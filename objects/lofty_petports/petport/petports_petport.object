@@ -1,0 +1,78 @@
+//  M.A.U.S. PETPORT
+//
+//  One-slot container. Socket a petports_ship_pet item to wake the unit inside.
+//  See petports_petport.lua.
+
+{
+  "objectName" : "petports_petport",
+  "colonyTags" : ["nicemice"],
+  "rarity" : "Rare",
+  "objectType" : "container",
+  "category" : "storage",
+  "price" : 550,
+  "printable" : false,
+  "description" : "A Petport for M.A.U.S. utility units. Socket a dormant unit to bring it online.",
+  "shortdescription" : "M.A.U.S. Petport",
+  "race" : "nicemice",
+
+  //  assistant type here so "hostile" ignores us and the player doesn't view the entity hp bar on mouseover
+  "damageTeam" : { "type" : "assistant", "team" : 0 },
+
+  //  One pet, one slot.
+  "slotCount" : 1,
+
+  //  Custom panel. Modelled on the pet tether's; replace the path once the
+  //  bespoke interface config exists.
+  "uiConfig" : "/interface/chests/pettether.config",
+
+  //  Container must not auto-close while the player is fiddling with options.
+  "autoCloseCooldown" : 3600,
+  "frameCooldown" : 5,
+
+  //  Where the unit wakes up, relative to the station.
+  "petSpawnOffset" : [0, 2],
+
+  "inventoryIcon" : "petports_petporticon.png",
+  "orientations" : [
+    {
+      "imageLayers" : 
+	  [ 		
+		{ "image" : "petports_petport.png:<color>", "fullbright" : true },
+		{ "image" : "petports_petportlit.png:<color>" }
+	  ],
+      "imagePosition" : [-48, -24],
+      "direction" : "left",
+      "flipImages" : true,
+      "spaceScan" : 0.1,
+      "anchors" : [ "bottom" ],
+	  
+	  "frames" : 1,
+	  "animationCycle" : 1.2
+    },
+    {
+      "imageLayers" : 
+	  [ 		
+		{ "image" : "petports_petport.png:<color>", "fullbright" : true },
+		{ "image" : "petports_petportlit.png:<color>" }
+	  ],
+      "imagePosition" : [-48, -24],
+      "direction" : "right",
+      "spaceScan" : 0.1,
+      "anchors" : [ "bottom" ],
+	  
+	  "frames" : 1,
+	  "animationCycle" : 1.2
+    }
+  ],
+
+  "scripts" : [ "petports_petport.lua" ],
+  "scriptDelta" : 5,
+
+  "animation" : "petports_petport.animation",
+  "animationParts" : 
+  { 
+	"base_lit" : "petports_petportlit.png",
+	"base_fullbright" : "petports_petport.png"
+  },
+  "animationPosition" : [-48, -24]
+}
