@@ -27,12 +27,27 @@ require "/scripts/vec2.lua"
 --  either a plain list or a map of id -> node index. If linking silently fails,
 --  log what these actually return before changing anything else.
 
+--  Partner-resolution tracing. Off: linking is verified working. Flip to true
+--  if vents stop pairing -- it prints what the node calls returned, what each
+--  collected id actually is, and how many survived the name filter, which
+--  separates "collected nothing" from "collected and discarded".
+local VENT_DEBUG = false
+
+--  VERIFIED 2025-08-20, twice, in game: getOutputNodeIds / getInputNodeIds
+--  return a table KEYED BY ENTITY ID, whose value is the node index. Entity 18
+--  wired to node 0 is `{[18] = 0}`.
+--
+--  TRAP THAT COST TWO ATTEMPTS: sb.printJson STRINGIFIES NUMERIC TABLE KEYS,
+--  because JSON object keys can only be strings. The same table prints as
+--  {"18":0}, which reads as a string key and is not one. Key type cannot be
+--  inferred from printJson output -- check with type() if it matters.
+--
+--  Both key and value are numbers here, so there is no way to tell this shape
+--  from a plain list of ids by inspecting a single entry. Do not try. The shape
+--  is known; take the key.
 local function collectIds(result, into)
   if result == nil then return end
-  for key, value in pairs(result) do
-    --  plain list: value is the id.  map: key is the id.
-    local id = value
-    if type(value) ~= "number" then id = key end
+  for id, _nodeIndex in pairs(result) do
     if type(id) == "number" and id ~= entity.id() then
       into[id] = true
     end
@@ -52,14 +67,95 @@ function partnerIds()
 
   --  Only other vents. A player may well wire a vent to a door or a light by
   --  accident, and teleporting a unit into a lamp would be impolite.
+  --
+  --  object.name() rather than config.getParameter("objectName"). If that
+  --  parameter lookup returns nil -- and it is not guaranteed to surface a
+  --  top-level object config key -- then every comparison below is
+  --  `entityName == nil`, which is false for everything. The ids get collected
+  --  correctly and are then all discarded, which looks exactly like collecting
+  --  nothing.
+  local ventName = object.name and object.name() or config.getParameter("objectName")
+
   local vents = {}
-  local ventName = config.getParameter("objectName")
   for id, _ in pairs(ids) do
     if world.entityExists(id) and world.entityName(id) == ventName then
       table.insert(vents, id)
     end
   end
+
+  if VENT_DEBUG then
+    local seen = {}
+    for id, _ in pairs(ids) do
+      table.insert(seen, tostring(id) .. "=" ..
+        tostring(world.entityExists(id) and world.entityName(id) or "gone"))
+    end
+    sb.logInfo("VENT %s self=%s want=%s collected=[%s] matched=%s",
+      entity.id(), tostring(object.name and object.name() or "no object.name"),
+      tostring(ventName), table.concat(seen, " "), #vents)
+  end
+
   return vents
+end
+
+--  VENT RESIDENCY
+--
+--  A vent holds a small region around itself loaded, reusing the petport's
+--  stagehand. Without it a hop can deliver a unit into an unloaded chunk, and
+--  the vent on the far side is not running to catch it.
+--
+--  This is a real cost and it scales with vent count, which is why it is
+--  configurable -- a server owner who does not want it can patch
+--  petports_ventResidency to false. The rect is small: a vent needs its own
+--  mouth and the ground around it loaded, not a port-sized area.
+local VENT_COVERAGE = 12
+
+local function ventUniqueId()
+  local uniqueId = entity.uniqueId()
+  if not uniqueId then
+    uniqueId = sb.makeUuid()
+    world.setUniqueId(entity.id(), uniqueId)
+  end
+  return uniqueId
+end
+
+local function residencyUniqueId()
+  local position = entity.position()
+  return string.format("petports_ventres_%s_%s",
+    math.floor(position[1]), math.floor(position[2]))
+end
+
+local function ensureVentResidency()
+  if not config.getParameter("petports_ventResidency", true) then return end
+
+  --  Only linked vents matter. An unlinked vent is somewhere a unit can never
+  --  arrive, so holding a region open for it buys nothing.
+  if #self.partners == 0 then return end
+
+  local residencyId = residencyUniqueId()
+  local existing = world.loadUniqueEntity(residencyId)
+  if existing ~= nil and world.entityExists(existing) then return end
+
+  local ok, result = pcall(world.spawnStagehand, entity.position(), "petports_residency", {
+    uniqueId = residencyId,
+    residencyUniqueId = residencyId,
+    portUniqueId = ventUniqueId(),
+    coverageSize = VENT_COVERAGE
+  })
+
+  sb.logInfo("VENT %s residency spawn id=%s ok=%s result=%s",
+    entity.id(), residencyId, tostring(ok), tostring(result))
+end
+
+local function stopVentResidency()
+  local residencyId = world.loadUniqueEntity(residencyUniqueId())
+  if residencyId == nil then return end
+  world.sendEntityMessage(residencyId, "petports_residencyStop")
+end
+
+--  DESTRUCTION ONLY -- from uninit this would drop residency on every world
+--  unload.
+function die()
+  stopVentResidency()
 end
 
 function init()
@@ -167,5 +263,6 @@ function update(dt)
   if self.refreshTimer <= 0 then
     self.refreshTimer = 2.0
     refreshPartners()
+    ensureVentResidency()
   end
 end

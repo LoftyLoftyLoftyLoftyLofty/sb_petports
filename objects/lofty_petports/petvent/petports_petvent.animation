@@ -5,7 +5,7 @@
         "default" : "idle",
         "states" : {
           "idle" : { "frames" : 1 },
-          "linked" : { "frames" : 2, "cycle" : 0.8, "mode" : "loop" }
+          "linked" : { "frames" : 1 }
         }
       }
     },
@@ -14,7 +14,7 @@
         "properties" : { "centered" : false },
         "partStates" : {
           "ventState" : {
-            "idle"   : { "properties" : { "image" : "<partImage>:idle" } },
+            "idle"   : { "properties" : { "image" : "<partImage>:idle.<frame>" } },
             "linked" : { "properties" : { "image" : "<partImage>:linked.<frame>" } }
           }
         }

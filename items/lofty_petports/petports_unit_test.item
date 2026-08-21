@@ -2,7 +2,7 @@
   "itemName" : "petports_unit_test",
   "price" : 0,
   "rarity" : "Rare",
-  "category" : "Ship Pet",
+  "category" : "petports_pet",
   "inventoryIcon" : "petports_unit_test.png",
   "description" : "A dormant M.A.U.S. utility unit. Socket it into a Petport to bring it online.",
   "shortdescription" : "Utility Unit",

@@ -1,4 +1,3 @@
-@ -1,52 +0,0 @@
 //  M.A.U.S. UTILITY VENT
 //
 //  Wire two together with the wiring tool to link them. One wire is enough --
@@ -6,7 +5,7 @@
 
 {
   "objectName" : "petports_petvent",
-  "colonyTags" : ["nicemice"],
+  "colonyTags" : ["petports"],
   "rarity" : "Common",
   "category" : "wire",
   "price" : 80,
@@ -15,12 +14,10 @@
   "shortdescription" : "Utility Vent",
   "race" : "generic",
 
-  "objectType" : "wire",
-
   //  ONE input, ONE output. A single wire from one vent's output to another's
   //  input links the pair in both directions.
-  "inputNodes" : [ [0, 0] ],
-  "outputNodes" : [ [1, 0] ],
+  "inputNodes" : [ [-1, 1] ],
+  "outputNodes" : [ [0, 0] ],
 
   //  Where a unit stands to enter, relative to the object.
   "entryOffset" : [0, 1],
@@ -28,7 +25,7 @@
   "inventoryIcon" : "petports_petvent_icon.png",
   "orientations" : [
     {
-      "image" : "petports_petvent.png",
+      "image" : "petports_petvent.png:idle.1",
       "imagePosition" : [-8, 0],
       "direction" : "left",
       "flipImages" : true,
@@ -36,7 +33,7 @@
       "anchors" : [ "background" ]
     },
     {
-      "image" : "petports_petvent.png",
+      "image" : "petports_petvent.png:idle.1",
       "imagePosition" : [-8, 0],
       "direction" : "right",
       "spaceScan" : 0.1,

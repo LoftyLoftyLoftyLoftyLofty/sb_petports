@@ -1,0 +1,15 @@
+{
+
+  "frameGrid" : {
+    "size" : [16, 16],
+    "dimensions" : [2, 1],
+    "names" : [
+      [ "idle.1", "linked.1" ]
+    ]
+  },
+  "aliases" : {
+    "default" : "idle.1",
+	"default.default" : "idle.1",
+	"idle" : "idle.1"
+  }
+}

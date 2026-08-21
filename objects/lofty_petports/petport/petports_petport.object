@@ -5,7 +5,7 @@
 
 {
   "objectName" : "petports_petport",
-  "colonyTags" : ["nicemice"],
+  "colonyTags" : ["petports"],
   "rarity" : "Rare",
   "objectType" : "container",
   "category" : "storage",
@@ -13,7 +13,7 @@
   "printable" : false,
   "description" : "A Petport for M.A.U.S. utility units. Socket a dormant unit to bring it online.",
   "shortdescription" : "M.A.U.S. Petport",
-  "race" : "nicemice",
+  "race" : "generic",
 
   //  assistant type here so "hostile" ignores us and the player doesn't view the entity hp bar on mouseover
   "damageTeam" : { "type" : "assistant", "team" : 0 },
@@ -37,6 +37,7 @@
     {
       "imageLayers" : 
 	  [ 		
+		//{ "image" : "petport_range_preview.png:<color>", "fullbright" : true, "imagePosition" : [-128, -128] },
 		{ "image" : "petports_petport.png:<color>", "fullbright" : true },
 		{ "image" : "petports_petportlit.png:<color>" }
 	  ],
@@ -51,7 +52,8 @@
     },
     {
       "imageLayers" : 
-	  [ 		
+	  [
+	    //{ "image" : "petport_range_preview.png:<color>", "fullbright" : true, "imagePosition" : [-128, -128] },
 		{ "image" : "petports_petport.png:<color>", "fullbright" : true },
 		{ "image" : "petports_petportlit.png:<color>" }
 	  ],

@@ -1,0 +1,52 @@
+//  PETPORTS -- RESIDENCY STAGEHAND
+//
+//  Holds a petport's coverage rect resident so its unit can work while the
+//  player is elsewhere on the same world.
+//
+//  WHY A STAGEHAND AND NOT THE PETPORT ITSELF
+//
+//  keepAlive is available on stagehands and NOT on objects. That is the whole
+//  reason this entity exists -- an object cannot keep itself loaded, so it
+//  cannot bootstrap its own residency. A keepAlive stagehand loads with the
+//  world and calls world.loadRegion from there.
+//
+//  This also removes the chain-init design that preceded it, where each port
+//  loaded zones around its wired neighbours so they could init in turn. That
+//  needed a hop limit and a visited set, and made the resident footprint "every
+//  port in the network" rather than "ports the player is near".
+//
+//  MODELLED ON /stagehands/mission/glitchmissionmanager
+//
+//  Vanilla's Glitch defense mission manager exists to keep its mission area
+//  loaded, and it calls world.loadRegion EVERY UPDATE -- residency is a
+//  continuous assertion, not a one-time latch. It stores its area relative in
+//  config and translates by its own position at init. Both patterns are copied
+//  here.
+
+{
+  "type" : "petports_residency",
+
+  //  The point of the entity.
+  "keepAlive" : true,
+
+  "scripts" : [ "/stagehands/lofty_petports/petports_residency.lua" ],
+
+  //  Vanilla's mission manager runs at 1 (every tick). 5 is roughly 12 calls a
+  //  second, which should hold sectors comfortably while costing less across
+  //  the many ports this mod expects a player to deploy. TUNING KNOB: if
+  //  regions are observed unloading under load, this is the first thing to
+  //  lower, and 1 is the known-good reference.
+  "scriptDelta" : 5,
+
+  //  Small: nothing broadcasts to this. The petport addresses it by uniqueId.
+  "broadcastArea" : [-1, -1, 1, 1],
+
+  //  Overridden at spawn by the petport, which owns the real value.
+  "coverageSize" : 32,
+
+  //  How long to tolerate not finding the owning petport before self-
+  //  terminating. Must be generous: on world load this stagehand comes up
+  //  BEFORE the port does, and it is its own loadRegion call that brings the
+  //  port in.
+  "orphanGrace" : 15.0
+}
