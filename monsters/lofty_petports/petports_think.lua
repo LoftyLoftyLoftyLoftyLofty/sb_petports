@@ -51,26 +51,53 @@ local THINK_DEBUG = true
 
 --  How long thinking must run CONTINUOUSLY before the indicator appears.
 --
---  Worth knowing before tuning this: an ordinary A* over open ground resolves
---  in a few hundred ms, so normal walking will NEVER trip a 1.0s threshold.
---  That is deliberate -- a spinner at every re-plan is worse than no spinner --
---  but it also means "the spinner never shows on flat ground" is correct
---  behaviour and not a bug. Cold-cache probing is what this exists for.
-local THINK_DELAY = 1.0
+--  MEASURED, NOT GUESSED. Instrumented runs show think durations are strongly
+--  bimodal: cold-cache route probing runs 45-50s (one PROBE_LIMIT per unknown
+--  edge, and there are several), while the jump-arc solve after a vent exit
+--  runs about 1.0s. Nothing lands in between.
+--
+--  This was 1.0, which is the single worst value in that whole range -- it sat
+--  exactly on top of the arc solve, so a perfectly ordinary vent exit crossed
+--  the threshold at the instant it finished and blipped the spinner for the
+--  length of the grace tail. The indicator was working; the threshold was
+--  parked on a common case.
+--
+--  2.0 clears the arc solve with headroom and costs one extra second of
+--  stillness before a 47s probe announces itself, which is noise at that scale.
+--  Lower it toward 1.5 if two seconds of motionless unit feels too long, but do
+--  not go back to 1.0.
+local THINK_DELAY = 2.0
 
---  How long after the last ping before it comes down. Must exceed one script
---  tick comfortably -- monsters run on scriptDelta, not per frame -- so a
---  single-tick gap between two phases of one think does not blink it off and
---  on. Must stay well under THINK_DELAY so a lone stray ping can never
---  accumulate its way to the threshold.
-local THINK_GRACE = 0.5
+--  What counts as ONE think. Bridges a gap of a tick or two so that a single
+--  hiccup inside one continuous search does not restart the clock.
+--
+--  KEEP THIS SMALL. It is the only thing separating one think from the next.
+--
+--  It was 0.5s, and that was too generous by far. Repathing during a walk pings
+--  in short bursts a few tenths of a second apart; at 0.5s every one of those
+--  gaps was bridged, so `held` never reset and crept upward across an entire
+--  multi-hop journey. The unit would leave its last vent already sitting at
+--  0.9-something, and a legitimate split-second jump-arc calculation would tip
+--  it over the threshold and blip the spinner.
+--
+--  At roughly two script ticks, a real gap between two separate thinks breaks
+--  the run, which is the point. Pings inside one think arrive every tick, so
+--  nothing legitimate is at risk of being split.
+local THINK_GRACE = 0.2
 
---  Declared in the unit's .animation as a SEPARATE stateType from "movement".
---  Setting a state type that does not exist RAISES, which is the good case:
---  a typo here is loud rather than invisible.
-local THINK_STATE_TYPE = "thinking"
-local THINK_STATE_ON   = "spin"
-local THINK_STATE_OFF  = "none"
+--  Once shown, stay shown at least this long.
+--
+--  Separate constant on purpose. Bridging hiccups wants a SMALL number; not
+--  flashing wants a LARGE one. THINK_GRACE used to do both jobs at once, which
+--  is how it ended up at a value that was simultaneously too big for the first
+--  and too small for the second. A think that runs just past THINK_DELAY needs
+--  this floor or it appears and vanishes inside a couple of frames.
+local THINK_MIN_SHOW = 0.75
+
+local THINK_STATE_TYPE   = "thinking"
+local THINK_STATE_ON     = "spin"
+local THINK_STATE_ON_L   = "spinflip"
+local THINK_STATE_OFF    = "none"
 
 --  Ping. Call EVERY TICK for as long as the expensive thing is still running.
 --  `reason` is for logging only; nothing branches on it.
@@ -79,8 +106,13 @@ function petports_think(reason)
   self.petportsThinkReason = reason
 end
 
-local function applyState(want)
-  local state = want and THINK_STATE_ON or THINK_STATE_OFF
+--  Which of the three states the unit should be showing right now.
+local function wantedState(want)
+  if not want then return THINK_STATE_OFF end
+  return mcontroller.facingDirection() < 0 and THINK_STATE_ON_L or THINK_STATE_ON
+end
+
+local function applyState(state)
   local ok, err = pcall(animator.setAnimationState, THINK_STATE_TYPE, state)
 
   --  NOT flag-gated. If the animation is missing the "thinking" stateType
@@ -96,31 +128,54 @@ end
 --  Per-tick pump. Called from petportsTaskAction.update, top of the function so
 --  that its early returns cannot skip it. See the header before moving it.
 function petports_thinkPump(dt)
-  self.petportsThinkHeld  = self.petportsThinkHeld or 0
-  self.petportsThinkGrace = self.petportsThinkGrace or 0
-  self.petportsThinkTrace = self.petportsThinkTrace or 0
+  self.petportsThinkHeld     = self.petportsThinkHeld or 0
+  self.petportsThinkGrace    = self.petportsThinkGrace or 0
+  self.petportsThinkTrace    = self.petportsThinkTrace or 0
+  self.petportsThinkShowLeft = self.petportsThinkShowLeft or 0
+  self.petportsThinkPeak     = self.petportsThinkPeak or 0
   if self.petportsThinkShown == nil then self.petportsThinkShown = false end
 
-  if self.petportsThinkPinged then
-    self.petportsThinkPinged = false
+  local pinged = self.petportsThinkPinged
+  self.petportsThinkPinged = false
+
+  if pinged then
+    self.petportsThinkLastReason = self.petportsThinkReason
     self.petportsThinkHeld = self.petportsThinkHeld + dt
     self.petportsThinkGrace = THINK_GRACE
+    if self.petportsThinkHeld > self.petportsThinkPeak then
+      self.petportsThinkPeak = self.petportsThinkHeld
+    end
   else
     self.petportsThinkGrace = self.petportsThinkGrace - dt
     if self.petportsThinkGrace <= 0 then
-      --  Nobody has thought for a while. Forget the run entirely, so the next
-      --  think starts its own clock rather than inheriting a stale one.
+      --  The run is over. Discard the clock so the NEXT think is measured on
+      --  its own merits rather than inheriting whatever this one accumulated.
       self.petportsThinkHeld = 0
       self.petportsThinkReason = nil
-    else
-      --  Inside the grace window: keep the clock running so a one-tick gap
-      --  between two phases of the same think reads as one continuous think.
-      self.petportsThinkHeld = self.petportsThinkHeld + dt
+      self.petportsThinkLastReason = nil
     end
+    --  Inside the grace window `held` is FROZEN, never advanced. Grace decides
+    --  whether the clock is kept or discarded; it does not add to it. Advancing
+    --  here would let a sub-threshold think keep climbing after its work had
+    --  already finished and trip the threshold post hoc.
   end
 
-  local want = self.petportsThinkHeld >= THINK_DELAY
-    and self.petportsThinkGrace > 0
+  if self.petportsThinkShown then
+    self.petportsThinkShowLeft = self.petportsThinkShowLeft - dt
+  end
+
+  local want
+  if self.petportsThinkShown then
+    --  Already up: stay up while the think is still live, or until the
+    --  anti-flash floor runs out, whichever is longer.
+    want = (self.petportsThinkHeld >= THINK_DELAY and self.petportsThinkGrace > 0)
+      or self.petportsThinkShowLeft > 0
+  else
+    --  Not up yet: the threshold may only be crossed on a tick that actually
+    --  CARRIED A PING. Without this, a think could cross it while coasting
+    --  through the grace window after its work was done.
+    want = pinged and self.petportsThinkHeld >= THINK_DELAY
+  end
 
   --  Telemetry while a think is accumulating, whether or not it ever crosses
   --  the threshold. A think that reaches 0.4s and dies explains a missing
@@ -137,18 +192,35 @@ function petports_thinkPump(dt)
     end
   end
 
-  --  Only touch the animator on a CHANGE. setAnimationState with the state
-  --  already set is cheap but not free, and this runs every tick forever.
-  if want ~= self.petportsThinkShown then
-    applyState(want)
-    self.petportsThinkShown = want
+  --  Compare the STATE NAME, not the boolean. Facing can change while `want`
+  --  stays true, and that still needs the animator touched -- tracking only
+  --  "shown" would leave a unit that turned mid-think spinning backwards for
+  --  the rest of the think.
+  --
+  --  Still only touched on a change: setAnimationState with the state already
+  --  set is cheap but not free, and this runs every tick forever.
+  local state = wantedState(want)
+  if state ~= self.petportsThinkState then
+    applyState(state)
 
-    if THINK_DEBUG then
-      sb.logInfo("UNIT thinking %s (%s) after %s s",
-        want and "SHOWN" or "hidden",
-        tostring(self.petportsThinkReason),
-        sb.printJson(self.petportsThinkHeld))
+    if want and not self.petportsThinkShown then
+      self.petportsThinkShowLeft = THINK_MIN_SHOW
     end
+
+    --  Report the PEAK, not the current value. By the time a think is hidden
+    --  the clock has usually been discarded already, so the old message read
+    --  "hidden (nil) after 0 s" -- true, and useless. The peak is the one
+    --  number that tells you where THINK_DELAY should sit.
+    if THINK_DEBUG and want ~= self.petportsThinkShown then
+      sb.logInfo("UNIT thinking %s (%s) peak %s s",
+        want and "SHOWN" or "hidden",
+        tostring(self.petportsThinkReason or self.petportsThinkLastReason),
+        sb.printJson(self.petportsThinkPeak))
+      if not want then self.petportsThinkPeak = 0 end
+    end
+
+    self.petportsThinkState = state
+    self.petportsThinkShown = want
   end
 end
 
@@ -160,10 +232,14 @@ function petports_thinkClear()
   self.petportsThinkPinged = false
   self.petportsThinkHeld = 0
   self.petportsThinkGrace = 0
+  self.petportsThinkShowLeft = 0
+  self.petportsThinkPeak = 0
   self.petportsThinkReason = nil
+  self.petportsThinkLastReason = nil
 
   if self.petportsThinkShown then
-    applyState(false)
+    applyState(THINK_STATE_OFF)
+    self.petportsThinkState = THINK_STATE_OFF
     self.petportsThinkShown = false
   end
 end
@@ -180,7 +256,9 @@ function petports_thinkSelfTest()
   self.petportsThinkHeld = THINK_DELAY
   self.petportsThinkGrace = 5.0
   self.petportsThinkReason = "selftest"
-  applyState(true)
+  self.petportsThinkShowLeft = 0
+  self.petportsThinkState = wantedState(true)
+  applyState(self.petportsThinkState)
   self.petportsThinkShown = true
   sb.logInfo("UNIT thinking SELFTEST forced on")
 end

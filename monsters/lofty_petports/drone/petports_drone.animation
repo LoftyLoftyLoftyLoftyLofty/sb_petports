@@ -78,8 +78,19 @@
         "priority" : 1,
         "default" : "none",
         "states" : {
-          "none" : { "frames" : 1, "cycle" : 1.00, "mode" : "loop" },
-          "spin" : { "frames" : 8, "cycle" : 0.80, "mode" : "loop" }
+          "none"     : { "frames" : 1, "cycle" : 1.00, "mode" : "loop" },
+          "spin"     : { "frames" : 8, "cycle" : 0.80, "mode" : "loop" },
+
+          //  Faced left. Pre-mirrored art, so the engine's own mirroring puts
+          //  the ring back upright and spinning the same way round. Selected by
+          //  petports_think.lua off mcontroller.facingDirection().
+          //
+          //  NOTE: switching between "spin" and "spinflip" RESTARTS the cycle,
+          //  so a unit that oscillates its facing will stutter. Units stand
+          //  still while thinking, so this has not been a problem -- but if it
+          //  becomes one, a transformation group scaled -1 on x is the fix that
+          //  preserves phase.
+          "spinflip" : { "frames" : 8, "cycle" : 0.80, "mode" : "loop" }
         }
       }
     },
@@ -182,8 +193,9 @@
         },
         "partStates" : {
           "thinking" : {
-            "none" : { "properties" : { "image" : "/monsters/lofty_petports/shared/spinner/spinner.png:blank" } },
-            "spin" : { "properties" : { "image" : "/monsters/lofty_petports/shared/spinner/spinner.png:spin.<frame>" } }
+            "none"     : { "properties" : { "image" : "/monsters/lofty_petports/shared/spinner/spinner.png:blank" } },
+            "spin"     : { "properties" : { "image" : "/monsters/lofty_petports/shared/spinner/spinner.png:spin.<frame>" } },
+            "spinflip" : { "properties" : { "image" : "/monsters/lofty_petports/shared/spinner/spinner.png:spinflip.<frame>" } }
           }
         }
       }
