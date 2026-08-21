@@ -1,72 +1,156 @@
-//  M.A.U.S. PETPORT
-//
-//  HOW THIS FILE IS WIRED
-//
-//  "stateTypes" are independent tracks. Each has its own current state and they
-//  all run at once, so a script can drive portState without disturbing
-//  anything else. petports_petport.lua calls
-//  animator.setAnimationState("portState", "off" | "on").
-//
-//  "parts" are image layers. Every part name here MUST have a matching entry in
-//  the object's "animationParts" map -- that map is what <partImage> resolves
-//  to. A part with no entry there has no image and silently draws nothing.
-//
-//    base_lit        -> petports_petportlit.png   (responds to world lighting)
-//    base_fullbright -> petports_petport.png      (glow, ignores world lighting)
-//
-//  Naming follows the drone: "lit" means world-lit, "fullbright" means
-//  self-lit. Same split, same layer order -- glow drawn over base.
-//
-//  PLACEHOLDER STATE
-//
-//  default.frames declares exactly one frame, named "default", so both off and
-//  on point at it. Keeping BOTH states declared matters: the Lua sets them by
-//  name every tick, and removing a state type a script addresses raises. An
-//  unknown state NAME within an existing type is harmless, but an unknown TYPE
-//  is not.
-//
-//  When real art lands, give "on" its own frames (on.1, on.2, ... -- objects
-//  with an .animation file are 1-indexed) and only this file changes.
-
 {
-  "animatedParts" : {
-    "stateTypes" : {
-      "portState" : {
-        "default" : "off",
-        "states" : {
-          "off" : { "frames" : 1 },
-          "on"  : { "frames" : 1 }
-        }
-      }
-    },
+	"animatedParts" : 
+	{
+		"stateTypes" : 
+		{
+			"hullState" : 
+			{
+				"default" : "closing",
+				"states" : 
+				{
+					"closed" : { "frames" : 1 },
+					"opening"  : { "frames" : 10, "mode" : "transition", "transition" : "open" },
+					"open" : { "frames" : 1 },
+					"closing" : { "frames" : 10, "mode" : "transition", "transition" : "closed" }
+				}
+			},
+			"doorState" : 
+			{
+				"default" : "closing",
+				"states" : 
+				{
+					"closed" : { "frames" : 1 },
+					"opening"  : { "frames" : 10, "mode" : "transition", "transition" : "open" },
+					"open" : { "frames" : 1 },
+					"closing" : { "frames" : 10, "mode" : "transition", "transition" : "closed" }
+				}
+			},
+			"interiorState" : 
+			{
+				"default" : "closing",
+				"states" : 
+				{
+					"closed" : { "frames" : 1 },
+					"opening"  : { "frames" : 10, "mode" : "transition", "transition" : "open" },
+					"open" : { "frames" : 1 },
+					"closing" : { "frames" : 10, "mode" : "transition", "transition" : "closed" }
+				}
+			}
+		},
 
-    "parts" : {
-      "base_lit" : {
-        "properties" : {
-          "centered" : false,
-          "zLevel" : 2
-        },
-        "partStates" : {
-          "portState" : {
-            "off" : { "properties" : { "image" : "<partImage>:default" } },
-            "on"  : { "properties" : { "image" : "<partImage>:default" } }
-          }
-        }
-      },
-
-      "base_fullbright" : {
-        "properties" : {
-          "centered" : false,
-          "zLevel" : 1,
-          "fullbright" : true
-        },
-        "partStates" : {
-          "portState" : {
-            "off" : { "properties" : { "image" : "<partImage>:default" } },
-            "on"  : { "properties" : { "image" : "<partImage>:default" } }
-          }
-        }
-      }
-    }
-  }
+		"parts" : 
+		{
+			"hull_lit" : 
+			{
+				"properties" : 
+				{
+					"centered" : false,
+					"zLevel" : 5
+				},
+				"partStates" : 
+				{
+					"hullState" : 
+					{
+						"closed" : { "properties" : { "image" : "<partImage>:closed.<frame>" } },
+						"opening" : { "properties" : { "image" : "<partImage>:opening.<frame>" } },
+						"open" : { "properties" : { "image" : "<partImage>:open.<frame>" } },
+						"closing" : { "properties" : { "image" : "<partImage>:closing.<frame>" } }
+					}
+				}
+			},
+			"hull_fullbright" : 
+			{
+				"properties" : 
+				{
+					"centered" : false,
+					"zLevel" : 4,
+					"fullbright" : true
+				},
+				"partStates" : 
+				{
+					"hullState" : 
+					{
+						"closed" : { "properties" : { "image" : "<partImage>:closed.<frame>" } },
+						"opening" : { "properties" : { "image" : "<partImage>:opening.<frame>" } },
+						"open" : { "properties" : { "image" : "<partImage>:open.<frame>" } },
+						"closing" : { "properties" : { "image" : "<partImage>:closing.<frame>" } }
+					}
+				}
+			},
+			"door_lit" : 
+			{
+				"properties" : 
+				{
+					"centered" : false,
+					"zLevel" : 3
+				},
+				"partStates" : 
+				{
+					"doorState" : 
+					{
+						"closed" : { "properties" : { "image" : "<partImage>:closed.<frame>" } },
+						"opening" : { "properties" : { "image" : "<partImage>:opening.<frame>" } },
+						"open" : { "properties" : { "image" : "<partImage>:open.<frame>" } },
+						"closing" : { "properties" : { "image" : "<partImage>:closing.<frame>" } }
+					}
+				}
+			},
+			"door_fullbright" : 
+			{
+				"properties" : 
+				{
+					"centered" : false,
+					"zLevel" : 2,
+					"fullbright" : true
+				},
+				"partStates" : 
+				{
+					"doorState" : 
+					{
+						"closed" : { "properties" : { "image" : "<partImage>:closed.<frame>" } },
+						"opening" : { "properties" : { "image" : "<partImage>:opening.<frame>" } },
+						"open" : { "properties" : { "image" : "<partImage>:open.<frame>" } },
+						"closing" : { "properties" : { "image" : "<partImage>:closing.<frame>" } }
+					}
+				}
+			},
+			"interior_lit" : 
+			{
+				"properties" : 
+				{
+					"centered" : false,
+					"zLevel" : 1
+				},
+				"partStates" : 
+				{
+					"interiorState" : 
+					{
+						"closed" : { "properties" : { "image" : "<partImage>:closed.<frame>" } },
+						"opening" : { "properties" : { "image" : "<partImage>:opening.<frame>" } },
+						"open" : { "properties" : { "image" : "<partImage>:open.<frame>" } },
+						"closing" : { "properties" : { "image" : "<partImage>:closing.<frame>" } }
+					}
+				}
+			},
+			"interior_fullbright" : 
+			{
+				"properties" : 
+				{
+					"centered" : false,
+					"zLevel" : 0,
+					"fullbright" : true
+				},
+				"partStates" : 
+				{
+					"interiorState" : 
+					{
+						"closed" : { "properties" : { "image" : "<partImage>:closed.<frame>" } },
+						"opening" : { "properties" : { "image" : "<partImage>:opening.<frame>" } },
+						"open" : { "properties" : { "image" : "<partImage>:open.<frame>" } },
+						"closing" : { "properties" : { "image" : "<partImage>:closing.<frame>" } }
+					}
+				}
+			}
+		}
+	}
 }

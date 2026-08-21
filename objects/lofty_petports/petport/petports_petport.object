@@ -14,6 +14,8 @@
   "description" : "A Petport for M.A.U.S. utility units. Socket a dormant unit to bring it online.",
   "shortdescription" : "M.A.U.S. Petport",
   "race" : "generic",
+  
+  "health" : 5,
 
   //  assistant type here so "hostile" ignores us and the player doesn't view the entity hp bar on mouseover
   "damageTeam" : { "type" : "assistant", "team" : 0 },
@@ -30,37 +32,43 @@
   "frameCooldown" : 5,
 
   //  Where the unit wakes up, relative to the station.
-  "petSpawnOffset" : [0, 2],
+  "petSpawnOffset" : [0, 0],
 
   "inventoryIcon" : "petports_petporticon.png",
   "orientations" : [
     {
       "imageLayers" : 
 	  [ 		
-		//{ "image" : "petport_range_preview.png:<color>", "fullbright" : true, "imagePosition" : [-128, -128] },
-		{ "image" : "petports_petport.png:<color>", "fullbright" : true },
-		{ "image" : "petports_petportlit.png:<color>" }
+		{ "image" : "petport_hull_lit.png:closed.1", "fullbright" : false },
+		{ "image" : "petport_hull_fullbright.png:closed.1", "fullbright" : true },
+		{ "image" : "petport_door_lit.png:closed.1", "fullbright" : false },
+		{ "image" : "petport_door_fullbright.png:closed.1", "fullbright" : true },
+		{ "image" : "petport_interior_lit.png:closed.1", "fullbright" : false },
+		{ "image" : "petport_interior_fullbright.png:closed.1", "fullbright" : true }
 	  ],
-      "imagePosition" : [-48, -24],
+      "imagePosition" : [-16, -16],
       "direction" : "left",
       "flipImages" : true,
       "spaceScan" : 0.1,
-      "anchors" : [ "bottom" ],
+      "anchors" : [ "background" ],
 	  
 	  "frames" : 1,
 	  "animationCycle" : 1.2
     },
     {
       "imageLayers" : 
-	  [
-	    //{ "image" : "petport_range_preview.png:<color>", "fullbright" : true, "imagePosition" : [-128, -128] },
-		{ "image" : "petports_petport.png:<color>", "fullbright" : true },
-		{ "image" : "petports_petportlit.png:<color>" }
+	  [ 		
+		{ "image" : "petport_hull_lit.png:closed.1", "fullbright" : false },
+		{ "image" : "petport_hull_fullbright.png:closed.1", "fullbright" : true },
+		{ "image" : "petport_door_lit.png:closed.1", "fullbright" : false },
+		{ "image" : "petport_door_fullbright.png:closed.1", "fullbright" : true },
+		{ "image" : "petport_interior_lit.png:closed.1", "fullbright" : false },
+		{ "image" : "petport_interior_fullbright.png:closed.1", "fullbright" : true }
 	  ],
-      "imagePosition" : [-48, -24],
+      "imagePosition" : [-16, -16],
       "direction" : "right",
       "spaceScan" : 0.1,
-      "anchors" : [ "bottom" ],
+      "anchors" : [ "background" ],
 	  
 	  "frames" : 1,
 	  "animationCycle" : 1.2
@@ -73,8 +81,12 @@
   "animation" : "petports_petport.animation",
   "animationParts" : 
   { 
-	"base_lit" : "petports_petportlit.png",
-	"base_fullbright" : "petports_petport.png"
+	"hull_lit" : "petport_hull_lit.png",
+	"hull_fullbright" : "petport_hull_fullbright.png",
+	"door_lit" : "petport_door_lit.png",
+	"door_fullbright" : "petport_door_fullbright.png",
+	"interior_lit" : "petport_interior_lit.png",
+	"interior_fullbright" : "petport_interior_fullbright.png"
   },
-  "animationPosition" : [-48, -24]
+  "animationPosition" : [-16, -16]
 }

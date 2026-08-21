@@ -16,8 +16,8 @@
 
   //  ONE input, ONE output. A single wire from one vent's output to another's
   //  input links the pair in both directions.
-  "inputNodes" : [ [-1, 1] ],
-  "outputNodes" : [ [0, 0] ],
+  "inputNodes" : [ [-1, 0] ],
+  "outputNodes" : [ [0, 1] ],
 
   //  Where a unit stands to enter, relative to the object.
   "entryOffset" : [0, 1],
