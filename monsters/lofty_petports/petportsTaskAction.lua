@@ -543,6 +543,22 @@ end
 function petportsTaskAction.update(dt, stateData)
   local task = stateData.task
 
+  --  PUMP THE THINKING INDICATOR HERE, NOT FROM petBehavior.run().
+  --
+  --  run()'s cadence is NOT verified. Vanilla groundPet.lua may only call it on
+  --  the querySurroundings cooldown, which is 1s in the monstertype -- that
+  --  would feed a per-tick dt once a second and stretch every timer inside the
+  --  pump by roughly twelve. Observed as a forced spinner that would not expire.
+  --
+  --  This update IS verified per-tick with a real dt: traceTimer counts down by
+  --  it and produces exactly one line per second. Use the hook with evidence
+  --  behind it.
+  --
+  --  Scoping the pump to a task costs nothing, because thinking only ever
+  --  happens inside one. Pings raised later in this same call are consumed on
+  --  the NEXT tick; the grace window absorbs that.
+  petports_thinkPump(dt)
+
   --  Every tick: world.debug* draws per-frame.
   if petports_drawRouteDebug ~= nil then petports_drawRouteDebug(stateData) end
 
@@ -576,7 +592,14 @@ function petportsTaskAction.update(dt, stateData)
 
     --  "probing" or "routing" -- either way, stand still and continue next
     --  tick. A unit walking while its route is undecided just wanders.
-    if stateData.viaVent == nil then return false end
+    --
+    --  This is THE case the indicator exists for: a cold cache spends a full
+    --  PROBE_LIMIT per unknown edge, and a five-edge plan is the better part of
+    --  a minute of a unit standing perfectly still.
+    if stateData.viaVent == nil then
+      petports_think("routing")
+      return false
+    end
   end
 
   --  A vent leg replaces the destination until the unit is through it.
@@ -882,6 +905,10 @@ function petportsTaskAction.update(dt, stateData)
     if finder ~= nil and not finder.hasPath and finder.aStar ~= nil then
       stateData.searchingTimer = stateData.searchingTimer + dt
 
+      --  A* alive with no path is the unit thinking, by definition. Most such
+      --  searches resolve well inside THINK_DELAY and correctly show nothing.
+      petports_think("pathing")
+
       if stateData.searchingTimer >= SEARCH_LIMIT then
         --  Direct route failed. Before giving up, see whether a vent lands us
         --  nearer the target. This is the whole reason vents are
@@ -988,6 +1015,15 @@ function petportsTaskAction.update(dt, stateData)
 end
 
 function petportsTaskAction.leavingState(stateData)
+  --  Nothing will pump the indicator down once this state is gone, so drop it
+  --  now rather than leaving a spinner over an idle unit forever.
+  --
+  --  Deliberately NOT done on vent travel: petports_ventTeleport is a straight
+  --  setPosition with no invisible state, the spinner is a PART and moves with
+  --  the entity, and the unit is usually still routing on the far side. A clear
+  --  there would only blink it off and on between legs.
+  petports_thinkClear()
+
   petports_cancelProbe()
 
   --  Do not leave an abandoned search behind for follow/inspect to inherit.

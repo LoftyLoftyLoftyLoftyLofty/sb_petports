@@ -59,6 +59,28 @@
           "blink"     : { "frames" : 8, "cycle" : 0.75, "mode" : "loop" },
           "invisible" : { "frames" : 8, "cycle" : 0.75, "mode" : "loop" }
         }
+      },
+
+      //  THINKING INDICATOR -- a SEPARATE state type on purpose.
+      //
+      //  It has to compose with whatever "movement" is doing: a unit can be
+      //  standing, falling or asleep while a route probe grinds away behind
+      //  it. Folding "thinking" into movement would mean a spinner state per
+      //  movement state, and groundPet.lua would clobber it on the next tick
+      //  anyway -- it writes "movement" directly out of setMovementState.
+      //
+      //  Driven only by petports_think.lua. Nothing else may set it.
+      //
+      //  cycle 0.8 over 8 frames is 10fps, which reads as a deliberate tick
+      //  rather than a smooth blur. Slower than this looks stalled, which is
+      //  the exact impression the spinner exists to dispel.
+      "thinking" : {
+        "priority" : 1,
+        "default" : "none",
+        "states" : {
+          "none" : { "frames" : 1, "cycle" : 1.00, "mode" : "loop" },
+          "spin" : { "frames" : 8, "cycle" : 0.80, "mode" : "loop" }
+        }
       }
     },
 
@@ -124,6 +146,44 @@
             "sound"     : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
             "blink"     : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
             "invisible" : { "properties" : { "image" : "<partImage>:fly.<frame>" } }
+          }
+        }
+      },
+
+      //  Thinking spinner. Drawn above both body layers, always lit.
+      //
+      //  NOT a <partImage> reference. <partImage> resolves against the
+      //  monsterpart the engine rolled for this instance, which would force
+      //  every chassis spritesheet to carry its own spin.1..spin.8 strip just
+      //  to show a spinner that is identical on all of them. A literal shared
+      //  path costs nothing and keeps the sheet in one place.
+      //
+      //  TO GIVE A UNIT TYPE ITS OWN SPINNER, override this image path from
+      //  the monstertype via baseParameters.animationCustom rather than
+      //  forking this file. VERIFY animationCustom merges on monsters before
+      //  relying on it; if it does not, a per-type .animation is the fallback.
+      //
+      //  fullbright because an unlit status indicator is not a status
+      //  indicator. A unit probing a route in a dark cave is the case it is
+      //  most needed in.
+      //
+      //  offset is in TILES and is TUNE-IN-GAME. [0, 1.5] puts a 16px sprite
+      //  centred two tiles up, whose visible ring clears the top of a body
+      //  whose metaBoundBox tops out at 0.9. A taller chassis needs more.
+      //
+      //  No anchorPart: the body sits at the entity origin with no per-state
+      //  offsets, so anchoring buys nothing and adds a dependency.
+      "thinkingspinner" : {
+        "properties" : {
+          "zLevel" : 3,
+          "centered" : true,
+          "offset" : [0, 1.5],
+          "fullbright" : true
+        },
+        "partStates" : {
+          "thinking" : {
+            "none" : { "properties" : { "image" : "/monsters/lofty_petports/shared/spinner/spinner.png:blank" } },
+            "spin" : { "properties" : { "image" : "/monsters/lofty_petports/shared/spinner/spinner.png:spin.<frame>" } }
           }
         }
       }

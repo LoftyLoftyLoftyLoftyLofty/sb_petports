@@ -26,6 +26,22 @@
 --      has no branch for it, so it always scores 0 and can never be picked.
 --      Our units do not starve to death anyway.
 --
+--  CADENCE IS UNVERIFIED -- DO NOT HANG TIMERS OFF THIS
+--
+--  The note below says run() re-asserts the task "every tick". That was
+--  inferred from the re-assert WORKING, which it would at 1 Hz just as well:
+--  once the action state is entered it stays entered until it returns true, so
+--  a slow re-assert is indistinguishable from a fast one.
+--
+--  Vanilla groundPet.lua may well call this on the querySurroundings cooldown
+--  (1s in the monstertype) rather than per tick. The thinking indicator was
+--  pumped from here first and produced a spinner that would not expire, which
+--  is exactly what a twelvefold-stretched timer looks like. It now pumps from
+--  petportsTaskAction.update, whose per-tick dt is verified.
+--
+--  Anything that needs a real dt belongs in an action state's update, not here.
+--  Set RUN_CADENCE_DEBUG below to settle the question properly.
+--
 --  THE QUEUE IS NOT A QUEUE
 --
 --  The last line of run() is `petBehavior.actionQueue = {}`, and the first
@@ -36,6 +52,16 @@
 --  So the unit holds its assignment in self.petportsTask (durable, set by the
 --  petport through the contract) and re-queues it every single tick. The
 --  petport dispatches STATE, not an event.
+
+--  Measure run()'s real cadence. Accumulates SCRIPT dt per call and logs every
+--  time that sum reaches 5.
+--
+--  Read the result off the WALL CLOCK, not the number: if run() is per-tick,
+--  the accumulated script-dt tracks real time and lines land every 5 real
+--  seconds. If it is throttled to 1 Hz, the same sum needs roughly a minute of
+--  real time to get there. The gap between log lines is the answer, and it
+--  needs no API whose behaviour is itself in question.
+local RUN_CADENCE_DEBUG = false
 
 petBehavior = {
   actionQueue = {}
@@ -105,6 +131,18 @@ function petBehavior.performAction(action)
 end
 
 function petBehavior.run()
+  if RUN_CADENCE_DEBUG then
+    self.runCadenceCalls = (self.runCadenceCalls or 0) + 1
+    self.runCadenceClock = (self.runCadenceClock or 0) + script.updateDt()
+    if self.runCadenceClock >= 5.0 then
+      sb.logInfo("BEHAVIOR run() %s calls per 5.0 script-seconds -- if these "
+        .. "lines are 5s apart it is per-tick, if ~60s apart it is throttled",
+        sb.printJson(self.runCadenceCalls))
+      self.runCadenceCalls = 0
+      self.runCadenceClock = 0
+    end
+  end
+
   if self.actionState.stateDesc() == "" then
     self.currentActionScore = 0
   end

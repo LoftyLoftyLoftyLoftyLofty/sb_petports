@@ -86,6 +86,7 @@
       "/monsters/lofty_petports/petports_petBehavior.lua",
       "/monsters/lofty_petports/petports_contract.lua",
       "/monsters/lofty_petports/petports_placement.lua",
+      "/monsters/lofty_petports/petports_think.lua",
       "/monsters/lofty_petports/petportsSleepAction.lua",
       "/monsters/lofty_petports/petportsTaskAction.lua"
     ],

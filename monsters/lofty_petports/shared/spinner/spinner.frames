@@ -1,0 +1,21 @@
+//  Shared thinking-spinner sheet. Nine 16x16 cells: eight spinner frames and
+//  one deliberately EMPTY cell.
+//
+//  The blank exists because the "none" state still has to draw SOMETHING. A
+//  part state with no image is not a reliable way to hide a part, and the
+//  drone animation already carries a note about "invisible" being mapped to a
+//  visible frame -- this is that mistake's fix, made in advance.
+//
+//  <frame> is 1-indexed in .animation files, so spin.1 .. spin.8 is what a
+//  "frames" : 8 state expands to. Do not renumber from zero.
+
+{
+  "frameGrid" : {
+    "size" : [16, 16],
+    "dimensions" : [9, 1],
+    "names" : [
+      [ "spin.1", "spin.2", "spin.3", "spin.4",
+        "spin.5", "spin.6", "spin.7", "spin.8", "blank" ]
+    ]
+  }
+}
