@@ -109,6 +109,20 @@ local EXPLORE_RATE = 300
 --  How long to wait for a drop to stop falling before calling it unreachable.
 local SETTLE_GRACE = 2.0
 
+--  NET DISPLACEMENT WATCHDOG.
+--
+--  The pathfinder's jump model is more optimistic than the movement
+--  controller, so it will happily plan an arc the unit cannot complete. The
+--  unit jumps, falls short, PathFinder:update trips its stuckTimer, re-plans,
+--  and produces the identical arc -- forever.
+--
+--  Distance TRAVELLED cannot detect this, because jumping in place accumulates
+--  plenty of it. Net displacement over a window can: a unit making real
+--  progress moves away from where it was, a unit bouncing off a ledge does not.
+local PROGRESS_WINDOW = 5.0
+local PROGRESS_DISTANCE = 2.5
+local PROGRESS_STRIKES = 2
+
 --  How many vent hops one task may make.
 --
 --  Bounded because the routing is GREEDY: the unit picks the vent whose far
@@ -130,13 +144,8 @@ local PROBE_LIMIT = 8.0
 --  moves, so distance costs nothing.
 local VENT_APPROACH_TIMEOUT = 8.0
 
---  How close a unit must get to a vent mouth to use it.
---
---  GENEROUS ON PURPOSE. A vent embedded in a wall has no walkable alcove, so
---  the nearest place a unit can actually stand is often the floor several tiles
---  below. If this is tighter than that drop, the unit arrives at the only spot
---  it can reach and still refuses to use the vent.
-local VENT_USE_DISTANCE = 4.0
+--  Fallback radius, used only if the vent's occupied spaces cannot be read.
+local VENT_USE_DISTANCE = 2.0
 
 --  Decide whether a vent can rescue this task, probing if the answer is not yet
 --  known. Returns "routing" (a leg was started), "probing" (still finding out),
@@ -236,6 +245,29 @@ local function tryVentRoute(stateData, target)
   return "routing"
 end
 
+--  Is the unit OVERLAPPING the vent's occupied tiles?
+--
+--  A radius is the wrong test: too small and a unit that cannot quite reach the
+--  mouth never enters, too large and it triggers while merely walking PAST a
+--  vent on the way somewhere else. The vent's own footprint is the honest
+--  answer, and `objectBounds` in pathutil.lua already builds it from
+--  world.objectSpaces translated to the object's position.
+function petportsTaskAction.touchingVent(ventId)
+  local ok, ventRect = pcall(objectBounds, ventId)
+
+  if not ok or type(ventRect) ~= "table" or type(ventRect[1]) ~= "number" then
+    --  Could not read the footprint. Fall back to a tight radius rather than
+    --  refusing to ever enter.
+    return world.magnitude(mcontroller.position(), world.entityPosition(ventId))
+      <= VENT_USE_DISTANCE
+  end
+
+  local me = rect.translate(mcontroller.boundBox(), mcontroller.position())
+
+  return not (me[1] > ventRect[3] or me[3] < ventRect[1]
+           or me[2] > ventRect[4] or me[4] < ventRect[2])
+end
+
 function petportsTaskAction.enterWith(args)
   local task = args.petportsTask
   if task == nil then return nil end
@@ -296,6 +328,9 @@ function petportsTaskAction.enterWith(args)
     probeTimer = 0,
     plan = nil,
     planIndex = 1,
+    progressTimer = 0,
+    progressAnchor = nil,
+    progressStrikes = 0,
     ventHops = 0,
     triedVents = {},
 
@@ -555,8 +590,7 @@ function petportsTaskAction.update(dt, stateData)
     --  adjacency.
     --
     --  Using the vent is a proximity test, not an arrival test.
-    if world.magnitude(mcontroller.position(), stateData.viaVent.entry)
-       <= VENT_USE_DISTANCE then
+    if petportsTaskAction.touchingVent(stateData.viaVent.id) then
       local ok = pcall(world.callScriptedEntity,
         stateData.viaVent.id, "petports_ventTravel",
         entity.id(), stateData.viaVent.destinationId)
@@ -767,6 +801,41 @@ function petportsTaskAction.update(dt, stateData)
       stateData.arrived = true
       animator.setAnimationState("movement", "idle")
       return false
+    end
+
+    --  Net displacement check.
+    stateData.progressTimer = (stateData.progressTimer or 0) + dt
+    if stateData.progressTimer >= PROGRESS_WINDOW then
+      stateData.progressTimer = 0
+
+      local now = mcontroller.position()
+      local reference = stateData.progressAnchor or now
+      local moved = world.magnitude(now, reference)
+      stateData.progressAnchor = now
+
+      if moved < PROGRESS_DISTANCE then
+        stateData.progressStrikes = (stateData.progressStrikes or 0) + 1
+
+        if stateData.progressStrikes >= PROGRESS_STRIKES then
+          --  Try a vent before giving up: a route the unit cannot jump may be
+          --  reachable another way.
+          local routing = tryVentRoute(stateData, target)
+          if routing ~= "none" then
+            stateData.routing = true
+            stateData.progressStrikes = 0
+            return false
+          end
+
+          report(stateData, "failed",
+            "no net progress -- moved " .. sb.printJson(moved)
+            .. " in " .. sb.printJson(PROGRESS_WINDOW * PROGRESS_STRIKES)
+            .. "s at " .. sb.printJson(now)
+            .. " heading for " .. sb.printJson(approachTo))
+          return true
+        end
+      else
+        stateData.progressStrikes = 0
+      end
     end
 
     --  Once a second: how far has it actually got?
