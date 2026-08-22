@@ -103,8 +103,15 @@ function petports_claimTake(workId, ownerId, unitId, workType, position, ttl)
   if existing ~= nil
      and existing.owner ~= ownerId
      and (existing.expires or 0) > now then
+    sb.logInfo("PETPORTS claim %s REFUSED to %s: held by %s until %s (now %s)",
+      workId, tostring(ownerId), tostring(existing.owner),
+      sb.printJson(existing.expires), sb.printJson(now))
     return false
   end
+
+  sb.logInfo("PETPORTS claim %s TAKEN by %s for unit %s, type %s at %s",
+    workId, tostring(ownerId), tostring(unitId), tostring(workType),
+    sb.printJson(position))
 
   claims[workId] = {
     owner = ownerId,
@@ -137,7 +144,14 @@ function petports_claimRelease(workId, ownerId)
   local claim = claims[workId]
 
   if claim == nil then return false end
-  if ownerId ~= nil and claim.owner ~= ownerId then return false end
+
+  if ownerId ~= nil and claim.owner ~= ownerId then
+    sb.logInfo("PETPORTS claim %s release REFUSED to %s: held by %s",
+      workId, tostring(ownerId), tostring(claim.owner))
+    return false
+  end
+
+  sb.logInfo("PETPORTS claim %s RELEASED by %s", workId, tostring(ownerId))
 
   claims[workId] = nil
   writeClaims(claims)
@@ -217,6 +231,11 @@ function petports_registryPublish(portId, entry)
   registry.ports[portId] = entry
   registry.version = (registry.version or 0) + 1
   world.setProperty(REGISTRY_KEY, registry)
+
+  sb.logInfo("PETPORTS registry publish %s -> version %s, rect %s, unitPosition %s, busy %s",
+    tostring(portId), sb.printJson(registry.version),
+    sb.printJson(entry.rect), sb.printJson(entry.unitPosition),
+    tostring(entry.busy))
 end
 
 --  Remove an entry. MUST be called from die(), never uninit -- uninit also
@@ -230,22 +249,65 @@ function petports_registryRemove(portId)
   local registry = petports_registry()
   if registry.ports == nil or registry.ports[portId] == nil then return end
 
+  sb.logInfo("PETPORTS registry REMOVE %s (was rect %s)",
+    tostring(portId), sb.printJson(registry.ports[portId].rect))
+
   registry.ports[portId] = nil
   registry.version = (registry.version or 0) + 1
   world.setProperty(REGISTRY_KEY, registry)
 end
 
---  Drop any entry whose position sits inside this rect. Called by a port when
---  it publishes at init, so a port that was mined and replaced does not leave
---  its predecessor behind as a phantom.
-function petports_registryClearAt(rect, exceptPortId)
+--  Bump the version without changing any entry.
+--
+--  For structural changes that are NOT a port coming or going -- a vent being
+--  rewired is the case this exists for. A rewired vent changes what routes are
+--  possible without changing coverage by one tile, so nothing in `ports` moves
+--  and a port diffing rects alone would see nothing at all.
+--
+--  Deliberately routed through the SAME version counter as coverage rather than
+--  a second notification channel. Ports already poll this once and re-derive
+--  everything they care about; giving vents their own path would mean two
+--  mechanisms that can disagree about whether an update happened.
+--
+--  Callers must only touch on an ACTUAL change. A vent that touches on every
+--  refresh tick turns a cheap poll into a permanent cache invalidation storm.
+function petports_registryTouch()
+  local registry = petports_registry()
+  registry.version = (registry.version or 0) + 1
+  world.setProperty(REGISTRY_KEY, registry)
+
+  sb.logInfo("PETPORTS registry touched -> version %s", sb.printJson(registry.version))
+end
+
+--  Drop any entry standing on THIS EXACT TILE. Called by a port when it
+--  publishes at init, so a port that was mined and replaced does not leave its
+--  predecessor behind as a phantom.
+--
+--  TAKES A POSITION, NOT A RECT.
+--
+--  It used to take the port's whole COVERAGE RECT and clear every entry inside
+--  it, which is a 32-tile square. Any two ports built within sixteen tiles of
+--  each other therefore evicted one another from the registry at init, and
+--  since publishRegistry only ever runs on the first update, the loser never
+--  came back. It then reported "network now 0 ports" -- not even counting
+--  itself -- and union dispatch was dead for the rest of the session.
+--
+--  Observed with six ports on a test planet: the last one to initialise cleared
+--  four of the other five, including the only port holding a unit.
+--
+--  A replaced port occupies the SAME TILE as its predecessor. That is the whole
+--  case this exists for, so that is the whole test.
+function petports_registryClearAt(position, exceptPortId)
   local registry = petports_registry()
   if registry.ports == nil then return end
 
   local changed = false
   for portId, entry in pairs(registry.ports) do
     if portId ~= exceptPortId and entry.position ~= nil
-       and petports_rectContains(rect, entry.position) then
+       and math.floor(entry.position[1]) == math.floor(position[1])
+       and math.floor(entry.position[2]) == math.floor(position[2]) then
+      sb.logInfo("PETPORTS registry clearAt %s: dropping predecessor %s at %s",
+        sb.printJson(position), tostring(portId), sb.printJson(entry.position))
       registry.ports[portId] = nil
       changed = true
     end
@@ -350,24 +412,43 @@ end
 --  from vent exit E?" Terrain decides that, not the drop -- so the answer is
 --  reusable for every future target in the same neighbourhood.
 --
---  Positions are therefore BUCKETED. A farm is a handful of buckets, storage is
---  a handful more; after the first query in each, every later one is a table
---  lookup and no pathfinding at all.
+--  Position keys are TILE-EXACT: math.floor of each coordinate, nothing more.
 --
---  16 tiles is deliberately coarse. Too fine and nothing is ever reused; too
---  coarse and a bucket spans a wall, which produces a wrong answer -- though a
---  wrong answer is self-correcting, since the route it suggests fails fast and
---  the failure invalidates the entry.
+--  These were quantised into 16-tile buckets so that every drop in a
+--  neighbourhood shared one cached answer. That traded correctness for reuse,
+--  and the trade was bad in both directions.
+--
+--  A bucket is larger than a room. A unit shut in a cage and the port outside
+--  it landed in the same bucket, so probes ran from the wrong side of a wall
+--  and every edge came back reachable; the unit then stood still for the full
+--  approach timeout walking into solid ground. The cache also held the reverse
+--  error -- the cage's own vent recorded unreachable, from a probe taken
+--  outside the cage -- and because the key was identical either way, nothing
+--  could re-ask the question.
+--
+--  Subdividing does not fix that. The quantisation is GEOMETRIC and the cached
+--  fact is TOPOLOGICAL: two points either side of a wall are adjacent by every
+--  distance metric and unreachable from each other in fact. A smaller bucket
+--  only makes a straddling wall rarer.
+--
+--  The reuse given up is smaller than it looks. The expensive part of this
+--  cache is the vent-to-vent graph, keyed by ENTITY ID and never quantised at
+--  all -- that is the V^2 term, and a cold one measured 47 seconds. Only the
+--  unit-to-vent and vent-to-target edges lose sharing, and those are O(V). A
+--  target key rarely hit anyway, since every drop lands somewhere new.
+--
+--  If reuse ever needs recovering, the answer is a key derived from CONNECTED
+--  REGION rather than a coarser grid: two positions share a key when a unit can
+--  actually walk between them. Correct by construction, and considerably more
+--  machinery than this needs.
 
-local BUCKET_SIZE = 16
-
-function petports_bucketKey(position)
+function petports_tileKey(position)
   return string.format("%s,%s",
-    math.floor(position[1] / BUCKET_SIZE),
-    math.floor(position[2] / BUCKET_SIZE))
+    math.floor(position[1]),
+    math.floor(position[2]))
 end
 
---  One cache entry per (destination bucket, vent exit).
+--  One cache entry per (destination tile, vent exit).
 function petports_routeKey(position, exitId)
-  return petports_bucketKey(position) .. "|" .. tostring(exitId)
+  return petports_tileKey(position) .. "|" .. tostring(exitId)
 end

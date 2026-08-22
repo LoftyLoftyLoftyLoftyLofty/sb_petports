@@ -71,10 +71,19 @@ end
 --  Velocity is cleared so a unit that entered mid-stride does not shoot out of
 --  the destination still carrying its momentum.
 function petports_ventTeleport(position)
-  if position == nil then return false end
+  if position == nil then
+    sb.logInfo("UNIT ventTeleport called with nil position")
+    return false
+  end
+
+  local before = mcontroller.position()
 
   mcontroller.setPosition(position)
   mcontroller.setVelocity({0, 0})
+
+  sb.logInfo("UNIT teleported: from %s asked %s ended at %s",
+    sb.printJson(before), sb.printJson(position),
+    sb.printJson(mcontroller.position()))
 
   return true
 end
@@ -94,8 +103,20 @@ end
 --  supposed to know whether its unit is busy, and silently swapping tasks would
 --  strand the claim on the one that got dropped.
 function petports_assignTask(task)
-  if task == nil or task.id == nil then return false end
-  if self.petportsTask ~= nil then return false end
+  if task == nil or task.id == nil then
+    sb.logInfo("UNIT refusing assignment: malformed task %s", sb.printJson(task))
+    return false
+  end
+
+  if self.petportsTask ~= nil then
+    sb.logInfo("UNIT refusing assignment %s: already holding %s",
+      tostring(task.id), tostring(self.petportsTask.id))
+    return false
+  end
+
+  sb.logInfo("UNIT accepted task %s type %s target %s at %s",
+    tostring(task.id), tostring(task.type),
+    sb.printJson(task.target), sb.printJson(task.position))
 
   self.petportsTask = task
   return true
@@ -110,6 +131,8 @@ end
 --  the task is gone -- the claim expired, the work vanished, the port is being
 --  broken.
 function petports_clearTask()
+  sb.logInfo("UNIT task cleared by port (was %s)",
+    self.petportsTask and tostring(self.petportsTask.id) or "none")
   self.petportsTask = nil
   return true
 end
@@ -175,6 +198,18 @@ end
 --  NOT persisted: entity ids do not survive a reload, and the port re-pushes on
 --  every spawn.
 function petports_setVents(vents)
+  local summary = {}
+  for _, vent in ipairs(vents or {}) do
+    local exits = {}
+    for _, destination in ipairs(vent.destinations or {}) do
+      table.insert(exits, destination.id)
+    end
+    table.insert(summary, {id = vent.id, entry = vent.entry, exits = exits})
+  end
+
+  sb.logInfo("UNIT received %s vents: %s",
+    sb.printJson(#(vents or {})), sb.printJson(summary))
+
   self.petportsVents = vents
   return true
 end
@@ -200,7 +235,8 @@ end
 --  Walk edges between two vent mouths depend on TERRAIN ONLY, so they are
 --  cached forever and shared with every other unit through the port. Only edges
 --  involving the unit's own position or the target are query-dependent, and
---  those are bucketed so they are reused across every drop in a neighbourhood.
+--  those are keyed to the exact tile, so they are reused only when a unit is
+--  genuinely standing where it stood before.
 --
 --  WHY A GRAPH AND NOT A SINGLE LOOKUP. An earlier version asked only "does
 --  this exit reach the target?". That rejects any first hop whose exit reaches
@@ -213,17 +249,22 @@ end
 --  whenever the network is and survive reloads, while units respawn.
 
 function petports_setRouteCache(cache)
+  local count = 0
+  for _ in pairs(cache or {}) do count = count + 1 end
+
+  sb.logInfo("UNIT received route cache with %s edges", sb.printJson(count))
+
   self.petportsRoutes = cache or {}
   return true
 end
 
---  Node keys. Bucketed for positions, exact for vent mouths.
+--  Node keys. Tile-exact for positions, entity id for vent mouths.
 function petports_unitKey(position)
-  return "u:" .. petports_bucketKey(position)
+  return "u:" .. petports_tileKey(position)
 end
 
 function petports_targetKey(position)
-  return "t:" .. petports_bucketKey(position)
+  return "t:" .. petports_tileKey(position)
 end
 
 function petports_entryKey(ventId)
@@ -247,6 +288,13 @@ end
 function petports_learnRoute(fromKey, toKey, reachable, portUniqueId)
   self.petportsRoutes = self.petportsRoutes or {}
   local key = edgeKey(fromKey, toKey)
+
+  local previous = self.petportsRoutes[key]
+  if previous ~= nil and previous ~= reachable then
+    sb.logInfo("UNIT cache CONTRADICTED for %s: was %s, now %s",
+      key, tostring(previous), tostring(reachable))
+  end
+
   self.petportsRoutes[key] = reachable
 
   if portUniqueId then
@@ -313,7 +361,15 @@ function petports_probeStep(from, to, fromKey, toKey, exploreRate)
 
     --  A target that is not a valid standing position is never pathfound at
     --  all -- find() checks this and so must we, since we are bypassing it.
+    if self.petportsProbe ~= nil then
+      sb.logInfo("UNIT probe RESTART: was %s -> %s, now %s -> %s (previous progress discarded)",
+        tostring(self.petportsProbe.fromKey), tostring(self.petportsProbe.toKey),
+        tostring(fromKey), tostring(toKey))
+    end
+
     if not validStandingPosition(to, false) then
+      sb.logInfo("UNIT probe %s -> %s skipped: %s is not a valid standing position",
+        tostring(fromKey), tostring(toKey), sb.printJson(to))
       self.petportsProbe = nil
       return false
     end
@@ -322,18 +378,29 @@ function petports_probeStep(from, to, fromKey, toKey, exploreRate)
     finder.exploreRate = function() return exploreRate or 300 end
     finder:start(from, to)
 
+    sb.logInfo("UNIT probe START %s -> %s: from %s to %s rate %s",
+      tostring(fromKey), tostring(toKey), sb.printJson(from), sb.printJson(to),
+      sb.printJson(exploreRate or 300))
+
     self.petportsProbe = {
       finder = finder,
       from = from, to = to,
-      fromKey = fromKey, toKey = toKey
+      fromKey = fromKey, toKey = toKey,
+      ticks = 0
     }
   end
 
+  self.petportsProbe.ticks = self.petportsProbe.ticks + 1
+
   local result = self.petportsProbe.finder.aStar:explore(exploreRate or 300)
   if result == true then
+    sb.logInfo("UNIT probe %s -> %s REACHABLE after %s ticks",
+      tostring(fromKey), tostring(toKey), sb.printJson(self.petportsProbe.ticks))
     self.petportsProbe = nil
     return true
   elseif result == false then
+    sb.logInfo("UNIT probe %s -> %s UNREACHABLE after %s ticks (A* exhausted)",
+      tostring(fromKey), tostring(toKey), sb.printJson(self.petportsProbe.ticks))
     self.petportsProbe = nil
     return false
   end
@@ -345,7 +412,11 @@ end
 --  Returns true, false, or "searching".
 local function edgeReachable(fromPos, fromKey, toPos, toKey, portId, exploreRate)
   local known = petports_routeKnown(fromKey, toKey)
-  if known ~= nil then return known end
+  if known ~= nil then
+    sb.logInfo("UNIT edge %s -> %s answered FROM CACHE: %s",
+      tostring(fromKey), tostring(toKey), tostring(known))
+    return known
+  end
 
   local result = petports_probeStep(fromPos, toPos, fromKey, toKey, exploreRate)
   if result == "searching" then return "searching" end
@@ -368,18 +439,38 @@ end
 --  `origin` FREEZES THE STARTING NODE for the duration of a planning session.
 --
 --  Planning from the unit's live position re-keys every `u:` edge the moment it
---  drifts into a new 16-tile bucket, discarding all probe work done so far and
---  starting again -- and each unreachable edge costs a full A* exhaustion. A
---  unit that shifts bucket mid-plan can burn minutes and never finish.
+--  drifts to a new tile, discarding all probe work done so far and starting
+--  over. Probing is measured in tens of seconds, so a unit that shifts position
+--  mid-plan can burn minutes and never finish.
 --
---  Freezing it also makes the cached edges reusable: the same origin bucket
---  answers for every future task planned from there.
-function petports_planRoute(target, maxHops, portId, exploreRate, allowWalk, origin)
+--  Freezing it also keeps the cached edges usable: the same origin tile means
+--  the same keys
+--  `avoid` is a set of vent ids to exclude, keyed by entity id.
+--
+--  The caller blacklists a vent whose mouth it could not physically reach. That
+--  judgement is about walking, not wiring, so the planner cannot derive it --
+--  and without it the planner cheerfully returns the same unreachable vent
+--  forever. Observed as a unit replanning an identical one-hop route every
+--  eight seconds until the drop despawned.
+--
+--  The caller was already recording this. It simply had no way to say so: there
+--  was no parameter, and nothing here read one. A blacklist written in two
+--  places and read in none is worse than no blacklist, because it reads as
+--  handled.
+function petports_planRoute(target, maxHops, portId, exploreRate, allowWalk, origin, avoid)
   local vents = self.petportsVents
-  if vents == nil or #vents == 0 then return nil end
+  if vents == nil or #vents == 0 then
+    sb.logInfo("UNIT planRoute impossible: vent list is %s",
+      vents == nil and "nil (port never pushed one)" or "empty")
+    return nil
+  end
 
   local here = origin or mcontroller.position()
   local targetKey = petports_targetKey(target)
+
+  sb.logInfo("UNIT planRoute to %s from %s (frozen origin %s), %s vents, maxHops %s, allowWalk %s",
+    sb.printJson(target), sb.printJson(here), tostring(origin ~= nil),
+    sb.printJson(#vents), sb.printJson(maxHops), tostring(allowWalk))
 
   local queue = {{
     position = here,
@@ -392,11 +483,19 @@ function petports_planRoute(target, maxHops, portId, exploreRate, allowWalk, ori
     local node = table.remove(queue, 1)
 
     --  Can we finish from here on foot?
+    sb.logInfo("UNIT planRoute expanding node %s at %s (%s legs so far, %s queued)",
+      tostring(node.key), sb.printJson(node.position),
+      sb.printJson(#node.legs), sb.printJson(#queue))
+
     local finishes = edgeReachable(node.position, node.key, target, targetKey,
       portId, exploreRate)
     if finishes == "searching" then return "probing" end
     if finishes == true then
-      if #node.legs > 0 then return node.legs end
+      if #node.legs > 0 then
+        sb.logInfo("UNIT planRoute FOUND a %s-hop route to %s",
+          sb.printJson(#node.legs), sb.printJson(target))
+        return node.legs
+      end
 
       --  Zero legs means the target is walkable FROM WHERE WE STAND.
       --
@@ -405,14 +504,36 @@ function petports_planRoute(target, maxHops, portId, exploreRate, allowWalk, ori
       --  new, and "just walk" is a fresh and usually correct answer. Observed a
       --  unit land beside its target, discard exactly this answer, plan a
       --  second hop, and take it.
-      if allowWalk then return "walk" end
+      if allowWalk then
+        sb.logInfo("UNIT planRoute: target walkable from %s, no hops needed",
+          sb.printJson(node.position))
+        return "walk"
+      end
+
+      sb.logInfo("UNIT planRoute: target walkable from %s but allowWalk is false -- continuing into vents",
+        sb.printJson(node.position))
     end
 
     if #node.legs < maxHops then
       for _, vent in ipairs(vents) do
         local entryKey = petports_entryKey(vent.id)
 
-        if not visited[entryKey] then
+        --  Excluded vents are skipped WITHOUT probing. Probing one costs up to
+        --  PROBE_LIMIT and the answer is already known to be useless.
+        --  A vent with no exits cannot be traversed -- it can only be arrived
+        --  at. Skipping BEFORE probing matters: reaching it might cost a full
+        --  PROBE_LIMIT to establish something the planner could not use.
+        local traversable = vent.destinations ~= nil and #vent.destinations > 0
+        local excluded = avoid ~= nil and avoid[vent.id] == true
+
+        if not traversable or excluded or visited[entryKey] then
+          sb.logInfo("UNIT planRoute skipping vent %s: %s",
+            sb.printJson(vent.id),
+            (not traversable) and "no exits wired (terminal)"
+              or (excluded and "blacklisted this task" or "already visited"))
+        end
+
+        if traversable and not excluded and not visited[entryKey] then
           local canReach = edgeReachable(node.position, node.key,
             vent.entry, entryKey, portId, exploreRate)
           if canReach == "searching" then return "probing" end
@@ -448,6 +569,8 @@ function petports_planRoute(target, maxHops, portId, exploreRate, allowWalk, ori
     end
   end
 
+  sb.logInfo("UNIT planRoute EXHAUSTED: no route to %s through %s vents within %s hops",
+    sb.printJson(target), sb.printJson(#vents), sb.printJson(maxHops))
   return nil
 end
 
@@ -467,14 +590,19 @@ function petports_probeTimeout(portId)
   if self.petportsProbe.fromKey and self.petportsProbe.toKey then
     petports_learnRoute(self.petportsProbe.fromKey, self.petportsProbe.toKey,
       false, portId)
-    sb.logInfo("UNIT probe %s -> %s timed out, recording unreachable",
-      self.petportsProbe.fromKey, self.petportsProbe.toKey)
+    sb.logInfo("UNIT probe %s -> %s TIMED OUT after %s ticks, recording unreachable (this is a guess, not an answer)",
+      self.petportsProbe.fromKey, self.petportsProbe.toKey,
+      sb.printJson(self.petportsProbe.ticks or 0))
   end
 
   self.petportsProbe = nil
 end
 
 function petports_cancelProbe()
+  if self.petportsProbe ~= nil then
+    sb.logInfo("UNIT probe %s -> %s CANCELLED, nothing recorded",
+      tostring(self.petportsProbe.fromKey), tostring(self.petportsProbe.toKey))
+  end
   self.petportsProbe = nil
 end
 
@@ -512,7 +640,7 @@ function petports_drawRouteDebug(stateData)
   local unitKey = petports_unitKey(here)
 
   --  Every vent mouth we know about, coloured by cached reachability from the
-  --  bucket we are standing in.
+  --  tile we are standing in.
   for _, vent in ipairs(self.petportsVents or {}) do
     local known = petports_routeKnown(unitKey, petports_entryKey(vent.id))
     local colour = reachColour(known)

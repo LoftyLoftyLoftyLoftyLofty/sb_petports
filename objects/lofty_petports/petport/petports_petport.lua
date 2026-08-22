@@ -65,7 +65,7 @@ local WRITE_INTERVAL = 10.0
 
 --  Instrumentation, dormant by default (see handoff §4). Flip to true to trace
 --  the item <-> pet state round trip in starbound.log.
-local DEBUG = false
+local DEBUG = true
 
 --------------------------------------------------------------------------------
 --  COVERAGE AND WORK
@@ -125,6 +125,18 @@ local FAILURE_BACKOFF = { 10.0, 30.0, 120.0, 600.0 }
 --  How many failed walk-home attempts before the unit is re-homed instead.
 local RECALL_LIMIT = 2
 
+--  Consecutive unreachable-target failures before the unit is treated as
+--  SEALED IN rather than merely unlucky.
+--
+--  Distinct from RECALL_LIMIT, which counts failures to walk home. This counts
+--  failures to reach WORK, and it exists because those are the only symptom a
+--  unit shut inside a room ever produces.
+--
+--  Small on purpose. A genuinely unreachable target fails fast once its edges
+--  are cached, so three in a row is seconds of evidence, not minutes -- and a
+--  unit that can still reach anything at all resets this on its first success.
+local STRANDED_LIMIT = 3
+
 --  How far beyond the network's coverage to look for usable vents.
 local VENT_SEARCH_MARGIN = 24
 
@@ -167,7 +179,9 @@ local function publishRegistry()
 
   --  Clear any predecessor sitting at our own position first, so a port that
   --  was mined and replaced does not leave a phantom coverage zone behind.
-  petports_registryClearAt(rect, stationUniqueId())
+  --  OUR POSITION, not our rect. Clearing by rect evicted every other port
+  --  within sixteen tiles -- see petports_registryClearAt.
+  petports_registryClearAt(entity.position(), stationUniqueId())
 
   petports_registryPublish(stationUniqueId(), {
     rect = rect,
@@ -200,13 +214,39 @@ local function publishUnitPosition()
     position = world.entityPosition(self.petId)
   end
 
-  local moved = position == nil or entry.unitPosition == nil
-    or world.magnitude(position, entry.unitPosition) > UNIT_POSITION_THRESHOLD
+  --  NIL IS NOT MOVEMENT WHEN IT WAS ALREADY NIL.
+  --
+  --  This read `position == nil or entry.unitPosition == nil or <distance>`,
+  --  so an empty port -- position permanently nil -- computed moved = true on
+  --  every single tick, skipped the unchanged-state early return below, and
+  --  republished forever. Each publish bumps the shared registry version, and
+  --  every port polls that version and re-derives its network and re-gathers
+  --  its vents when it moves.
+  --
+  --  Measured: one empty port drove the version from 17249 to 18037 in about
+  --  sixty-five seconds, so every port in the world re-ran gatherVents roughly
+  --  twelve times a second for as long as it sat there.
+  --
+  --  What is actually being asked is "has anything changed", and going from no
+  --  unit to no unit is not a change.
+  local appeared = (position == nil) ~= (entry.unitPosition == nil)
+  local moved = appeared
+    or (position ~= nil and entry.unitPosition ~= nil
+        and world.magnitude(position, entry.unitPosition) > UNIT_POSITION_THRESHOLD)
 
-  if not moved and entry.busy == busy then return end
+  if not moved and entry.busy == busy
+     and entry.hasUnit == (position ~= nil) then return end
+
+  sb.logInfo("PETPORT %s publishing unit position %s (busy %s, hasUnit %s, was %s)",
+    stationUniqueId(), sb.printJson(position), tostring(busy),
+    tostring(position ~= nil), sb.printJson(entry.unitPosition))
 
   entry.unitPosition = position
   entry.busy = busy
+
+  --  Explicit, so a reader never has to infer "has a unit" from a position that
+  --  might merely be stale.
+  entry.hasUnit = position ~= nil
   petports_registryPublish(stationUniqueId(), entry)
 end
 
@@ -250,8 +290,32 @@ local function gatherVents()
         local okEntry, entry = pcall(world.callScriptedEntity, id, "petports_ventEntryPosition")
         local okDest, dests = pcall(world.callScriptedEntity, id, "petports_ventDestinations")
 
-        if okEntry and entry ~= nil and okDest and dests ~= nil and #dests > 0 then
+        --  EVERY vent is listed, including ones with no exits.
+        --
+        --  Requiring destinations used to drop receive-only and unlinked vents
+        --  from the list entirely -- and pruneRouteCache treats absence from
+        --  the list as "this vent is gone", so their cached edges were deleted
+        --  on every refresh and re-probed from scratch when they came back.
+        --  Under directional wiring a terminal vent legitimately has no exits,
+        --  so that would have thrown away good probe work constantly.
+        --
+        --  Pruning now means only what it says: the vent was physically
+        --  removed. planRoute skips vents it cannot traverse.
+        local exits = {}
+        for _, destination in ipairs(dests or {}) do
+          table.insert(exits, destination.id)
+        end
+
+        sb.logInfo("PETPORT %s gatherVents: vent %s entry %s okEntry %s okDest %s exits %s",
+          stationUniqueId(), sb.printJson(id), sb.printJson(entry),
+          tostring(okEntry), tostring(okDest), sb.printJson(exits))
+
+        if okEntry and entry ~= nil and okDest and dests ~= nil then
           table.insert(vents, { id = id, entry = entry, destinations = dests })
+        else
+          sb.logInfo("PETPORT %s gatherVents: DROPPED vent %s -- entry %s dests %s",
+            stationUniqueId(), sb.printJson(id),
+            sb.printJson(entry), sb.printJson(dests))
         end
       end
     end
@@ -260,12 +324,64 @@ local function gatherVents()
   return vents
 end
 
+--  A stable signature for the gathered vent list: every vent and every exit it
+--  offers. Compared as a string so a rewiring is detected without a deep diff.
+local function ventSignature(vents)
+  local rows = {}
+  for _, vent in ipairs(vents or {}) do
+    local exits = {}
+    for _, destination in ipairs(vent.destinations or {}) do
+      table.insert(exits, tostring(destination.id))
+    end
+    table.sort(exits)
+    table.insert(rows, tostring(vent.id) .. ">" .. table.concat(exits, ","))
+  end
+  table.sort(rows)
+  return table.concat(rows, ";")
+end
+
+--  Drop cached edges that name a vent which no longer exists.
+--
+--  NOT A BLANKET CLEAR, unlike the coverage path above. The two cases are not
+--  alike: a coverage change moves terrain the cache was derived from, while a
+--  rewiring changes only which exits connect to which. Every cached edge is a
+--  WALKABILITY fact -- "from the exit of vent 17, can this unit walk to vent
+--  18's mouth" -- and rewiring 84 makes none of them false.
+--
+--  The distinction is worth the extra code because probing is the single most
+--  expensive thing the system does. An instrumented cold cache spent 47 seconds
+--  on one plan, all of it A* exhaustion on unreachable edges. Discarding that to
+--  react to a wire being moved would be a far worse trade than the stale entry
+--  it protects against, and vanished ids are the only genuinely dead entries.
+local function pruneRouteCache(vents)
+  if self.routeCache == nil then return 0 end
+
+  local live = {}
+  for _, vent in ipairs(vents or {}) do live[tostring(vent.id)] = true end
+
+  local removed = 0
+  for key in pairs(self.routeCache) do
+    --  Keys are "<from>><to>", where a vent appears as "e:<id>" or "x:<id>".
+    for id in string.gmatch(key, "[ex]:(%-?%d+)") do
+      if not live[id] then
+        self.routeCache[key] = nil
+        removed = removed + 1
+        break
+      end
+    end
+  end
+
+  return removed
+end
+
 local function refreshNetwork()
   local version = petports_registryVersion()
   local unitChanged = false
 
   if version ~= self.registryVersion then
     self.registryVersion = version
+
+    sb.logInfo("PETPORT %s registry version moved to %s", stationUniqueId(), sb.printJson(version))
 
     local rects = petports_networkRects(stationUniqueId())
     if not petports_rectListsEqual(rects, self.networkRects) then
@@ -283,6 +399,27 @@ local function refreshNetwork()
       self.routeCache = {}
       self.routeDirty = true
     end
+
+    --  VENTS ARE A FIRST-CLASS TRIGGER, NOT A PASSENGER.
+    --
+    --  gatherVents used to be called only inside the push block below, and that
+    --  block only ran when the RECTS changed. A vent rewired in place bumps the
+    --  version, moves no rect, and so pushed nothing -- the unit kept its old
+    --  vent list and kept planning routes through exits that no longer existed.
+    --
+    --  Gathered after the rect update above, since it reads self.networkRects.
+    local vents = gatherVents()
+    if ventSignature(vents) ~= self.ventSignature then
+      self.ventSignature = ventSignature(vents)
+      unitChanged = true
+
+      local removed = pruneRouteCache(vents)
+      if removed > 0 then self.routeDirty = true end
+
+      sb.logInfo("PETPORT %s vent topology changed: %s vents, %s stale edges dropped",
+        stationUniqueId(), #vents, removed)
+    end
+    self.vents = vents
   end
 
   --  Also push on a fresh unit, which has no list yet, and whenever the route
@@ -295,7 +432,20 @@ local function refreshNetwork()
 
     --  Vent list rides the same push. Entity ids are not stable across a
     --  reload, which is fine: this is re-gathered and re-pushed on every spawn.
-    world.callScriptedEntity(self.petId, "petports_setVents", gatherVents())
+    --
+    --  Reuses the list gathered above when there is one. This block also fires
+    --  on a fresh unit with the version unmoved, so it must still be able to
+    --  gather for itself.
+    if self.vents == nil then
+      self.vents = gatherVents()
+      self.ventSignature = ventSignature(self.vents)
+    end
+    sb.logInfo("PETPORT %s pushing to unit %s: %s rects, %s vents, routeDirty %s, freshUnit %s",
+      stationUniqueId(), sb.printJson(self.petId),
+      sb.printJson(#(self.networkRects or {})), sb.printJson(#(self.vents or {})),
+      tostring(self.routeDirty), tostring(self.pushedToPet ~= self.petId))
+
+    world.callScriptedEntity(self.petId, "petports_setVents", self.vents)
     world.callScriptedEntity(self.petId, "petports_setRouteCache", self.routeCache)
     self.routeDirty = false
     self.pushedToPet = self.petId
@@ -334,6 +484,24 @@ local function noteFailure(taskId, reason)
     sb.logInfo("PETPORT %s recall failed (%s of %s): %s",
       stationUniqueId(), self.recallFailures, RECALL_LIMIT, reason)
     return
+  end
+
+  --  COUNT FAILURES THAT MEAN "CANNOT GET THERE FROM HERE".
+  --
+  --  A unit sealed into a room by a rewiring produces exactly one symptom: every
+  --  target becomes unroutable. It never strays, never dies, and never misses a
+  --  deadline once its edges are cached -- it just fails everything, instantly,
+  --  forever. Counting that is the only way the port can notice.
+  --
+  --  Reset by any successful task, so a single awkward drop behind a locked
+  --  door cannot accumulate its way to a re-home.
+  sb.logInfo("PETPORT %s noteFailure %s: %s", stationUniqueId(), taskId, tostring(reason))
+
+  if string.find(reason or "", "no vent route", 1, true) ~= nil
+     or string.find(reason or "", "no route", 1, true) ~= nil then
+    self.unreachableFailures = (self.unreachableFailures or 0) + 1
+    sb.logInfo("PETPORT %s unreachable failure %s of %s: %s",
+      stationUniqueId(), self.unreachableFailures, STRANDED_LIMIT, reason)
   end
 
   --  A failure while the unit was outside its network says nothing about the
@@ -445,11 +613,14 @@ function init()
   self.lastReject = nil
   self.lastRejectAt = 0
   self.recallFailures = 0
+  self.unreachableFailures = 0
   self.taskAge = 0
   self.registryVersion = -1
   self.networkRects = nil
+  self.vents = nil
+  self.ventSignature = nil
 
-  --  Route cache: "<destination bucket>|<vent exit id>" -> bool.
+  --  Route cache: "<destination tile>|<vent exit id>" -> bool.
   --
   --  Produced by UNITS, because only they can pathfind. Held HERE because a
   --  port is resident whenever the network is and survives reloads, while units
@@ -472,6 +643,10 @@ function init()
 
     if report.outcome == "done" then
       self.workFailures[report.id] = nil
+
+      --  It got somewhere. Whatever the last few failures were, it is not
+      --  sealed in.
+      self.unreachableFailures = 0
       if report.id == "return:" .. stationUniqueId() then
         self.recallFailures = 0
       end
@@ -866,9 +1041,30 @@ end
 --  pathfinding per candidate per drop, which is enormously more expensive than
 --  the occasional wrong pick -- and a wrong pick self-corrects, because an
 --  unreachable target fails fast and backs off.
+--  How long to keep deferring a drop to a unit that is not taking it.
+--
+--  Deferral is a TIE-BREAK, NOT A VETO. Straight-line distance says nothing
+--  about whether the other unit can actually get there, and in a player's base
+--  it is routinely wrong: a unit three tiles from a drop through a cage wall
+--  reads as nearer than a free unit twenty tiles away with a clear path.
+--
+--  Worse, the veto had no timeout. If the "closer" unit never takes the drop --
+--  wrong side of a wall, idle, already failing it -- every port deferred
+--  forever and nobody collected anything. Observed with a caged unit: the port
+--  reported drops as claimed or backed off when in truth it was standing aside
+--  for a neighbour that was never going to move.
+--
+--  After this many seconds of a drop sitting unclaimed, take it anyway. Long
+--  enough that a genuinely closer unit wins the race in normal play, short
+--  enough that a player notices nothing.
+local DEFER_GRACE = 12.0
+
 local function anotherUnitIsCloser(position, ourDistance)
   for _, entry in ipairs(petports_networkMembers(stationUniqueId())) do
-    if entry.unitPosition ~= nil and not entry.busy then
+    --  A port with no unit socketed cannot take anything, whatever position it
+    --  last published. Belt and braces against a stale entry surviving a crash,
+    --  an unload, or a version of this file that stopped publishing on empty.
+    if entry.unitPosition ~= nil and not entry.busy and entry.hasUnit ~= false then
       if world.magnitude(entry.unitPosition, position) < ourDistance then
         return true
       end
@@ -919,8 +1115,19 @@ local function collectionWork()
     return nil, "no drops in network coverage (own rect " .. sb.printJson(rect) .. ")"
   end
 
+  sb.logInfo("PETPORT %s scan: %s drops in %s rects",
+    stationUniqueId(), sb.printJson(#drops), sb.printJson(#rects))
+
   local origin = entity.position()
   local best, bestDistance = nil, nil
+
+  --  Why each drop was passed over. The old message named only two of the three
+  --  possible causes, so deferral -- the one that can deadlock -- was invisible
+  --  and presented as a backoff that did not exist.
+  local rejected = { claimed = 0, backedOff = 0, deferred = 0, gone = 0 }
+
+  self.deferredSince = self.deferredSince or {}
+  local stillDeferred = {}
 
   for _, dropId in ipairs(drops) do
     local workId = "drop:" .. dropId
@@ -934,9 +1141,26 @@ local function collectionWork()
       or claim.owner == stationUniqueId()
       or (claim.expires or 0) <= world.time())
 
-    if free and world.entityExists(dropId) then
+    if backedOff then
+      sb.logInfo("PETPORT %s drop %s SKIPPED: backed off until %s (now %s, failures %s)",
+        stationUniqueId(), sb.printJson(dropId),
+        sb.printJson(failure["until"]), sb.printJson(world.time()),
+        sb.printJson(failure.count))
+      rejected.backedOff = rejected.backedOff + 1
+    elseif not free then
+      sb.logInfo("PETPORT %s drop %s SKIPPED: claimed by %s until %s",
+        stationUniqueId(), sb.printJson(dropId),
+        tostring(claim.owner), sb.printJson(claim.expires))
+      rejected.claimed = rejected.claimed + 1
+    elseif not world.entityExists(dropId) then
+      sb.logInfo("PETPORT %s drop %s SKIPPED: entity gone",
+        stationUniqueId(), sb.printJson(dropId))
+      rejected.gone = rejected.gone + 1
+    else
       local position = world.entityPosition(dropId)
-      if position ~= nil then
+      if position == nil then
+        rejected.gone = rejected.gone + 1
+      else
         --  Distance is measured from the UNIT, not the port -- it is the unit
         --  that has to walk.
         local from = origin
@@ -945,16 +1169,49 @@ local function collectionWork()
         end
 
         local distance = world.magnitude(from, position)
-        if (bestDistance == nil or distance < bestDistance)
-           and not anotherUnitIsCloser(position, distance) then
+
+        --  Stand aside for a closer unit, but only for a while. See DEFER_GRACE.
+        local defer = anotherUnitIsCloser(position, distance)
+        if defer then
+          local since = self.deferredSince[workId] or world.time()
+          stillDeferred[workId] = since
+
+          if world.time() - since >= DEFER_GRACE then
+            sb.logInfo("PETPORT %s taking %s anyway: deferred %ss with no taker",
+              stationUniqueId(), workId,
+              sb.printJson(math.floor(world.time() - since)))
+            defer = false
+          end
+        end
+
+        if defer then
+          sb.logInfo("PETPORT %s drop %s SKIPPED: deferred to a closer unit (ours %s away)",
+            stationUniqueId(), sb.printJson(dropId), sb.printJson(distance))
+          rejected.deferred = rejected.deferred + 1
+        elseif bestDistance == nil or distance < bestDistance then
+          sb.logInfo("PETPORT %s drop %s TAKEABLE at %s, %s away -- new best",
+            stationUniqueId(), sb.printJson(dropId),
+            sb.printJson(position), sb.printJson(distance))
           best, bestDistance = dropId, distance
+        else
+          sb.logInfo("PETPORT %s drop %s takeable but further (%s vs best %s)",
+            stationUniqueId(), sb.printJson(dropId),
+            sb.printJson(distance), sb.printJson(bestDistance))
         end
       end
     end
   end
 
+  --  Drops no longer being deferred stop accruing. Rebuilt each pass rather
+  --  than pruned, so a drop that vanishes cannot leak an entry.
+  self.deferredSince = stillDeferred
+
   if best == nil then
-    return nil, "all drops in rect are claimed or backed off after failing"
+    return nil, string.format(
+      "%s drops in rect, none takeable: %s claimed, %s backed off, "
+      .. "%s deferred to a closer unit, %s gone",
+      #drops, rejected.claimed, rejected.backedOff,
+      rejected.deferred, rejected.gone)
   end
 
   return {
@@ -988,12 +1245,15 @@ end
 --  So recall gets a small retry budget, and then the unit is RE-HOMED: despawned
 --  and respawned at the port. The unit's state lives in the item, so this costs
 --  nothing except the walk it was going to make anyway, and it always works.
+--  Despawn and respawn at the port. The unit's learned state lives in the item,
+--  so this costs nothing but the walk it was going to fail anyway.
 local function rehomeUnit(reason)
   sb.logInfo("PETPORT %s re-homing unit: %s", stationUniqueId(), reason)
 
   --  Round-trips state through the item, exactly as an unsocket would.
   saveAndDespawn()
   self.recallFailures = 0
+  self.unreachableFailures = 0
   self.spawnTimer = 0
 end
 
@@ -1001,10 +1261,40 @@ local function returnWork()
   local rect = coverageRect()
 
   if self.petId == nil or not world.entityExists(self.petId) then return nil end
-  if inNetwork(world.entityPosition(self.petId)) then
+
+  --  STRANDED IS ABOUT REACHABILITY, NOT GEOGRAPHY.
+  --
+  --  This used to return early whenever the unit was inside coverage, on the
+  --  assumption that a unit in the rect is a unit that is fine. A player
+  --  unlinking the only vent out of an enclosed corridor breaks that: the unit
+  --  sits WELL INSIDE the rect and cannot reach a single thing, including the
+  --  port. The early return also reset recallFailures, so the counter could
+  --  never climb and rehomeUnit -- the one thing that could have freed it --
+  --  was unreachable code.
+  --
+  --  Both predicates now have to agree the unit is healthy. If it is failing to
+  --  reach work, it falls through to the recall ladder regardless of where it
+  --  is standing: a recall is attempted first, because a unit that CAN walk
+  --  home should, and only a unit that cannot gets despawned and respawned.
+  local stranded = (self.unreachableFailures or 0) >= STRANDED_LIMIT
+  local inside = inNetwork(world.entityPosition(self.petId))
+
+  --  THIS DECISION PRE-EMPTS ALL COLLECTION. returnWork is consulted before
+  --  collectionWork, so whenever it returns a task the port collects nothing --
+  --  and until now it did that silently.
+  sb.logInfo("PETPORT %s returnWork: unit at %s inNetwork %s stranded %s (unreachableFailures %s of %s, recallFailures %s of %s)",
+    stationUniqueId(), sb.printJson(world.entityPosition(self.petId)),
+    tostring(inside), tostring(stranded),
+    sb.printJson(self.unreachableFailures or 0), sb.printJson(STRANDED_LIMIT),
+    sb.printJson(self.recallFailures or 0), sb.printJson(RECALL_LIMIT))
+
+  if not stranded and inside then
     self.recallFailures = 0
     return nil
   end
+
+  sb.logInfo("PETPORT %s returnWork: RECALLING -- collection is suppressed this pass",
+    stationUniqueId())
 
   if (self.recallFailures or 0) >= RECALL_LIMIT then
     rehomeUnit("stranded outside rect at "
@@ -1169,6 +1459,10 @@ local function trackWork()
     return reject("unit is no longer holding the task")
   end
 
+  sb.logInfo("PETPORT %s tracking %s, age %s of %s",
+    stationUniqueId(), self.task.id,
+    sb.printJson(self.taskAge), sb.printJson(TASK_DEADLINE))
+
   petports_claimRefresh(self.task.id, stationUniqueId(), CLAIM_TTL)
 end
 
@@ -1178,17 +1472,73 @@ local function workUpdate(dt)
   self.workTimer = WORK_INTERVAL
 
   petports_claimsSweep()
+
+  --  RE-PUBLISH IF OUR OWN ENTRY HAS GONE.
+  --
+  --  publishRegistry otherwise runs only on the first update, so a port that
+  --  lost its entry stayed lost for the rest of the session -- it reported
+  --  "network now 0 ports", could not count even itself, and union dispatch
+  --  died with it. That is exactly what registryClearAt used to do to every
+  --  port within sixteen tiles.
+  --
+  --  Cheap: one world property read on the work timer, and the branch is not
+  --  taken in normal operation.
+  --
+  --  CANNOT LOOP. Re-publishing calls registryClearAt, which now matches only
+  --  the port's exact tile -- and two ports cannot occupy one tile, so the only
+  --  entry it can clear is a predecessor with no live object left to re-publish
+  --  it. Restoring the rect-wide clear would turn this into two ports evicting
+  --  and re-publishing each other forever.
+  local registry = petports_registry()
+  if (registry.ports or {})[stationUniqueId()] == nil then
+    sb.logInfo("PETPORT %s registry entry is missing -- re-publishing",
+      stationUniqueId())
+    publishRegistry()
+  end
+
   refreshNetwork()
   publishUnitPosition()
 
   --  Cheap: loadUniqueEntity on an existing stagehand and out.
   ensureResidency()
 
+  sb.logInfo("PETPORT %s tick: unit %s task %s",
+    stationUniqueId(), sb.printJson(self.petId),
+    self.task and self.task.id or "none")
+
   if self.task == nil then
     dispatchWork()
   else
     trackWork()
   end
+end
+
+function setHullAnimationStateIntent(intent)
+
+	local currentHullState = animator.animationState("hullState")
+	if intent == "open" then
+		if 
+			currentHullState ~= "opening" and 
+			currentHullState ~= "open"
+		then
+		setAnimationStateForAllHullComponents("opening")
+		end
+		
+	elseif intent == "close" then
+		if 
+			currentHullState ~= "closing" and 
+			currentHullState ~= "closed"
+		then
+		setAnimationStateForAllHullComponents("closing")
+		end
+	end
+end
+
+function setAnimationStateForAllHullComponents(anim)
+	if not anim then return end
+	animator.setAnimationState("hullState", anim)
+    animator.setAnimationState("doorState", anim)
+    animator.setAnimationState("interiorState", anim)
 end
 
 function update(dt)
@@ -1215,12 +1565,26 @@ function update(dt)
       saveAndDespawn()
       self.petData = nil
     end
-    animator.setAnimationState("portState", "off")
+    setHullAnimationStateIntent("close")
 
     --  This branch returns BEFORE workUpdate, so nothing below runs while the
     --  port sits empty -- no sweep, no refresh. A claim left here would survive
     --  until this port's next init cleared it. Release it on the way out.
     abandonTask("item removed")
+
+    --  AND THE UNIT POSITION, for exactly the same reason.
+    --
+    --  publishUnitPosition also lives past this return, so an emptied port kept
+    --  publishing the position its unit had when the item came out -- forever.
+    --  anotherUnitIsCloser reads unitPosition ~= nil and busy == false as a
+    --  live idle unit, so every emptied port left a GHOST that could veto drops
+    --  near wherever it last stood. In a base with several ports, that suppresses
+    --  dispatch for work nobody is ever going to do.
+    --
+    --  publishUnitPosition already handles this correctly -- it resolves the
+    --  position to nil when there is no pet, and treats nil as movement. It was
+    --  simply never reached.
+    publishUnitPosition()
     return
   end
 
@@ -1247,14 +1611,14 @@ function update(dt)
     if self.petData == nil then
       --  Not a pet item, or a malformed one. Do nothing rather than spawning
       --  something unintended.
-      animator.setAnimationState("portState", "off")
+      setHullAnimationStateIntent("close")
       abandonTask("socketed item is not a pet")
       return
     end
     self.spawnTimer = 0
   end
 
-  animator.setAnimationState("portState", "on")
+  setHullAnimationStateIntent("open")
 
   --  Spawn, or respawn after an unload/death.
   if self.petId == nil or not world.entityExists(self.petId) then

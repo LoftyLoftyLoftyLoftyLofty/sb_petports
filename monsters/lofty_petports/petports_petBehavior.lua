@@ -215,6 +215,10 @@ function petBehavior.scoreAction(action)
     return status.resource("playful")
 
   elseif action == "sleep" then
+    --  Gated by petports_allowSleep in the monstertype. Scoring zero keeps the
+    --  action registered but unwinnable, which is a smaller change than pulling
+    --  it out of actionStates.
+    if not config.getParameter("petports_allowSleep", true) then return 0 end
     return status.resource("sleepy")
 
   elseif action == "emote" then
@@ -282,6 +286,9 @@ end
 function petBehavior.reactToObject(entityId)
   local entityName = world.entityName(entityId)
   if entityName == "pethouse" then
+    --  A pethouse queues sleep by REACTION rather than by score, so the score
+    --  gate above does not cover this path on its own.
+    if not config.getParameter("petports_allowSleep", true) then return end
     petBehavior.queueAction("sleep", {sleepTarget = entityId})
   end
 end

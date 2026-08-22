@@ -51,6 +51,13 @@ function petportsSleepAction.description()
 end
 
 function petportsSleepAction.enterWith(args)
+  --  Third and final gate. The other two are in petports_petBehavior.lua; this
+  --  one catches any caller that reaches the state some other way.
+  if not config.getParameter("petports_allowSleep", true) then
+    sb.logInfo("UNIT sleep refused: petports_allowSleep is false")
+    return nil
+  end
+
   if not args.sleepAction and not args.sleepTarget then return nil end
 
   if args.sleepAction and status.resourcePercentage("sleepy") < 1 then
