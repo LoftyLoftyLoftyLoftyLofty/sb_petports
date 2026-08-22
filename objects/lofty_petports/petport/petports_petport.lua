@@ -1648,6 +1648,34 @@ end
 --  radishes fit before a trip back is a real feature and not this one -- and
 --  the version of it that guesses wrong is worse than the version that always
 --  returns.
+--  CAN THIS CRATE TAKE ANY OF WHAT WE ARE CARRYING?
+--
+--  Asks the engine the same question depositing asks, WITHOUT depositing.
+--  world.containerItemsCanFit runs the real merge rules -- matching descriptors
+--  top up existing partial stacks, non-matching ones need a free slot -- so a
+--  crate with no empty slots but a half-full stack of the thing we are holding
+--  correctly reads as usable.
+--
+--  WHY THIS REPLACES A BACKOFF. `fullContainers` marked the whole crate refused
+--  for 60s the moment ANY stack bounced. One steak that needed a free slot
+--  therefore diverted every stackable item in the load to a second crate, when
+--  those items would have merged into stacks already sitting in the first. The
+--  refusal was about one descriptor and was applied to all of them.
+--
+--  Returns nil when the engine cannot be asked, so the caller can fall back
+--  rather than treating "unknown" as "no".
+local function containerTakesAny(containerId)
+  if world.containerItemsCanFit == nil then return nil end
+  if self.petData == nil or self.petData.cargo == nil then return nil end
+
+  for _, stack in ipairs(self.petData.cargo) do
+    local fits = world.containerItemsCanFit(containerId, stack)
+    if fits ~= nil and fits > 0 then return true end
+  end
+
+  return false
+end
+
 local function depositWork()
   if self.petData == nil then return nil end
   if self.petData.cargo == nil or #self.petData.cargo == 0 then return nil end
@@ -1665,12 +1693,29 @@ local function depositWork()
   self.fullContainers = self.fullContainers or {}
 
   for _, beacon in ipairs(targets) do
-    local backedOff = (self.fullContainers[beacon.id] or 0) > now
+    --  Ask the crate directly. Only if the engine will not answer do we fall
+    --  back to the blunt time-based backoff.
+    local takesAny = containerTakesAny(beacon.id)
+    local backedOff
+
+    if takesAny == nil then
+      backedOff = (self.fullContainers[beacon.id] or 0) > now
+      if backedOff then
+        sb.logInfo("PETPORT %s deposit target %s SKIPPED: was full, retrying in %s (no containerItemsCanFit)",
+          stationUniqueId(), sb.printJson(beacon.id),
+          sb.printJson((self.fullContainers[beacon.id] or 0) - now))
+      end
+    else
+      backedOff = not takesAny
+      if backedOff then
+        sb.logInfo("PETPORT %s deposit target %s SKIPPED: cannot take any of %s carried stack(s)",
+          stationUniqueId(), sb.printJson(beacon.id),
+          sb.printJson(#self.petData.cargo))
+      end
+    end
 
     if backedOff then
-      sb.logInfo("PETPORT %s deposit target %s SKIPPED: was full, retrying in %s",
-        stationUniqueId(), sb.printJson(beacon.id),
-        sb.printJson((self.fullContainers[beacon.id] or 0) - now))
+      --  nothing further; try the next beacon
     else
       --  Stand next to the container, not on it. The container's own position
       --  is not a standing position for the same reason a petport's is not --
@@ -1768,12 +1813,26 @@ function depositCargo(containerId)
   self.petData.cargo = remaining
 
   if #remaining > 0 then
-    self.fullContainers = self.fullContainers or {}
-    self.fullContainers[containerId] = world.time() + CONTAINER_FULL_BACKOFF
+    --  A LEFTOVER IS ABOUT A DESCRIPTOR, NOT ABOUT THE CRATE. The next dispatch
+    --  asks containerTakesAny with whatever is still held, so a crate that can
+    --  still merge part of the load stays eligible and only a crate that can
+    --  take NOTHING is passed over -- no timer needed, and no waiting out 60
+    --  seconds for a crate that was never actually unusable.
+    --
+    --  The timed backoff is kept ONLY for the case where the engine cannot be
+    --  asked, so that path still makes progress instead of retrying the same
+    --  full crate forever.
+    if world.containerItemsCanFit == nil then
+      self.fullContainers = self.fullContainers or {}
+      self.fullContainers[containerId] = world.time() + CONTAINER_FULL_BACKOFF
+    end
 
-    sb.logInfo("PETPORT %s container %s could not take %s of %s stack(s) -- backing it off for %s",
+    sb.logInfo("PETPORT %s container %s could not take %s of %s stack(s) (%s)",
       stationUniqueId(), sb.printJson(containerId), sb.printJson(#remaining),
-      sb.printJson(before), sb.printJson(CONTAINER_FULL_BACKOFF))
+      sb.printJson(before),
+      world.containerItemsCanFit == nil
+        and ("backed off for " .. sb.printJson(CONTAINER_FULL_BACKOFF))
+        or "will re-check per descriptor")
   end
 
   --  Cargo changed, and the world drop for it is long gone. Same reasoning as
