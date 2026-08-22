@@ -97,6 +97,11 @@
     //  unit outright if it cannot find an anchor of this name.
     "anchorName" : "petports_petport",
 
+    //  SLEEP KILL SWITCH. False while dispatch and routing are being tested --
+    //  a unit that nods off mid-diagnosis produces a stationary unit that looks
+    //  identical to a stalled one.
+    "petports_allowSleep" : false,
+
     "petResources" : {
       "sleepy" : 10,
       "hunger" : 60,

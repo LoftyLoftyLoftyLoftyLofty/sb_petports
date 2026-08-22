@@ -107,20 +107,20 @@
         },
         "partStates" : {
           "movement" : {
-            "idle"      : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "stand"     : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "walk"      : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "run"       : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "swim"      : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "jumping"   : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "falling"   : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "eat"       : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "eatloop"   : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "inspect"   : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "sleep"     : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "sound"     : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "blink"     : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "invisible" : { "properties" : { "image" : "<partImage>:fly.<frame>" } }
+            "idle"      : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "stand"     : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "walk"      : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "run"       : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "swim"      : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "jumping"   : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "falling"   : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "eat"       : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "eatloop"   : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "inspect"   : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "sleep"     : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "sound"     : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "blink"     : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "invisible" : { "properties" : { "image" : "<partImage>:run.<frame>" } }
           }
         }
       },
@@ -143,20 +143,20 @@
         },
         "partStates" : {
           "movement" : {
-            "idle"      : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "stand"     : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "walk"      : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "run"       : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "swim"      : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "jumping"   : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "falling"   : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "eat"       : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "eatloop"   : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "inspect"   : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "sleep"     : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "sound"     : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "blink"     : { "properties" : { "image" : "<partImage>:fly.<frame>" } },
-            "invisible" : { "properties" : { "image" : "<partImage>:fly.<frame>" } }
+            "idle"      : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "stand"     : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "walk"      : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "run"       : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "swim"      : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "jumping"   : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "falling"   : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "eat"       : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "eatloop"   : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "inspect"   : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "sleep"     : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "sound"     : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "blink"     : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "invisible" : { "properties" : { "image" : "<partImage>:run.<frame>" } }
           }
         }
       },
