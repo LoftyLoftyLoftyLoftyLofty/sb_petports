@@ -1,0 +1,47 @@
+{
+  "itemName" : "petports_beacon_deposit",
+  "price" : 0,
+  "rarity" : "Common",
+  "category" : "petports_beacon",
+  "inventoryIcon" : "petports_beacon_deposit.png",
+  "description" : "Drop this in a container and units will deposit what they collect there.",
+  "shortdescription" : "Deposit Beacon",
+  "itemTags" : [ "petports", "petports_beacon" ],
+
+  //  BEACONS ARE READ WHERE THEY SIT.
+  //
+  //  A beacon is not placed and it is not activated to take effect. It is an
+  //  ITEM SITTING IN A CONTAINER, and the port reads container contents to
+  //  decide what that container is for. So a player retasks a chest by dropping
+  //  one in, and untasks it by taking it out. No config UI to find, no separate
+  //  registry of designated containers to keep in sync with the world, and
+  //  nothing to leak when a chest is mined.
+  //
+  //  The behaviour tag lives HERE, in the item's config, rather than in
+  //  instance parameters -- so every copy of the item works, including one
+  //  crafted, spawned, or pulled off a corpse. Read it with
+  //  root.itemConfig(descriptor).config.petports_sortingBeaconBehavior;
+  //  parameters are merged over the top the same way petData is, which leaves
+  //  room for per-instance configuration later without changing how it is found.
+  "petports_sortingBeaconBehavior" : "deposit",
+
+  //  Stackable, deliberately. One beacon per container is what matters, and a
+  //  player with twelve deposit chests should carry one stack, not twelve
+  //  slots. Nothing per-instance is stored yet; when the config UI lands, a
+  //  CONFIGURED beacon will need maxStack 1 while a blank one stays stackable.
+  "maxStack" : 1000,
+
+  //  ACTIVE ITEM, THOUGH IT DOES NOTHING WHEN USED YET.
+  //
+  //  It is an .activeitem rather than a plain .item purely so that "use it to
+  //  configure it" has somewhere to live later -- filters, priorities, request
+  //  amounts. An activeitem with no script errors on activation, so the stub
+  //  below exists to make using one a no-op instead of a log full of nil
+  //  indexes.
+  "scripts" : [ "/items/lofty_petports/beacons/petports_beacon.lua" ],
+  "animation" : "/items/lofty_petports/beacons/petports_beacon.animation",
+  "inspectionKind" : "",
+
+  "twoHanded" : false,
+  "handPosition" : [-4, -2]
+}

@@ -3,5 +3,10 @@
 		"op" : "add",
 		"path" : "/labels/petports_pet",
 		"value" : "Petport Pet"
+	},
+	{
+		"op" : "add",
+		"path" : "/labels/petports_beacon",
+		"value" : "Petport Beacon"
 	}
 ]
