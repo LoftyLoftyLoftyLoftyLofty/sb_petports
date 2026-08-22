@@ -162,6 +162,9 @@
     },
     "idle" : { "idleTime" : [4, 8], "standTime" : 2 },
     "pounce" : { "maxRange" : 10, "minRange" : 5 },
+	
+	//	go to the port and stay there when idle. do not wander
+	"strictPortTethering" : true,
 
     "movementSettings" : {
       "collisionPoly" : [ [-0.5, -0.5], [-0.3, -0.75], [0.3, -0.75], [0.5, -0.5],

@@ -515,10 +515,21 @@ local function report(stateData, outcome, reason)
     })
   end
 
-  --  Clear locally regardless of whether the port heard us. A unit holding a
-  --  task the port has forgotten would re-assert it every tick forever; the
-  --  port re-dispatches if it still wants the work done.
-  self.petportsTask = nil
+  --  CLEAR ONLY THE TASK THIS REPORT IS ABOUT.
+  --
+  --  This used to nil self.petportsTask unconditionally. That is correct while
+  --  the only tasks are dispatched ones, and destructive the moment a leash
+  --  task exists: finishing or abandoning a leash would silently throw away a
+  --  real task the port had assigned in the meantime, and the port would then
+  --  sit in trackWork waiting for a report on work the unit no longer knew it
+  --  had.
+  --
+  --  Otherwise unchanged: a unit holding a task the port has forgotten would
+  --  re-assert it every tick forever, so its own task still goes.
+  if self.petportsTask ~= nil and task ~= nil
+     and self.petportsTask.id == task.id then
+    self.petportsTask = nil
+  end
 end
 
 --  Resolve a raw world position to somewhere a ground unit can actually stand.
@@ -625,6 +636,28 @@ end
 function petportsTaskAction.update(dt, stateData)
   local task = stateData.task
 
+  --  HAND THE STATE BACK WHEN REAL WORK ARRIVES.
+  --
+  --  A leash task is not dispatched work: it is not in self.petportsTask, it
+  --  holds no claim, and nothing is owed a report for it. So the unit can be
+  --  carrying one out at the exact moment the port assigns a real task -- which
+  --  is the ordinary case for a tethered unit, since it is walking home most of
+  --  the time it is not working.
+  --
+  --  petBehavior CANNOT preempt this from its side. Its pick loop skips any
+  --  action whose state is already the running one, and a real task and a leash
+  --  task are both "petportsTaskAction" -- so the higher score is computed,
+  --  compared, and then discarded. Leaving voluntarily is the only way the swap
+  --  can happen at all.
+  --
+  --  Returning true WITHOUT reporting: the leash was never dispatched, and
+  --  reporting it would be reporting work nobody asked for.
+  if task.port == nil and self.petportsTask ~= nil then
+    sb.logInfo("UNIT leaving station-keeping: task %s was dispatched",
+      tostring(self.petportsTask.id))
+    return true
+  end
+
   --  PUMP THE THINKING INDICATOR HERE, NOT FROM petBehavior.run().
   --
   --  run()'s cadence is NOT verified. Vanilla groundPet.lua may only call it on
@@ -661,6 +694,18 @@ function petportsTaskAction.update(dt, stateData)
 
     if routing == "walk" then
       stateData.routing = false
+      return false
+    end
+
+    if routing == "none" and task.hold then
+      --  Station-keeping never vent-routes (tryVentRoute refuses "return"
+      --  tasks), so reaching here means only that the direct walk is hard.
+      --  There is nowhere else for a tethered unit to be, so keep walking.
+      sb.logInfo("UNIT station-keeping: no route offered, retrying the walk")
+      stateData.routing = false
+      stateData.searchingTimer = 0
+      stateData.approachTimer = APPROACH_TIMEOUT
+      freshPather()
       return false
     end
 
@@ -1027,6 +1072,14 @@ function petportsTaskAction.update(dt, stateData)
             return false
           end
 
+          if task.hold then
+            sb.logInfo("UNIT station-keeping: no net progress, resetting and retrying")
+            stateData.progressStrikes = 0
+            stateData.approachTimer = APPROACH_TIMEOUT
+            freshPather()
+            return false
+          end
+
           report(stateData, "failed",
             "no net progress -- moved " .. sb.printJson(moved)
             .. " in " .. sb.printJson(PROGRESS_WINDOW * PROGRESS_STRIKES)
@@ -1113,6 +1166,18 @@ function petportsTaskAction.update(dt, stateData)
     end
 
     stateData.approachTimer = stateData.approachTimer - dt
+    if stateData.approachTimer <= 0 and task.hold then
+      --  A tethered unit that cannot get home has nowhere else to be, and
+      --  failing the task just drops it back into wanderState -- the exact
+      --  outcome the tether exists to prevent. Keep trying instead.
+      sb.logInfo("UNIT could not reach station within %s s, retrying from %s",
+        sb.printJson(APPROACH_TIMEOUT), sb.printJson(mcontroller.position()))
+      stateData.approachTimer = APPROACH_TIMEOUT
+      stateData.routingTried = false
+      freshPather()
+      return false
+    end
+
     if stateData.approachTimer <= 0 then
       --  Ran out of walking time rather than failing to find a route. A vent
       --  may still shorten what is left, so try one before giving up -- vent
@@ -1149,6 +1214,12 @@ function petportsTaskAction.update(dt, stateData)
       return true
     end
 
+    if self.pathing.stuck and task.hold then
+      sb.logInfo("UNIT station-keeping: PathMover reported stuck, rebuilding pather")
+      freshPather()
+      return false
+    end
+
     if self.pathing.stuck then
       sb.logInfo("UNIT pathing.stuck is set -- vanilla PathMover gave up")
       report(stateData, "failed", "stuck at " .. sb.printJson(mcontroller.position()))
@@ -1182,6 +1253,41 @@ function petportsTaskAction.update(dt, stateData)
       report(stateData, "failed",
         "arrived but could not take drop (pcall ok=" .. tostring(ok) .. ")")
       return true
+    end
+
+    return false
+  end
+
+  --  ON STATION. Do NOT report done.
+  --
+  --  Completing the task returns the unit to the state machine's idle branch,
+  --  and vanilla wanderState takes it straight back out again -- which is the
+  --  behaviour strictPortTethering exists to stop. Staying in the state keeps
+  --  the action state occupied, and wanderState only runs when it is not.
+  --
+  --  The unit leaves this by exactly one route: the check at the top of this
+  --  function, when the port dispatches real work.
+  if task.hold then
+    local home = world.magnitude(mcontroller.position(), task.position)
+
+    --  Pushed off station -- shoved by a player, a door, an explosion. Walk
+    --  back rather than holding a position the unit is no longer standing in.
+    if home > (task.slack or 3.0) then
+      sb.logInfo("UNIT pushed off station (%s from port), returning",
+        sb.printJson(home))
+      stateData.arrived = false
+      stateData.approachTimer = APPROACH_TIMEOUT
+      stateData.progressStrikes = 0
+      freshPather()
+      return false
+    end
+
+    if not stateData.onStation then
+      stateData.onStation = true
+      task.arrivedHome = true
+      animator.setAnimationState("movement", "idle")
+      sb.logInfo("UNIT on station at %s (port %s), holding until dispatched",
+        sb.printJson(mcontroller.position()), sb.printJson(task.position))
     end
 
     return false
@@ -1226,7 +1332,12 @@ function petportsTaskAction.leavingState(stateData)
   --  Interrupted rather than completed -- the state was pre-empted, or the unit
   --  is being recalled. Hand the task back so the claim is released rather than
   --  left to age out.
-  if self.petportsTask ~= nil then
+  --  Only if the held task is THE ONE THIS STATE WAS RUNNING. A leash task
+  --  yielding to a freshly dispatched task passes through here with the new
+  --  task already held, and reporting that as interrupted would fail the work
+  --  before it started.
+  if self.petportsTask ~= nil and stateData.task ~= nil
+     and self.petportsTask.id == stateData.task.id then
     report(stateData, "failed", "interrupted")
   end
 end

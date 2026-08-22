@@ -159,9 +159,37 @@ end
 --  task names one, so this is a purely local errand the port never hears about
 --  -- which is right: nothing was dispatched, no claim was taken, and nothing
 --  is owed a report.
+--  How far from the port a tethered unit may drift before it walks back.
+--
+--  Not zero, and not tight. The unit stands on ground the port resolves for
+--  itself, arrival has slop, and a threshold smaller than that slop means the
+--  unit is permanently one step from home and permanently re-approaching.
+local TETHER_SLACK = 3.0
+
 function petports_leashTask()
   if self.petportsHome == nil then return nil end
-  if petports_inNetwork(mcontroller.position()) then
+
+  --  TWO DIFFERENT LEASHES, ONE TASK.
+  --
+  --  Without strictPortTethering this is the original behaviour: come home only
+  --  after wandering clean out of the network, and otherwise let vanilla
+  --  wanderState do as it likes. That is right for a biological pet.
+  --
+  --  With it, the bound is the PORT rather than the network, because a robot
+  --  has no reason to be anywhere else. It walks back to the ground under its
+  --  port and holds there -- see the `hold` flag, which is what stops the task
+  --  completing and handing the unit back to wanderState.
+  local tethered = config.getParameter("strictPortTethering", false)
+
+  if tethered then
+    local distance = world.magnitude(mcontroller.position(), self.petportsHome)
+    if distance <= TETHER_SLACK and self.petportsLeashTask ~= nil
+       and self.petportsLeashTask.arrivedHome then
+      --  Already on station. Keep returning the task so the action state stays
+      --  entered and wanderState never gets a turn.
+      return self.petportsLeashTask
+    end
+  elseif petports_inNetwork(mcontroller.position()) then
     self.petportsLeashTask = nil
     return nil
   end
@@ -173,7 +201,20 @@ function petports_leashTask()
     position = self.petportsHome,
     dwell = 0
   }
+
+  --  RAW PORT POSITION, DELIBERATELY UNRESOLVED.
+  --
+  --  A port is an object and its position is not somewhere a unit can stand.
+  --  approachPoint already resolves a raw target through
+  --  findGroundPosition(target, -20, 1, ...) -- twenty tiles DOWN -- which is
+  --  exactly "the nearest walkable tile beneath the port". Resolving it here
+  --  instead would duplicate that, and the last two attempts to be clever about
+  --  resolving a target before handing it to approachPoint both broke it. See
+  --  the vent-mouth notes in petportsTaskAction.
   self.petportsLeashTask.position = self.petportsHome
+  self.petportsLeashTask.hold = tethered
+  self.petportsLeashTask.slack = TETHER_SLACK
+
   return self.petportsLeashTask
 end
 
