@@ -369,9 +369,48 @@ local function edgeKey(fromKey, toKey)
 end
 
 --  true / false / nil for unknown.
+--  HOW LONG A CACHED ANSWER IS TRUSTED.
+--
+--  ASYMMETRIC, DELIBERATELY. The two answers fail in completely different ways:
+--
+--    a stale FALSE is permanent damage. It blocks a route that now works, and
+--    nothing ever re-tests it, so the unit refuses forever. Nothing in the
+--    system invalidates walkability -- pruneRouteCache only drops edges naming
+--    vents that no longer exist, so a player mining one tile invalidates
+--    nothing at all.
+--
+--    a stale TRUE is self-correcting. The unit walks it, fails, and relearns on
+--    the spot. The cost is one wasted attempt.
+--
+--  So negatives expire quickly and positives are kept. Measured motivation: a
+--  session's worth of tests were poisoned by falses learned before the terrain
+--  was edited, and the fix was re-placing the port to drop the cache.
+local ROUTE_TTL_FALSE = 60.0
+local ROUTE_TTL_TRUE = 600.0
+
+--  Entries are { r = reachable, t = when learned }. Bare booleans from an older
+--  save are treated as expired rather than trusted forever -- an unknown age on
+--  a false is exactly the thing this exists to stop.
 function petports_routeKnown(fromKey, toKey)
   if self.petportsRoutes == nil then return nil end
-  return self.petportsRoutes[edgeKey(fromKey, toKey)]
+
+  local entry = self.petportsRoutes[edgeKey(fromKey, toKey)]
+  if entry == nil then return nil end
+
+  if type(entry) ~= "table" then return nil end
+
+  local age = world.time() - (entry.t or 0)
+  local ttl = entry.r and ROUTE_TTL_TRUE or ROUTE_TTL_FALSE
+
+  if age > ttl then
+    sb.logInfo("UNIT cache EXPIRED for %s (%s, age %s of %s) -- will re-probe",
+      edgeKey(fromKey, toKey), tostring(entry.r),
+      sb.printJson(age), sb.printJson(ttl))
+    self.petportsRoutes[edgeKey(fromKey, toKey)] = nil
+    return nil
+  end
+
+  return entry.r
 end
 
 function petports_learnRoute(fromKey, toKey, reachable, portUniqueId)
@@ -379,17 +418,21 @@ function petports_learnRoute(fromKey, toKey, reachable, portUniqueId)
   local key = edgeKey(fromKey, toKey)
 
   local previous = self.petportsRoutes[key]
-  if previous ~= nil and previous ~= reachable then
+  local was = type(previous) == "table" and previous.r or previous
+
+  if previous ~= nil and was ~= reachable then
     sb.logInfo("UNIT cache CONTRADICTED for %s: was %s, now %s",
-      key, tostring(previous), tostring(reachable))
+      key, tostring(was), tostring(reachable))
   end
 
-  self.petportsRoutes[key] = reachable
+  local at = world.time()
+  self.petportsRoutes[key] = { r = reachable, t = at }
 
   if portUniqueId then
     world.sendEntityMessage(portUniqueId, "petports_learnedRoute", {
       key = key,
-      reachable = reachable
+      reachable = reachable,
+      at = at
     })
   end
 end

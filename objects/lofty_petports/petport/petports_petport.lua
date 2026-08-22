@@ -709,9 +709,16 @@ function init()
   --  A unit reporting what it learned from a probe.
   message.setHandler("petports_learnedRoute", simpleHandler(function(learned)
     if learned == nil or learned.key == nil then return end
-    if self.routeCache[learned.key] == learned.reachable then return end
+    --  Entries carry when they were learned so the unit can expire them; see
+    --  ROUTE_TTL_FALSE in petports_contract.lua. The port only stores and
+    --  forwards them, it does not interpret them.
+    local held = self.routeCache[learned.key]
+    if type(held) == "table" and held.r == learned.reachable then return end
 
-    self.routeCache[learned.key] = learned.reachable
+    self.routeCache[learned.key] = {
+      r = learned.reachable,
+      t = learned.at or world.time()
+    }
     self.routeDirty = true
   end))
 
