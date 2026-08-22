@@ -109,6 +109,56 @@ local EXPLORE_RATE = 300
 --  How long to wait for a drop to stop falling before calling it unreachable.
 local SETTLE_GRACE = 2.0
 
+--  HOW FAR THE UNIT MUST MOVE TO COUNT AS NOT STUCK.
+--
+--  Compared against an ANCHOR that only moves when the threshold is crossed, so
+--  displacement accumulates: a unit crawling at half a tile per second still
+--  clears this every fifth of a second, while a unit wedged against terrain
+--  never clears it at all.
+--
+--  See the stuck-timer note below for what this feeds.
+local STUCK_MOVE = 0.1
+
+--  HOW LONG A GROUNDED UNIT MAY SIT MOTIONLESS ON AN AIRBORNE EDGE.
+--
+--  Must be longer than 0.2, because moveJump deliberately parks the unit for
+--  that long before takeoff: it sets the position onto the jump source, zeroes
+--  the velocity, and counts jumpTimer down from 0.2. That is a legitimate
+--  motionless grounded tick on a Jump edge and must not be read as a stall.
+--  jumpTimer is also checked directly below; this is the second guard.
+--
+--  Below vanilla's own 0.5, so the classified line lands before the anonymous
+--  reset does.
+local AIRBORNE_EDGE_STALL = 0.35
+
+--  Cap on arc waypoints skipped in one tick. Only a bound on the loop below --
+--  reaching it would mean the whole descending half of an arc was above the
+--  unit, which cannot happen. It exists so a malformed path cannot spin here.
+local MAX_ARC_SKIP = 16
+
+--  Vanilla's own takeoff radius, copied rather than changed. See the header on
+--  petportsJumpMover for why this is not widened.
+local JUMP_TAKEOFF_REACH = 1.0
+
+--  Below this horizontal offset there is nothing to walk toward -- the jump
+--  point is effectively straight up or straight down.
+local JUMP_APPROACH_EPSILON = 0.05
+
+--  How far ahead to read the planned arc when working out how high the jump
+--  actually has to go. Arcs run a few dozen sample edges; this only has to
+--  outlast the longest of them.
+local MAX_JUMP_LOOKAHEAD = 64
+
+--  Launch a little harder than the arithmetic demands. Covers the discrete
+--  integration loss between the continuous solution and the engine's stepped
+--  one, which costs a few hundredths of a tile of apex.
+local JUMP_VELOCITY_MARGIN = 1.02
+
+--  Never launch harder than this multiple of the planned velocity. A path that
+--  asks for something absurd is a broken path, and it should fail visibly
+--  rather than fling the unit across the room.
+local JUMP_VELOCITY_CAP = 1.25
+
 --  NET DISPLACEMENT WATCHDOG.
 --
 --  The pathfinder's jump model is more optimistic than the movement
@@ -459,6 +509,212 @@ end
 --
 --  The pather is cheap to build and there is one task at a time, so build a
 --  FRESH one per task rather than trying to unpick vanilla's state.
+--  REPLACEMENT FOR PathMover:moveJump
+--
+--  WHAT VANILLA DOES, IN FULL:
+--
+--      if world.magnitude(mcontroller.position(),
+--                         self.edge.source.position) < 1.0 then
+--        ... snap to the source, pause 0.2s, launch, advance ...
+--      end
+--      return "running"
+--
+--  Outside that radius the function does NOTHING -- no movement, no advance, no
+--  report -- and there is no code anywhere that walks the unit to its own jump
+--  point. It relies entirely on the approach happening to end inside a one-tile
+--  circle.
+--
+--  WHY THAT FAILS AT SPEED. The Jump edge only becomes current AFTER the unit
+--  crosses the source, so the usable half of the window is one tile wide. At
+--  walkSpeed 8 the script advances the unit about 0.66 tiles per step, so there
+--  are one or two chances to land inside it and the phase decides whether any
+--  do. Measured: the unit coasted to a dead stop 1.19 tiles past the jump point,
+--  replanned, walked back, overshot by 1.21 the other way, and oscillated
+--  between [1208.81] and [1211.21] indefinitely. It gets worse as speed rises,
+--  which is exactly backwards for a unit that should move with purpose.
+--
+--  THE FIX IS THE MISSING ELSE. Outside the radius, walk toward the source.
+--  Overshooting stops being terminal and becomes self-correcting, and the whole
+--  thing stops depending on approach speed.
+--
+--  The takeoff path is vanilla's, deliberately unchanged: the snap to
+--  source.position is what makes the flown arc match the planned one, the 0.2s
+--  jumpTimer pause is what the arc is computed from, and the friction zeroing is
+--  what keeps the ascent ballistic. This is an added branch, not a rewrite.
+--
+--  THE RADIUS IS STILL 1.0. Widening it would be the obvious way to catch a
+--  fast approach, but the body of this function TELEPORTS the unit to the jump
+--  point -- a larger radius means a longer snap, and a long enough snap puts the
+--  unit through a wall. Walking is slower and cannot do that.
+--
+--  NOTE THE PARAMETER NAME. edgeMove calls this as self:moveJump(), so the
+--  pather arrives as the first argument -- but inside THIS file `self` is the
+--  monster's script table, which is a completely different thing. pathing.lua
+--  flags the same collision in its own comment above setMoved(). Everything
+--  below goes through `pather`; `self` is never the pather here.
+--  THE HIGHEST POINT THE PLANNED ARC GOES TO.
+--
+--  Reads forward from the Jump edge through its Arc edges and includes the
+--  first non-Arc edge, which is the Land the arc is aimed at. That last one
+--  matters: the Land target IS the surface the unit has to get on top of, and
+--  it usually sits slightly above the final Arc waypoint.
+local function plannedApex(pather)
+  local finder = pather.finder
+  local edges = finder and finder.edges
+  local index = finder and finder.currentEdgeIndex
+  if edges == nil or index == nil then return nil end
+
+  local highest = nil
+
+  for i = index + 1, math.min(index + MAX_JUMP_LOOKAHEAD, #edges) do
+    local edge = edges[i]
+    if edge == nil then break end
+
+    if edge.target ~= nil and edge.target.position ~= nil then
+      local y = edge.target.position[2]
+      if highest == nil or y > highest then highest = y end
+    end
+
+    if edge.action ~= "Arc" then break end
+  end
+
+  return highest
+end
+
+--  LAUNCH HARD ENOUGH TO REACH WHAT THE PLAN ASKS FOR.
+--
+--  The planner over-estimates how high this unit jumps. Measured across the
+--  four takeoffs of one chute run, sorted by the rise each one needs:
+--
+--      704.375 -> 711.375   7.0 tiles   ok
+--      711.375 -> 719.375   8.0 tiles   ok
+--      719.375 -> 728.375   9.0 tiles   FAILS
+--
+--  Physics allows 45^2 / (2 * 120) = 8.4375. The planner emitted a jump needing
+--  9.0, which means it is solving with g near 112.5 against a world running
+--  120. The unit apexed at 728.125, a quarter tile under the ledge, hit the
+--  vertical face of it -- x velocity went from -12 to -0.003 in one tick -- and
+--  dropped three tiles.
+--
+--  SCALING jumpSpeed DOES NOT FIX THIS. Planner and movement controller both
+--  read airJumpProfile.jumpSpeed, so lowering it shrinks both and the
+--  percentage error survives; every jump just fails at a proportionally lower
+--  ledge.
+--
+--  So instead of arguing with the planner about physics, satisfy its answer:
+--  work out the velocity that genuinely reaches the arc's highest planned point
+--  and launch with that.
+--
+--  IT ONLY EVER RAISES, NEVER LOWERS, and only when the plan demands more than
+--  the nominal jump delivers. The 8.0-tile jump needs 43.8 and keeps its 45
+--  unchanged; the 9.0-tile one needs 46.5 and gets it. So arcs that already
+--  worked are untouched, which is the property that matters -- launching WEAKER
+--  than planned is what produced ceiling collisions earlier, and this cannot do
+--  that.
+local function launchVelocity(pather, edge, source)
+  local planned = edge.jumpVelocity[2]
+
+  local apex = plannedApex(pather)
+  if apex == nil then return planned, nil end
+
+  local rise = apex - source[2]
+  if rise <= 0 then return planned, nil end
+
+  local parameters = mcontroller.baseParameters()
+  local gravity = world.gravity(source) * (parameters.gravityMultiplier or 1.0)
+  if gravity <= 0 then return planned, nil end
+
+  local needed = math.sqrt(2 * gravity * rise) * JUMP_VELOCITY_MARGIN
+  if needed <= planned then return planned, nil end
+
+  local capped = math.min(needed, planned * JUMP_VELOCITY_CAP)
+  return capped, { rise = rise, gravity = gravity, needed = needed, apex = apex }
+end
+
+function petportsJumpMover(pather)
+  --  Vanilla's first guard, unchanged. moveArc sets jumpCooldown to 0.3 on
+  --  every airborne tick, so without this a unit landing out of an arc would
+  --  immediately launch again.
+  if mcontroller.onGround() and pather.jumpCooldown then
+    return "running"
+  end
+
+  local edge = pather.edge
+  if edge == nil or edge.source == nil or edge.source.position == nil then
+    return "running"
+  end
+
+  local source = edge.source.position
+  local gap = world.magnitude(mcontroller.position(), source)
+
+  if gap >= JUMP_TAKEOFF_REACH then
+    --  THE BRANCH VANILLA IS MISSING.
+    --
+    --  Only on the ground: airborne on a Jump edge means something else has
+    --  gone wrong, and adding thrust to it would make the landing worse rather
+    --  than better.
+    if mcontroller.onGround() then
+      local toSource = source[1] - mcontroller.position()[1]
+
+      --  Directly above or below, so no amount of walking closes the gap. Leave
+      --  it: the unit will stand still, and the grounded-stall check in
+      --  update() replans within 0.35s. Walking an arbitrary direction here
+      --  would just wander off the path.
+      if math.abs(toSource) >= JUMP_APPROACH_EPSILON then
+        mcontroller.controlMove(toSource > 0 and 1 or -1, false)
+
+        if not pather.petportsWalkingToJump then
+          pather.petportsWalkingToJump = true
+          sb.logInfo("UNIT walking back to jump point %s from %s (gap %s)",
+            sb.printJson(source), sb.printJson(mcontroller.position()),
+            sb.printJson(gap))
+        end
+      end
+    end
+
+    return "running"
+  end
+
+  pather.petportsWalkingToJump = nil
+
+  --  Everything from here down is vanilla's takeoff, unmodified.
+  if not pather.jumpTimer then
+    pather.jumpTimer = 0.2
+    mcontroller.setPosition(source)
+    mcontroller.setVelocity({0, 0})
+
+    sb.logInfo("UNIT takeoff from %s, jumpVel %s (approached to %s)",
+      sb.printJson(source), sb.printJson(edge.jumpVelocity), sb.printJson(gap))
+  end
+
+  pather.deltaX = edge.jumpVelocity[1]
+
+  if mcontroller.liquidMovement() or pather.jumpTimer <= 0 then
+    pather.controlParameters.airFriction = 0
+    pather.controlParameters.liquidFriction = 0
+    pather.controlParameters.liquidImpedance = 0
+    pather.controlParameters.groundFriction = 0
+
+    local vy, correction = launchVelocity(pather, edge, source)
+
+    if correction ~= nil then
+      sb.logInfo("UNIT jump under-powered by the plan: needs %s tiles of rise, planned %s gives %s, launching at %s (g %s, capped %s)",
+        sb.printJson(correction.rise), sb.printJson(edge.jumpVelocity[2]),
+        sb.printJson((edge.jumpVelocity[2] * edge.jumpVelocity[2]) / (2 * correction.gravity)),
+        sb.printJson(vy), sb.printJson(correction.gravity),
+        tostring(vy < correction.needed))
+    end
+
+    mcontroller.setVelocity({edge.jumpVelocity[1], vy})
+    pather.jumpTimer = nil
+    pather:advancePath()
+  else
+    pather.jumpTimer = pather.jumpTimer - script.updateDt()
+  end
+
+  return "running"
+end
+
 local function freshPather()
   local options = petports_pathOptions()
   options.run = false
@@ -476,6 +732,14 @@ local function freshPather()
   })
 
   self.pather.finder.exploreRate = function() return EXPLORE_RATE end
+
+  --  REPLACEMENT moveJump. See the header on petportsJumpMover below.
+  --
+  --  Assigned to the INSTANCE, so it shadows PathMover.moveJump through the
+  --  metatable for this pather only. Vanilla's version stays reachable as
+  --  PathMover.moveJump, no other entity is affected, and nothing is patched
+  --  globally. Same technique as the exploreRate override above.
+  self.pather.moveJump = petportsJumpMover
 end
 
 function petportsTaskAction.enteringState(stateData)
@@ -673,6 +937,246 @@ function petportsTaskAction.update(dt, stateData)
   --  happens inside one. Pings raised later in this same call are consumed on
   --  the NEXT tick; the grace window absorbs that.
   petports_thinkPump(dt)
+
+  --  VANILLA DISCARDS THE PATH ON EVERY JUMP. THIS IS THE FIX.
+  --
+  --  /scripts/pathing.lua, PathFinder:update:
+  --
+  --      if self.hasPath and self.stuckTimer > 0.5 then
+  --        self:reset()
+  --      end
+  --      self.stuckTimer = self.stuckTimer + script.updateDt()
+  --
+  --  and stuckTimer is zeroed in exactly ONE place, further down the same
+  --  function: when currentEdgeIndex changes. So the timer does not measure
+  --  being stuck, it measures TIME SPENT ON ONE EDGE -- and any edge lasting
+  --  more than half a second destroys the whole path.
+  --
+  --  Walk edges are a tile long and advance constantly, so flat ground never
+  --  trips it. Arc and Land do: moveArc's airborne branch applies velocity and
+  --  does not advancePath until passedTarget comes true, and moveLand waits for
+  --  onGround. Both are airborne waits, and any jump worth planning is longer
+  --  than 0.5s. moveArc's run-up branch has the same shape on the ground.
+  --
+  --  It then compounds, which is why the symptom is a multi-second freeze
+  --  rather than a stutter. PathFinder:canPathfind() is
+  --
+  --      return mcontroller.onGround() or not gravityEnabled
+  --
+  --  so find() refuses to start a search while airborne. The path is discarded
+  --  MID-FLIGHT, nothing can replace it until the unit lands, the arc finishes
+  --  ballistically with nothing steering it, and only then does a cold A* run.
+  --  Measured at 3.9s of a motionless unit, having landed short of the arc.
+  --
+  --  THE FIX IS TO CORRECT THE PREDICATE, NOT THE TIMEOUT. Raising 0.5 to some
+  --  larger number just moves the threshold; the timer would still be measuring
+  --  the wrong thing, and a genuinely wedged unit would take proportionally
+  --  longer to recover. Stuck means NOT MOVING, so measure that: zero the timer
+  --  whenever the unit has actually displaced, and let it run when it has not.
+  --
+  --  Vanilla's reset still fires for a unit that truly cannot move -- which is
+  --  the case the timer was put there for, and the only one it now catches.
+  --
+  --  Done here rather than by overriding PathFinder:update, which would mean
+  --  carrying a copy of vanilla's function and re-checking it against every
+  --  Starbound release.
+  --  A GROUNDED UNIT ON AN AIRBORNE EDGE THAT IS NOT MOVING. VANILLA CANNOT TELL.
+  --
+  --  PathFinder:update invalidates a path when the TARGET moves more than two
+  --  tiles, and never when the UNIT does. Nothing anywhere checks whether the
+  --  unit is still standing where the plan says it is.
+  --
+  --  PRE-MOVE SAMPLE. THE STATE THE MOVERS ACTUALLY SEE.
+  --
+  --  The `pathing at` line further down runs AFTER approachPoint, so everything
+  --  it reports is POST-move -- the state a mover saw on a given tick is the
+  --  PREVIOUS line's end state. That is not a detail: it made a srcDist of 0.52
+  --  look like a takeoff that should have happened, when moveJump never ran at
+  --  that position at all. The two lines together bracket the mover, so a value
+  --  can be attributed to the tick that actually used it.
+  local preFinder = self.pather and self.pather.finder
+  if preFinder ~= nil and preFinder.hasPath then
+    local preEdge = preFinder.edges and preFinder.currentEdgeIndex
+      and preFinder.edges[preFinder.currentEdgeIndex]
+    local preSource = preEdge and preEdge.source and preEdge.source.position
+
+    sb.logInfo("UNIT pre-move at %s: action %s edge %s of %s srcDist %s velocity %s onGround %s",
+      sb.printJson(mcontroller.position()),
+      tostring(preEdge and preEdge.action),
+      tostring(preFinder.currentEdgeIndex),
+      tostring(preFinder.edges and #preFinder.edges),
+      sb.printJson(preSource and world.magnitude(mcontroller.position(), preSource)),
+      sb.printJson(mcontroller.velocity()),
+      tostring(mcontroller.onGround()))
+  end
+
+  --  AN ARC WAYPOINT THE UNIT CANNOT REACH. SKIP IT.
+  --
+  --  The planner over-estimates jump height. Measured on a straight-up hop:
+  --
+  --    takeoff                        711.375
+  --    planner's last arc waypoint    720.723   (9.348 tiles of rise)
+  --    physics, 45^2 / (2 * 120)                 8.438
+  --    observed apex                  720.125   (8.750)
+  --
+  --  So the final waypoint of an arc sits about 7% higher than the unit can
+  --  actually get. That is the "PathFinder's jump model is more optimistic than
+  --  the movement controller" problem, with a number on it.
+  --
+  --  It deadlocks because NEITHER AXIS CAN ADVANCE THE PATH:
+  --
+  --    passedTargetOnAxis(edge, 2)  the unit never reaches the target y, so
+  --                                 edgeDistance and targetDistance keep the
+  --                                 same sign and the product is never negative
+  --    passedTargetOnAxis(edge, 1)  a vertical arc has edgeDistance[1] == 0,
+  --                                 which the function's own `~= 0` guard
+  --                                 rejects outright
+  --
+  --  and moveArc calls controlApproachXVelocity(velocity[1], groundForce) with
+  --  velocity[1] = 0, actively braking x to zero -- so the unit cannot drift
+  --  sideways into passing it either. It rises, stops short, falls back to
+  --  exactly where it took off, lands still holding the same edge, and moveArc's
+  --  grounded branch then computes arcDelta = delta[1] = 0 and issues moveX(0)
+  --  forever.
+  --
+  --  Nudging the unit does not help: the `~= 0` guard is on the EDGE's own
+  --  geometry, not on where the unit is standing.
+  --
+  --  ONCE THE UNIT IS FALLING, ANY WAYPOINT STILL ABOVE IT IS UNREACHABLE.
+  --  Gravity is one-directional and there is no second jump mid-arc. So it is
+  --  safe to declare those edges passed and move on, which is what vanilla's
+  --  own advance does -- this only supplies the test it is missing. Descending
+  --  arcs put their waypoints BELOW the unit, so the loop breaks immediately
+  --  and normal flight is untouched.
+  --
+  --  Deliberately not a fix to the 7% over-estimate. That lives inside
+  --  world.platformerPathStart, and shrinking planned jumps to compensate is
+  --  how the smallJumpMultiplier mess started.
+  local arcFinder = self.pather and self.pather.finder
+
+  if arcFinder ~= nil and arcFinder.hasPath and not mcontroller.onGround()
+     and mcontroller.velocity()[2] < 0 then
+    local skipped = 0
+
+    while skipped < MAX_ARC_SKIP do
+      local index = arcFinder.currentEdgeIndex
+      local edges = arcFinder.edges
+      if index == nil or edges == nil or index > #edges then break end
+
+      local edge = edges[index]
+      if edge == nil or edge.action ~= "Arc" then break end
+      if edge.target == nil or edge.target.position == nil then break end
+
+      --  Still below us: this is the ordinary descending half of the arc.
+      if edge.target.position[2] <= mcontroller.position()[2] then break end
+
+      arcFinder:advance()
+      skipped = skipped + 1
+    end
+
+    if skipped > 0 then
+      sb.logInfo("UNIT skipped %s unreachable arc waypoint(s) while falling from %s -- now on edge %s of %s",
+        sb.printJson(skipped), sb.printJson(mcontroller.position()),
+        tostring(arcFinder.currentEdgeIndex),
+        tostring(arcFinder.edges and #arcFinder.edges))
+    end
+  end
+
+  --  THREE STALLS MEASURED, THREE DIFFERENT MOVERS, ONE SHAPE:
+  --
+  --    Jump  src [1215,713.75]   srcDist 4.03   moveJump does nothing outside
+  --                                             1.0 of its source, and contains
+  --                                             no code to walk there
+  --    Land  src [1214,711.75]   srcDist 4.58   moveLand is four lines with no
+  --                                             else -- if abs(delta[1]) >= 1
+  --                                             it neither advances nor moves
+  --    Arc   src [1215,716.25]   srcDist 0.50   moveArc grounded repositions
+  --                                             HORIZONTALLY only, and a
+  --                                             vertical arc has delta[1] = 0,
+  --                                             so it issues moveX(0) forever
+  --
+  --  DISTANCE DOES NOT DISCRIMINATE -- 4.58, 4.03 and 0.50 all stall dead. What
+  --  they share is that the unit is ON THE GROUND, the current edge is an
+  --  AIRBORNE one, and it is NOT MOVING. That is the predicate.
+  --
+  --  An earlier version of this checked Jump edges against a 1.0 distance gate,
+  --  which caught one of the three and read as a fix for all of them.
+  --
+  --  False positives are covered: a legitimate run-up along the ground toward an
+  --  arc IS moving, and moveJump's deliberate 0.2s pre-takeoff pause is excluded
+  --  both by jumpTimer below and by AIRBORNE_EDGE_STALL being longer than it.
+  --
+  --  This does not repair the movers -- it cannot, short of overriding them --
+  --  and vanilla's stuck timer would eventually reset anyway. What it buys is a
+  --  NAMED failure with the edge, the action and the gap in it, instead of an
+  --  anonymous path drop, so the spots that produce unexecutable edges can be
+  --  catalogued rather than rediscovered.
+  local pathFinder = self.pather and self.pather.finder
+  local stalledEdge = nil
+
+  --  NOT WHILE ROUTING. Once stateData.routing is set, update() returns from
+  --  the routing branch below and approachPoint is never called -- so the
+  --  pather is not being driven at all. The unit is then grounded and motionless
+  --  for a reason that has nothing to do with the edge it happens to be parked
+  --  on, and every check below would read that as a mover dead-end.
+  --
+  --  Observed: after APPROACH_TIMEOUT handed over to vent routing, this fired on
+  --  a Land edge at srcDist 0.5 -- a gap moveLand accepts perfectly well -- and
+  --  reset a path that was never the problem.
+  if pathFinder ~= nil and pathFinder.hasPath and mcontroller.onGround()
+     and not stateData.routing and self.pather.jumpTimer == nil then
+    local edge = pathFinder.edges and pathFinder.currentEdgeIndex
+      and pathFinder.edges[pathFinder.currentEdgeIndex]
+
+    if edge ~= nil and (edge.action == "Jump" or edge.action == "Arc"
+                        or edge.action == "Land") then
+      stalledEdge = edge
+    end
+  end
+
+  if stalledEdge == nil then
+    stateData.airborneEdgeStall = 0
+  else
+    stateData.airborneEdgeStall = (stateData.airborneEdgeStall or 0) + dt
+
+    if stateData.airborneEdgeStall >= AIRBORNE_EDGE_STALL then
+      local source = stalledEdge.source and stalledEdge.source.position
+
+      sb.logInfo("UNIT stalled on %s edge %s of %s: grounded and motionless at %s, edge source %s srcDist %s -- replanning",
+        tostring(stalledEdge.action),
+        tostring(pathFinder.currentEdgeIndex),
+        tostring(pathFinder.edges and #pathFinder.edges),
+        sb.printJson(mcontroller.position()),
+        sb.printJson(source),
+        sb.printJson(source and world.magnitude(mcontroller.position(), source)))
+
+      --  reset() clears edges and hasPath but leaves aStar alone; find() starts
+      --  a fresh search next tick, and the unit is grounded so canPathfind()
+      --  will allow it.
+      pathFinder:reset()
+      stateData.stuckAnchor = nil
+      stateData.airborneEdgeStall = 0
+    end
+  end
+
+  if pathFinder ~= nil and pathFinder.hasPath then
+    local here = mcontroller.position()
+
+    if stateData.stuckAnchor == nil
+       or world.magnitude(here, stateData.stuckAnchor) > STUCK_MOVE then
+      stateData.stuckAnchor = here
+      pathFinder.stuckTimer = 0
+
+      --  Moving, so whatever edge it is on is being executed. This is what
+      --  keeps a grounded run-up toward an arc from reading as a stall.
+      stateData.airborneEdgeStall = 0
+    end
+  else
+    --  No path: the anchor belongs to a path that no longer exists, and keeping
+    --  it would let the first tick of the NEXT path inherit a stale reference
+    --  point and skip its own reset.
+    stateData.stuckAnchor = nil
+  end
 
   --  Every tick: world.debug* draws per-frame.
   if petports_drawRouteDebug ~= nil then petports_drawRouteDebug(stateData) end
@@ -1130,9 +1634,91 @@ function petportsTaskAction.update(dt, stateData)
       end
     end
 
-    --  A* alive but no path yet. Reset whenever a path IS found, so a unit
-    --  that legitimately re-plans mid-walk is not punished for it.
+    --  PATH ACQUIRED / LOST, PER TICK.
+    --
+    --  The once-a-second approach line samples too coarsely to see this: a path
+    --  is lost and a fresh A* is already running by the time the next sample
+    --  lands, so both the loss and its cause fall between two lines.
+    --
+    --  What is needed to identify the mechanism is the state AT THE INSTANT
+    --  hasPath flips:
+    --
+    --    action     the edge being executed when it went. If this reads Jump or
+    --               Arc, the loss is tied to the jump rather than merely
+    --               coincident with it -- that is the whole question.
+    --    onGround   airborne at the moment of loss points at a guard that
+    --               refuses to path off the ground; grounded points elsewhere.
+    --    velocity   a jump that fell short lands with a downward velocity and
+    --               near-zero horizontal; a jump that never started has both
+    --               near zero.
+    --    stuck      whether vanilla's PathMover declared it, or something else
+    --               cleared the path without saying so.
+    --    edge i/n   how far along the path it got. Losing it on the same edge
+    --               index every time is a specific edge the unit cannot walk.
     local finder = self.pather and self.pather.finder
+    local hasPath = finder ~= nil and finder.hasPath == true
+
+    if hasPath ~= stateData.lastHasPath then
+      local edge = nil
+      if finder ~= nil and finder.edges ~= nil and finder.currentEdgeIndex ~= nil then
+        edge = finder.edges[finder.currentEdgeIndex]
+      end
+
+      sb.logInfo("UNIT path %s at %s: action %s onGround %s velocity %s stuck %s aStar %s edge %s of %s target %s",
+        hasPath and "ACQUIRED" or "LOST",
+        sb.printJson(mcontroller.position()),
+        tostring(edge and edge.action),
+        tostring(mcontroller.onGround()),
+        sb.printJson(mcontroller.velocity()),
+        tostring(self.pathing and self.pathing.stuck),
+        tostring(finder ~= nil and finder.aStar ~= nil),
+        tostring(finder and finder.currentEdgeIndex),
+        tostring(finder and finder.edges and #finder.edges),
+        sb.printJson(finder and finder.target))
+
+      stateData.lastHasPath = hasPath
+    end
+
+    --  Every tick WHILE a path is held, so the tick before a loss is on record
+    --  rather than inferred. This is the noisiest line in the mod -- it is here
+    --  for the jump diagnosis and should come out once that is settled.
+    if hasPath then
+      local edge = finder.edges and finder.currentEdgeIndex
+        and finder.edges[finder.currentEdgeIndex]
+
+      --  EDGE SOURCE AND THE DISTANCE TO IT.
+      --
+      --  moveJump does nothing at all unless the unit is within 1.0 of
+      --  edge.source.position -- and it contains no code to walk there:
+      --
+      --      if world.magnitude(mcontroller.position(),
+      --                         self.edge.source.position) < 1.0 then
+      --        ... take off ...
+      --      end
+      --      return "running"
+      --
+      --  So a unit parked further than a tile from its own jump point returns
+      --  "running" forever while standing perfectly still. srcDist is the field
+      --  that separates that from a cooldown stall, and both from a jump that
+      --  fired and fell short.
+      local source = edge and edge.source and edge.source.position
+      local target = edge and edge.target and edge.target.position
+
+      sb.logInfo("UNIT post-move at %s: action %s edge %s of %s onGround %s velocity %s src %s srcDist %s dst %s jumpVel %s cooldown %s jumpTimer %s",
+        sb.printJson(mcontroller.position()),
+        tostring(edge and edge.action),
+        tostring(finder.currentEdgeIndex),
+        tostring(finder.edges and #finder.edges),
+        tostring(mcontroller.onGround()),
+        sb.printJson(mcontroller.velocity()),
+        sb.printJson(source),
+        sb.printJson(source and world.magnitude(mcontroller.position(), source)),
+        sb.printJson(target),
+        sb.printJson(edge and edge.jumpVelocity),
+        tostring(self.pather.jumpCooldown),
+        tostring(self.pather.jumpTimer))
+    end
+
     if finder ~= nil and not finder.hasPath and finder.aStar ~= nil then
       stateData.searchingTimer = stateData.searchingTimer + dt
 

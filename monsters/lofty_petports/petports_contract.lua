@@ -358,8 +358,41 @@ end
 --  disables every vertical edge. See the handoff.
 function petports_pathOptions()
   local bounds = mcontroller.boundBox()
-  local halfWidth = (bounds[3] - bounds[1]) / 2
-  local pad = math.min(0.7, halfWidth * 0.4)
+
+  --  NO PADDING. THE PLANNER GETS THE BODY THE UNIT ACTUALLY HAS.
+  --
+  --  This was `math.min(0.7, halfWidth * 0.4)`, giving a standing and dropping
+  --  box 0.6 wide against a real body of 1.0. That existed to dodge vanilla's
+  --  flat -0.7 default, which INVERTS for anything narrower than 1.4 tiles and
+  --  silently disables every vertical edge -- a real bug, and the reason this
+  --  is computed rather than left to default.
+  --
+  --  But a narrower box is not a free safety margin, it is a LIE ABOUT THE BODY.
+  --  A* validates positions and clearances with it, so it will happily plan a
+  --  trajectory through a gap only the imaginary 0.6-wide unit fits through,
+  --  and the real 1.0-wide one clips the corner.
+  --
+  --  MEASURED, mid-arc in a two-wide chute:
+  --
+  --    edge 19  [1213,710.75]      velocity [12,25]
+  --    edge 20  [1213.63,711.374]  velocity [1.67,-3.53]
+  --
+  --  Total loss of momentum in one tick, 0.62 tiles of rise -- a head-on
+  --  collision (airJumpProfile.collisionCancelled is true), at a point sitting
+  --  ON THE PLANNER'S OWN TRAJECTORY. The planner routed the unit through
+  --  geometry the movement controller hits. It then fell four tiles past its
+  --  intended landing and stalled moveLand at srcDist 4.58.
+  --
+  --  Zero is safe against the inversion this guarded: the box equals the real
+  --  bounds, so left is never right of right. What it costs is permissiveness --
+  --  vanilla pads so a unit can be considered standing in a tighter spot than
+  --  it strictly fits -- so expect fewer valid standing positions and, in tight
+  --  terrain, occasionally no route where one was previously offered and then
+  --  failed. A refused route is cheaper than a planned collision.
+  --
+  --  If the inversion ever needs guarding again, guard it as an assertion on
+  --  the result, not by shrinking the body.
+  local pad = 0
 
   return {
     returnBest = false,
@@ -368,7 +401,34 @@ function petports_pathOptions()
     boundBox = bounds,
     standingBoundBox = { bounds[1] + pad, bounds[2], bounds[3] - pad, bounds[4] },
     droppingBoundBox = { bounds[1] + pad, bounds[2], bounds[3] - pad, bounds[4] },
-    smallJumpMultiplier = 0.75,
+    --  1.0, NOT 0.75. THE ACTOR CANNOT PERFORM A PARTIAL JUMP.
+    --
+    --  This tells A* it may plan hops at a fraction of full jump strength, and
+    --  it plans arcs on that basis. The movement controller then fires every
+    --  jump at FULL strength, because default_actor_movement.config sets
+    --  jumpInitialPercentage 1.0 and jumpHoldTime 0.0 and the drone overrides
+    --  neither -- there is no mechanism by which a weaker jump can happen.
+    --
+    --  MEASURED, from an arc the unit flew in a two-wide chute:
+    --
+    --    velocity samples fell -10 per tick at ~1/12s  ->  g = 120
+    --    (world gravity 80 x gravityMultiplier 1.5, inherited from the
+    --     default actor config -- confirming movementSettings are MERGED)
+    --
+    --    real apex   45^2 / (2*120)          = 8.44 tiles   observed 8.75
+    --    planned apex from the arc edges     = 5.25 tiles
+    --    velocity implied by a 5.25 arc      = 33.75 = 45 * 0.75
+    --
+    --  So the planner was drawing arcs for a 33.75 jump the unit answers with a
+    --  45 one. It clears its own planned arc by three tiles, hits ceilings that
+    --  were never in the plan, and lands where no mover can recover -- which is
+    --  every stall catalogued so far: moveLand with delta[1] 4.58, moveJump at
+    --  srcDist 4.03, moveArc grounded under a vertical arc.
+    --
+    --  Raise this only as far as the actor can actually go. If shorter hops are
+    --  ever wanted, the honest place is the monstertype's airJumpProfile, so
+    --  that plan and execution move together.
+    smallJumpMultiplier = 1.0,
     jumpDropXMultiplier = 0.125,
     enableWalkSpeedJumps = true,
     enableVerticalJumpAirControl = true,

@@ -150,7 +150,7 @@
     "pathing" : { "canOpenDoors" : false },
 
     //  Sized to the body, not to vanilla's oversized click target.
-    "metaBoundBox" : [-0.9, -0.9, 0.9, 0.9],
+    "metaBoundBox" : [-0.5, -0.75, 0.5, 0.6],
     "scale" : 1.0,
 
     "querySurroundingsCooldown" : 1,
@@ -167,13 +167,15 @@
 	"strictPortTethering" : true,
 
     "movementSettings" : {
-      "collisionPoly" : [ [-0.5, -0.5], [-0.3, -0.75], [0.3, -0.75], [0.5, -0.5],
-                          [0.5, 0.35], [0.3, 0.6], [-0.3, 0.6], [-0.5, 0.35] ],
+      "collisionPoly" : [ [-0.375, -0.2812], [-0.2812, -0.375], [0.2812, -0.375], [0.375, -0.2812],
+                    [0.375, 0.2812], [0.2812, 0.375], [-0.2812, 0.375], [-0.375, 0.2812] ],
       "mass" : 1.0,
-      "walkSpeed" : 4,
+      "walkSpeed" : 8,
       "runSpeed" : 12,
       "flySpeed" : 15,
-      "airForce" : 50.0
+      "airForce" : 50.0,
+	  
+	  "gravityMultiplier" : 1.5
     },
 
     "bodyMaterialKind" : "robotic",
