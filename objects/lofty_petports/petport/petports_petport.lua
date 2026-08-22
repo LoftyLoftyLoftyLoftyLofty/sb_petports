@@ -73,15 +73,48 @@ local DEBUG = true
 --
 --  The coverage rect is a square centred on the petport: the region this port
 --  keeps resident, the area its unit may take work in, and the placement-time
---  visual, all one number. 32 tiles is one chunk.
+--  visual, all one number.
 --
---  Residency is NOT implemented here. keepAlive is unavailable on objects, so
---  the loadRegion call belongs to an anchored stagehand -- see the handoff. For
---  now the player has to be nearby, which is deliberate: dispatch is being
---  tested on its own, so "the unit stopped when I walked away" stays a clean
---  signal rather than an ambiguous one.
+--  64 TILES, RAISED FROM 32. One chunk turned out to be small in practice --
+--  a modest base spans several, and a port that cannot see the room next door
+--  is not doing logistics.
+--
+--  THIS NUMBER IS LOAD-BEARING IN FOUR PLACES, and doubling it does not scale
+--  them equally:
+--
+--    residency  the stagehand holds this rect resident every update. AREA is
+--               what costs, so 32 -> 64 is 4x, not 2x. Sectors load whole, so
+--               the true resident set is larger still.
+--    work scan  entityQuery per rect per work tick. Also area.
+--    vents      gatherVents inflates by a further COVERAGE_SIZE on each side,
+--               so the vent query rect goes from 96x96 to 192x192 -- 4x again,
+--               on top of a per-vent callScriptedEntity for entry and another
+--               for destinations.
+--    eviction   registryClearAt is NOT affected: it matches the port's exact
+--               tile and is deliberately independent of coverage.
+--
+--  Passed to the stagehand as `coverageSize` at spawn, so changing it here is
+--  enough -- but only for stagehands spawned AFTER the change. An existing
+--  residency keeps the size it was born with until its port respawns it.
+local COVERAGE_SIZE = 64
 
-local COVERAGE_SIZE = 32
+--  How long a container that could not take a whole load is passed over for.
+--
+--  Not a permanent verdict. A player empties chests, and a chest that was full
+--  a minute ago usually is not.
+local CONTAINER_FULL_BACKOFF = 60.0
+
+--  How often to re-scan containers for beacons.
+--
+--  Slow on purpose. A beacon is put in a chest ONCE and then sits there; what
+--  changes constantly is the chest's other contents, which this does not care
+--  about. Meanwhile the scan reads every container in coverage, and coverage
+--  just became four times the area.
+local BEACON_INTERVAL = 5.0
+
+--  The config key a beacon item carries. See
+--  /items/lofty_petports/beacons/petports_beacon_deposit.activeitem.
+local BEACON_KEY = "petports_sortingBeaconBehavior"
 
 --  How long a claim survives without a refresh. Long enough to walk across the
 --  rect, short enough that an abandoned job frees up while the player watches.
@@ -641,6 +674,21 @@ function init()
       stationUniqueId(), report.id, report.outcome,
       report.reason or "no detail")
 
+    --  Before anything else: the unit may be handing over an item, and the
+    --  world drop for it is already gone. Nothing below this may return early
+    --  ahead of it.
+    if report.cargo ~= nil then
+      receiveCargo(report.cargo)
+    end
+
+    --  Arrived at a deposit container. The port does the transfer, not the
+    --  unit: the cargo has been on petData the whole time, so it never has to
+    --  exist anywhere else and there is no second window to lose it in.
+    if report.outcome == "done" and self.task ~= nil
+       and self.task.type == "deposit" and self.task.id == report.id then
+      depositCargo(self.task.target)
+    end
+
     if report.outcome == "done" then
       self.workFailures[report.id] = nil
 
@@ -915,6 +963,236 @@ function saveAndDespawn(skipWrite)
   self.spawning = false
 end
 
+--  WRITE CARGO THROUGH IMMEDIATELY, not on the slow timer.
+--
+--  Everything else on petData is RE-DERIVABLE -- resource levels, known players,
+--  food likings all come back from the live unit, so deferring those to
+--  WRITE_INTERVAL costs nothing worse than a stale number. Cargo is not like
+--  that. takeItemDrop has already destroyed the world drop, so between the
+--  handover and the write the item exists in exactly one place: this port's RAM.
+--  A crash, an unload, or a player mining the port in that window loses it.
+--
+--  Cheap by nature: this fires once per pickup, and a pickup involves a unit
+--  walking somewhere. It cannot become the per-tick write storm WRITE_INTERVAL
+--  exists to prevent.
+--
+--  dirty stays set first, so if the write cannot land -- no socketed item,
+--  which happens if the unit item was pulled mid-task -- the normal timer
+--  retries instead of the change being dropped.
+local function flushCargo()
+  self.dirty = true
+  writeBackToItem()
+  self.writeTimer = WRITE_INTERVAL
+
+  --  DISPATCH ON THE NEXT TICK, not on the next work interval.
+  --
+  --  A unit that has just picked something up should be walking to a chest
+  --  immediately. Waiting out WORK_INTERVAL is a second of a loaded unit
+  --  standing still for no reason, and it reads as the port having missed the
+  --  handover entirely.
+  --
+  --  Zeroing the timer rather than calling dispatchWork here on purpose: the
+  --  report handler is still unwinding, self.task is not cleared until it
+  --  finishes, and dispatching into that would collide with the task being
+  --  closed.
+  self.workTimer = 0
+end
+
+--------------------------------------------------------------------------------
+--  BEACONS AND CONTAINERS
+--------------------------------------------------------------------------------
+--
+--  A CONTAINER DECLARES ITS OWN PURPOSE BY ITS CONTENTS. Drop a beacon item in
+--  a chest and the chest becomes a deposit target; take it out and it stops.
+--
+--  Deliberately not a registry of designated containers. A registry has to be
+--  kept in step with a world where chests are mined, moved, and replaced, and
+--  it leaks an entry every time that goes wrong. Reading the container answers
+--  the question from the only authority that cannot disagree with itself.
+
+--  What behaviour, if any, does this item declare?
+--
+--  Parameters first, then config -- the same precedence petData uses, so a
+--  configured beacon can override its template later without changing how it
+--  is found.
+local function beaconBehaviorOf(item)
+  if item == nil or item.name == nil then return nil end
+
+  if item.parameters ~= nil and item.parameters[BEACON_KEY] ~= nil then
+    return item.parameters[BEACON_KEY]
+  end
+
+  --  Unguarded on purpose. An item in a container HAS a config -- Starbound
+  --  fails world load outright on a missing item definition rather than
+  --  degrading, so a world holding one never reaches this line.
+  return root.itemConfig(item).config[BEACON_KEY]
+end
+
+--  Every container in coverage that holds a beacon.
+local function scanContainers()
+  local rects = self.networkRects
+  if rects == nil or #rects == 0 then rects = { coverageRect() } end
+
+  local found = {}
+  local seen = {}
+  local containers = 0
+
+  for _, rect in ipairs(rects) do
+    local ids = world.entityQuery({ rect[1], rect[2] }, { rect[3], rect[4] }, {
+      includedTypes = { "object" }
+    })
+
+    for _, id in ipairs(ids) do
+      if not seen[id] then
+        seen[id] = true
+
+        --  containerSize is the test for "is this a container". Checking the
+        --  object name against a list would miss every modded chest, and there
+        --  are a lot of modded chests.
+        local okSize, size = pcall(world.containerSize, id)
+
+        if okSize and size ~= nil and size > 0 then
+          containers = containers + 1
+
+          local okItems, items = pcall(world.containerItems, id)
+          if okItems and items ~= nil then
+            --  pairs, not ipairs: containerItems is keyed by SLOT and empty
+            --  slots leave holes, so ipairs stops at the first gap.
+            for _, item in pairs(items) do
+              local behavior = beaconBehaviorOf(item)
+
+              if behavior ~= nil then
+                table.insert(found, {
+                  id = id,
+                  position = world.entityPosition(id),
+                  behavior = behavior,
+                  name = world.entityName(id)
+                })
+                --  One beacon decides a container. A second is the player's
+                --  business, not ours.
+                break
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  return found, containers
+end
+
+local function refreshBeacons(dt)
+  self.beaconTimer = (self.beaconTimer or 0) - dt
+  if self.beaconTimer > 0 then return end
+  self.beaconTimer = BEACON_INTERVAL
+
+  local found, containers = scanContainers()
+  self.beacons = found
+
+  --  Change-gated on the SIGNATURE, not the count. Two chests swapping roles
+  --  keeps the count identical and is exactly the event worth seeing; and at
+  --  one scan every five seconds forever, an unconditional line is noise.
+  local parts = {}
+  for _, beacon in ipairs(found) do
+    table.insert(parts, string.format("%s@%s,%s=%s", tostring(beacon.id),
+      tostring(math.floor(beacon.position[1])),
+      tostring(math.floor(beacon.position[2])),
+      tostring(beacon.behavior)))
+  end
+  table.sort(parts)
+  local signature = table.concat(parts, " ")
+
+  if signature ~= self.beaconSignature then
+    self.beaconSignature = signature
+    sb.logInfo("PETPORT %s beacons: %s of %s container(s) in coverage -- %s",
+      stationUniqueId(), sb.printJson(#found), sb.printJson(containers),
+      signature == "" and "none" or signature)
+  end
+end
+
+--  Beacons matching a behaviour, nearest first. The deposit task will want the
+--  nearest one it can actually reach; nearest-first is the order to try.
+function petports_beaconsFor(behavior)
+  local matches = {}
+  local origin = entity.position()
+
+  for _, beacon in ipairs(self.beacons or {}) do
+    if beacon.behavior == behavior and world.entityExists(beacon.id) then
+      table.insert(matches, beacon)
+    end
+  end
+
+  table.sort(matches, function(a, b)
+    return world.magnitude(origin, a.position) < world.magnitude(origin, b.position)
+  end)
+
+  return matches
+end
+
+--  CARGO HANDOVER.
+--
+--  Lives on petData, so writeBackToItem persists it with everything else and no
+--  new write path is needed. Deliberately NOT routed through the monster's
+--  storage table: that syncs via setAnchor's params echo, which whitelists
+--  specific fields and IGNORES the first callback after a spawn to avoid
+--  overwriting a restore. Suppression is right for state the unit re-derives and
+--  wrong for an item that exists exactly once.
+--
+--  Cargo is also not handed to the monster on spawn. The port owns it; the unit
+--  is a courier, not a container.
+--  GLOBAL, not local, and that is load-bearing. The petports_taskReport handler
+--  is registered in init() -- earlier in the file than this definition -- so a
+--  `local function` here is not in scope at the call site and resolves to nil.
+--  Globals resolve at call time, which is why writeBackToItem below is one too.
+function receiveCargo(item)
+  if item == nil or item.name == nil then return end
+
+  if self.petData == nil then
+    --  Cargo with nowhere to go. The world drop is already destroyed, so this
+    --  is a real item loss and it gets logged as an error rather than dropped
+    --  silently -- the whole point of tracing this path.
+    sb.logError("PETPORT %s received cargo with no petData -- ITEM LOST: %s",
+      stationUniqueId(), sb.printJson(item))
+    return
+  end
+
+  self.petData.cargo = self.petData.cargo or {}
+
+  --  MERGE INTO AN EXISTING STACK where the descriptor matches. Fifty pickups
+  --  of the same block should be one entry of fifty, not fifty entries -- this
+  --  goes into item parameters, and parameters are serialised with the item
+  --  every write.
+  for _, held in ipairs(self.petData.cargo) do
+    if held.name == item.name and compare(held.parameters, item.parameters) then
+      held.count = (held.count or 1) + (item.count or 1)
+
+      sb.logInfo("PETPORT %s cargo +%s %s (stack now %s, %s stack(s) held)",
+        stationUniqueId(), sb.printJson(item.count or 1), tostring(item.name),
+        sb.printJson(held.count), sb.printJson(#self.petData.cargo))
+
+      flushCargo()
+      return
+    end
+  end
+
+  table.insert(self.petData.cargo, {
+    name = item.name,
+    count = item.count or 1,
+    parameters = item.parameters
+  })
+
+  --  NO CAPACITY LIMIT YET, on purpose. A cap that silently drops items is
+  --  worse than no cap; the right shape is the port refusing to DISPATCH
+  --  collection when full, and that belongs with the deposit task. Until then
+  --  this count is how unbounded growth becomes visible.
+  sb.logInfo("PETPORT %s cargo +%s %s (new stack, %s stack(s) held)",
+    stationUniqueId(), sb.printJson(item.count or 1), tostring(item.name),
+    sb.printJson(#self.petData.cargo))
+
+  flushCargo()
+end
+
 --  Persist the live pet state into the socketed item, so the unit travels with
 --  the item rather than living in the petport.
 function writeBackToItem()
@@ -983,6 +1261,31 @@ end
 --  UNVERIFIED: world.pointTileCollision's default collision kinds. If targets
 --  come back inside blocks or floating, that default is the first thing to
 --  check.
+--  Resolve a standing position by ASKING THE UNIT.
+--
+--  The unit owns the only correct test -- see petports_standingPointNear in
+--  petports_contract.lua for why the port's own geometry cannot answer this.
+--  callScriptedEntity is synchronous, so this costs one call and no round trip.
+--
+--  Falls back to findStandingPoint when there is no unit to ask. That fallback
+--  is KNOWN TO BE WRONG for any unit whose boundBox bottom is not a whole tile,
+--  and it is here only so a port with no unit socketed still produces something
+--  rather than nil. Anything dispatched to a unit should go through this
+--  function, not findStandingPoint directly.
+local function standingPointNear(position, radius)
+  if self.petId ~= nil and world.entityExists(self.petId) then
+    local ok, resolved = pcall(world.callScriptedEntity, self.petId,
+      "petports_standingPointNear", position, radius or 4)
+
+    if ok and resolved ~= nil then return resolved end
+
+    sb.logInfo("PETPORT %s unit could not resolve a standing point near %s (called %s)",
+      stationUniqueId(), sb.printJson(position), tostring(ok))
+  end
+
+  return nil
+end
+
 local function findStandingPoint(rect)
   for _ = 1, 12 do
     local x = math.floor(rect[1] + math.random() * (rect[3] - rect[1])) + 0.5
@@ -1331,13 +1634,164 @@ local function returnWork()
 end
 
 --  Real work first, diagnostic only as an opt-in filler.
+--  DEPOSIT: THE UNIT IS CARRYING SOMETHING AND SHOULD NOT BE DOING ANYTHING ELSE.
+--
+--  ANY CARGO IS A FULL LOAD, deliberately. One pixel and a thousand dirt are
+--  the same state: "holding something, go put it down". Working out how many
+--  radishes fit before a trip back is a real feature and not this one -- and
+--  the version of it that guesses wrong is worse than the version that always
+--  returns.
+local function depositWork()
+  if self.petData == nil then return nil end
+  if self.petData.cargo == nil or #self.petData.cargo == 0 then return nil end
+
+  local targets = petports_beaconsFor("deposit")
+  if #targets == 0 then
+    --  Change-gated by the reject machinery upstream; a unit with cargo and no
+    --  beacon anywhere is a state the player needs to see, not a per-second
+    --  line.
+    return nil, "carrying " .. sb.printJson(#self.petData.cargo)
+      .. " stack(s) but no deposit beacon in coverage"
+  end
+
+  local now = world.time()
+  self.fullContainers = self.fullContainers or {}
+
+  for _, beacon in ipairs(targets) do
+    local backedOff = (self.fullContainers[beacon.id] or 0) > now
+
+    if backedOff then
+      sb.logInfo("PETPORT %s deposit target %s SKIPPED: was full, retrying in %s",
+        stationUniqueId(), sb.printJson(beacon.id),
+        sb.printJson((self.fullContainers[beacon.id] or 0) - now))
+    else
+      --  Stand next to the container, not on it. The container's own position
+      --  is not a standing position for the same reason a petport's is not --
+      --  see the arrival test in PathMover:move, which wants the vertical
+      --  component under one tile.
+      --
+      --  Resolved BY THE UNIT. A point the unit cannot occupy is rejected by
+      --  validStandingPosition before pathing starts, which fails the last leg
+      --  of the route and therefore the entire plan -- the unit does not move at
+      --  all, and the log reads as a vent failure rather than a bad target.
+      local stand = standingPointNear(beacon.position, 4)
+
+      if stand == nil then
+        sb.logInfo("PETPORT %s deposit target %s SKIPPED: no standable spot within 4 tiles of %s",
+          stationUniqueId(), sb.printJson(beacon.id), sb.printJson(beacon.position))
+      else
+
+        return {
+          --  KEYED BY CONTAINER **AND PORT**. The port half is what matters.
+          --
+          --  This was keyed by container alone, on the reasoning that
+          --  serialising deposits into one chest cost nothing. It cost five
+          --  units. Claims are exclusive, so the first port to claim
+          --  "deposit:24" owned the crate outright and every other port was
+          --  refused with "claimed by another owner" -- their units got no
+          --  task, fell back to station-keeping, walked a couple of tiles
+          --  toward their ports, were re-dispatched, and were refused again.
+          --  That shuffle is what looked like units stuck sliding back and
+          --  forth on two tiles.
+          --
+          --  There is nothing to serialise. containerAddItems already returns
+          --  its own overflow per call, so two units arriving at once each get
+          --  a truthful answer about what was taken, and each backs the
+          --  container off independently if it filled.
+          --
+          --  Container id stays in the string for readability in claims and
+          --  logs; the port id is what makes it non-exclusive.
+          id = "deposit:" .. tostring(beacon.id) .. "@" .. stationUniqueId(),
+          type = "deposit",
+          target = beacon.id,
+          position = stand,
+          containerPosition = beacon.position,
+          port = stationUniqueId(),
+          dwell = 0
+        }
+      end
+    end
+  end
+
+  return nil, "every deposit beacon is backed off as full"
+end
+
+--  Move cargo into a container. Called when the unit reports it is standing
+--  there.
+--
+--  PARTIAL DEPOSITS ARE NOT SPECIAL-CASED. Whatever the container refuses stays
+--  on the unit, the container goes into backoff, and the next dispatch picks a
+--  different beacon. That is the same behaviour as a chest being full outright,
+--  which means there is one path to test rather than two.
+--  GLOBAL, like receiveCargo above it and for the same reason: the
+--  petports_taskReport handler is registered in init(), which is earlier in the
+--  file than this definition, so a local would not be in scope at the call site.
+function depositCargo(containerId)
+  if self.petData == nil or self.petData.cargo == nil then return end
+
+  if not world.entityExists(containerId) then
+    sb.logInfo("PETPORT %s deposit failed: container %s no longer exists",
+      stationUniqueId(), sb.printJson(containerId))
+    return
+  end
+
+  local before = #self.petData.cargo
+  local remaining = {}
+
+  for _, stack in ipairs(self.petData.cargo) do
+    --  containerAddItems returns WHAT IT COULD NOT TAKE, or nil when it took
+    --  everything. A partial take comes back as the same descriptor with a
+    --  smaller count, so this is also how a half-filled stack is accounted.
+    local leftover = world.containerAddItems(containerId, stack)
+
+    if leftover ~= nil and (leftover.count or 0) > 0 then
+      table.insert(remaining, leftover)
+      sb.logInfo("PETPORT %s deposited %s of %s %s into %s",
+        stationUniqueId(),
+        sb.printJson((stack.count or 1) - leftover.count),
+        sb.printJson(stack.count or 1), tostring(stack.name),
+        sb.printJson(containerId))
+    else
+      sb.logInfo("PETPORT %s deposited %s %s into %s",
+        stationUniqueId(), sb.printJson(stack.count or 1), tostring(stack.name),
+        sb.printJson(containerId))
+    end
+  end
+
+  self.petData.cargo = remaining
+
+  if #remaining > 0 then
+    self.fullContainers = self.fullContainers or {}
+    self.fullContainers[containerId] = world.time() + CONTAINER_FULL_BACKOFF
+
+    sb.logInfo("PETPORT %s container %s could not take %s of %s stack(s) -- backing it off for %s",
+      stationUniqueId(), sb.printJson(containerId), sb.printJson(#remaining),
+      sb.printJson(before), sb.printJson(CONTAINER_FULL_BACKOFF))
+  end
+
+  --  Cargo changed, and the world drop for it is long gone. Same reasoning as
+  --  the pickup side: write it through now.
+  flushCargo()
+end
+
 local function findWork()
   --  Before anything else: a unit that has strayed cannot reach work anyway.
   local recall = returnWork()
   if recall ~= nil then return recall end
 
+  --  CARGO OUTRANKS COLLECTION. A unit holding a load has exactly one job, and
+  --  letting it pick up more first is how a unit ends up hoarding instead of
+  --  ferrying. Below the recall ladder, though -- a stranded unit cannot reach
+  --  a chest either.
+  local drop, noDrop = depositWork()
+  if drop ~= nil then return drop end
+
   local work, why = collectionWork()
   if work ~= nil then return work end
+
+  --  A unit with cargo and nowhere to put it should say THAT, not "no drops in
+  --  rect". The storage-full indicator hangs off this state.
+  if noDrop ~= nil then return nil, noDrop end
 
   if DIAG_FALLBACK then
     return diagnosticWork()
@@ -1403,7 +1857,30 @@ local function dispatchWork()
 
   if not petports_claimTake(work.id, stationUniqueId(), petUniqueId(),
                             work.type, work.position, CLAIM_TTL) then
-    return reject("claimed by another owner")
+    --  Name the work. "claimed by another owner" on its own does not say
+    --  whether two ports are racing for one drop or one crate, and those are
+    --  very different problems.
+    return reject("claimed by another owner: " .. tostring(work.id))
+  end
+
+  --  CARGO MANIFEST, FOR DISPLAY ONLY.
+  --
+  --  Cargo lives on the port, not the unit, so the unit cannot draw what it is
+  --  carrying without being told. The task table is already crossing the
+  --  boundary, so it carries a short summary rather than opening a second sync
+  --  channel for something only the debug overlay reads.
+  --
+  --  A SNAPSHOT, not a live view. It is correct at dispatch and goes stale the
+  --  moment anything changes -- which for a deposit run is exactly the window
+  --  it needs to be right for, since the load does not change between leaving
+  --  and arriving.
+  if self.petData ~= nil and self.petData.cargo ~= nil then
+    local manifest = {}
+    for _, stack in ipairs(self.petData.cargo) do
+      table.insert(manifest, string.format("%sx %s",
+        tostring(stack.count or 1), tostring(stack.name)))
+    end
+    work.cargo = manifest
   end
 
   if not world.callScriptedEntity(self.petId, "petports_assignTask", work) then
@@ -1497,6 +1974,7 @@ local function workUpdate(dt)
   end
 
   refreshNetwork()
+  refreshBeacons(WORK_INTERVAL)
   publishUnitPosition()
 
   --  Cheap: loadUniqueEntity on an existing stagehand and out.

@@ -286,7 +286,7 @@ end
 --  TAKES A POSITION, NOT A RECT.
 --
 --  It used to take the port's whole COVERAGE RECT and clear every entry inside
---  it, which is a 32-tile square. Any two ports built within sixteen tiles of
+--  it, which is the whole coverage square. Any two ports built within half of
 --  each other therefore evicted one another from the registry at init, and
 --  since publishRegistry only ever runs on the first update, the loser never
 --  came back. It then reported "network now 0 ports" -- not even counting

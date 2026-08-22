@@ -167,8 +167,13 @@
 	"strictPortTethering" : true,
 
     "movementSettings" : {
-      "collisionPoly" : [ [-0.875, -0.6562], [-0.6562, -0.875], [0.6562, -0.875], [0.875, -0.6562],
-                    [0.875, 0.6562], [0.6562, 0.875], [-0.6562, 0.875], [-0.875, 0.6562] ],
+	
+	  //  a width and height of 1.6 here is deliberate:
+	  //  it must be larger than 1.5 for the pathfinder to reject 1-tile-high tunnels, 
+	  //  and it must be small enough to thread the needle into 2-tile-high gaps when coming out of a jump arc
+	  
+      "collisionPoly" :  [ [-0.8, -0.6], [-0.6, -0.8], [0.6, -0.8], [0.8, -0.6],
+                    [0.8, 0.6], [0.6, 0.8], [-0.6, 0.8], [-0.8, 0.6] ],
       "mass" : 1.0,
       "walkSpeed" : 8,
       "runSpeed" : 12,

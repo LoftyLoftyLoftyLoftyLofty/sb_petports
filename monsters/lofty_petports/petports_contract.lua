@@ -204,13 +204,17 @@ function petports_leashTask()
 
   --  RAW PORT POSITION, DELIBERATELY UNRESOLVED.
   --
-  --  A port is an object and its position is not somewhere a unit can stand.
-  --  approachPoint already resolves a raw target through
-  --  findGroundPosition(target, -20, 1, ...) -- twenty tiles DOWN -- which is
-  --  exactly "the nearest walkable tile beneath the port". Resolving it here
-  --  instead would duplicate that, and the last two attempts to be clever about
-  --  resolving a target before handing it to approachPoint both broke it. See
-  --  the vent-mouth notes in petportsTaskAction.
+  --  A port is an object and its position is not somewhere a unit can stand,
+  --  so the task carries the raw position and the unit resolves it in
+  --  approachTargetFor.
+  --
+  --  CORRECTION: an earlier version of this comment claimed the resolve was
+  --  "findGroundPosition(target, -20, 1) -- twenty tiles DOWN". Both numbers
+  --  were wrong and so was the implied direction. The real bounds are
+  --  GROUND_SEARCH_DOWN -6 and GROUND_SEARCH_UP 4, and vanilla tests UP FIRST,
+  --  so an unbiased resolve happily puts the unit on the port's roof. The
+  --  downward bias for "return" tasks lives in approachTargetFor; this comment
+  --  is not the place to restate it, only to stop the old claim being trusted.
   self.petportsLeashTask.position = self.petportsHome
   self.petportsLeashTask.hold = tethered
   self.petportsLeashTask.slack = TETHER_SLACK
@@ -238,6 +242,50 @@ end
 --
 --  NOT persisted: entity ids do not survive a reload, and the port re-pushes on
 --  every spawn.
+--  A POSITION THIS UNIT CAN ACTUALLY STAND AT, near `position`.
+--
+--  Exists because THE PORT CANNOT ANSWER THIS. validStandingPosition tests the
+--  unit's BOUNDING BOX, and the box comes from mcontroller.boundBox(), which
+--  objects do not have. The port's own findStandingPoint tests a POINT instead,
+--  and the two disagree systematically:
+--
+--    findStandingPoint      wants the tile under the POINT to be solid
+--    validStandingPosition  wants the tile under the BOX to be solid, and the
+--                           box bottom is boundBox[2] below the point
+--
+--  For a unit with boundBox[2] = -0.375 those are contradictory -- the row the
+--  port requires to be solid is the row the pathfinder requires to be empty.
+--  Every standing position this unit ever occupies ends in .375; the port was
+--  handing out integers, so the deposit target was rejected before pathing even
+--  started and the whole route failed with it.
+--
+--  findGroundPosition does the alignment properly:
+--      position = {x, math.ceil(y) - (bounds[2] % 1)}
+--  which is where that .375 comes from. Use it rather than reproducing it.
+--
+--  Searches columns outward from the centre so the nearest usable spot wins,
+--  and checks both directions at each step because a container against a wall
+--  may only be approachable from one side.
+function petports_standingPointNear(position, radius)
+  if position == nil then return nil end
+  radius = radius or 4
+
+  for offset = 0, radius do
+    for _, dx in ipairs(offset == 0 and { 0 } or { -offset, offset }) do
+      --  Tile centre. findGroundPosition only resolves the y.
+      local x = math.floor(position[1] + dx) + 0.5
+
+      local ground = findGroundPosition({ x, position[2] }, -radius, radius, false)
+
+      if ground ~= nil and validStandingPosition(ground, false) then
+        return { ground[1], ground[2] }
+      end
+    end
+  end
+
+  return nil
+end
+
 function petports_setVents(vents)
   local summary = {}
   for _, vent in ipairs(vents or {}) do
@@ -479,9 +527,25 @@ function petports_probeStep(from, to, fromKey, toKey, exploreRate)
     finder.exploreRate = function() return exploreRate or 300 end
     finder:start(from, to)
 
-    sb.logInfo("UNIT probe START %s -> %s: from %s to %s rate %s",
-      tostring(fromKey), tostring(toKey), sb.printJson(from), sb.printJson(to),
-      sb.printJson(exploreRate or 300))
+    --  VALIDATE THE START, NOT JUST THE TARGET.
+    --
+    --  probeStep checks validStandingPosition on `to` and has never checked
+    --  `from`. A probe that begins somewhere the unit cannot occupy gives A*
+    --  almost nothing to expand and comes back "UNREACHABLE" in a tick or two,
+    --  which is indistinguishable in the log from a genuinely small sealed
+    --  region. Those need completely different fixes, so the log has to say
+    --  which one it is.
+    --
+    --  Also reports where the nearest standable ground actually is. If `from`
+    --  is invalid but ground sits a fraction of a tile away, the vent's entry
+    --  position is misaligned rather than the geometry being wrong.
+    local fromValid = validStandingPosition(from, false)
+    local fromGround = findGroundPosition(from, -4, 4, false)
+
+    sb.logInfo("UNIT probe START %s -> %s: from %s (standable %s, ground %s) to %s rate %s",
+      tostring(fromKey), tostring(toKey), sb.printJson(from),
+      tostring(fromValid), sb.printJson(fromGround),
+      sb.printJson(to), sb.printJson(exploreRate or 300))
 
     self.petportsProbe = {
       finder = finder,
@@ -767,6 +831,49 @@ function petports_drawRouteDebug(stateData)
   end
 
   if stateData == nil then return end
+
+  local task = stateData.task
+
+  --  WHAT THIS UNIT THINKS IT IS DOING, above its head.
+  --
+  --  Stacked upward from the unit so the lines do not overlap each other or the
+  --  route text already drawn at +3 and +4. Read bottom-up: what, where, what
+  --  it is holding.
+  if task ~= nil then
+    local phase = "walking"
+    if stateData.arrived then phase = "arrived"
+    elseif stateData.viaVent ~= nil then phase = "to vent " .. tostring(stateData.viaVent.id)
+    elseif stateData.routing then phase = "routing"
+    end
+
+    world.debugText("%s [%s]", tostring(task.id), phase,
+      {here[1], here[2] + 5}, "yellow")
+
+    --  Hop count only once it is doing any, so an ordinary walk stays quiet.
+    if (stateData.ventHops or 0) > 0 then
+      world.debugText("hop %s", tostring(stateData.ventHops),
+        {here[1], here[2] + 5.75}, "yellow")
+    end
+
+    --  The manifest the port sent at dispatch. Drawn one line per stack so a
+    --  mixed load is readable rather than a single run-on string.
+    local offset = 6.5
+    for _, entry in ipairs(task.cargo or {}) do
+      world.debugText("%s", entry, {here[1], here[2] + offset}, "orange")
+      offset = offset + 0.75
+    end
+
+    --  THE DEPOSIT TARGET, drawn to the CONTAINER rather than to the standing
+    --  point beside it. Which crate a unit has chosen is the thing that is
+    --  impossible to tell from watching it walk, and the standing point can be
+    --  several tiles from the crate it belongs to.
+    if task.type == "deposit" and task.containerPosition ~= nil then
+      world.debugLine(here, task.containerPosition, "orange")
+      world.debugPoint(task.containerPosition, "orange")
+      world.debugText("deposit -> %s", tostring(task.target),
+        {task.containerPosition[1], task.containerPosition[2] + 1.5}, "orange")
+    end
+  end
 
   --  The planned route, leg by leg.
   if stateData.plan ~= nil then

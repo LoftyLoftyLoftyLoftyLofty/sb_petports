@@ -144,6 +144,35 @@ local JUMP_TAKEOFF_REACH = 1.0
 --  point is effectively straight up or straight down.
 local JUMP_APPROACH_EPSILON = 0.05
 
+--  How far the jump source may sit above or below the unit and still be worth
+--  WALKING toward.
+--
+--  Walking changes x. It does not change what level the unit is standing on, so
+--  a source four tiles down is not something to approach -- it is evidence the
+--  unit is not where its path thinks it is, and the answer is a replan.
+--
+--  One tile: enough to cover a source on a slope or a half-step, not enough to
+--  cover a different floor.
+local JUMP_LEVEL_TOLERANCE = 1.0
+
+--  How close to a coming jump point the unit slows down, and to what.
+--
+--  moveJump only fires within 1.0 of its source. At walkSpeed 8 the script
+--  advances the unit about 0.66 tiles per tick, so that window gets ONE sample,
+--  maybe two, and the phase decides whether either lands inside it.
+--
+--  On flat ground a miss is recoverable -- walk back. AT A LEDGE IT IS NOT.
+--  Measured: the unit walked off at full speed, the path advanced to the Jump
+--  edge only after it was already airborne and 1.23 tiles from the takeoff
+--  point, and it fell eight tiles.
+--
+--  3.0 gives about 0.25 tiles per tick, so the window gets three or four
+--  samples instead of one. 2.5 tiles of run-in is enough to shed the speed
+--  without making ordinary walking look sluggish -- it only applies with a jump
+--  immediately ahead.
+local JUMP_APPROACH_SLOWDOWN = 2.5
+local JUMP_APPROACH_SPEED = 3.0
+
 --  How far ahead to read the planned arc when working out how high the jump
 --  actually has to go. Arcs run a few dozen sample edges; this only has to
 --  outlast the longest of them.
@@ -509,6 +538,47 @@ end
 --
 --  The pather is cheap to build and there is one task at a time, so build a
 --  FRESH one per task rather than trying to unpick vanilla's state.
+--  REPLACEMENT FOR PathMover:moveWalk
+--
+--  Vanilla walks at full speed right up to the moment the next edge takes over.
+--  That is fine when every mover can pick up from wherever the walk left the
+--  unit, and moveJump cannot -- it has a hard 1.0 radius and no way to recover
+--  from being outside it.
+--
+--  So this does one thing: SLOW DOWN WHEN A JUMP IS NEXT. Everything else is
+--  vanilla's, called directly through the class table so there is no copy of it
+--  to maintain.
+--
+--  Speed is set on pather.controlParameters, which PathMover:move rebuilds
+--  BEFORE edgeMove and applies AFTER it -- so a change made here lands on the
+--  same tick.
+function petportsWalkMover(pather)
+  local finder = pather.finder
+  local ahead = finder ~= nil and finder.lookAhead and finder:lookAhead(1) or nil
+
+  if ahead ~= nil and ahead.action == "Jump"
+     and ahead.source ~= nil and ahead.source.position ~= nil then
+
+    local gap = world.magnitude(mcontroller.position(), ahead.source.position)
+
+    if gap <= JUMP_APPROACH_SLOWDOWN then
+      pather.controlParameters.walkSpeed = JUMP_APPROACH_SPEED
+      pather.controlParameters.runSpeed = JUMP_APPROACH_SPEED
+
+      if not pather.petportsSlowingForJump then
+        pather.petportsSlowingForJump = true
+        sb.logInfo("UNIT slowing to %s for jump point %s (gap %s)",
+          sb.printJson(JUMP_APPROACH_SPEED),
+          sb.printJson(ahead.source.position), sb.printJson(gap))
+      end
+    end
+  else
+    pather.petportsSlowingForJump = nil
+  end
+
+  return PathMover.moveWalk(pather)
+end
+
 --  REPLACEMENT FOR PathMover:moveJump
 --
 --  WHAT VANILLA DOES, IN FULL:
@@ -655,6 +725,37 @@ function petportsJumpMover(pather)
     --  than better.
     if mcontroller.onGround() then
       local toSource = source[1] - mcontroller.position()[1]
+      local levelGap = math.abs(source[2] - mcontroller.position()[2])
+
+      --  ON A DIFFERENT LEVEL: DO NOT WALK.
+      --
+      --  Measured failure, and it was this branch that caused it. A unit stood
+      --  at [1214.88,711.875] with its jump source at [1215,707.875] -- four
+      --  tiles BELOW. The horizontal offset was 0.12, which cleared the epsilon
+      --  below, so this issued controlMove toward 1215, overshot to 1215.13,
+      --  reversed, overshot to 1214.88, and did that indefinitely.
+      --
+      --  THE OSCILLATION DEFEATED THE STALL DETECTOR, which is why it never
+      --  recovered on its own: the unit was displacing a quarter tile per
+      --  cycle, so stuckAnchor kept updating and airborneEdgeStall kept
+      --  resetting. A unit that paces looks livelier than one that is wedged
+      --  and is in fact worse off.
+      --
+      --  Standing still is the correct behaviour here. The grounded-stall check
+      --  in update() then fires within 0.35s and replans from where the unit
+      --  actually is, which is the only thing that can help.
+      if levelGap > JUMP_LEVEL_TOLERANCE then
+        if not pather.petportsWrongLevel then
+          pather.petportsWrongLevel = true
+          sb.logInfo("UNIT jump source %s is %s tiles off our level (at %s) -- not walkable, waiting for replan",
+            sb.printJson(source), sb.printJson(levelGap),
+            sb.printJson(mcontroller.position()))
+        end
+
+        return "running"
+      end
+
+      pather.petportsWrongLevel = nil
 
       --  Directly above or below, so no amount of walking closes the gap. Leave
       --  it: the unit will stand still, and the grounded-stall check in
@@ -676,6 +777,7 @@ function petportsJumpMover(pather)
   end
 
   pather.petportsWalkingToJump = nil
+  pather.petportsWrongLevel = nil
 
   --  Everything from here down is vanilla's takeoff, unmodified.
   if not pather.jumpTimer then
@@ -740,6 +842,7 @@ local function freshPather()
   --  PathMover.moveJump, no other entity is affected, and nothing is patched
   --  globally. Same technique as the exploreRate override above.
   self.pather.moveJump = petportsJumpMover
+  self.pather.moveWalk = petportsWalkMover
 end
 
 function petportsTaskAction.enteringState(stateData)
@@ -762,7 +865,9 @@ end
 --  Reported by uniqueId, not entity id: the port's entity id is not stable
 --  across a reload and the unit may well have respawned since the task was
 --  issued.
-local function report(stateData, outcome, reason)
+--  `cargo` is an item descriptor the unit is handing over, or nil. Only a
+--  successful pickup passes one.
+local function report(stateData, outcome, reason, cargo)
   local task = stateData.task
 
   sb.logInfo("UNIT reporting %s for %s: %s (ended at %s, target %s, hops %s, moved %s)",
@@ -775,6 +880,7 @@ local function report(stateData, outcome, reason)
       id = task.id,
       outcome = outcome,
       reason = reason,
+      cargo = cargo,
       unit = entity.uniqueId()
     })
   end
@@ -842,12 +948,17 @@ local COLUMN_SEARCH = { 0, 1, -1, 2, -2, 3, -3 }
 --  unit's boundBox is about a tile wide and centred, so an integer x straddles
 --  two columns and only passes where both are clear. findGroundPosition then
 --  supplies the y.
-local function standableNear(position)
+--  `searchUp` overrides how far above `position` a standing spot may be taken
+--  from. Pass 0 to forbid climbing -- see the homeward bias in
+--  approachTargetFor for why that is sometimes required.
+local function standableNear(position, searchUp)
+  if searchUp == nil then searchUp = GROUND_SEARCH_UP end
+
   for _, offset in ipairs(COLUMN_SEARCH) do
     local x = math.floor(position[1] + offset) + 0.5
 
     local ok, resolved = pcall(findGroundPosition,
-      {x, position[2]}, GROUND_SEARCH_DOWN, GROUND_SEARCH_UP, false)
+      {x, position[2]}, GROUND_SEARCH_DOWN, searchUp, false)
 
     --  Guard the SHAPE, not just nil-ness: pcall returns the error message in
     --  this slot on failure, and a string indexes without complaint.
@@ -890,10 +1001,47 @@ end
 --  Cached so the resolve runs once per task rather than once per tick.
 --  Cached once RESOLVED. Until then it is recomputed every tick, because a
 --  falling drop's position changes and an early resolve would be wrong.
+--  HOME IS BENEATH THE PORT, NOT ON TOP OF IT.
+--
+--  findGroundPosition tests UP BEFORE DOWN at every step of its search:
+--
+--      for y = 0, max(abs(minHeight), abs(maxHeight)) do
+--        if y <= maxHeight and validStandingPosition({x, pos[2] + y}) then break end
+--        if -y >= minHeight and validStandingPosition({x, pos[2] - y}) then break end
+--      end
+--
+--  so with GROUND_SEARCH_UP at 4 a standable spot ABOVE the target beats one
+--  below it at the same distance, and it will climb four tiles to find one. A
+--  port under a shelter has a perfectly good roof, and the roof wins.
+--
+--  Measured: port at [1203,728] resolved to [1203.5,731.875] -- 3.875 tiles up,
+--  on top of its own shelter -- while the floor immediately beneath it was
+--  fine. The unit then leashes to the roof, and every recall sends it there.
+--
+--  So a homeward task forbids climbing outright. Down-only first; the normal
+--  search is kept as a fallback so a port with genuinely no floor beneath it
+--  still resolves to something rather than nothing.
+--
+--  Applies to "return" -- both the unit's own leash and the port's recall use
+--  that type, and both mean "come back to your port".
 local function approachTargetFor(stateData, rawPosition)
   if stateData.groundTarget ~= nil then return stateData.groundTarget end
 
-  stateData.groundTarget = standableNear(rawPosition)
+  local task = stateData.task
+  local homeward = task ~= nil and task.type == "return"
+
+  if homeward then
+    stateData.groundTarget = standableNear(rawPosition, 0)
+
+    if stateData.groundTarget == nil then
+      sb.logInfo("UNIT no floor beneath %s -- falling back to an unbiased search",
+        sb.printJson(rawPosition))
+      stateData.groundTarget = standableNear(rawPosition)
+    end
+  else
+    stateData.groundTarget = standableNear(rawPosition)
+  end
+
   return stateData.groundTarget
 end
 
@@ -1191,10 +1339,35 @@ function petportsTaskAction.update(dt, stateData)
   end
   task.position = target
 
+  --  THE ROUTER AND THE WALKER MUST AIM AT THE SAME POINT.
+  --
+  --  approachPoint resolves a raw target to standable ground internally, so the
+  --  direct walk was aiming at the resolved spot while tryVentRoute was handed
+  --  the RAW one. That is invisible on flat floor, where the two coincide.
+  --
+  --  On a slope they do not. Measured with a drop resting at
+  --  [1224.71,718.789]:
+  --
+  --    standableNear      resolved it to [1224.5,718.875]
+  --    the direct A*      searched toward [1224.5,718.875] -- fine, just slow
+  --    every vent probe   ran toward [1224.71,718.789] and was refused:
+  --                       "not a valid standing position"
+  --
+  --  So the direct walk timed out on a hard route, handed over to vents, and
+  --  vent routing then rejected the target outright at every single vent --
+  --  planRoute EXHAUSTED, task failed, unit never moved. The drop was reachable
+  --  the whole time; only the coordinate handed to the router was wrong.
+  --
+  --  Resolved HERE rather than at the two call sites, so a third caller cannot
+  --  reintroduce the split. approachTargetFor caches once the drop has settled,
+  --  and falls back to the raw target while it is still falling or when nothing
+  --  standable is near -- the settle grace below owns that case.
+  local routeTarget = approachTargetFor(stateData, target) or target
+
   --  Routing mode: probing exits, or waiting for one to be chosen. Runs every
   --  tick so a probe actually makes progress.
   if stateData.routing and stateData.viaVent == nil then
-    local routing = tryVentRoute(stateData, target)
+    local routing = tryVentRoute(stateData, routeTarget)
 
     if routing == "walk" then
       stateData.routing = false
@@ -1569,7 +1742,7 @@ function petportsTaskAction.update(dt, stateData)
         if stateData.progressStrikes >= PROGRESS_STRIKES then
           --  Try a vent before giving up: a route the unit cannot jump may be
           --  reachable another way.
-          local routing = tryVentRoute(stateData, target)
+          local routing = tryVentRoute(stateData, routeTarget)
           if routing ~= "none" then
             stateData.routing = true
             stateData.progressStrikes = 0
@@ -1827,9 +2000,19 @@ function petportsTaskAction.update(dt, stateData)
       sb.printJson(stateData.dwellTimer))
 
     if ok and taken then
-      --  TESTING SINK: the descriptor is discarded, which destroys the item.
-      --  Replace with deposit-into-port when the port UI grows storage.
-      report(stateData, "done", "collected at " .. sb.printJson(task.position))
+      --  THE DESCRIPTOR IS THE ITEM. Discarding it destroyed the pickup, which
+      --  is what the testing sink used to do. It now travels back to the port
+      --  on the report, and the port writes it into the unit ITEM -- so cargo
+      --  survives despawn, reload, and being carried to another world, the same
+      --  way the unit's own state does.
+      --
+      --  THERE IS A LOSS WINDOW and it is worth knowing about: takeItemDrop has
+      --  already destroyed the world drop by the time this line runs, so if the
+      --  report never reaches the port -- port mined during the second between
+      --  pickup and report -- the item is gone. Narrow, but real. The port logs
+      --  an error rather than swallowing it if cargo arrives with nowhere to go.
+      report(stateData, "done",
+        "collected at " .. sb.printJson(task.position), taken)
       return true
     end
 
