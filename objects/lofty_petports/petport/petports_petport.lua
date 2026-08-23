@@ -338,6 +338,8 @@ end
 --  query objects cheaply. It cannot evaluate REACHABILITY -- pathfinding needs
 --  mcontroller, which objects do not have -- so the unit does that part.
 local function gatherVents()
+	local ventReport = {}
+
   --  Vents are gathered from a rect INFLATED beyond the network's coverage.
   --
   --  A vent sitting just outside coverage is still perfectly usable -- units on
@@ -388,9 +390,12 @@ local function gatherVents()
           table.insert(exits, destination.id)
         end
 
-        sb.logInfo("PETPORT %s gatherVents: vent %s entry %s okEntry %s okDest %s exits %s",
-          stationUniqueId(), sb.printJson(id), sb.printJson(entry),
-          tostring(okEntry), tostring(okDest), sb.printJson(exits))
+        --  Accumulated and reported once per refresh, change-gated below.
+        --  Was one line per vent per refresh: 339 vents-worth of identical
+        --  wiring in a single session.
+        table.insert(ventReport, string.format("%s@%s->%s%s",
+          tostring(id), sb.printJson(entry), sb.printJson(exits),
+          (okEntry and okDest) and "" or " (CALL FAILED)"))
 
         if okEntry and entry ~= nil and okDest and dests ~= nil then
           table.insert(vents, { id = id, entry = entry, destinations = dests })
@@ -401,6 +406,24 @@ local function gatherVents()
         end
       end
     end
+  end
+
+  --  ONE LINE PER REFRESH, AND ONLY WHEN THE WIRING CHANGES. Vent topology is
+  --  static until a player rewires something, so re-stating it every few
+  --  seconds is pure noise -- but losing it entirely means a mis-wired vent
+  --  becomes invisible. Change-gating keeps the signal and drops the volume.
+  table.sort(ventReport)
+  local signature = table.concat(ventReport, " | ")
+
+  --  DELIBERATELY NOT self.ventSignature -- refreshNetwork owns that one for
+  --  ventSignature(vents), and sharing it made both change-gates fire on every
+  --  call. The visible symptom was "vent topology changed" once a second; the
+  --  invisible one was unitChanged going true with it, so the port re-pushed
+  --  rects and vents to its unit every tick.
+  if signature ~= self.ventReportSignature then
+    self.ventReportSignature = signature
+    sb.logInfo("PETPORT %s vents: %s", stationUniqueId(),
+      signature == "" and "none" or signature)
   end
 
   return vents
@@ -736,6 +759,36 @@ function init()
     if report.outcome == "done" and self.task ~= nil
        and self.task.type == "deposit" and self.task.id == report.id then
       depositCargo(self.task.target)
+    end
+
+    --  Arrived at a crate holding a seed. Symmetric with deposit above: the
+    --  container call happens HERE, on the port, so the unit never needs a
+    --  container primitive of its own.
+    if report.outcome == "done" and self.task ~= nil
+       and self.task.type == "withdraw" and self.task.id == report.id then
+      withdrawSeed(self.task.target, self.task.seed, self.task.id)
+    end
+
+    --  The crop went in the ground. Spend the seed and retire the intent.
+    if report.outcome == "done" and self.task ~= nil
+       and self.task.type == "replant" and self.task.id == report.id then
+      spendSeed(self.task.seed)
+      petports_replantClear(self.task.target, "replanted")
+    end
+
+    --  A HARVEST THAT LEFT A HOLE BECOMES AN INTENT.
+    --
+    --  Decided here rather than on the unit because the port is the thing that
+    --  can still answer it: entityExists on a crop that reset is true, on one
+    --  that was destroyed is false, and that single test is the whole
+    --  resetToStage distinction without reading any config.
+    if report.outcome == "done" and self.task ~= nil
+       and self.task.type == "harvest" and self.task.id == report.id then
+      if not world.entityExists(self.task.target)
+         and self.task.targetName ~= nil then
+        petports_replantSet(self.task.position, self.task.targetName,
+          stationUniqueId())
+      end
     end
 
     if report.outcome == "done" then
@@ -1757,9 +1810,18 @@ local function depositWork()
     else
       backedOff = not takesAny
       if backedOff then
-        sb.logInfo("PETPORT %s deposit target %s SKIPPED: cannot take any of %s carried stack(s)",
-          stationUniqueId(), sb.printJson(beacon.id),
-          sb.printJson(#self.petData.cargo))
+        --  NAMES THE STACKS, not just the count. Cargo can now be mixed -- a
+        --  unit may hold an undepositable stack AND a seed it is on its way to
+        --  plant -- so "cannot take any of 2 stacks" stopped being enough to
+        --  tell a full crate from a wrong-item crate.
+        local held = {}
+        for _, stack in ipairs(self.petData.cargo) do
+          table.insert(held, string.format("%sx%s",
+            tostring(stack.name), tostring(stack.count or 1)))
+        end
+
+        sb.logInfo("PETPORT %s deposit target %s SKIPPED: cannot take any of [%s]",
+          stationUniqueId(), sb.printJson(beacon.id), table.concat(held, ", "))
       end
     end
 
@@ -1815,6 +1877,86 @@ local function depositWork()
   end
 
   return nil, "every deposit beacon is backed off as full"
+end
+
+--  Take one seed out of a container and put it on the unit.
+--
+--  GLOBAL for the same reason depositCargo is: the petports_taskReport handler
+--  is registered in init(), earlier in this file than the definition, so a
+--  local would not be in scope at the call site.
+--
+--  containerConsume is all-or-nothing -- it succeeds only if the FULL count can
+--  be consumed -- which is exactly the semantics wanted for taking exactly one.
+function withdrawSeed(containerId, seedName, workId)
+  if seedName == nil then return end
+
+  --  A WITHDRAW THAT TAKES NOTHING MUST BE RECORDED AS A FAILURE, and this is
+  --  the whole reason this function knows its work id.
+  --
+  --  The unit walked there and reported "done" -- it did arrive, and arriving
+  --  is all it was asked to do. The report handler treats done as success and
+  --  CLEARS the failure record for that id. So if containerAvailable and
+  --  containerConsume ever disagree persistently, the port re-dispatches the
+  --  identical walk immediately, and the unit shuttles to an empty crate
+  --  forever with no backoff and nothing in the log that looks wrong.
+  --
+  --  Ordinarily that disagreement means a player emptied the crate mid-walk,
+  --  which resolves itself. The backoff exists for the case where it does not.
+  local function empty(reason)
+    sb.logInfo("PETPORT %s withdraw of %s from %s took nothing: %s",
+      stationUniqueId(), tostring(seedName), sb.printJson(containerId), reason)
+
+    if workId ~= nil then noteFailure(workId, reason) end
+  end
+
+  if not world.entityExists(containerId) then
+    empty("container no longer exists")
+    return
+  end
+
+  local took = world.containerConsume(containerId, { name = seedName, count = 1 })
+
+  if took ~= true then
+    empty("containerConsume returned " .. tostring(took)
+      .. " -- crate emptied between dispatch and arrival?")
+    return
+  end
+
+  sb.logInfo("PETPORT %s withdrew 1 %s from %s",
+    stationUniqueId(), tostring(seedName), sb.printJson(containerId))
+
+  receiveCargo({ name = seedName, count = 1 })
+end
+
+--  Remove one seed from cargo after it has gone into the ground.
+--
+--  Global, same reason as above.
+function spendSeed(seedName)
+  if self.petData == nil or self.petData.cargo == nil then return end
+
+  for index, stack in ipairs(self.petData.cargo) do
+    if stack.name == seedName then
+      local count = (stack.count or 1) - 1
+
+      if count <= 0 then
+        table.remove(self.petData.cargo, index)
+      else
+        stack.count = count
+      end
+
+      sb.logInfo("PETPORT %s spent 1 %s planting; %s stack(s) still held",
+        stationUniqueId(), tostring(seedName),
+        sb.printJson(#self.petData.cargo))
+
+      writeBackToItem()
+      return
+    end
+  end
+
+  --  The unit planted something it was not carrying. Worth a shout: it means
+  --  cargo accounting and the world disagree.
+  sb.logError("PETPORT %s planted %s but was not carrying it",
+    stationUniqueId(), tostring(seedName))
 end
 
 --  Move cargo into a container. Called when the unit reports it is standing
@@ -2102,20 +2244,510 @@ local function harvestWork()
 	end
 
 	if best == nil then
-		return nil, string.format(
+		local reason = string.format(
 			"%s farmable(s) in coverage, none harvestable: %s unripe, "
 			.. "%s claimed, %s backed off, %s gone",
 			#crops, rejected.unripe, rejected.claimed,
 			rejected.backedOff, rejected.gone)
+
+		--  LOGGED HERE, NOT RETURNED AND HOPED FOR. findWork returns the
+		--  deposit reason ahead of this one, so a port sitting next to nine
+		--  ripe crops and refusing to dispatch said nothing whatsoever about
+		--  the crops -- the reason existed and never reached the log. Change
+		--  gated so it does not repeat every tick.
+		if reason ~= self.harvestRejectReason then
+			self.harvestRejectReason = reason
+			sb.logInfo("PETPORT %s harvest: %s", stationUniqueId(), reason)
+		end
+
+		return nil, reason
 	end
+
+	self.harvestRejectReason = nil
 
 	return {
 		id = "harvest:" .. best.id,
 		type = "harvest",
 		port = stationUniqueId(),
 		target = best.id,
+		--  CARRIED SO THE INTENT CAN BE WRITTEN AFTER THE CROP IS GONE. Once
+		--  the harvest succeeds the entity no longer exists, so entityName is
+		--  no longer answerable -- and the crop's own name IS the seed name,
+		--  which is the whole thing the intent needs to record.
+		targetName = best.name,
 		position = best.position
 	}
+end
+
+--------------------------------------------------------------------------------
+--  REPLANTING
+--------------------------------------------------------------------------------
+
+--  Is this position inside coverage for ANY port on the network?
+--
+--  Intents are network-wide -- one port harvests, another may be nearer the
+--  crate -- so the test cannot be this port's own rect. Falls back to the own
+--  rect before the network has been derived, which is the same fallback the
+--  farmable scan makes.
+local function inNetworkCoverage(position)
+	local rects = self.networkRects
+	if rects == nil or #rects == 0 then rects = { coverageRect() } end
+
+	for _, rect in ipairs(rects) do
+		if petports_rectContains(rect, position) then return true end
+	end
+
+	return false
+end
+
+--  Is this tile still a place a crop could go?
+--
+--  TWO TILES, NOT ONE. A farmable occupies spaces [0,0] and [0,1] anchored at
+--  the bottom, so a check against the anchor alone will happily try to plant
+--  into something hanging one tile above the ground.
+--  A crop's real footprint, from its own config.
+--
+--  WAS HARDCODED 1 WIDE BY 2 TALL, generalised from potatoseed's
+--  spaces [[0,0],[0,1]]. Wrong for every wide crop -- oculemon and pineapple
+--  are two wide -- and the failure was quiet in both directions: the clear
+--  check missed a blocker standing in the column it never looked at, and the
+--  post-plant check looked for the new crop in tiles it might not occupy and
+--  concluded the planting had failed.
+--
+--  The seed and the crop share one name, so the seed's own config describes
+--  exactly what is about to appear. Cached per name: object configs are
+--  static, and this is read on every occupancy test.
+local seedSpacesCache = {}
+
+local function seedSpaces(seedName)
+	if seedName == nil then return { {0, 0}, {0, 1} } end
+	if seedSpacesCache[seedName] ~= nil then return seedSpacesCache[seedName] end
+
+	local spaces = nil
+	local ok, config = pcall(root.itemConfig, seedName)
+
+	if ok and type(config) == "table" and type(config.config) == "table" then
+		local orientations = config.config.orientations
+
+		if type(orientations) == "table" and type(orientations[1]) == "table"
+		   and type(orientations[1].spaces) == "table"
+		   and #orientations[1].spaces > 0 then
+			spaces = orientations[1].spaces
+		end
+	end
+
+	if spaces == nil then
+		--  Loud, because falling back means occupancy is a guess from here on.
+		sb.logInfo("PETPORT %s could not read spaces for %s -- assuming 1x2",
+			stationUniqueId(), tostring(seedName))
+		spaces = { {0, 0}, {0, 1} }
+	else
+		sb.logInfo("PETPORT %s footprint for %s: %s tile(s) %s",
+			stationUniqueId(), tostring(seedName), sb.printJson(#spaces),
+			sb.printJson(spaces))
+	end
+
+	seedSpacesCache[seedName] = spaces
+	return spaces
+end
+
+--  The tiles a crop of this type would occupy if planted at this anchor.
+local function seedTiles(position, seedName)
+	local anchor = { math.floor(position[1]), math.floor(position[2]) }
+	local tiles = {}
+
+	for _, space in ipairs(seedSpaces(seedName)) do
+		table.insert(tiles, { anchor[1] + space[1], anchor[2] + space[2] })
+	end
+
+	return tiles
+end
+
+--  Does this object actually stand on any of these tiles?
+--
+--  world.objectSpaces returns the object's occupied tiles RELATIVE to its own
+--  position -- the same thing vanilla's pathutil objectBounds translates -- so
+--  this is an exact occupancy test rather than a bounding-box overlap.
+local function objectOccupies(objectId, tiles)
+	local spaces = world.objectSpaces(objectId)
+	if spaces == nil then return false end
+
+	local origin = world.entityPosition(objectId)
+	if origin == nil then return false end
+
+	for _, space in ipairs(spaces) do
+		local x = math.floor(origin[1]) + space[1]
+		local y = math.floor(origin[2]) + space[2]
+
+		for _, tile in ipairs(tiles) do
+			if x == tile[1] and y == tile[2] then return true end
+		end
+	end
+
+	return false
+end
+
+local function replantFootprintClear(position, seedName)
+	local tiles = seedTiles(position, seedName)
+
+	--  Query bounds from the real footprint, padded, since the exact test
+	--  below does the actual work.
+	local lox, loy = tiles[1][1], tiles[1][2]
+	local hix, hiy = lox, loy
+
+	for _, t in ipairs(tiles) do
+		lox = math.min(lox, t[1]); hix = math.max(hix, t[1])
+		loy = math.min(loy, t[2]); hiy = math.max(hiy, t[2])
+	end
+
+	--  QUERY WIDE, THEN FILTER EXACTLY, and the filter is the whole point.
+	--
+	--  entityQuery returns anything whose bounds INTERSECT the rect, and a rect
+	--  drawn tightly around one tile touches the edge of the next one. In a
+	--  planted row -- crops at x, x+1, x+2 -- every tile therefore reported
+	--  itself occupied by its neighbour, and every replant intent was cleared
+	--  as "footprint occupied" within seconds of being written. MEASURED: nine
+	--  intents set, seven destroyed this way, and the two survivors only lasted
+	--  because their neighbours had not regrown yet.
+	--
+	--  Padding the query and then testing real occupancy is immune to that,
+	--  and costs one objectSpaces call per candidate.
+	local candidates = world.entityQuery(
+		{ lox - 1, loy - 1 }, { hix + 2, hiy + 2 },
+		{ includedTypes = { "object" } })
+
+	for _, id in ipairs(candidates or {}) do
+		if objectOccupies(id, tiles) then
+			sb.logInfo("PETPORT %s footprint for %s at %s BLOCKED by object %s",
+				stationUniqueId(), tostring(seedName), sb.printJson(tiles),
+				sb.printJson(id))
+			return false
+		end
+	end
+
+	return true
+end
+
+--  Is the ground under the tile still tilled?
+--
+--  THE SOIL IS BELOW THE ANCHOR. A crop stands ON tilled dirt, so the matmod to
+--  test is at y - 1, not at the crop's own tile. Both are logged on failure
+--  because that offset is an assumption about where world.entityPosition sits
+--  for an object, and one look at a real field settles it.
+--
+--  Mods are NAMED at this layer, not numbered: world.placeMod takes "tilled",
+--  and vanilla's own removable-mod tables compare against "tilleddry". So the
+--  31/32 ids in the material config are not what shows up here.
+local function replantGroundTilled(position)
+	local under = world.mod({ position[1], position[2] - 1 }, "foreground")
+	local at = world.mod({ position[1], position[2] }, "foreground")
+
+	--  EITHER TILE COUNTS, and that is a hedge rather than sloppiness. The soil
+	--  SHOULD be at y - 1, but that rests on an assumption about where
+	--  world.entityPosition sits for an object, and getting it wrong here is
+	--  not a small bug: the sweep would clear every intent within five seconds
+	--  as "ground no longer tilled" and replanting would silently never happen
+	--  with nothing obviously broken. Accepting a tilled mod at either tile
+	--  means the wrong guess costs nothing, and the log line below names both
+	--  so the right answer is readable from one field.
+	local function isTilled(mod)
+		local name = tostring(mod)
+		return name == "tilled" or name == "tilleddry"
+	end
+
+	local tilled = isTilled(under) or isTilled(at)
+
+	if not tilled then
+		sb.logInfo("PETPORT %s replant ground at %s: mod below is %s, mod at is %s "
+			.. "-- not tilled",
+			stationUniqueId(), sb.printJson(position), tostring(under), tostring(at))
+	end
+
+	return tilled
+end
+
+--  Drop intents the world has already answered.
+--
+--  RUNS ON THE FARMABLE TIMER, not the work tick. Sweeping is cheap but it is
+--  still an entityQuery per intent, and intents are long-lived by design.
+--  OWN TIMER, AND CALLED FROM workUpdate, NOT FROM refreshFarmables.
+--
+--  This used to be a call at the bottom of refreshFarmables, which crashed
+--  every port on the first sweep: refreshFarmables is defined EARLIER in this
+--  file, so the `local function` below was not in scope at that call site and
+--  Lua compiled it as a lookup of a GLOBAL named sweepReplants, which is nil.
+--  Same trap the receiveCargo and writeBackToItem comments describe, reached
+--  from the other direction.
+--
+--  Calling it from workUpdate -- which is defined after everything -- removes
+--  the ordering dependency entirely rather than papering over it with a
+--  forward declaration.
+local REPLANT_SWEEP_INTERVAL = 5.0
+
+local function sweepReplants(dt)
+	self.replantSweepTimer = (self.replantSweepTimer or 0) - dt
+	if self.replantSweepTimer > 0 then return end
+	self.replantSweepTimer = REPLANT_SWEEP_INTERVAL
+
+	local intents = petports_replantsAll()
+
+	local outstanding = {}
+	for key, intent in pairs(intents) do
+		table.insert(outstanding, tostring(key) .. "=" .. tostring(intent.name))
+	end
+	table.sort(outstanding)
+
+	local signature = table.concat(outstanding, " | ")
+	if signature ~= self.replantSignature then
+		self.replantSignature = signature
+		sb.logInfo("PETPORT %s replant intents outstanding: %s",
+			stationUniqueId(), signature == "" and "none" or signature)
+	end
+
+	for key, intent in pairs(intents) do
+		if intent.position ~= nil
+		   and inNetworkCoverage(intent.position) then
+			--  A SUCCESSFUL REPLANT CLEARS ITS OWN INTENT BY EXISTING, because
+			--  a farmable is an object and lands in this same test. One check
+			--  covers "we did it" and "the player put a crate there".
+			if not replantFootprintClear(intent.position, intent.name) then
+				petports_replantClear(key, "footprint occupied")
+			elseif not replantGroundTilled(intent.position) then
+				petports_replantClear(key, "ground no longer tilled")
+			end
+		end
+	end
+end
+
+--  Is this work item free for this port to take?
+--
+--  Factored out because the withdraw loop needs it TWICE -- once for its own
+--  leg and once for the replant that follows -- and getting that wrong livelocks
+--  the whole queue. See withdrawWork.
+local function claimFree(workId)
+	local claim = petports_claimGet(workId)
+
+	return (claim == nil)
+		or claim.owner == stationUniqueId()
+		or (claim.expires or 0) <= world.time()
+end
+
+--  Does any networked container hold this seed?
+local function containerWithSeed(seedName)
+	--  SEEDS COME OUT OF THE SAME CRATES THEY WENT INTO. Deposit beacons are
+	--  the network's storage as far as this mod is concerned, and reusing that
+	--  list means a player who moves their storage does not also have to tell
+	--  the replanting system about it.
+	--
+	--  containerAvailable answers "how many could be consumed", which is a
+	--  stronger test than reading containerItems and matching names -- it is
+	--  the same question containerConsume will ask when the unit arrives.
+	for _, beacon in ipairs(petports_beaconsFor("deposit")) do
+		if world.entityExists(beacon.id) then
+			local available = world.containerAvailable(beacon.id,
+				{ name = seedName, count = 1 })
+
+			if type(available) == "number" and available >= 1 then
+				return beacon.id
+			end
+		end
+	end
+
+	return nil
+end
+
+--  Is the unit already carrying the seed an outstanding intent wants?
+local function carriedSeedIntent()
+	if self.petData == nil or self.petData.cargo == nil then return nil end
+
+	local intents = petports_replantsAll()
+
+	for _, stack in ipairs(self.petData.cargo) do
+		for key, intent in pairs(intents) do
+			if intent.name ~= nil and stack.name == intent.name
+			   and intent.position ~= nil
+			   and inNetworkCoverage(intent.position) then
+				return key, intent, stack
+			end
+		end
+	end
+
+	--  NO MATCH, WITH BOTH SIDES NON-EMPTY -- the interesting failure, and the
+	--  one that produced a withdraw/deposit loop with nothing in the log that
+	--  looked wrong. Names both sides so a mismatch is readable at a glance
+	--  rather than inferred from what did not happen.
+	--
+	--  Change-gated: this is reached on every work tick a unit is carrying
+	--  something, which is most of them.
+	if #self.petData.cargo > 0 then
+		local held = {}
+		for _, stack in ipairs(self.petData.cargo) do
+			table.insert(held, tostring(stack.name))
+		end
+
+		local wanted = {}
+		for key, intent in pairs(intents) do
+			table.insert(wanted, string.format("%s@%s%s", tostring(intent.name),
+				tostring(key),
+				inNetworkCoverage(intent.position or {0, 0}) and "" or " (OUT OF RANGE)"))
+		end
+
+		table.sort(held)
+		table.sort(wanted)
+
+		local signature = table.concat(held, ",") .. " vs " .. table.concat(wanted, ",")
+
+		if signature ~= self.replantMissSignature then
+			self.replantMissSignature = signature
+			sb.logInfo("PETPORT %s carrying [%s] but no intent matches: intents are [%s]",
+				stationUniqueId(),
+				table.concat(held, ", "),
+				#wanted > 0 and table.concat(wanted, ", ") or "none")
+		end
+	end
+
+	return nil
+end
+
+--  Walk the seed we are already holding to the hole it came out of.
+--
+--  THIS OUTRANKS DEPOSIT, and that ordering is the whole reason this task can
+--  exist. Deposit fires on ANY cargo, so a unit holding a seed would otherwise
+--  carry it straight past the tile it belongs in and back to a crate.
+--
+--  The rule is narrow on purpose: replant wins ONLY when the cargo is the seed
+--  an outstanding intent names. A unit holding a potato still deposits. That
+--  also makes the whole thing self-healing -- if an intent is invalidated while
+--  a unit is carrying its seed, the match stops holding, deposit takes over,
+--  and the seed goes to storage like any other item.
+local function replantWork()
+	local key, intent = carriedSeedIntent()
+	if key == nil then return nil, "no carried seed matches an intent" end
+
+	--  BACKOFF IS LOAD-BEARING HERE, not a nicety. Nothing about a failed
+	--  replant changes on its own: the unit is still holding the seed, the
+	--  intent still exists, and the match still holds -- so without this the
+	--  port re-dispatches the identical task on the very next tick and the unit
+	--  retries a refused placeObject several times a second, forever. Every
+	--  other work type gets away with omitting this because its precondition is
+	--  consumed by the attempt.
+	local failure = self.workFailures["replant:" .. key]
+	if failure ~= nil and (failure["until"] or 0) > world.time() then
+		return nil, string.format("replant at %s backed off until %s",
+			tostring(key), sb.printJson(failure["until"]))
+	end
+
+	if not replantFootprintClear(intent.position, intent.name) then
+		petports_replantClear(key, "footprint occupied at dispatch")
+		return nil, "intent tile is occupied"
+	end
+
+	sb.logInfo("PETPORT %s REPLANT dispatch: %s back into %s (tile %s)",
+		stationUniqueId(), tostring(intent.name), tostring(key),
+		sb.printJson(intent.position))
+
+	return {
+		id = "replant:" .. key,
+		type = "replant",
+		port = stationUniqueId(),
+		target = key,
+		seed = intent.name,
+		--  Placement wants the tile; standing wants ground near it. The unit
+		--  resolves the second from the first, the same way collection does.
+		position = { intent.position[1] + 0.5, intent.position[2] + 0.5 },
+		tile = intent.position
+	}
+end
+
+--  Fetch a seed from storage for an outstanding intent.
+--
+--  LAST IN THE ORDER, BELOW HARVEST, and that is a real decision rather than an
+--  accident: this is the only task that MANUFACTURES cargo rather than clearing
+--  something. Drops despawn and crops occupy space; an empty tile does neither,
+--  so replanting is the chore a network does in its downtime. The visible
+--  consequence is that a busy base replants slowly, which is correct.
+--
+--  SEED GOES TO STORAGE FIRST, BY DESIGN. The harvest drops its seed on the
+--  ground, ordinary collection carries it to a crate, and only then does this
+--  fetch it back out. The round trip is the point: every seed is accounted for
+--  in storage, so a player who wants them for food or crafting can take them
+--  before the network spends them on replanting.
+local function withdrawWork()
+	--  CARRYING SOMETHING IS NOT A REASON NOT TO FETCH A SEED.
+	--
+	--  This used to refuse on any cargo at all, which deadlocked the exact
+	--  situation it most needed to survive: storage full, unit holding a stack
+	--  nothing will accept. Deposit cannot place it, so the unit carries it
+	--  forever -- and a blanket cargo refusal here meant replanting stopped too,
+	--  even with seeds sitting in a crate and bare tilled ground waiting.
+	--  Nothing about a full crate should stop a seed going into the ground.
+	--
+	--  What IS still refused is fetching a second seed while already holding one
+	--  an intent wants, since that seed is about to be planted and a unit
+	--  hoarding seeds helps nobody.
+	if carriedSeedIntent() ~= nil then
+		return nil, "unit is already carrying a seed for an intent"
+	end
+
+	local intents = petports_replantsAll()
+	local wanted = 0
+
+	for key, intent in pairs(intents) do
+		if intent.name ~= nil and intent.position ~= nil
+		   and inNetworkCoverage(intent.position) then
+			wanted = wanted + 1
+
+			local workId = "withdraw:" .. key
+			local failure = self.workFailures[workId]
+			local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
+
+			--  BOTH LEGS ARE CHECKED, and the first one is the fix for a
+			--  livelock rather than belt-and-braces.
+			--
+			--  dispatchWork does take a claim on this work id, so two ports
+			--  cannot both FETCH for one intent -- but the refusal happens at
+			--  DISPATCH, after selection has already committed to this intent.
+			--  A second port would propose the same withdraw, be rejected,
+			--  return no work, and propose it again next tick, forever, never
+			--  reaching the other intents in the list. Checking here means it
+			--  skips to the next one instead.
+			--
+			--  The replant leg is checked because the two legs have different
+			--  work ids and therefore different claims. Without it, a port
+			--  would happily fetch a second seed for a tile another unit is
+			--  already walking one to.
+			local free = not backedOff
+				and claimFree(workId)
+				and claimFree("replant:" .. key)
+
+			if free then
+				local containerId = containerWithSeed(intent.name)
+
+				if containerId ~= nil then
+					return {
+						id = "withdraw:" .. key,
+						type = "withdraw",
+						port = stationUniqueId(),
+						target = containerId,
+						seed = intent.name,
+						intent = key,
+						position = world.entityPosition(containerId)
+					}
+				end
+			end
+		end
+	end
+
+	if wanted == 0 then
+		return nil, "no replant intents in network coverage"
+	end
+
+	--  NEVER BLOCKS. An intent with no seed in storage simply waits, the same
+	--  way a dry unit is routed around rather than stalling the port. A player
+	--  who stops stocking a seed gets a bare tile, not a stuck network.
+	return nil, string.format(
+		"%s replant intent(s), none actionable (no seed in storage, or claimed)",
+		wanted)
 end
 
 local function findWork()
@@ -2127,6 +2759,18 @@ local function findWork()
   --  letting it pick up more first is how a unit ends up hoarding instead of
   --  ferrying. Below the recall ladder, though -- a stranded unit cannot reach
   --  a chest either.
+  --  REPLANT SITS ABOVE DEPOSIT and below recall. See replantWork: a unit
+  --  holding the seed an intent names is two tiles from finishing a job, and
+  --  deposit would send it back to a crate instead.
+  --
+  --  THIS ORDERING IS THE WHOLE FEATURE. It was written below depositWork by
+  --  mistake and the loop that produced was exact and undramatic: withdraw a
+  --  seed, deposit it, withdraw it again, roughly three times a second, with
+  --  nothing in the log looking like an error because every individual task
+  --  succeeded.
+  local putBack, noPutBack = replantWork()
+  if putBack ~= nil then return putBack end
+
   local drop, noDrop = depositWork()
   if drop ~= nil then return drop end
 
@@ -2144,6 +2788,11 @@ local function findWork()
   local crop, noCrop = harvestWork()
   if crop ~= nil then return crop end
 
+  --  Fetching a seed is the lowest-priority thing a unit can do. See
+  --  withdrawWork.
+  local fetch, noFetch = withdrawWork()
+  if fetch ~= nil then return fetch end
+
   --  A unit with cargo and nowhere to put it should say THAT, not "no drops in
   --  rect". The storage-full indicator hangs off this state.
   if noDrop ~= nil then return nil, noDrop end
@@ -2156,6 +2805,7 @@ local function findWork()
   --  the port never looked at the farm.
   if noCrop ~= nil then
     return nil, tostring(why) .. "; " .. tostring(noCrop)
+      .. "; " .. tostring(noFetch or noPutBack or "no replant work")
   end
 
   return nil, why
@@ -2216,8 +2866,12 @@ local function dispatchWork()
   --  legitimately sit inside another member port's rect. Only points this port
   --  GENERATED itself are checked against its own rect.
   if work.type ~= "collect" and work.type ~= "harvest"
+     and work.type ~= "replant" and work.type ~= "withdraw"
      and not petports_rectContains(coverageRect(), work.position) then
-    return reject("generated point outside rect")
+    return reject(string.format(
+      "generated point outside rect: %s type %s at %s, own rect %s",
+      tostring(work.id), tostring(work.type), sb.printJson(work.position),
+      sb.printJson(coverageRect())))
   end
 
   if not petports_claimTake(work.id, stationUniqueId(), petUniqueId(),
@@ -2341,6 +2995,7 @@ local function workUpdate(dt)
   refreshNetwork()
   refreshBeacons(WORK_INTERVAL)
   refreshFarmables(WORK_INTERVAL)
+  sweepReplants(WORK_INTERVAL)
   publishUnitPosition()
 
   --  Cheap: loadUniqueEntity on an existing stagehand and out.

@@ -448,6 +448,67 @@ function petports_tileKey(position)
     math.floor(position[2]))
 end
 
+--------------------------------------------------------------------------------
+--  REPLANT INTENTS
+--------------------------------------------------------------------------------
+--
+--  "This tile had a crop on it, and a unit destroyed that crop harvesting it."
+--
+--  DELIBERATELY NOT A CLAIM, and it must never grow a TTL. A claim expires
+--  because an interrupted unit would otherwise poison a work item forever. An
+--  intent is a persisted record of what the PLAYER had growing, and it should
+--  survive a week of nobody visiting the world -- a field that forgets itself
+--  because the player was away is a worse failure than a stale entry.
+--
+--  It is invalidated by STATE instead, in the port's sweep: an object standing
+--  in the footprint, or ground that is no longer tilled. See the handoff.
+--
+--  Keyed by petports_tileKey so it is one entry per tile, and any second
+--  harvest of the same tile overwrites rather than accumulating.
+local REPLANT_KEY = "petports_replants"
+
+function petports_replantsAll()
+	return world.getProperty(REPLANT_KEY) or {}
+end
+
+function petports_replantGet(tileKey)
+	return petports_replantsAll()[tileKey]
+end
+
+--  seedName is the crop's OWN object name: the seed and the farmable share one
+--  name, so nothing has to be looked up or mapped.
+function petports_replantSet(position, seedName, ownerId)
+	local key = petports_tileKey(position)
+	local intents = petports_replantsAll()
+
+	intents[key] = {
+		name = seedName,
+		--  Stored floored, so the tile the crop was rooted in is what gets
+		--  replanted rather than wherever its float position rounded to.
+		position = { math.floor(position[1]), math.floor(position[2]) },
+		owner = ownerId,
+		created = world.time()
+	}
+
+	sb.logInfo("PETPORTS replant intent SET at %s for %s (by %s)",
+		key, tostring(seedName), tostring(ownerId))
+
+	world.setProperty(REPLANT_KEY, intents)
+	return key
+end
+
+function petports_replantClear(tileKey, why)
+	local intents = petports_replantsAll()
+	if intents[tileKey] == nil then return false end
+
+	sb.logInfo("PETPORTS replant intent CLEARED at %s: %s",
+		tostring(tileKey), tostring(why or "no reason given"))
+
+	intents[tileKey] = nil
+	world.setProperty(REPLANT_KEY, intents)
+	return true
+end
+
 --  One cache entry per (destination tile, vent exit).
 function petports_routeKey(position, exitId)
   return petports_tileKey(position) .. "|" .. tostring(exitId)

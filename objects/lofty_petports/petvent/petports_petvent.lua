@@ -38,7 +38,11 @@ require "/scripts/lofty_petports/petports_work.lua"
 --  if vents stop pairing -- it prints what the node calls returned, what each
 --  collected id actually is, and how many survived the name filter, which
 --  separates "collected nothing" from "collected and discarded".
-local VENT_DEBUG = true
+--  TEMPORARILY OFF. These per-node lines were ~45% of a ten-thousand-line log
+--  and they re-state identical wiring on every refresh -- the wiring CHANGING
+--  is the event worth seeing, and the port's gatherVents summary reports that
+--  on change. Turn back on when working on vent routing itself.
+local VENT_DEBUG = false
 
 --  VERIFIED 2025-08-20, twice, in game: getOutputNodeIds / getInputNodeIds
 --  return a table KEYED BY ENTITY ID, whose value is the node index. Entity 18

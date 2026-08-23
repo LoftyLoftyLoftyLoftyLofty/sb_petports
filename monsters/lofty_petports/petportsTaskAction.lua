@@ -52,6 +52,15 @@
 --  any seed, which walks back to storage like anything else. That is the whole
 --  of the v1 scope.
 --
+--  "withdraw" -- walk to a crate and stand there. No act at all: the port does
+--  the world.containerConsume when the arrival is reported, the same way it
+--  does the containerAddItems for a deposit. The seed lands on petData, so it
+--  never has to exist anywhere it could be dropped.
+--
+--  "replant" -- walk to a tile an intent names and put the seed back in the
+--  ground with world.placeObject. The seed and the crop share one name, so
+--  there is nothing to look up: what was harvested is what gets planted.
+--
 --  DIAGNOSTIC TASK
 --
 --  type "diag" is throwaway. Walk to a point inside the rect, stand there,
@@ -250,6 +259,88 @@ local HARVEST_DAMAGE = 0.2
 --  drop as items, and a harvest that drops nothing is indistinguishable from
 --  one that never happened.
 local HARVEST_LEVEL = 1
+
+--  Is anything standing on this tile, or the one above it?
+--
+--  Exact rather than a bounding-box overlap. world.entityQuery returns anything
+--  whose bounds INTERSECT the rect, and a rect drawn around a single tile
+--  touches its neighbours -- which in a planted row means every tile reports
+--  itself occupied by the crop next door. world.objectSpaces gives an object's
+--  real occupied tiles, relative to its position, so the test can be honest.
+--
+--  Defined ABOVE its call sites deliberately: a local function called from a
+--  line above its definition compiles as a nil global. That has already cost
+--  one bricked update loop in this mod.
+local seedSpacesCache = {}
+
+local function seedSpaces(seedName)
+	if seedName == nil then return { {0, 0}, {0, 1} } end
+	if seedSpacesCache[seedName] ~= nil then return seedSpacesCache[seedName] end
+
+	local spaces = nil
+	local ok, config = pcall(root.itemConfig, seedName)
+
+	if ok and type(config) == "table" and type(config.config) == "table" then
+		local orientations = config.config.orientations
+
+		if type(orientations) == "table" and type(orientations[1]) == "table"
+		   and type(orientations[1].spaces) == "table"
+		   and #orientations[1].spaces > 0 then
+			spaces = orientations[1].spaces
+		end
+	end
+
+	if spaces == nil then
+		sb.logInfo("UNIT could not read spaces for %s -- assuming 1x2",
+			tostring(seedName))
+		spaces = { {0, 0}, {0, 1} }
+	end
+
+	seedSpacesCache[seedName] = spaces
+	return spaces
+end
+
+--  Is anything standing where this crop would go?
+--
+--  Footprint comes from the SEED'S OWN CONFIG rather than an assumed 1x2 --
+--  oculemon and pineapple are two tiles wide, and the old shape both missed
+--  blockers in the column it never checked and failed to see a successfully
+--  planted wide crop afterwards.
+local function tileOccupied(anchor, seedName)
+	local tiles = {}
+	local lox, loy = anchor[1], anchor[2]
+	local hix, hiy = lox, loy
+
+	for _, space in ipairs(seedSpaces(seedName)) do
+		local t = { anchor[1] + space[1], anchor[2] + space[2] }
+		table.insert(tiles, t)
+
+		lox = math.min(lox, t[1]); hix = math.max(hix, t[1])
+		loy = math.min(loy, t[2]); hiy = math.max(hiy, t[2])
+	end
+
+	local candidates = world.entityQuery(
+		{ lox - 1, loy - 1 }, { hix + 2, hiy + 2 },
+		{ includedTypes = { "object" } })
+
+	for _, id in ipairs(candidates or {}) do
+		local spaces = world.objectSpaces(id)
+		local origin = world.entityPosition(id)
+
+		if spaces ~= nil and origin ~= nil then
+			for _, space in ipairs(spaces) do
+				local x = math.floor(origin[1]) + space[1]
+				local y = math.floor(origin[2]) + space[2]
+
+				for _, tile in ipairs(tiles) do
+					if x == tile[1] and y == tile[2] then return true end
+				end
+			end
+		end
+	end
+
+	return false
+end
 
 --  How close the unit has to be before it fires the harvest.
 --
@@ -748,6 +839,142 @@ local function launchVelocity(pather, edge, source)
   return capped, { rise = rise, gravity = gravity, needed = needed, apex = apex }
 end
 
+--  REPLACEMENT timedDrop AND keepDropping.
+--
+--  Vanilla's pair has two separate faults and they compound, so both are
+--  replaced together. Neither is patched globally -- these are assigned to the
+--  pather INSTANCE in freshPather, so PathMover.timedDrop stays reachable and
+--  no other entity in the world is affected.
+--
+--  FAULT ONE, /scripts/pathing.lua PathMover:timedDrop:
+--
+--      function PathMover:timedDrop(time)
+--        if holdTime == nil then holdTime = 0 end
+--        holdTime = math.min(holdTime, 0.5)
+--        mcontroller.controlDown()
+--        self.downHoldTimer = holdTime
+--      end
+--
+--  The parameter is `time`; the body uses `holdTime`, which is declared
+--  nowhere and is therefore an undeclared GLOBAL. The argument is ignored
+--  entirely, the global is nil on the first call so it becomes 0, and
+--  math.min(0, 0.5) is 0 -- so downHoldTimer is 0 on every drop the entity
+--  ever makes. moveDrop computes math.max(timeToFall(-delta[2]), 0.05) and
+--  hands over a perfectly good fall time that nothing reads.
+--
+--  FAULT TWO, PathMover:keepDropping: it calls controlDown() and THEN tests
+--  onGround(). On the tick the unit lands on the platform below, down has
+--  already been pressed for that tick, so it falls through that one too and
+--  the timer clears one platform late. Invisible when platforms are far apart
+--  -- the unit is still airborne when the timer expires -- and very visible
+--  when a player stacks them to fake a ladder, which is exactly where this was
+--  observed: drop, land, hesitate, drop again, overshoot, jump back, repeat.
+--
+--  THE OBVIOUS FIX FOR FAULT TWO RE-BREAKS DROPPING. Testing onGround() before
+--  pressing down cancels on the FIRST tick, because the unit is still standing
+--  on the platform it is trying to fall through when moveDrop fires. So the
+--  hold has to survive until the unit has actually left: dropOrigin records the
+--  y at drop start, and onGround only counts once the unit is meaningfully
+--  below it. That works whether the physics settles in one tick or three,
+--  which matters because it is not known which.
+--  MEASURED: vanilla's moveDrop asks for math.max(timeToFall(-delta[2]), 0.05),
+--  which came out at 0.158s for a one-tile platform drop -- so this cap is not
+--  a formality, it CLAMPS ordinary drops. 0.5 was vanilla's own intended
+--  ceiling and is far longer than anything here needs.
+--
+--  At 0.1s the unit presses down for roughly six ticks, which is ample to pass
+--  through a platform, and it stops pressing well before it reaches the next
+--  one down.
+--
+--  THE FAILURE MODE IF THIS GOES TOO LOW is worse than over-dropping and looks
+--  different: the unit does not fall through at all, stands on the platform,
+--  and the path stalls rather than overshooting. If that shows up, this is the
+--  number -- the hold actually used is printed on every drop.
+local DROP_HOLD_MAX = 0.1
+
+--  How far below the drop point the unit must be before a landing is believed.
+--  A platform is one tile, so anything well under 1 works; this is deliberately
+--  small so the guard releases as early as it safely can.
+local DROP_DESCENT_EPSILON = 0.35
+
+--  A Drop edge that does not actually descend is not a drop, and pressing down
+--  for one is how a unit falls through the floor it is standing on.
+--
+--  MEASURED, and this is the whole of the reproduced bug. A unit fell further
+--  than its plan expected -- an Arc overshot and the Land put it at y 723.8 --
+--  and the pather then executed the NEXT edge from the plan regardless:
+--
+--    post-move at [1207,723.8]: action Drop edge 4 of 26 src [1207,726.8] srcDist 3
+--    drop hold 0.05 from y 723.8
+--
+--  The edge's SOURCE was three tiles above where the unit actually was. It had
+--  already fallen past that node. Its target was level with the unit -- vanilla
+--  asked for max(timeToFall(-delta[2]), 0.05) and got the 0.05 FLOOR, meaning
+--  the descent was about a tenth of a tile. Pressing down there passed the unit
+--  through the platform it had just landed on, and the loop that produced
+--  repeated on a six-second cycle.
+--
+--  So: if the next node is not meaningfully below us, consume the edge and do
+--  not touch the controls. advancePath still runs in moveDrop, so the plan
+--  moves on -- which is correct, because the unit is already past that node.
+local MIN_DROP_DISTANCE = 0.5
+
+function petportsTimedDrop(pather, time)
+  local delta = pather.delta
+  local descent = (delta ~= nil and delta[2] ~= nil) and -delta[2] or 0
+
+  if descent < MIN_DROP_DISTANCE then
+    --  Explicitly cleared rather than left alone: a stale timer from an earlier
+    --  drop would otherwise keep keepDropping pressing on this edge too.
+    pather.downHoldTimer = nil
+    pather.petportsDropOrigin = nil
+
+    sb.logInfo("UNIT drop SKIPPED at y %s: next node is %s below (delta %s) "
+      .. "-- already past it, not pressing down",
+      sb.printJson(mcontroller.position()[2]), sb.printJson(descent),
+      sb.printJson(delta))
+    return
+  end
+
+  --  The argument vanilla throws away.
+  pather.downHoldTimer = math.min(time or 0, DROP_HOLD_MAX)
+  pather.petportsDropOrigin = mcontroller.position()[2]
+
+  mcontroller.controlDown()
+
+  sb.logInfo("UNIT drop hold %s from y %s for a %s tile descent",
+    sb.printJson(pather.downHoldTimer),
+    sb.printJson(pather.petportsDropOrigin), sb.printJson(descent))
+end
+
+function petportsKeepDropping(pather, dt)
+  if pather.downHoldTimer == nil then return end
+
+  local y = mcontroller.position()[2]
+  local origin = pather.petportsDropOrigin or y
+  local descended = (origin - y) >= DROP_DESCENT_EPSILON
+
+  --  CHECKED BEFORE THE PRESS, NOT AFTER. This is fault two.
+  if descended and mcontroller.onGround() then
+    if TASK_DEBUG then
+      sb.logInfo("UNIT drop landed at y %s (fell %s), releasing down",
+        sb.printJson(y), sb.printJson(origin - y))
+    end
+
+    pather.downHoldTimer = nil
+    pather.petportsDropOrigin = nil
+    return
+  end
+
+  mcontroller.controlDown()
+
+  pather.downHoldTimer = pather.downHoldTimer - dt
+  if pather.downHoldTimer <= 0 then
+    pather.downHoldTimer = nil
+    pather.petportsDropOrigin = nil
+  end
+end
+
 function petportsJumpMover(pather)
   --  Vanilla's first guard, unchanged. moveArc sets jumpCooldown to 0.3 on
   --  every airborne tick, so without this a unit landing out of an arc would
@@ -890,10 +1117,12 @@ local function freshPather()
   --  globally. Same technique as the exploreRate override above.
   self.pather.moveJump = petportsJumpMover
   self.pather.moveWalk = petportsWalkMover
-  self.pather.timedDrop = function(pather, time)
-	pather.downHoldTimer = math.min(time or 0, 0.5)
-	mcontroller.controlDown()
-  end
+
+  --  Vanilla's moveDrop itself is fine and is left alone -- the x snap to
+  --  nextPathPosition, setXVelocity(0) and advancePath all do the right thing.
+  --  Only the two functions it leans on are broken. See petportsTimedDrop.
+  self.pather.timedDrop = petportsTimedDrop
+  self.pather.keepDropping = petportsKeepDropping
 end
 
 function petportsTaskAction.enteringState(stateData)
@@ -1751,7 +1980,8 @@ function petportsTaskAction.update(dt, stateData)
   --  same one-line fix as collection, and it presents as a unit that walks
   --  somewhere near the crop and then times out.
   local approachTo = target
-  if task.type == "collect" or task.type == "harvest" then
+  if task.type == "collect" or task.type == "harvest"
+     or task.type == "replant" then
     approachTo = approachTargetFor(stateData, target)
 
     if approachTo == nil then
@@ -2064,6 +2294,59 @@ function petportsTaskAction.update(dt, stateData)
     end
 
     return false
+  end
+
+  if task.type == "replant" then
+    local tile = task.tile or {
+      math.floor(task.position[1]), math.floor(task.position[2])
+    }
+
+    --  LAST LOOK BEFORE PLANTING. The port checked the footprint at dispatch,
+    --  but the unit has been walking since then and a player can put a crate
+    --  anywhere in that time. Cheap, and the failure mode it avoids is a seed
+    --  spent on a placement that silently did nothing.
+    --  SAME EXACT-OCCUPANCY TEST AS THE PORT, and for the same reason: a rect
+    --  drawn tightly around one tile intersects the next tile's crop, so in a
+    --  planted row a naive query says every tile is occupied by its neighbour.
+    if tileOccupied(tile, task.seed) then
+      report(stateData, "failed", string.format(
+        "footprint for %s at %s is occupied -- not planting",
+        tostring(task.seed), sb.printJson(tile)))
+      return true
+    end
+
+    --  world.placeObject wants a direction. Crops are symmetric and
+    --  single-orientation, so this is a formality rather than a choice -- but
+    --  it is a required argument, and omitting it is not the same as passing 1.
+    local ok, placed = pcall(world.placeObject, task.seed, tile, 1)
+
+    sb.logInfo("UNIT replant at %s: placeObject(%s) ok %s returned %s",
+      sb.printJson(tile), tostring(task.seed), tostring(ok), tostring(placed))
+
+    --  VERIFIED BY LOOKING, NOT BY THE RETURN VALUE. Same discipline as the
+    --  harvest swing: world.placeObject's return is not documented clearly
+    --  enough to branch on, and the world can answer the question directly.
+    --  A farmable is an object, so the footprint query that just came back
+    --  empty should now come back with exactly the thing we planted.
+    --  Verified by looking, not by placeObject's return value. Now checks the
+    --  crop's REAL footprint, so a wide crop that planted fine is no longer
+    --  reported as a failure because only its anchor column was inspected.
+    if tileOccupied(tile, task.seed) then
+      --  The port spends the seed and retires the intent on this report.
+      report(stateData, "done",
+        "planted " .. tostring(task.seed) .. " at " .. sb.printJson(tile))
+      return true
+    end
+
+    --  Placement refused. The likeliest causes are the ground no longer being
+    --  tilled and tile protection, and neither is worth retrying in place --
+    --  the port's sweep will clear the intent if the ground changed, and the
+    --  backoff ladder handles the rest.
+    report(stateData, "failed", string.format(
+      "placeObject(%s) at %s left nothing there -- untilled ground, "
+      .. "or placement refused",
+      tostring(task.seed), sb.printJson(tile)))
+    return true
   end
 
   if task.type == "harvest" then
