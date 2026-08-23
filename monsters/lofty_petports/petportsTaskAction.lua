@@ -2737,6 +2737,26 @@ function petportsTaskAction.update(dt, stateData)
       stateData.onStation = true
       task.arrivedHome = true
       animator.setAnimationState("movement", "idle")
+
+      --  THE TRIP HOME IS OVER, SO THE ROUTE THAT GOT HERE IS HISTORY.
+      --
+      --  A leash is a HOLD task: it never completes, so its stateData lives for
+      --  as long as the unit sits at its port. Anything left on it stays
+      --  forever. That did not show while recalls were refused a vent route --
+      --  plan was always nil and ventHops always zero on the way home -- and
+      --  became visible the moment recalls were allowed to route: a unit that
+      --  vent-hopped home then sat at its station indefinitely displaying
+      --  "hop 2", with "leg 1" hanging over the vents it had used.
+      --
+      --  Cosmetic in the overlay, but the same residue is real state: planIndex
+      --  and viaVent are read by the routing branches, and a stale plan on a
+      --  task that has arrived is a plan nothing intends to execute.
+      stateData.plan = nil
+      stateData.planIndex = 1
+      stateData.ventHops = 0
+      stateData.viaVent = nil
+      stateData.routing = false
+
       sb.logInfo("UNIT on station at %s (port %s), holding until dispatched",
         sb.printJson(mcontroller.position()), sb.printJson(task.position))
     end

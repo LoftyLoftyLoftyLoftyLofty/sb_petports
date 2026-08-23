@@ -125,7 +125,9 @@ is a no-op stub, because an activeitem with no script errors on activation.
 
 **Farming is BUILT AND VERIFIED end to end**: discovery, harvest, drop
 collection, deposit, replant intents, seed withdrawal and replanting of crops of
-arbitrary footprint, surviving vent traversal in both directions. See Task 2.
+arbitrary footprint, and watering of dry tilled soil -- all of it surviving vent
+traversal in both directions. **The cycle runs with no sprinkler
+infrastructure.** Animal produce is the only piece of Task 2 still unspecified.
 
 **Still not built.** Docking, request beacons, per-item routing, and any notion
 of cargo capacity -- ANY cargo is treated as a full load, deliberately, and
@@ -217,6 +219,11 @@ Same argument as the mod split: cheap now, not later.
         body/  drone_placeholder.monsterpart, art, default.frames
       shared/
         spinner/ spinner.png, .frames   -- shared across unit types on purpose
+    projectiles/lofty_petports/
+      petports_watersprinkle/  .projectile, .png, .frames, icon.png
+                               -- EMPTY actionOnReap; filled per cast
+    tiles/mods/
+      tilleddry.matmod.patch   -- swamp water wets tilled dirt
     objects/lofty_petports/
       petport/  petports_petport.object, .lua, .animation, art, default.frames,
                 petport_range_preview.png/.frames  -- placement-time coverage box
@@ -1581,13 +1588,24 @@ are destructible", where that setting is what kills a unit in lava.
 So underwater farming is gated on the aquatic locomotion class. Say it out loud
 rather than letting a player discover it as "my farm is being ignored".
 
-##### Modded soils are out of scope for v1, with one name attached
+##### Modded soils -- SUPERSEDED, see "Modded soil support, mostly arrived early"
 
-Modded dirt can declare its own tilled matmods, so the 31/32 pair is a vanilla
-fact rather than a universal one. The reason to record it now rather than later
-is **Alta / Enternia** — popular, adds a lot of alien crops, and several of them
-want specific dirt. Reading `tillableMod` off the material config instead of
-hardcoding 32 costs nothing and is most of what compatibility would take.
+Kept because the reasoning was right and the scope call was wrong in a way worth
+seeing. What was recorded: modded dirt can declare its own tilled matmods, so
+the 31/32 pair is a vanilla fact rather than a universal one; **Alta / Enternia**
+is the name attached, popular and full of alien crops wanting specific dirt; and
+reading `tillableMod` off the material config instead of hardcoding 32 costs
+nothing.
+
+All true. But it was filed as deferred work, and watering delivered most of it
+by accident -- because reading the matmod at runtime, which was done for
+correctness rather than for compatibility, IS the compatibility. Watering and
+replanting both handle modded soils today. Only tilling would need
+`tillableMod`, and the mod does not till.
+
+**The general lesson is the one worth keeping:** reading the data instead of
+learning the vocabulary tends to deliver mod compatibility as a side effect,
+and is often no more expensive at the time.
 
 ##### What a farmable declares, and what it does not
 
@@ -1926,16 +1944,15 @@ has been running since drop collection landed.
 3.  **Stop.** The existing collect and deposit tasks take it from there,
     including the seed.
 
-Deferred out of v1, in the order they are likely to land:
+Deferred out of v1, and all but one has since landed:
 
-  - **Replanting from storage**, against outstanding replant intents.
-  - **Replanting ON THE SPOT** from the seed the harvest just dropped. Good QoL
-    and a shorter walk, but it fights `findWork` — see below — so it needs the
-    harvest task to own the whole sequence rather than being re-dispatched
-    mid-way.
-  - **Re-wetting decayed tiles**, which needs the consume-item-produce-liquid
-    primitive that does not exist anywhere yet.
-  - **Animal produce.**
+  - **Replanting from storage** — BUILT, see below.
+  - **Replanting ON THE SPOT** — arrived for free out of the `findWork`
+    ordering, which was not the plan. See the measurement in the replanting
+    section.
+  - **Re-wetting decayed tiles** — BUILT, see the watering section. The
+    consume-item-produce-liquid primitive turned out not to be needed at all.
+  - **Animal produce** — still unspecified, still the only piece outstanding.
 
 **WHY ON-THE-SPOT REPLANTING IS NOT FREE, and why it is not in v1.** `findWork`
 orders recall, then deposit, then collect, and deposit fires on ANY cargo. A
@@ -1961,6 +1978,208 @@ the empty-graph bootstrap and cycle detection. What farming owes is a decision
 on sweeping orphaned replant intents, confirmation of the `fill` reading above,
 and the animal-produce question. Everything else here is readable from configs
 rather than guessed at.
+
+##### Watering -- BUILT AND VERIFIED
+
+**The whole farming cycle now runs with no sprinkler infrastructure.** Crops
+will not grow on dry tilled soil at all -- confirmed in game, it is not merely
+slower -- so watering was the last piece standing between the mod and
+hands-off farming. That is the Blue Ocean claim for this feature, and it is
+stronger than "we automate farming", because sprinklers are what every other
+answer looks like.
+
+##### The soil describes itself, so `farming.config` is barely needed
+
+The plan was to read `farming.config`'s `wetToDryMods` to decide wet from dry.
+That turned out to be unnecessary. The matmod carries everything:
+
+    tilleddry   "tilled" : true                     -> it is farmland
+                liquidInteractions[] .liquidId      -> what wets it
+                                     .transformModId-> what it becomes
+    tilled      "tilled" : true, no liquidInteractions -> farmland, already wet
+
+So "is this dry farmland" is `tilled == true` and at least one
+`liquidInteraction` with a `transformModId`. No name comparisons, no hardcoded
+pairs, and **modded soils work for free** -- which is most of what
+Alta/Enternia compatibility was expected to cost.
+
+`root.modConfig(name)` reads it. Note the API goes ONE WAY ONLY: there is no
+`root.modName`, so a numeric `transformModId` cannot be turned back into a name
+directly.
+
+**`itemDrop` closes the loop from the other end.** The matmod names liquids by
+numeric id; a liquid ITEM names its liquid by string. Matching items against the
+mod would need a bridge -- but `root.liquidConfig(id).config.itemDrop` names the
+item that yields that liquid, so the chain runs mod -> liquid -> item and
+nothing is ever matched by name.
+
+    tilleddry -> liquidId 1  -> liquidwater
+              -> liquidId 6  -> liquidhealing
+
+Both resolve and both were verified working in game.
+
+**The one thing `wetToDryMods` IS for: turning `transformModId` into a name.**
+`applySurfaceMod` wants `newMod` as a NAME and the matmod gives an id. Inverting
+`wetToDryMods` maps the dry name to its wet one, and the result is then VERIFIED
+by reading `root.modConfig(candidate).config.modId` and confirming it equals the
+`transformModId` the soil asked for. A modded soil whose author patched
+`wetToDryMods` correctly passes; one that did not is refused rather than watered
+with a droplet naming a mod that does not exist.
+
+That verification matters because the failure it prevents is indistinguishable
+in a log from the OTHER silent failure in this path -- a droplet that lands and
+does nothing.
+
+##### The act is a projectile, and the projectile is a blank
+
+`world.spawnLiquid` needed up to FOURTEEN attempts to saturate one tile. It is
+tuned for rain, not gardening. `applySurfaceMod` is exact and lands once, so
+watering never spawns liquid at all -- the item is a cost token, consumed, and
+the mod is applied directly.
+
+`projectiles/lofty_petports/petports_watersprinkle/` ships with an EMPTY
+`actionOnReap`. The caller supplies the transition per cast:
+
+    world.spawnProjectile("petports_watersprinkle", spawn, entity.id(),
+      {0, -1}, false, {
+        actionOnReap = { { action = "applySurfaceMod",
+                           previousMod = <read off the tile>,
+                           newMod      = <resolved from transformModId>,
+                           radius      = 0 } },
+        processing = "?multiply=" .. <tint>
+      })
+
+**CONFIRMED: projectile parameters DO override `actionOnReap`.** That was the
+one assumption the whole modular approach rested on. One asset covers vanilla
+and modded soils; vanilla's own `watersprinkledroplet` hardcodes a single pair
+in its config and needs one projectile per soil type.
+
+**The droplet wears the liquid's own colour.** The sprite is transparent white
+and `processing` paints it, with the colour read from the liquid config -- so
+water is blue and lava would not be, with no table anywhere in this mod. ALPHA
+IS FORCED OPAQUE: a liquid's alpha describes how a BODY of it renders (water is
+128) and would leave a three-pixel droplet nearly invisible.
+
+##### Three off-by-ones, all in the geometry
+
+Recorded individually because each presented differently and none was obvious
+from the code.
+
+**1. The cast landed one tile right, every time.** Spawn x was `tile + 0.5`, the
+tile centre -- correct if the engine FLOORS a reap position to a tile, one tile
+off if it ROUNDS. Sweeping right to left, the first cast spilled off the right
+edge and the leftmost tile never got one. Fixed at `tile + 0.25`, which is
+inside the target tile under either rule. **Anything in `[x, x + 0.5)` is safe.**
+The standing position keeps `+ 0.5` deliberately -- nothing converts it to a
+tile.
+
+**2. Radius 1 wet two tiles per cast.** MEASURED: six casts, five skips, ten
+tiles for five items. Each droplet caught its neighbour, so the unit reached
+every second tile to find it already wet. Cheaper, but not PREDICTABLE, and the
+point of one-item-per-tile is that a player can look at a row and know what it
+cost. Radius 0 wets exactly one.
+
+Worth noting what kept the accounting honest through that: the unit re-reads the
+mod at each tile, skips an already-wet one free, and the port charges from the
+count actually wetted rather than the tile list it handed out. Charging from the
+list would have billed ten for five.
+
+**3. A run would not form from a crop on wet soil.** `waterRunFrom` required the
+tile UNDER the crop to be dry and returned nothing otherwise -- so a crop
+standing on already-watered soil aborted before the left/right expansion ran,
+and freshly tilled ground right beside it was never seen. Break and re-till a
+patch next to a watered crop and nothing would ever water it.
+
+The crop makes the row ELIGIBLE; it does not have to be thirsty itself.
+Traversal now runs through FARMLAND and collects the DRY tiles out of it, so a
+wet tile mid-row is passed over rather than treated as the end of the row --
+which is the common case once a fleet has been working, since rows go patchy
+rather than splitting cleanly.
+
+**One soil type per run**, as a consequence: `previousMod` is a single value used
+for every cast in the sweep, so a run spanning two kinds of dry soil would aim
+the wrong transition at half of it. The run takes its soil from the first dry
+tile and keeps only matching tiles. This did not matter while the anchor had to
+be dry, because runs were implicitly homogeneous.
+
+##### The sweep is the first multi-stop task
+
+Every other task walks to a place and does a thing. Watering walks a LIST, in
+order, and **the order is the feature** -- watering a forty-tile row in
+discovery order looks like a malfunction rather than gardening.
+
+  - The port expands left and right from the crop, builds an ordered run, picks
+    whichever END is nearer the unit, and hands over the list reversed if
+    needed. The unit sweeps away from that end and never reverses.
+  - The list is capped at `WATER_CARRY`, which is also how many units the unit
+    fetches. That bounds the task: a forty-tile row becomes four sweeps rather
+    than one task that outlives `TASK_DEADLINE`.
+  - The index lives ON THE TASK rather than on `stateData`, because
+    `currentTarget` is only handed the task. The task table is the unit's own
+    copy, so mutating it is local.
+  - Between tiles the unit clears `arrived`, the ground target and the pather,
+    so arrival is re-earned per tile. Without that it waters the whole row from
+    wherever it happens to be standing.
+
+**ONE ITEM PER TILE, ONE TRIP PER RUN.** Those are separate decisions and
+conflating them is how a forty-tile row becomes forty round trips to a crate.
+
+**Discovery is anchored on CROPS, not on bare soil.** A player with a large
+fallow field has not asked for it to be watered, and scanning all of coverage
+for dry farmland would generate work nobody wanted. A crop on dry ground is an
+unambiguous request -- it cannot grow -- and the run expansion then finishes the
+row it is part of.
+
+##### Swamp water, and why the patch needed no code
+
+`tiles/mods/tilleddry.matmod.patch` adds liquid 12 to `liquidInteractions`.
+Vanilla lets water (1) and healing water (6) wet tilled dirt and stops there;
+swamp water is water with a status effect attached and the omission reads as an
+oversight.
+
+**Nothing in this mod knows swamp water exists.** `soilInfo` reads
+`liquidInteractions` at runtime and resolves each liquid to its `itemDrop`, so
+the patch is pure data and is picked up with no code aware of it. That was the
+entire argument for reading the matmod instead of hardcoding
+`tilleddry -> tilled`, and this is the first thing to prove it.
+
+Guarded on `/liquidInteractions/2` being absent, so a future vanilla patch
+adding swamp water itself makes this a no-op rather than a duplicate.
+
+**IF THE PATCH PATH IS WRONG IT SILENTLY DOES NOTHING** -- that is the one part
+of it that cannot be verified by reading.
+
+##### Modded soil support, mostly arrived early
+
+The recorded plan was that modded soils were out of scope for v1, with one line
+of discipline to keep them cheap later: read `tillableMod` off the material
+config rather than hardcoding 32. Watering overtook that without meaning to.
+
+  - **Watering**: modded soils work today. `soilInfo` reads whatever matmod is
+    on the tile.
+  - **Replanting**: `replantGroundTilled` used to compare names against
+    `"tilled"` and `"tilleddry"` literally. It now asks `soilInfo` for the
+    `tilled` flag, so modded soils work there too.
+  - **Tilling**: still entirely unbuilt, and the only place `tillableMod` would
+    matter. The player tills their own dirt; the mod sustains it.
+
+**DO NOT COPY HARVESTERBEAM'S TILLING TEST.** It gates on `.soil`, which is the
+SAPLING flag, where `tillableMod` is the hoe flag. Vanilla dirt declares both so
+the mistake is invisible on vanilla and would bite on any modded material
+declaring one without the other.
+
+##### One behaviour change to watch, from the same pass
+
+`replantGroundTilled` used to accept a tilled mod at the anchor tile OR the one
+below, hedging an unverified assumption about where `world.entityPosition` sits
+for an object. Watering settled it -- `waterRuns` derives the soil tile the same
+way, `floor(cropPosition) - 1`, and wets exactly the right tiles -- so the check
+is now `y - 1` only.
+
+Strictly better: a crop whose anchor tile happens to be farmland can no longer
+mask missing soil beneath it. But it is a change on a path that was working, so
+**if replanting ever starts clearing intents as "not farmland", this is the
+first suspect.** The log prints both mods and the `tilled` flag.
 
 #### Task 3 — collecting item drops
 

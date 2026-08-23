@@ -2532,6 +2532,27 @@ end
 --  a unit across a forty-tile row in whatever order discovery happened to
 --  produce, which looks like malfunctioning rather than gardening. The run is
 --  built as an ordered list and swept end to end.
+--  Is this position inside coverage for ANY port on the network?
+--
+--  Network-wide rather than this port's own rect: one port harvests, another
+--  may be nearer the crate, and a run may span two members. Falls back to the
+--  own rect before the network has been derived, which is the same fallback
+--  the farmable scan makes.
+--
+--  Defined here rather than beside its first user because it now has several,
+--  the earliest being the watering run builder -- and a local called from above
+--  its definition compiles as a nil global, which has bricked this file once.
+local function inNetworkCoverage(position)
+	local rects = self.networkRects
+	if rects == nil or #rects == 0 then rects = { coverageRect() } end
+
+	for _, rect in ipairs(rects) do
+		if petports_rectContains(rect, position) then return true end
+	end
+
+	return false
+end
+
 local function waterRunFrom(anchor)
 	--  THE CROP MAKES THE ROW ELIGIBLE. IT DOES NOT HAVE TO BE THIRSTY ITSELF.
 	--
@@ -2546,6 +2567,22 @@ local function waterRunFrom(anchor)
 	--  the row, which is the common case once a fleet has been working: rows
 	--  become patchy, not cleanly split.
 	local function farmlandAt(tile)
+		--  COVERAGE BOUNDS THE RUN, not just the crop that anchored it.
+		--
+		--  scanFarmables only finds crops inside the network, so a farm that
+		--  falls out of coverage stops producing work -- but the left/right
+		--  expansion had no such limit and would happily walk up to
+		--  WATER_RUN_REACH tiles past the edge. A crop just inside a rect could
+		--  send a unit thirty tiles outside the network to water soil no port
+		--  is responsible for.
+		--
+		--  Break rather than skip: a run is contiguous by definition, and
+		--  stepping over a gap would produce a "run" the sweep walks across in
+		--  a straight line through territory it was never given.
+		if not inNetworkCoverage({ tile[1] + 0.5, tile[2] + 0.5 }) then
+			return nil
+		end
+
 		local modName = world.mod({ tile[1], tile[2] }, "foreground")
 		if modName == nil then return nil end
 
@@ -2728,23 +2765,6 @@ end
 --  REPLANTING
 --------------------------------------------------------------------------------
 
---  Is this position inside coverage for ANY port on the network?
---
---  Intents are network-wide -- one port harvests, another may be nearer the
---  crate -- so the test cannot be this port's own rect. Falls back to the own
---  rect before the network has been derived, which is the same fallback the
---  farmable scan makes.
-local function inNetworkCoverage(position)
-	local rects = self.networkRects
-	if rects == nil or #rects == 0 then rects = { coverageRect() } end
-
-	for _, rect in ipairs(rects) do
-		if petports_rectContains(rect, position) then return true end
-	end
-
-	return false
-end
-
 --  Is this tile still a place a crop could go?
 --
 --  TWO TILES, NOT ONE. A farmable occupies spaces [0,0] and [0,1] anchored at
@@ -2887,25 +2907,36 @@ local function replantGroundTilled(position)
 	local under = world.mod({ position[1], position[2] - 1 }, "foreground")
 	local at = world.mod({ position[1], position[2] }, "foreground")
 
-	--  EITHER TILE COUNTS, and that is a hedge rather than sloppiness. The soil
-	--  SHOULD be at y - 1, but that rests on an assumption about where
-	--  world.entityPosition sits for an object, and getting it wrong here is
-	--  not a small bug: the sweep would clear every intent within five seconds
-	--  as "ground no longer tilled" and replanting would silently never happen
-	--  with nothing obviously broken. Accepting a tilled mod at either tile
-	--  means the wrong guess costs nothing, and the log line below names both
-	--  so the right answer is readable from one field.
-	local function isTilled(mod)
-		local name = tostring(mod)
-		return name == "tilled" or name == "tilleddry"
-	end
+	--  ASK THE MATMOD, DO NOT COMPARE ITS NAME.
+	--
+	--  This used to test the name against "tilled" and "tilleddry" literally,
+	--  which is correct for vanilla and wrong for every modded soil -- and mods
+	--  like Alta/Enternia ship a lot of them. Both vanilla matmods carry
+	--  "tilled" : true, and soilInfo already reads and caches that, so the
+	--  question "is this farmland" is answerable without knowing any names.
+	--
+	--  Modded soil support for replanting therefore costs nothing beyond this
+	--  line, the same way watering got it for free by reading liquidInteractions
+	--  rather than hardcoding a wet/dry pair.
+	local info = soilInfo(under)
+	local tilled = info ~= nil and info.tilled
 
-	local tilled = isTilled(under) or isTilled(at)
+	--  THE SOIL IS AT y - 1 AND ONLY THERE, now that it is verified.
+	--
+	--  This used to accept a tilled mod at EITHER tile, hedging an unverified
+	--  assumption about where world.entityPosition sits for an object -- getting
+	--  it wrong would have cleared every replant intent within five seconds as
+	--  "ground no longer tilled", with nothing obviously broken. Watering settled
+	--  it: waterRuns derives the soil tile the same way, from
+	--  floor(cropPosition) - 1, and it wets exactly the right tiles. The hedge
+	--  can go, and dropping it means a crop whose anchor tile happens to be
+	--  farmland no longer masks missing soil beneath it.
 
 	if not tilled then
-		sb.logInfo("PETPORT %s replant ground at %s: mod below is %s, mod at is %s "
-			.. "-- not tilled",
-			stationUniqueId(), sb.printJson(position), tostring(under), tostring(at))
+		sb.logInfo("PETPORT %s replant ground at %s: mod below is %s (tilled %s), "
+			.. "mod at is %s -- not farmland",
+			stationUniqueId(), sb.printJson(position), tostring(under),
+			tostring(info ~= nil and info.tilled), tostring(at))
 	end
 
 	return tilled
