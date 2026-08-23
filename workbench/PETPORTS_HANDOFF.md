@@ -123,6 +123,11 @@ CONFIG rather than its parameters so every copy works. It is an activeitem
 purely so that "use it to configure it" has somewhere to live later; the script
 is a no-op stub, because an activeitem with no script errors on activation.
 
+**Animal harvesting is BUILT**: farm animals are discovered by reading
+`root.monsterParameters` for the TYPE, and harvested with one
+`world.callScriptedEntity` call that spawns the produce and resets the animal's
+own timer. See Task 2.
+
 **Farming is BUILT AND VERIFIED end to end**: discovery, harvest, drop
 collection, deposit, replant intents, seed withdrawal and replanting of crops of
 arbitrary footprint, and watering of dry tilled soil -- all of it surviving vent
@@ -717,6 +722,111 @@ swallow clicks meant for objects behind them, and park in front of the things yo
 need. The design goal is the opposite — small robotic units that find something
 useful to do, inspired by Axiom Verge's ambient drones and Factorio's logistics
 bots rather than by a squishy pet that wants attention.
+
+### What this mod is actually FOR
+
+Written down because every feature below reads differently once it is stated,
+and because "automate farming" is a description of the mechanism rather than of
+the point.
+
+**Vanilla farming is barely a gameplay loop.** Place a seed, leave, come back
+later, maybe it is ready. There is no decision in the middle and no skill in the
+harvest. Most players meet it once, early, because they need cotton for armour,
+and then never look at it again.
+
+**And yet players build large farms anyway.** For the look of the place, or for
+the satisfaction of having one, or for no articulated reason at all. The reason
+does not matter; the fact does. Those farms are big, and the labour of working
+them scales with their size while the interest of working them does not. That is
+the actual problem: **effort scales, engagement does not.**
+
+**So automating the harvest is not removing gameplay, it is replacing a loop
+that was not one.** "Plant a seed and wait" becomes "you can scale this now, so
+manage it properly". The player stops walking up to individual carrots and
+starts making decisions about layout, storage, routing, fleet size and upkeep --
+decisions that get MORE interesting as the farm grows, where the old loop got
+more tedious.
+
+**Upkeep is what keeps it a system rather than a switch.** A fleet consumes fuel
+in proportion to its size, so scaling up is a commitment rather than a
+one-off purchase. That is the load-bearing constraint under everything in the
+investment path below: without it, acquiring pets is the end of the game rather
+than the beginning of it.
+
+**And it is an opportunity, not just a brake.** Vanilla has a long tail of items
+it uses sparingly, once, or not at all. A fuel economy gives them somewhere to
+go:
+
+  - **Robotic units eat AA Batteries**, which come from Robot Hens -- and
+    livestock harvesting is already built, so that loop closes with machinery
+    that exists today rather than with something hypothetical.
+  - **Biological units eat food**: seeds, or the produce the fleet already
+    gathers. A farm that feeds the fleet that works it is a self-contained
+    system the player assembled, which is a better thing to own than a fuel
+    counter.
+
+### The investment path — a pet is a project, not a purchase
+
+PLANNED, NOT BUILT. Acquiring a unit should be the start of its development
+rather than the end.
+
+**1. Most tasks are gated behind installed MODULES.** "Go milk that Mooshi"
+requires a Livestock Harvest Module. Dispatch eligibility per task type is
+checked against what the unit has installed, so an unequipped unit is not
+broken, it is unspecialised -- it still collects and deposits, which is the
+floor.
+
+The petport panel displays installed modules, laid out like the MECH ASSEMBLY
+GUI. That is a deliberate borrowing: players already know that interface, it
+already means "this is a machine you configure", and it makes the module slots
+legible without teaching anything new.
+
+Implementation note for whoever builds it: `findWork` already has exactly one
+branch per task type, so gating is one check per branch rather than a new
+system. And `petData` already persists per-unit state on the ITEM -- surviving
+respawn, unsocket and world reload -- so modules have a home that already works.
+
+**2. Slots are earned.** A unit starts with ONE module slot and is upgraded to
+add more. Robotic units want RAM Sticks, biological units want Cell Matter, and
+each TIER additionally wants a progression item -- the same ladder the EPP
+climbs:
+
+    slot 2    Living Root
+    slot 3    Venom Sample
+    slot 4    Scorched Core
+    slot 5    Cryonic Extract
+
+Riding the EPP progression means fleet capability is pinned to planet-tier
+progress the player is already making, without inventing a parallel currency.
+
+**Why gate at all**, since the tasks work without it: because a fleet that can
+do everything the moment it exists has no shape. Choosing which units get which
+modules is the management decision the whole design is trying to create, and it
+only exists if a unit cannot have all of them at once.
+
+### Network control — the two things still missing at the top
+
+Both were specified earlier and neither is built. Recorded here because they are
+what makes a LARGE deployment governable, and everything above assumes large
+deployments.
+
+**1. Per-task participation, per network.** A petport on a non-default network
+needs checkboxes for which tasks it takes part in -- automatic watering being
+the obvious first one a player will want to switch off. Without this, joining a
+network is all-or-nothing, and the only way to opt a port out of one behaviour
+is to opt it out of everything.
+
+**2. Filter beacons, in two families.** Filters apply IN ORDER, using the
+container's own slot order as the syntax:
+
+  - **Item filters** -- allow and deny lists over item descriptors, the original
+    spec.
+  - **Network filters** -- a PARALLEL beacon set governing which networks may
+    interact with a container's contents at all.
+
+The second is the one that makes shared bases work. Item filters answer "what
+belongs in this crate"; network filters answer "whose crate is this". Those are
+different questions and a player will eventually need both.
 
 ### Design direction — petports, fuel, and specialization
 
@@ -2180,6 +2290,96 @@ Strictly better: a crop whose anchor tile happens to be farmland can no longer
 mask missing soil beneath it. But it is a change on a path that was working, so
 **if replanting ever starts clearing intents as "not farmland", this is the
 first suspect.** The log prints both mods and the `tilled` flag.
+
+##### Animal harvesting -- BUILT
+
+Farm animals are far simpler than crops, because they are SCRIPTED MONSTERS
+where farmable objects have no script at all.
+`/scripts/actions/monsters/farmable.lua` defines `hasMonsterHarvest` and
+`dropMonsterHarvest` as plain globals in the monster's environment, and
+**neither uses its `args` or `board` parameters** -- they are declared
+`(args, board)` and ignore both. So both are callable out of band with no
+arguments:
+
+    world.callScriptedEntity(id, "hasMonsterHarvest")   -- false / true
+    world.callScriptedEntity(id, "dropMonsterHarvest")  -- spawns AND resets
+
+**`dropMonsterHarvest` calls `resetMonsterHarvest` itself**, which removes the
+obvious exploit. Faking the harvest with `world.spawnTreasure` from
+`harvestPool` would leave `storage.lastHarvest` untouched and the animal
+permanently ready -- infinite produce. We never touch the timer, so we cannot
+corrupt it.
+
+Produce lands on the ground at the animal, so collection and deposit take it
+from there unchanged, exactly as with crops.
+
+**Verified by asking again, not by the return value.** `callScriptedEntity`
+returns nil silently for a missing function, so nil is indistinguishable from a
+call that ran and returned nothing. A successful poke flips `hasMonsterHarvest`
+to false immediately, and the animal is its own authority.
+
+##### THE PROBE THAT KILLED LIVESTOCK
+
+Worth the space, because it is the most damaging bug this project has produced
+and the shape of it will recur.
+
+Discovery originally called `hasMonsterHarvest` on every monster in coverage to
+find out what each one was -- reasoning that a non-farmable monster has no such
+global and returns nil harmlessly, which is true of our own drones. **It is not
+true of baby livestock.** Babies run the SAME farmable behavior as adults, so
+the function exists, but they carry no `harvestTime` in config:
+
+    farmable.lua:34: attempt to compare nil with number
+
+`resetMonsterHarvest` stores nil, the comparison throws, and **a script error
+kills the monster.** The `pcall` on our side caught the exception perfectly and
+protected nothing: the error had already happened inside the ANIMAL's script
+context. The scan was culling baby Fluffalo once every five seconds.
+
+**A `pcall` protects the CALLER. `callScriptedEntity` runs code in someone
+else's context, where the consequences are theirs.** That is the generalisable
+lesson, and it applies to every cross-entity call in this mod.
+
+**The fix is to ask about the TYPE, not the animal.**
+`root.monsterParameters(monsterType)` reads the type's config, so nothing runs
+on the entity and nothing can throw. Both `harvestPool` and `harvestTime` are
+required -- `harvestTime` is the one that matters for safety, since its absence
+is exactly what killed babies. Our own units fall out for free, having neither.
+
+Checked at BOTH `params.harvestTime` and `params.baseParameters.harvestTime`,
+because the mooshi `.monstertype` carries these under `baseParameters` and
+whether the binding flattens or nests is undocumented. Cached per type.
+
+The unit repeats the same check before poking rather than trusting the
+dispatch, because a task can outlive the dispatch that created it and both calls
+in the act run inside the animal's script.
+
+**An intermediate fix is worth remembering as a pattern that was NOT good
+enough.** Before `root.monsterParameters` was confirmed to exist, the mitigation
+was a per-type verdict cached in `world.properties` -- bounding the damage to
+one death per type per world rather than per port per scan. It shipped
+correctly and was still wrong: bounded harm is not no harm, and a permanent
+"unsafe" verdict would have silently disabled harvesting for any species whose
+baby was met first. Deleted entirely once the real filter existed. **Note that
+worlds which ran that build carry an orphaned `petports_monsterProbes`
+property; nothing reads it.**
+
+##### Animals move, and nothing chases them
+
+`ANIMAL_REACH` is 6.0, more generous than the crop reach, because the standable
+ground target resolves ONCE and does not re-resolve as the animal ambles. A
+Mooshi is slow enough that this does not matter.
+
+Smaller roving livestock may outwalk it. That presents as an arrival out of
+reach, and the failure names the distance, the limit and both positions --
+deliberately, so the decision about catch-up behaviour comes from a measurement
+rather than a guess.
+
+**Known cosmetic:** the animal stays visually interactive for a tick or two
+after the poke. The behavior tree normally pairs `dropMonsterHarvest` with
+`setInteractive(false)` and calling out of band skips that half; the next
+behavior evaluation re-runs `hasMonsterHarvest`, gets false, and clears it.
+`behaviorUpdateDelta` is 2, so it is brief and self-correcting.
 
 #### Task 3 — collecting item drops
 
@@ -3779,6 +3979,22 @@ matching when someone rewords a log line.
   disagree.
 
 ---
+
+## Where this goes next
+
+**Pets get a break.** Farming, animal harvesting and item collection all work,
+and most of the pathing quirks are solved or sidestepped. The unit layer is in
+good enough shape to leave alone for a while.
+
+**The beacons system is next.** It is the natural follow-on for three reasons:
+it is entirely unbuilt where the unit layer is mature, it is what the network
+control section above is blocked on, and it is the piece that turns a working
+fleet into a governable one. Filter beacons, the active provider beacon, beacon
+on/off state and the network-filter family all live there.
+
+The module and slot work above depends on the petport panel, which is a larger
+and separate undertaking -- worth keeping behind beacons rather than starting
+both at once.
 
 ## Logging discipline, learned the hard way
 
