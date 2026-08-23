@@ -1,0 +1,32 @@
+//  Swamp water wets tilled dirt.
+//
+//  Vanilla lets water (1) and healing water (6) convert tilleddry and stops
+//  there. Swamp water (12) is water with a status effect attached and there is
+//  no evident reason it should not farm -- this reads as an oversight rather
+//  than a decision.
+//
+//  NOTHING IN THIS MOD CHANGES BECAUSE OF THIS FILE. The watering system reads
+//  liquidInteractions off the matmod at runtime and resolves each liquid to its
+//  itemDrop, so a new entry here is picked up with no code aware of it. That
+//  was the whole argument for reading the matmod instead of hardcoding
+//  tilleddry -> tilled, and this is the first thing to prove it.
+//
+//  Guarded on the entry NOT already existing, so a future vanilla patch adding
+//  swamp water itself makes this a no-op instead of a duplicate.
+
+[
+	[
+		{ "op" : "test", "path" : "/liquidInteractions" },
+		{ "op" : "test", "path" : "/liquidInteractions/2", "inverse" : true },
+		{
+			"op" : "add",
+			"path" : "/liquidInteractions/-",
+			"value" : {
+				"liquidId" : 12,
+				"consumeLiquid" : 0.5,
+				"transformModId" : 31,
+				"topOnly" : true
+			}
+		}
+	]
+]

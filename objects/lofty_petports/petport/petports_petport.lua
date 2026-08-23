@@ -167,6 +167,30 @@ local FARMABLE_STAGE_BASE = 0
 --  declared here would be a nil global there, inside a pcall, presenting as
 --  "damageTiles does not work" rather than as a missing value.
 
+--------------------------------------------------------------------------------
+--  WATERING
+--------------------------------------------------------------------------------
+--
+--  How many tiles one dispatch may cover, and therefore how many units of
+--  liquid a unit fetches per trip.
+--
+--  ONE ITEM PER TILE is the economy, deliberately stricter than vanilla, which
+--  charges consumeLiquid 0.5 per interaction. But one item per tile does NOT
+--  mean one TRIP per tile: a forty-tile row would otherwise be forty round
+--  trips to a crate, which is absurd to watch and pointless to simulate.
+--
+--  The cap also bounds the task. A run is capped at this length, so a long row
+--  becomes several sweeps rather than one task that outlives TASK_DEADLINE.
+local WATER_CARRY = 10
+
+--  How far to look left and right from a crop for more dry soil.
+--
+--  A bot that waters only the tile under the crop leaves a checkerboard. The
+--  least a fleet can do is finish the row it is standing in -- soil that is
+--  tilled and dry and contiguous is planting-ready ground somebody prepared on
+--  purpose.
+local WATER_RUN_REACH = 32
+
 local CLAIM_TTL = 30.0
 
 --  How often to look for work and to push claim expiry out.
@@ -766,7 +790,27 @@ function init()
     --  container primitive of its own.
     if report.outcome == "done" and self.task ~= nil
        and self.task.type == "withdraw" and self.task.id == report.id then
-      withdrawSeed(self.task.target, self.task.seed, self.task.id)
+      withdrawSeed(self.task.target, self.task.seed, self.task.id,
+        self.task.count)
+    end
+
+    --  Tiles were wetted. Spend one item per tile actually done.
+    --
+    --  COUNTED FROM THE REPORT, not from the task's tile list. A unit that ran
+    --  out of walking time partway through the sweep did fewer tiles than it
+    --  was given, and charging it for the whole run would quietly destroy
+    --  liquid that is still in its cargo.
+    if report.outcome == "done" and self.task ~= nil
+       and self.task.type == "water" and self.task.id == report.id then
+      local watered = tonumber(report.watered) or 0
+
+      for _ = 1, watered do
+        spendSeed(self.task.item)
+      end
+
+      sb.logInfo("PETPORT %s watering finished: %s tile(s), %s %s spent",
+        stationUniqueId(), sb.printJson(watered), sb.printJson(watered),
+        tostring(self.task.item))
     end
 
     --  The crop went in the ground. Spend the seed and retire the intent.
@@ -1887,8 +1931,13 @@ end
 --
 --  containerConsume is all-or-nothing -- it succeeds only if the FULL count can
 --  be consumed -- which is exactly the semantics wanted for taking exactly one.
-function withdrawSeed(containerId, seedName, workId)
+function withdrawSeed(containerId, seedName, workId, count)
   if seedName == nil then return end
+
+  --  count is 1 for seeds and the run length for liquid. Same call either way;
+  --  containerConsume is all-or-nothing on the full count, so asking for more
+  --  than the crate holds fails cleanly rather than half-filling the unit.
+  count = count or 1
 
   --  A WITHDRAW THAT TAKES NOTHING MUST BE RECORDED AS A FAILURE, and this is
   --  the whole reason this function knows its work id.
@@ -1914,7 +1963,8 @@ function withdrawSeed(containerId, seedName, workId)
     return
   end
 
-  local took = world.containerConsume(containerId, { name = seedName, count = 1 })
+  local took = world.containerConsume(containerId,
+    { name = seedName, count = count })
 
   if took ~= true then
     empty("containerConsume returned " .. tostring(took)
@@ -1922,10 +1972,11 @@ function withdrawSeed(containerId, seedName, workId)
     return
   end
 
-  sb.logInfo("PETPORT %s withdrew 1 %s from %s",
-    stationUniqueId(), tostring(seedName), sb.printJson(containerId))
+  sb.logInfo("PETPORT %s withdrew %s %s from %s",
+    stationUniqueId(), sb.printJson(count), tostring(seedName),
+    sb.printJson(containerId))
 
-  receiveCargo({ name = seedName, count = 1 })
+  receiveCargo({ name = seedName, count = count })
 end
 
 --  Remove one seed from cargo after it has gone into the ground.
@@ -2034,6 +2085,202 @@ end
 --------------------------------------------------------------------------------
 --  FARMABLES
 --------------------------------------------------------------------------------
+
+--  Is this work item free for this port to take?
+--
+--  MOVED ABOVE ITS FIRST CALLER. It is used by waterWork, replantWork and
+--  withdrawWork, and it originally sat below the first of those -- which is the
+--  nil-global trap this file has already been bricked by once: a local called
+--  from a line above its definition compiles as a lookup of a global nobody
+--  assigns, with no syntax error and no warning until it runs.
+--
+--  It matters twice over in withdrawWork, which needs it for its own leg AND
+--  for the replant that follows; getting that wrong livelocks the queue.
+local function claimFree(workId)
+	local claim = petports_claimGet(workId)
+
+	return (claim == nil)
+		or claim.owner == stationUniqueId()
+		or (claim.expires or 0) <= world.time()
+end
+
+--------------------------------------------------------------------------------
+--  SOIL
+--------------------------------------------------------------------------------
+
+--  What a surface mod is and what it wants, cached by name.
+--
+--  THE MATMOD IS SELF-DESCRIBING, which removes a whole layer that was planned
+--  and is not needed. farming.config's wetToDryMods describes the DRYING
+--  direction and never has to be read: a mod that carries "tilled" : true is
+--  farmland, and one that also carries a liquidInteraction with a
+--  transformModId is farmland that is currently DRY and says what would fix it.
+--
+--    tilleddry   "tilled" : true
+--                liquidInteractions -> liquidId 1 or 6, transformModId 31
+--    tilled      "tilled" : true, no liquidInteractions
+--
+--  So no name comparisons and no hardcoded pairs -- this is true for modded
+--  soils for free, which is most of what Alta/Enternia compatibility would
+--  otherwise have cost.
+local soilCache = {}
+
+--  transformModId is a NUMBER; applySurfaceMod wants a NAME.
+--
+--  The matmod says "liquid 1 turns me into mod 31" and vanilla's droplet says
+--  "previousMod tilleddry, newMod tilled". Passing 31 where a name is expected
+--  would spawn a droplet that falls and does nothing -- the same silent failure
+--  as the parameter override not landing, and indistinguishable from it in a
+--  log, so it is worth closing rather than discovering.
+--
+--  farming.config's wetToDryMods is the wet -> dry pairing, so INVERTED it maps
+--  a dry mod name to its wet one, which is exactly the name needed. That is the
+--  one thing that file is good for; everything else about dryness comes off the
+--  matmod itself.
+--
+--  THERE IS NO root.modName. The mod API goes one way only -- root.modConfig
+--  takes a NAME and yields a config -- so a numeric id cannot be turned into a
+--  name directly, and the inverse map is the only route.
+--
+--  It can be CHECKED, though, and cheaply: the resolved config carries modId,
+--  so confirming it equals the transformModId we were aiming at turns a guess
+--  into a verified lookup. A modded soil whose author patched wetToDryMods
+--  correctly passes; one that did not is refused rather than watered with a
+--  droplet naming a mod that does not exist.
+local wetNameCache = nil
+
+local function wetModName(dryName, transformModId)
+	if wetNameCache == nil then
+		wetNameCache = {}
+
+		for _, path in ipairs({ "/farming.config", "/assets/farming.config" }) do
+			local ok, config = pcall(root.assetJson, path)
+
+			if ok and type(config) == "table" and type(config.wetToDryMods) == "table" then
+				for wet, dry in pairs(config.wetToDryMods) do
+					wetNameCache[tostring(dry)] = tostring(wet)
+				end
+
+				sb.logInfo("PETPORT %s read wetToDryMods from %s: %s",
+					stationUniqueId(), path, sb.printJson(config.wetToDryMods))
+				break
+			end
+		end
+	end
+
+	local inverted = wetNameCache[tostring(dryName)]
+	if inverted == nil then
+		return nil, "no wetToDryMods entry for " .. tostring(dryName)
+	end
+
+	--  Confirm the name actually names the mod the soil asked for.
+	local ok, mod = pcall(root.modConfig, inverted)
+
+	if not ok or type(mod) ~= "table" or type(mod.config) ~= "table" then
+		return nil, "wetToDryMods names " .. tostring(inverted)
+			.. " but root.modConfig does not know it"
+	end
+
+	if mod.config.modId ~= transformModId then
+		return nil, string.format(
+			"wetToDryMods names %s (modId %s) but the soil transforms to %s",
+			tostring(inverted), tostring(mod.config.modId),
+			tostring(transformModId))
+	end
+
+	return inverted, "farming.config inverse, modId confirmed"
+end
+
+local function soilInfo(modName)
+	if modName == nil then return nil end
+
+	local key = tostring(modName)
+	if soilCache[key] ~= nil then return soilCache[key] end
+
+	local info = { tilled = false, dry = false, wants = {} }
+	local ok, mod = pcall(root.modConfig, key)
+
+	if ok and type(mod) == "table" and type(mod.config) == "table" then
+		info.tilled = mod.config.tilled == true
+
+		for _, interaction in ipairs(mod.config.liquidInteractions or {}) do
+			if interaction.transformModId ~= nil and interaction.liquidId ~= nil then
+				--  itemDrop CLOSES THE LOOP FROM THE OTHER END. The matmod names
+				--  liquids by numeric id and a liquid item names its liquid by
+				--  string, so matching items against the mod directly would need
+				--  a bridge. The liquid's own config carries the item that
+				--  yields it, so we go mod -> liquid -> item and never match
+				--  anything.
+				local okLiquid, liquid = pcall(root.liquidConfig, interaction.liquidId)
+				local item = nil
+				local tint = nil
+
+				if okLiquid and type(liquid) == "table" and type(liquid.config) == "table" then
+					item = liquid.config.itemDrop
+
+					--  THE DROPLET WEARS THE LIQUID'S OWN COLOUR. The sprite is
+					--  transparent white, so a multiply directive paints it --
+					--  and every liquid config already carries the colour the
+					--  engine renders it with, so nothing has to be authored per
+					--  liquid. Water is blue, lava is not, and swamp water looks
+					--  like swamp water without a table anywhere in this mod.
+					--
+					--  ALPHA IS FORCED OPAQUE. A liquid's alpha describes how a
+					--  BODY of it renders -- water is 128, half transparent,
+					--  which is right for a lake and nearly invisible on a
+					--  three-pixel droplet.
+					local colour = liquid.config.color
+
+					if type(colour) == "table" and #colour >= 3 then
+						local function channel(value)
+							return math.max(0, math.min(255, math.floor(tonumber(value) or 0)))
+						end
+
+						tint = string.format("%02X%02X%02XFF",
+							channel(colour[1]), channel(colour[2]), channel(colour[3]))
+					end
+				end
+
+				local wetName, via = wetModName(key, interaction.transformModId)
+
+				if item ~= nil and wetName ~= nil then
+					info.dry = true
+					table.insert(info.wants, {
+						liquidId = interaction.liquidId,
+						item = item,
+						transformModId = interaction.transformModId,
+						newMod = wetName,
+						tint = tint
+					})
+				elseif item ~= nil then
+					sb.logInfo("PETPORT %s soil %s: liquid %s yields %s but mod %s "
+						.. "has no resolvable name (%s) -- cannot water this soil",
+						stationUniqueId(), key, sb.printJson(interaction.liquidId),
+						tostring(item), sb.printJson(interaction.transformModId),
+						tostring(via))
+				end
+			end
+		end
+	end
+
+	sb.logInfo("PETPORT %s soil %s: tilled %s dry %s wants %s",
+		stationUniqueId(), key, tostring(info.tilled), tostring(info.dry),
+		sb.printJson(info.wants))
+
+	soilCache[key] = info
+	return info
+end
+
+--  Is this tile dry farmland, and what would fix it?
+local function drySoilAt(tile)
+	local modName = world.mod({ tile[1], tile[2] }, "foreground")
+	if modName == nil then return nil end
+
+	local info = soilInfo(modName)
+	if info == nil or not info.tilled or not info.dry then return nil end
+
+	return { mod = tostring(modName), wants = info.wants }
+end
 
 --  A farmable's stages array.
 --
@@ -2279,6 +2526,204 @@ local function harvestWork()
 	}
 end
 
+--  A contiguous run of dry farmland, ordered, starting from a crop.
+--
+--  ORDER IS THE POINT. Watering tile-by-tile as separate work items would send
+--  a unit across a forty-tile row in whatever order discovery happened to
+--  produce, which looks like malfunctioning rather than gardening. The run is
+--  built as an ordered list and swept end to end.
+local function waterRunFrom(anchor)
+	--  THE CROP MAKES THE ROW ELIGIBLE. IT DOES NOT HAVE TO BE THIRSTY ITSELF.
+	--
+	--  This used to require the tile UNDER the crop to be dry, and return
+	--  nothing otherwise -- so a crop standing on already-wet soil aborted
+	--  before the expansion ran, and freshly tilled dry ground right beside it
+	--  was never seen. Break and re-till a patch next to a watered crop and
+	--  nothing would ever water it.
+	--
+	--  Traversal now runs through FARMLAND and collects the DRY tiles out of
+	--  it. A wet tile mid-row is passed over rather than treated as the end of
+	--  the row, which is the common case once a fleet has been working: rows
+	--  become patchy, not cleanly split.
+	local function farmlandAt(tile)
+		local modName = world.mod({ tile[1], tile[2] }, "foreground")
+		if modName == nil then return nil end
+
+		local info = soilInfo(modName)
+		if info == nil or not info.tilled then return nil end
+
+		return { mod = tostring(modName), dry = info.dry, wants = info.wants }
+	end
+
+	local ordered = { anchor }
+
+	for direction = -1, 1, 2 do
+		for step = 1, WATER_RUN_REACH do
+			local tile = { anchor[1] + direction * step, anchor[2] }
+			if farmlandAt(tile) == nil then break end
+
+			if direction < 0 then
+				table.insert(ordered, 1, tile)
+			else
+				table.insert(ordered, tile)
+			end
+		end
+	end
+
+	--  ONE SOIL TYPE PER RUN. previousMod is a single value on the task and is
+	--  used for every cast in the sweep, so a run spanning two kinds of dry
+	--  soil would aim the wrong transition at half of it. Take the first dry
+	--  tile's soil and keep only tiles matching it; anything else becomes its
+	--  own run on a later pass.
+	local soil = nil
+	local tiles = {}
+
+	for _, tile in ipairs(ordered) do
+		local here = farmlandAt(tile)
+
+		if here ~= nil and here.dry then
+			if soil == nil then soil = here end
+
+			if here.mod == soil.mod then
+				table.insert(tiles, tile)
+			end
+		end
+	end
+
+	if soil == nil or #tiles == 0 then return nil end
+
+	return { tiles = tiles, wants = soil.wants, mod = soil.mod }
+end
+
+--  Every dry run worth watering in this network's coverage.
+--
+--  ANCHORED ON CROPS, not on bare soil. A player with a large fallow field has
+--  not asked for it to be watered, and scanning every tile in coverage for dry
+--  farmland would generate work nobody wanted. A crop standing on dry ground is
+--  an unambiguous request -- it cannot grow until the soil is wet -- and the
+--  run expansion then finishes the row it is part of.
+local function waterRuns()
+	local runs = {}
+	local seen = {}
+
+	for _, crop in ipairs(self.farmables or {}) do
+		if world.entityExists(crop.id) then
+			local position = world.entityPosition(crop.id)
+
+			--  The soil is BELOW the crop's anchor: a crop stands on tilled
+			--  dirt rather than in it.
+			local tile = { math.floor(position[1]), math.floor(position[2]) - 1 }
+			local key = petports_tileKey(tile)
+
+			if not seen[key] then
+				local run = waterRunFrom(tile)
+
+				if run ~= nil then
+					--  Mark the whole run seen, so the next crop standing in it
+					--  does not produce an overlapping duplicate. The ANCHOR is
+					--  marked separately because it is no longer necessarily in
+					--  the run -- a crop on already-wet soil contributes the row
+					--  without being part of the work.
+					seen[key] = true
+
+					for _, t in ipairs(run.tiles) do
+						seen[petports_tileKey(t)] = true
+					end
+
+					run.key = key
+					table.insert(runs, run)
+				else
+					seen[key] = true
+				end
+			end
+		end
+	end
+
+	return runs
+end
+
+--  Is the unit carrying something that would wet this run?
+local function carriedWaterFor(run)
+	if self.petData == nil or self.petData.cargo == nil then return nil end
+
+	for _, stack in ipairs(self.petData.cargo) do
+		for _, want in ipairs(run.wants or {}) do
+			if stack.name == want.item then
+				return stack, want
+			end
+		end
+	end
+
+	return nil
+end
+
+--  Sweep a dry run, one tile per unit of liquid carried.
+--
+--  ABOVE DEPOSIT, for the same reason replant is: a unit holding water that
+--  matches outstanding dry soil is mid-job, and deposit fires on any cargo.
+local function waterWork()
+	local runs = waterRuns()
+	if #runs == 0 then return nil, "no dry soil under any crop in coverage" end
+
+	for _, run in ipairs(runs) do
+		local workId = "water:" .. tostring(run.key)
+		local failure = self.workFailures[workId]
+		local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
+
+		local stack, want = carriedWaterFor(run)
+
+		if stack ~= nil and not backedOff and claimFree(workId) then
+			--  Carry decides length. One item per tile, and the unit stops when
+			--  it runs out rather than pretending.
+			local carried = math.min(stack.count or 1, WATER_CARRY)
+			local tiles = {}
+
+			for index = 1, math.min(carried, #run.tiles) do
+				table.insert(tiles, run.tiles[index])
+			end
+
+			--  START FROM THE NEARER END and sweep away from it. Walking to the
+			--  far end first doubles the trip for no reason, and reversing
+			--  mid-row is the spazzing this whole structure exists to avoid.
+			local from = entity.position()
+			if self.petId ~= nil and world.entityExists(self.petId) then
+				from = world.entityPosition(self.petId)
+			end
+
+			local head = world.magnitude(from, run.tiles[1])
+			local tail = world.magnitude(from, run.tiles[#run.tiles])
+
+			if tail < head then
+				tiles = {}
+				for index = 0, math.min(carried, #run.tiles) - 1 do
+					table.insert(tiles, run.tiles[#run.tiles - index])
+				end
+			end
+
+			sb.logInfo("PETPORT %s WATER dispatch: %s tile(s) of %s in run, "
+				.. "%s carried, from %s to %s",
+				stationUniqueId(), sb.printJson(#tiles), sb.printJson(#run.tiles),
+				sb.printJson(stack.count or 1), sb.printJson(tiles[1]),
+				sb.printJson(tiles[#tiles]))
+
+			return {
+				id = workId,
+				type = "water",
+				port = stationUniqueId(),
+				tiles = tiles,
+				waterIndex = 1,
+				item = want.item,
+				previousMod = run.mod,
+				newMod = want.newMod,
+				tint = want.tint,
+				position = { tiles[1][1] + 0.5, tiles[1][2] + 1.5 }
+			}
+		end
+	end
+
+	return nil, string.format("%s dry run(s), none actionable", #runs)
+end
+
 --------------------------------------------------------------------------------
 --  REPLANTING
 --------------------------------------------------------------------------------
@@ -2519,19 +2964,6 @@ local function sweepReplants(dt)
 	end
 end
 
---  Is this work item free for this port to take?
---
---  Factored out because the withdraw loop needs it TWICE -- once for its own
---  leg and once for the replant that follows -- and getting that wrong livelocks
---  the whole queue. See withdrawWork.
-local function claimFree(workId)
-	local claim = petports_claimGet(workId)
-
-	return (claim == nil)
-		or claim.owner == stationUniqueId()
-		or (claim.expires or 0) <= world.time()
-end
-
 --  Does any networked container hold this seed?
 local function containerWithSeed(seedName)
 	--  SEEDS COME OUT OF THE SAME CRATES THEY WENT INTO. Deposit beacons are
@@ -2672,6 +3104,62 @@ end
 --  fetch it back out. The round trip is the point: every seed is accounted for
 --  in storage, so a player who wants them for food or crafting can take them
 --  before the network spends them on replanting.
+--  Fetch liquid for a dry run.
+--
+--  ONE TRIP, MANY TILES. The economy is one item per tile; the LOGISTICS are
+--  one walk per run. Those are separate decisions and conflating them is how a
+--  forty-tile row turns into forty round trips.
+local function withdrawWaterWork()
+	local runs = waterRuns()
+	if #runs == 0 then return nil, "no dry soil needing water" end
+
+	for _, run in ipairs(runs) do
+		--  Already carrying the right thing? Then this is waterWork's problem,
+		--  not ours.
+		if carriedWaterFor(run) == nil then
+			local workId = "fetchwater:" .. tostring(run.key)
+			local failure = self.workFailures[workId]
+			local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
+
+			if not backedOff and claimFree(workId)
+			   and claimFree("water:" .. tostring(run.key)) then
+				local wanted = math.min(#run.tiles, WATER_CARRY)
+
+				for _, want in ipairs(run.wants) do
+					for _, beacon in ipairs(petports_beaconsFor("deposit")) do
+						if world.entityExists(beacon.id) then
+							local available = world.containerAvailable(beacon.id,
+								{ name = want.item, count = 1 })
+
+							if type(available) == "number" and available >= 1 then
+								local take = math.min(wanted, available)
+
+								sb.logInfo("PETPORT %s FETCHWATER dispatch: %s x%s "
+									.. "from %s for a %s tile run",
+									stationUniqueId(), tostring(want.item),
+									sb.printJson(take), sb.printJson(beacon.id),
+									sb.printJson(#run.tiles))
+
+								return {
+									id = workId,
+									type = "withdraw",
+									port = stationUniqueId(),
+									target = beacon.id,
+									seed = want.item,
+									count = take,
+									position = world.entityPosition(beacon.id)
+								}
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	return nil, string.format("%s dry run(s), no liquid in storage for any", #runs)
+end
+
 local function withdrawWork()
 	--  CARRYING SOMETHING IS NOT A REASON NOT TO FETCH A SEED.
 	--
@@ -2771,6 +3259,12 @@ local function findWork()
   local putBack, noPutBack = replantWork()
   if putBack ~= nil then return putBack end
 
+  --  WATER SITS WITH REPLANT, ABOVE DEPOSIT, and for exactly the same reason:
+  --  a unit carrying liquid that matches dry soil is mid-job, and deposit fires
+  --  on ANY cargo.
+  local wet, noWet = waterWork()
+  if wet ~= nil then return wet end
+
   local drop, noDrop = depositWork()
   if drop ~= nil then return drop end
 
@@ -2788,10 +3282,13 @@ local function findWork()
   local crop, noCrop = harvestWork()
   if crop ~= nil then return crop end
 
-  --  Fetching a seed is the lowest-priority thing a unit can do. See
-  --  withdrawWork.
+  --  Fetching is the lowest-priority thing a unit can do: it is the only work
+  --  that MANUFACTURES cargo rather than clearing something. See withdrawWork.
   local fetch, noFetch = withdrawWork()
   if fetch ~= nil then return fetch end
+
+  local fetchWater, noFetchWater = withdrawWaterWork()
+  if fetchWater ~= nil then return fetchWater end
 
   --  A unit with cargo and nowhere to put it should say THAT, not "no drops in
   --  rect". The storage-full indicator hangs off this state.
@@ -2806,6 +3303,7 @@ local function findWork()
   if noCrop ~= nil then
     return nil, tostring(why) .. "; " .. tostring(noCrop)
       .. "; " .. tostring(noFetch or noPutBack or "no replant work")
+      .. "; " .. tostring(noWet or noFetchWater or "no watering work")
   end
 
   return nil, why
@@ -2867,6 +3365,7 @@ local function dispatchWork()
   --  GENERATED itself are checked against its own rect.
   if work.type ~= "collect" and work.type ~= "harvest"
      and work.type ~= "replant" and work.type ~= "withdraw"
+     and work.type ~= "water"
      and not petports_rectContains(coverageRect(), work.position) then
     return reject(string.format(
       "generated point outside rect: %s type %s at %s, own rect %s",

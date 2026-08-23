@@ -1,0 +1,46 @@
+{
+  //  A modular soil-wetting droplet.
+  //
+  //  Vanilla's watersprinkledroplet hardcodes one transition in its config:
+  //  previousMod "tilleddry" -> newMod "tilled". That is fine for a sprinkler
+  //  and useless for a fleet that has to work whatever soil a player built on.
+  //
+  //  This copy ships DELIBERATELY INCOMPLETE. actionOnReap carries no mod names
+  //  at all; the caller supplies them per cast from what it read off the tile:
+  //
+  //    world.spawnProjectile("petports_watersprinkle", above, source, {0, -1},
+  //      false, {
+  //        actionOnReap = { {
+  //          action      = "applySurfaceMod",
+  //          previousMod = <the mod actually on the tile>,
+  //          newMod      = <its liquidInteraction transformModId>,
+  //          radius      = 1
+  //        } }
+  //      })
+  //
+  //  So one asset covers every soil, vanilla or modded, without a projectile
+  //  per pair. IF PARAMETER OVERRIDE DOES NOT REACH actionOnReap this becomes
+  //  an inert droplet that falls and does nothing -- which is the failure to
+  //  watch for, and is why the caller logs the parameters it passed.
+  //
+  //  physics "grenade" and timeToLive 5 are vanilla's, and both matter: the
+  //  droplet is spawned ABOVE the target tile and falls onto it, and
+  //  liquidInteractions on tilled soil are topOnly, so arriving from above is
+  //  not decoration.
+
+  "projectileName" : "petports_watersprinkle",
+  "image" : "petports_watersprinkle.png",
+  "physics" : "grenade",
+  "animationCycle" : 0.1,
+  "frameNumber" : 1,
+  "damageKindImage" : "icon.png",
+  "pointLight" : false,
+  "emitters" : [ ],
+  "timeToLive" : 5,
+
+  "actionOnReap" : [ ],
+
+  "power" : 0.0,
+  "damageType" : "NoDamage",
+  "damageKind" : "default"
+}

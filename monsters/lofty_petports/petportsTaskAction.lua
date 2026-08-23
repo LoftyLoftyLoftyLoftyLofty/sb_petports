@@ -61,6 +61,21 @@
 --  ground with world.placeObject. The seed and the crop share one name, so
 --  there is nothing to look up: what was harvested is what gets planted.
 --
+--  "water" -- sweep a run of dry tilled soil, one tile at a time, spending one
+--  unit of carried liquid per tile.
+--
+--  THE FIRST TASK WITH MORE THAN ONE DESTINATION. Every other task walks to a
+--  place and does a thing; this one walks a LIST, in order, and the order is
+--  the feature -- watering a forty-tile row in discovery order looks like a
+--  malfunction rather than gardening. The port builds the run ordered and picks
+--  the end nearer the unit; the unit sweeps away from it and never reverses.
+--
+--  The act is a projectile, not a liquid. world.spawnLiquid needed up to
+--  fourteen attempts to saturate one tile -- it is tuned for rain, not for
+--  gardening -- while applySurfaceMod is exact and lands once. So the droplet
+--  is spawned ABOVE the tile and falls onto it, which is also what tilled
+--  soil's topOnly liquidInteractions expect.
+--
 --  DIAGNOSTIC TASK
 --
 --  type "diag" is throwaway. Walk to a point inside the rect, stand there,
@@ -341,6 +356,16 @@ local function tileOccupied(anchor, seedName)
 
 	return false
 end
+
+--  How high above the target tile the droplet is spawned.
+--
+--  Far enough that it is unambiguously falling onto the tile from outside it,
+--  close enough that a grenade-physics projectile cannot drift into the next
+--  tile along on the way down.
+local WATER_DROP_HEIGHT = 1.0
+
+--  How close the unit must be to a tile before watering it.
+local WATER_REACH = 4.0
 
 --  How close the unit has to be before it fires the harvest.
 --
@@ -1188,6 +1213,11 @@ local function report(stateData, outcome, reason, cargo)
       outcome = outcome,
       reason = reason,
       cargo = cargo,
+      --  How many tiles a watering sweep actually wetted. The port spends one
+      --  item per tile from this number rather than from the tile list it
+      --  handed out, so a sweep that ended early is not charged for tiles it
+      --  never reached.
+      watered = task.watered,
       unit = entity.uniqueId()
     })
   end
@@ -1299,6 +1329,18 @@ end
 --  For "collect" this is the drop's CURRENT position, not the one the task was
 --  issued with. Returns nil if the drop is gone.
 local function currentTarget(task)
+  --  A watering task's destination MOVES as the sweep advances. The index
+  --  lives on the task rather than on stateData because currentTarget is only
+  --  handed the task -- and the task table is this unit's own copy, so
+  --  mutating it is local.
+  if task.type == "water" then
+    local tile = task.tiles ~= nil and task.tiles[task.waterIndex or 1] or nil
+    if tile == nil then return nil end
+
+    --  Stand ON the soil tile, which is one below the crop's anchor.
+    return { tile[1] + 0.5, tile[2] + 1.5 }
+  end
+
   if task.type ~= "collect" and task.type ~= "harvest" then
     return task.position
   end
@@ -2016,7 +2058,7 @@ function petportsTaskAction.update(dt, stateData)
   --  somewhere near the crop and then times out.
   local approachTo = target
   if task.type == "collect" or task.type == "harvest"
-     or task.type == "replant" then
+     or task.type == "replant" or task.type == "water" then
     approachTo = approachTargetFor(stateData, target)
 
     if approachTo == nil then
@@ -2340,6 +2382,135 @@ function petportsTaskAction.update(dt, stateData)
       report(stateData, "failed", "stuck at " .. sb.printJson(mcontroller.position()))
       return true
     end
+
+    return false
+  end
+
+  if task.type == "water" then
+    local tiles = task.tiles or {}
+    local index = task.waterIndex or 1
+    local tile = tiles[index]
+
+    if tile == nil then
+      report(stateData, "done",
+        "swept " .. sb.printJson(task.watered or 0) .. " tile(s)")
+      return true
+    end
+
+    local here = mcontroller.position()
+    local standing = { tile[1] + 0.5, tile[2] + 1.5 }
+
+    if world.magnitude(here, standing) > WATER_REACH then
+      report(stateData, "failed", string.format(
+        "arrived but %s from tile %s -- sweep abandoned after %s tile(s)",
+        sb.printJson(world.magnitude(here, standing)), sb.printJson(tile),
+        sb.printJson(task.watered or 0)))
+      return true
+    end
+
+    --  ALREADY WET? Skip it and charge nothing. Another unit may have swept
+    --  past, or a player may have watered by hand while this unit walked.
+    local modNow = world.mod({ tile[1], tile[2] }, "foreground")
+
+    if tostring(modNow) ~= tostring(task.previousMod) then
+      sb.logInfo("UNIT water SKIP tile %s: mod is %s, expected %s -- "
+        .. "already wet or no longer farmland",
+        sb.printJson(tile), tostring(modNow), tostring(task.previousMod))
+    else
+      --  PARAMETERS CARRY THE TRANSITION. The projectile ships with an empty
+      --  actionOnReap on purpose -- previousMod and newMod are read off the
+      --  tile per cast, so one asset covers vanilla and modded soils alike.
+      --
+      --  IF PARAMETER OVERRIDE DOES NOT REACH actionOnReap, this is where it
+      --  shows: the droplet falls, nothing changes, and the mod check on the
+      --  next pass still reads dry. Hence logging exactly what was passed.
+      --  NOT THE TILE CENTRE. x + 0.5 sits exactly on a rounding boundary, and
+      --  MEASURED at radius 0 it landed one tile RIGHT of target every time:
+      --  sweeping right to left, the first cast spilled off the right edge and
+      --  the leftmost tile never got one.
+      --
+      --  Two candidate causes and this offset is immune to both. If the engine
+      --  FLOORS the reap position, x + 0.25 is inside tile x. If it ROUNDS --
+      --  floor(x + 0.5), which is what x + 0.5 landing in x+1 looks like -- then
+      --  floor(x + 0.75) is still tile x. Anything in [x, x + 0.5) works under
+      --  either rule; a quarter tile keeps clear of both edges.
+      --
+      --  The standing position keeps + 0.5 deliberately: that is where the unit
+      --  walks to, it is not converted to a tile by anything, and centring it
+      --  is correct.
+      local spawn = { tile[1] + 0.25, standing[2] + WATER_DROP_HEIGHT }
+
+      local ok, err = pcall(world.spawnProjectile,
+        "petports_watersprinkle", spawn, entity.id(), {0, -1}, false, {
+          actionOnReap = { {
+            action = "applySurfaceMod",
+            previousMod = task.previousMod,
+            newMod = task.newMod,
+            --  RADIUS 0, NOT VANILLA'S 1.
+            --
+            --  MEASURED at radius 1: six casts, five skips, ten tiles wetted
+            --  for five items. Each droplet caught its neighbour, so the unit
+            --  arrived at every second tile to find it already wet and skipped
+            --  it free. That is cheaper but not PREDICTABLE, and the whole
+            --  point of one-item-per-tile is that a player can look at a row
+            --  and know what it cost.
+            --
+            --  IF RADIUS 0 WETS NOTHING, the symptom is unmistakable: casts
+            --  fire, no tile changes mod, and the sweep re-reports the same
+            --  run next pass. Vanilla ships 1, so 0 may be below the floor --
+            --  in which case keep 1 and halve WATER_CARRY instead, which buys
+            --  the same predictability from the other direction.
+            radius = 0
+          } },
+
+          --  THE LIQUID PAINTS ITS OWN DROPLET. The sprite is transparent
+          --  white, so this multiply is what gives it a colour at all -- and
+          --  the colour comes off the liquid's own config on the port side, so
+          --  water arrives blue and lava would not.
+          --
+          --  nil when the liquid config had no colour, which leaves the
+          --  parameter absent and the droplet white. Visible, wrong-looking,
+          --  and logged -- which is the right failure for a cosmetic.
+          processing = task.tint ~= nil and ("?multiply=" .. task.tint) or nil
+        })
+
+      --  Spawn x is printed to full precision on purpose: the whole off-by-one
+      --  lives in how that float maps to a tile, so the number that produced a
+      --  hit or a miss has to be in the log next to the tile it aimed at.
+      sb.logInfo("UNIT water CAST tile %s aim x %s spawn %s: %s -> %s, tint %s, ok %s %s",
+        sb.printJson(tile), sb.printJson(spawn[1]), sb.printJson(spawn),
+        tostring(task.previousMod), tostring(task.newMod),
+        tostring(task.tint or "none"), tostring(ok), tostring(err or ""))
+
+      if not ok then
+        report(stateData, "failed", string.format(
+          "spawnProjectile failed at %s after %s tile(s): %s",
+          sb.printJson(tile), sb.printJson(task.watered or 0), tostring(err)))
+        return true
+      end
+
+      --  COUNTED, NOT ASSUMED. The port charges one item per tile ACTUALLY
+      --  wetted, so a sweep cut short partway charges only for what it did.
+      task.watered = (task.watered or 0) + 1
+    end
+
+    task.waterIndex = index + 1
+
+    if task.waterIndex > #tiles then
+      report(stateData, "done",
+        "swept " .. sb.printJson(#tiles) .. " tile(s), watered "
+        .. sb.printJson(task.watered or 0))
+      return true
+    end
+
+    --  ON TO THE NEXT TILE. Everything about the previous approach is stale:
+    --  the ground target was resolved for a different tile, and arrival has to
+    --  be re-earned or the unit waters the whole row from where it stands.
+    stateData.arrived = false
+    stateData.groundTarget = nil
+    stateData.approachTimer = APPROACH_TIMEOUT
+    stateData.searchingTimer = 0
+    freshPather("water sweep advancing to tile " .. sb.printJson(task.waterIndex))
 
     return false
   end
