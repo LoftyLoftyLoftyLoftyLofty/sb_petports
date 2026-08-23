@@ -422,17 +422,33 @@ local VENT_USE_DISTANCE = 2.0
 local function tryVentRoute(stateData, target)
   if petports_planRoute == nil then return "none" end
 
-  --  RECALL DOES NOT VENT-ROUTE.
+  --  RECALLS DO VENT-ROUTE. This used to refuse them outright, and the refusal
+  --  is now wrong twice over.
   --
-  --  A walk home is not worth a route search: if the unit cannot walk back, the
-  --  port re-homes it, which is instant and always works. Routing a recall cost
-  --  38 seconds of probing before failing -- and worse, it filled the cache with
-  --  t: keys for recall points chosen at random inside the rect, which will
-  --  never be asked about again.
-  if stateData.task.type == "return" then
-    sb.logInfo("UNIT tryVentRoute: refusing to route a recall")
-    return "none"
-  end
+  --  The original reasoning: a walk home is not worth a route search, routing a
+  --  recall cost 38 seconds of probing before failing, and worse, it filled the
+  --  cache with t: keys for recall points CHOSEN AT RANDOM inside the rect,
+  --  which would never be asked about again.
+  --
+  --  Both halves have since expired. returnWork now recalls to a FIXED point --
+  --  findStandingPoint over a small box around the port, same answer every
+  --  attempt -- so a recall produces ONE t: key per port rather than a new one
+  --  per try. And route cache entries carry a TTL, so even a bad key ages out
+  --  instead of accumulating.
+  --
+  --  What the refusal cost, meanwhile, was units that could not get home at
+  --  all. A unit that vent-hopped somewhere to work, finished, and got recalled
+  --  had no vent available for the return leg -- it went in one way and was
+  --  only permitted to come back another. Inside an enclosure with vent-only
+  --  access, that is permanent: the leash deliberately never fails, so the unit
+  --  retries a walk that cannot succeed, forever, without ever reporting.
+  --
+  --  MEASURED: a unit idle at [1195.07,715.8], directly between vent 15 at
+  --  [1195,721] and vent 17 at [1195,712], with no walking route home. It
+  --  needed exactly the pair it had just used and was refused them.
+  --
+  --  Only reproducible with more than one unit deployed, which is the tell:
+  --  a single unit takes every job and is never left idle deep in the network.
 
   if stateData.viaVent ~= nil then return "routing" end
 
@@ -512,7 +528,7 @@ local function tryVentRoute(stateData, target)
     stateData.plan = nil
     stateData.planIndex = 1
     stateData.probeTimer = 0
-    freshPather()
+    freshPather("target walkable from here, no further ho")
     return "walk"
   end
 
@@ -1091,9 +1107,20 @@ function petportsJumpMover(pather)
   return "running"
 end
 
-local function freshPather()
+local function freshPather(why)
   local options = petports_pathOptions()
   options.run = false
+
+  --  ALWAYS LOGGED, not behind TASK_DEBUG. A pather rebuilt every tick and a
+  --  pather rebuilt once look identical from every other line in the log: the
+  --  search restarts, reports success, and restarts again. Naming the caller
+  --  is what separates "the search is slow" from "something is throwing the
+  --  answer away".
+  self.petportsPatherBuilds = (self.petportsPatherBuilds or 0) + 1
+  sb.logInfo("UNIT freshPather #%s at %s: %s",
+    sb.printJson(self.petportsPatherBuilds),
+    sb.printJson(mcontroller.position()),
+    tostring(why or "no reason given"))
 
   if TASK_DEBUG then
     sb.logInfo("UNIT pather boundBox %s standingBoundBox %s",
@@ -1132,7 +1159,7 @@ function petportsTaskAction.enteringState(stateData)
   --  Before any approachPoint call, so vanilla picks up ours rather than
   --  building its own with the inverted box -- and fresh, so no abandoned A*
   --  search carries over from a previous task.
-  freshPather()
+  freshPather("entering task state for")
 
   --  No emote here. This called emote("happy") on every pickup, which at one
   --  task per five seconds is a permanent affection loop -- precisely the
@@ -1675,14 +1702,22 @@ function petportsTaskAction.update(dt, stateData)
     end
 
     if routing == "none" and task.hold then
-      --  Station-keeping never vent-routes (tryVentRoute refuses "return"
-      --  tasks), so reaching here means only that the direct walk is hard.
-      --  There is nowhere else for a tethered unit to be, so keep walking.
-      sb.logInfo("UNIT station-keeping: no route offered, retrying the walk")
+      --  STALE PREMISE, KEPT DELIBERATELY. This used to read "station-keeping
+      --  never vent-routes, so reaching here means only that the direct walk is
+      --  hard" -- true when recalls were refused a route outright. They are not
+      --  any more, so reaching here now means something stronger: vents were
+      --  offered, considered, and none of them helped.
+      --
+      --  The behaviour is unchanged and still correct -- there is nowhere else
+      --  for a tethered unit to be, so it keeps walking -- but a unit landing
+      --  here repeatedly is now genuinely unreachable rather than merely
+      --  unrouted, and that is worth noticing in a log rather than reading as
+      --  the ordinary case.
+      sb.logInfo("UNIT station-keeping: no vent route home either, retrying the walk")
       stateData.routing = false
       stateData.searchingTimer = 0
       stateData.approachTimer = APPROACH_TIMEOUT
-      freshPather()
+      freshPather("station-keeping: no route offered, retry")
       return false
     end
 
@@ -1755,7 +1790,7 @@ function petportsTaskAction.update(dt, stateData)
         stateData.planIndex = 1
         stateData.planOrigin = nil
         stateData.routing = true
-        freshPather()
+        freshPather("vent")
         return false
       end
 
@@ -1815,7 +1850,7 @@ function petportsTaskAction.update(dt, stateData)
         stateData.planIndex = 1
         stateData.planOrigin = nil
         stateData.routing = true
-        freshPather()
+        freshPather("vent")
         return false
       end
 
@@ -1827,7 +1862,7 @@ function petportsTaskAction.update(dt, stateData)
       end
 
       stateData.planOrigin = nil
-      freshPather()
+      freshPather("line 1841")
       return false
     end
 
@@ -1882,7 +1917,7 @@ function petportsTaskAction.update(dt, stateData)
       stateData.plan = nil
       stateData.planIndex = 1
       stateData.routing = true
-      freshPather()
+      freshPather("line 1896")
       return false
     end
 
@@ -1920,7 +1955,7 @@ function petportsTaskAction.update(dt, stateData)
     --  reused pather -- see freshPather below.
     if not stateData.ventLegStarted then
       stateData.ventLegStarted = true
-      freshPather()
+      freshPather("line 1934")
 
       sb.logInfo("UNIT walking to vent %s mouth %s from %s",
         sb.printJson(stateData.viaVent.id),
@@ -1965,7 +2000,7 @@ function petportsTaskAction.update(dt, stateData)
       stateData.approachTimer = APPROACH_TIMEOUT
       stateData.arrived = false
       stateData.planOrigin = nil
-      freshPather()
+      freshPather("line 1979")
     end
 
     return false
@@ -2061,7 +2096,7 @@ function petportsTaskAction.update(dt, stateData)
             sb.logInfo("UNIT station-keeping: no net progress, resetting and retrying")
             stateData.progressStrikes = 0
             stateData.approachTimer = APPROACH_TIMEOUT
-            freshPather()
+            freshPather("station-keeping: no net progress, resett")
             return false
           end
 
@@ -2225,9 +2260,22 @@ function petportsTaskAction.update(dt, stateData)
     else
       --  A path exists now. Report how long the search took, so the limit can
       --  be set from measurements instead of guesswork.
-      if TASK_DEBUG and stateData.searchingTimer > 0 then
-        sb.logInfo("UNIT path found after %s seconds of searching",
-          sb.printJson(stateData.searchingTimer))
+      if stateData.searchingTimer > 0 then
+        --  SIZE AND SHAPE, not just "found". A path that satisfies hasPath and
+        --  contains nothing moves nobody, and reads in the log exactly like a
+        --  healthy one.
+        local finder = self.pather ~= nil and self.pather.finder or nil
+        local edges = (finder ~= nil and type(finder.path) == "table")
+          and #finder.path or nil
+        local first = (edges ~= nil and edges > 0 and type(finder.path[1]) == "table")
+          and finder.path[1].action or nil
+
+        sb.logInfo("UNIT path found after %s s: %s edge(s), first action %s, "
+          .. "unit at %s target %s",
+          sb.printJson(stateData.searchingTimer),
+          edges ~= nil and sb.printJson(edges) or "unreadable",
+          tostring(first), sb.printJson(mcontroller.position()),
+          sb.printJson(stateData.groundTarget or target))
       end
       stateData.searchingTimer = 0
     end
@@ -2241,7 +2289,7 @@ function petportsTaskAction.update(dt, stateData)
         sb.printJson(APPROACH_TIMEOUT), sb.printJson(mcontroller.position()))
       stateData.approachTimer = APPROACH_TIMEOUT
       stateData.routingTried = false
-      freshPather()
+      freshPather("could not reach station within")
       return false
     end
 
@@ -2283,7 +2331,7 @@ function petportsTaskAction.update(dt, stateData)
 
     if self.pathing.stuck and task.hold then
       sb.logInfo("UNIT station-keeping: PathMover reported stuck, rebuilding pather")
-      freshPather()
+      freshPather("station-keeping: PathMover reported stuc")
       return false
     end
 
@@ -2510,7 +2558,7 @@ function petportsTaskAction.update(dt, stateData)
       stateData.arrived = false
       stateData.approachTimer = APPROACH_TIMEOUT
       stateData.progressStrikes = 0
-      freshPather()
+      freshPather("pushed off station (")
       return false
     end
 

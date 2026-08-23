@@ -123,6 +123,10 @@ CONFIG rather than its parameters so every copy works. It is an activeitem
 purely so that "use it to configure it" has somewhere to live later; the script
 is a no-op stub, because an activeitem with no script errors on activation.
 
+**Farming is BUILT AND VERIFIED end to end**: discovery, harvest, drop
+collection, deposit, replant intents, seed withdrawal and replanting of crops of
+arbitrary footprint, surviving vent traversal in both directions. See Task 2.
+
 **Still not built.** Docking, request beacons, per-item routing, and any notion
 of cargo capacity -- ANY cargo is treated as a full load, deliberately, and
 `findWork` orders deposit above collect so a loaded unit ferries before it
@@ -1767,7 +1771,7 @@ run. The reset path — corn — takes a different route through the verificatio
 **V1 IS HARVEST AND NOTHING ELSE. The seed walks back to storage like any other
 drop**, and replanting it is a later increment for another unit to pick up.
 
-##### Replanting -- BUILT, UNTESTED
+##### Replanting -- BUILT AND VERIFIED
 
 Storage-first, by explicit decision: the harvest drops its seed, ordinary
 collection carries it to a crate, and only then does a unit fetch it back out.
@@ -1827,10 +1831,84 @@ silently never happen. So the check accepts a tilled mod at EITHER tile and logs
 both on failure. One look at a real field settles it, and the wrong guess costs
 nothing meanwhile.
 
-**Still untested end to end**, including whether `world.placeObject` succeeds
-from a monster script at all -- placement is verified by querying the footprint
-afterwards rather than by trusting the return value, the same discipline the
-harvest swing uses.
+**CONTENTION, traced rather than assumed.** Two units, two intents, one seed
+crate:
+
+  - **Both legs are claim-checked at SELECTION, not just at dispatch.**
+    `dispatchWork` does refuse a claim already held, but that refusal lands
+    after selection has committed to an intent -- so a second port would
+    propose the same withdraw, be rejected, return no work, and propose it
+    again next tick forever, never reaching the other intents in the list. It
+    now skips to the next intent instead. **This was a livelock and it is the
+    reason a second unit would have looked idle rather than busy.**
+  - The two legs have DIFFERENT work ids, so the withdraw check also has to
+    look at `replant:<key>`. Otherwise a port fetches a second seed for a tile
+    another unit is already walking one to.
+  - **`replant` honours the failure backoff, and it is the one work type that
+    genuinely needs it.** Every other task has its precondition consumed by the
+    attempt -- a drop is taken, a crop is harvested. A failed replant changes
+    nothing: the unit still holds the seed, the intent still exists, the match
+    still holds, so the port would re-dispatch the identical task on the next
+    tick and the unit would retry a refused placement several times a second.
+  - **A player emptying the crate mid-walk is recorded as a failure**, despite
+    the unit having done exactly what it was asked. It walked there and
+    reported done, and done CLEARS the failure record -- so a persistent
+    disagreement between `containerAvailable` and `containerConsume` would
+    shuttle a unit to an empty crate forever with nothing in the log looking
+    wrong. Normally the disagreement is transient and self-resolving; the
+    backoff is for when it is not.
+
+**Note corn cannot exercise any of this.** Corn has `resetToStage`, so it never
+leaves a hole and never produces an intent. Replanting only ever runs on
+one-shot crops -- carrots, potatoes, oculemons.
+
+**VERIFIED IN GAME.** `world.placeObject` does work from a monster script.
+Placement is confirmed by querying the footprint afterwards rather than by
+trusting the return value -- the same discipline the harvest swing uses, and
+for the same reason. Crops of arbitrary width replant correctly, and the
+harvest/replant cycle survives vent traversal in both directions.
+
+**FOOTPRINTS COME FROM THE SEED'S OWN CONFIG, not from an assumption.**
+`root.itemConfig(seedName).config.orientations[1].spaces`, cached per name. The
+first version hardcoded 1 wide by 2 tall, generalised from `potatoseed` -- and
+that was wrong for every wide crop AND wrong in both directions at once, which
+is why it produced inconsistent symptoms rather than a clean failure:
+
+  - the CLEAR check missed blockers standing in the column it never looked at,
+    so a wide crop was dispatched into occupied space and `placeObject` refused
+  - the POST-PLANT check looked for the new crop in tiles it might not occupy,
+    concluded the planting had failed, and fed the backoff ladder
+
+That second one presented as "it gave up trying to replant the oculemon".
+
+The fallback when the config cannot be read logs loudly, because past that point
+occupancy is a guess.
+
+**OCCUPANCY IS EXACT, NOT A BOUNDING-BOX OVERLAP.** `world.entityQuery` returns
+anything whose bounds INTERSECT the rect, and a rect drawn tightly around one
+tile touches the edge of the next. In a planted row -- crops at x, x+1, x+2 --
+every tile reported itself occupied by its neighbour, and MEASURED, nine replant
+intents were written and seven destroyed within four seconds as "footprint
+occupied". Query wide, then filter with `world.objectSpaces`, which gives an
+object's real occupied tiles relative to its position. Vanilla's own
+`pathutil.objectBounds` reads them the same way.
+
+**MEASURED: STORAGE-FIRST IS BYPASSED ROUGHLY NINE TIMES IN TEN.** One `withdraw`
+for nine replants in a representative run. A seed picked up off the ground
+matches an outstanding intent immediately, so replant outranks deposit and the
+unit plants it without ever visiting a crate -- the on-the-spot replanting that
+was deliberately deferred, arriving for free out of the ordering rule.
+
+That is not obviously wrong; it is a shorter walk and the field still ends up
+planted. But the accountability property the storage-first decision was FOR --
+seeds land in storage so a player can take them for food or crafting before the
+network spends them -- now holds about a tenth of the time, and which case you
+get is decided by pickup order.
+
+If strict storage-first is wanted later, the change is small: set a flag when
+`withdrawSeed` puts a seed into cargo and require it in `replantWork`, so a seed
+that arrived by collection is ordinary cargo and only a deliberately withdrawn
+one plants.
 
 That decision is what makes v1 cheap, and it is worth seeing why: once the crop
 is harvested, the drops on the ground are ORDINARY DROPS. Collection, cargo,
@@ -3063,6 +3141,14 @@ the geometry.**
 
 Real, characterised, deliberately not fixed. Each has been seen in a log.
 
+**RESOLVED items are kept here rather than deleted**, marked as such: recall
+vent-routing, over-dropping, and the `local function` scoping trap all sit
+below. They stay because each one records a wrong hypothesis that was held
+confidently for a while, and deleting the resolution loses the reasoning that
+made the fix correct -- which is exactly what an inherited handoff is for. A
+future session reading "over-dropping" should find out immediately that it is
+not a hold-time problem, rather than rediscovering that over two sessions.
+
 ### moveLand is still vanilla's, and it is four lines
 
     function PathMover:moveLand()
@@ -3088,7 +3174,115 @@ Shape of the fix if needed: accept on distance in BOTH axes; walk toward the
 target when grounded but short; and when landed far off in y, do NOT advance --
 that is a broken path and should surface as one.
 
-### Over-dropping through stacked platforms -- a second vanilla bug, same area
+### Recalls vent-route now, and the refusal that stopped them
+
+`tryVentRoute` used to refuse `return` tasks outright. Both of its reasons have
+since expired, and the refusal was stranding units.
+
+The original reasoning: a walk home is not worth a route search; routing a
+recall cost 38 seconds of probing before failing; and worse, it filled the cache
+with `t:` keys for recall points CHOSEN AT RANDOM inside the rect, which would
+never be asked about again.
+
+**Both halves are dead.** `returnWork` now recalls to a FIXED point --
+`findStandingPoint` over a small box around the port, same answer every attempt
+-- so a recall produces ONE `t:` key per port rather than a fresh one per try.
+And route cache entries carry a TTL, so even a bad key ages out instead of
+accumulating.
+
+**What the refusal cost was units that could not get home at all.** A unit that
+vent-hopped somewhere to work, finished, and was recalled had no vent available
+for the return leg: it went in one way and was permitted to come back only
+another. Inside an enclosure with vent-only access that is PERMANENT, because
+the leash deliberately never fails -- so the unit retries a walk that cannot
+succeed, forever, and never reports.
+
+MEASURED: a unit idle at `[1195.07,715.8]`, directly between vent 15 at
+`[1195,721]` and vent 17 at `[1195,712]`, with no walking route home. It needed
+exactly the pair it had just used.
+
+**ONLY REPRODUCIBLE WITH MORE THAN ONE UNIT DEPLOYED, and that is the tell.** A
+single unit takes every job and is never left idle deep in the network. It takes
+a second unit losing the claim race to produce an idle unit somewhere it cannot
+walk out of. Any bug that needs an IDLE unit to appear will hide from
+single-unit testing.
+
+Fixed by deleting the refusal. Verified: return-home from enclosed cages via
+vents works.
+
+**A stale premise was corrected downstream at the same time.** The
+station-keeping branch read "station-keeping never vent-routes, so reaching here
+means only that the direct walk is hard". Behaviour there is unchanged and still
+correct, but the MEANING of reaching it has changed: vents were offered,
+considered, and none helped. A unit landing there repeatedly is now genuinely
+unreachable rather than merely unrouted.
+
+### The unexplained stall, and why it stopped happening
+
+NOT SOLVED. NO LONGER REPRODUCIBLE. Recorded because the difference matters.
+
+Symptom: a unit stationary for 70+ seconds, `moved 0.0032959` identical every
+tick, while these two lines alternated twice a second:
+
+    approach at [1195.07,715.8] ... hasPath false aStar true
+    path found after 0.416667 seconds of searching
+
+A path found, and gone again by the next tick. Not a slow search -- something
+finding an answer and discarding it. `APPROACH_TIMEOUT` is 20s and the retry
+line did not appear once in a 27-second window, which should not be possible
+unless `approachTimer` was being reset every tick.
+
+**It stopped reproducing after recalls were allowed to vent-route, and the
+honest reading is that its PRECONDITION went away rather than its cause.** Every
+capture was a unit that could not get home. That state no longer arises.
+
+Two instruments were left in for it, unconditional:
+
+  - `freshPather` logs every rebuild with a counter and a caller-supplied
+    reason. A pather rebuilt once and one rebuilt sixty times a second look
+    identical in every other line.
+  - "path found" reports edge count and first action. A path with zero edges
+    satisfies `hasPath` and moves nobody, and reads exactly like a healthy one.
+
+Leave them until something else needs the noise budget.
+
+### Over-dropping was never about the hold time -- RESOLVED
+
+**THE ACTUAL BUG: the pather executes a Drop edge the unit has already fallen
+past.** Reproduced, and the two log lines say it outright:
+
+    post-move at [1207,723.8]: action Drop edge 4 of 26 src [1207,726.8] srcDist 3
+    drop hold 0.05 from y 723.8
+
+An Arc overshot and the Land put the unit at y 723.8. Edge 4 is a Drop whose
+SOURCE is 726.8 -- three tiles above where the unit actually was. It had already
+fallen past that node, and the pather ran the edge anyway. The edge's target was
+level with the unit: vanilla asks for `max(timeToFall(-delta[2]), 0.05)` and got
+the 0.05 FLOOR, meaning an intended descent of about a tenth of a tile. Pressing
+down there put the unit through the platform it had just landed on. The loop
+repeated on a six-second cycle.
+
+**This is why tuning the hold duration never worked.** 0.5, 0.158, 0.1 -- any of
+them passes a unit through a platform when the press should not have happened at
+all. Two sessions went into the number before the reproduction named the edge.
+
+**THE FIX: if the next node is not at least half a tile below, consume the edge
+and do not touch the controls.** `advancePath` still runs inside vanilla's
+`moveDrop`, so the plan advances -- correct, because the unit is already past
+that node. The stale `downHoldTimer` is cleared explicitly on the skip, since a
+leftover timer would have `keepDropping` pressing through the skipped edge and
+reproduce the same bug by another route.
+
+Verified: no aberrant fallthroughs across several runs, and the skip did not
+fire at all in the clean ones -- the paths were genuinely fine rather than being
+rescued by the guard.
+
+**WATCH FOR THE INVERSE.** If a unit ever stalls standing on a platform instead
+of over-dropping, this guard is refusing a drop it should allow, and
+`MIN_DROP_DISTANCE` is the number.
+
+### The two vanilla drop faults underneath it, both still fixed
+
 
 OBSERVED, MECHANISM IDENTIFIED FROM SOURCE, NOT YET FIXED. Symptom: with
 platforms stacked one above another to look like a ladder, a unit heading for a
@@ -3136,6 +3330,100 @@ require at least one genuinely airborne tick first. Both `timedDrop` and
 **Fix these two together, and test them together.** They are the same drop, and
 separating them means measuring a hold time that is still being cancelled a tick
 late.
+
+### Four ways to build a silent stall, all of them mine
+
+Recorded together because they share a shape: **every task succeeded, nothing
+errored, and the log looked healthy while the system did nothing useful.** That
+is the failure mode this codebase actually produces, far more than crashes.
+
+**1. An insertion anchored on the wrong line.** The replant branch was written
+into `findWork` above `collectionWork()` instead of above `depositWork()` --
+while the comment directly above it said "REPLANT SITS ABOVE DEPOSIT". Deposit
+fires on ANY cargo, so a unit that picked up a seed carried it straight back to
+a crate. The observable behaviour was a unit withdrawing a seed and depositing
+it again roughly three times a second, indefinitely, with every individual task
+reporting done.
+
+**LESSON: when an ordering IS the feature, assert the ordering.** A comment
+claiming position is not position.
+
+**2. A precondition that outlived its reason.** `withdrawWork` opened by
+refusing any cargo at all. That deadlocked precisely the case it most needed to
+survive -- storage full, unit holding a stack nothing will accept, deposit
+unable to place it -- because a unit can then never put anything down, and the
+blanket refusal stopped replanting too. Bare tilled ground, seeds in a crate,
+and a system that had stopped. Nothing about a full crate should stop a seed
+going into the ground.
+
+Now it refuses only if the unit already holds a seed an intent wants.
+
+**3. A shared state key.** A change-gated vent summary was added that wrote
+`self.ventSignature` -- which `refreshNetwork` already owned. Each overwrote the
+other, so BOTH change-gates fired on every call. The visible symptom was one
+extra log line per second. The invisible one was `unitChanged` going true with
+it, so the port pushed rects and vents to its unit every tick instead of on
+change.
+
+**LESSON: a new `self.<name>` is a namespace claim.** Grep before taking one.
+
+**4. A shape generalised from one sample.** See the crop footprint above:
+1 wide by 2 tall, read off `potatoseed`, wrong for every wide crop and quiet in
+both directions.
+
+### A `local function` called from above its definition is a nil GLOBAL
+
+The file already warns about this from one direction -- `receiveCargo` and
+`writeBackToItem` are globals because the handler that calls them is registered
+in `init()`, earlier in the file. **The same trap fires in the other direction
+and it is easier to walk into.**
+
+Lua resolves a name at COMPILE time. A call written above the `local function`
+that defines it does not see that local at all, so it compiles as a lookup of a
+GLOBAL by the same name -- which nothing ever assigns. There is no syntax error.
+`loadfile` accepts it. It fails only when that line runs.
+
+MEASURED: `sweepReplants` was called from the bottom of `refreshFarmables`,
+which is defined earlier in the file. Every port threw
+`attempt to call a nil value (global 'sweepReplants')` on its first sweep, five
+seconds after the world loaded, and kept throwing every five seconds after.
+**An error in an object's `update` aborts the rest of that update**, so
+everything downstream of the failing call -- work selection, dispatch, unit
+position publishing -- silently did not run on those ticks.
+
+Three ways out, in order of preference:
+
+  1.  **Call it from `workUpdate`**, which is defined after everything. Removes
+      the ordering dependency instead of working around it. What was done here.
+  2.  Forward-declare `local name` before the first use, then assign with
+      `name = function(...)`.
+  3.  Make it a global, like `receiveCargo`. Cheapest, and the reason the file
+      already has globals in it -- but it puts a name in a shared environment
+      for a scoping reason rather than a design one.
+
+**There is a static check for this in the session tooling** (`scope_audit.py`):
+it flags any call to a `local function` on a line above its definition. Expect
+false positives for calls inside functions that only RUN later; a call in
+straight-line code is not one.
+
+**IT ALSO FIRED FOR REAL.** `sweepReplants` was called from the bottom of
+`refreshFarmables`, defined earlier in the file. Every port threw
+`attempt to call a nil value (global 'sweepReplants')` on its first sweep, five
+seconds after world load, and every five seconds after. An error in an object's
+`update` ABORTS THE REST OF THAT UPDATE, so work selection, dispatch and unit
+position publishing silently did not run on those ticks. Fixed by calling it
+from `workUpdate` -- defined after everything -- which removes the ordering
+dependency rather than working around it with a forward declaration.
+
+**AND A SECOND, PRE-EXISTING INSTANCE.**
+`petportsTaskAction.lua:433`, inside `tryVentRoute`, calls `freshPather()` --
+defined as a `local function` at line 876. Every other one of the dozen-plus
+calls to `freshPather` sits below the definition and is fine; this one does not.
+It is in the branch that logs "target walkable from here, no further hops
+needed", which has never appeared in any log to date, so it has never fired.
+**UNFIXED, and it will throw the first time a vent route resolves to a plain
+walk.** The fix is one line -- move `freshPather` above `tryVentRoute`, or
+forward-declare it.
 
 ### moveDrop's hold time is dead code, and the bug is a typo
 
@@ -3272,6 +3560,39 @@ matching when someone rewords a log line.
   disagree.
 
 ---
+
+## Logging discipline, learned the hard way
+
+Game startup with 200 mods is slow enough that a wasted test cycle costs more
+than any amount of log volume. **Instrument first; do not reason from absence.**
+Three rules, each of which cost a cycle before it was written down.
+
+**LOG AT THE POINT OF DECISION, NOT VIA A RETURNED REASON.** `harvestWork`
+computed a perfectly good explanation for declining and handed it to `findWork`,
+which returned the DEPOSIT reason ahead of it. A port sitting beside nine ripe
+crops and refusing to dispatch said nothing whatsoever about the crops. The
+reason existed and never reached the log. Any function that decides not to act
+logs that itself.
+
+**LOG THE INPUTS, NOT JUST THE VERDICT.** "generated point outside rect"
+identified neither the work nor the position nor the rect. It named a rejection
+and nothing that would let anyone act on it. Every rejection now prints the
+thing and the values it was measured against.
+
+**CHANGE-GATE, DO NOT SUPPRESS.** A log-once hides a stuck state; a repeating
+log buries everything else. The `reject` pattern -- repeat-suppress, then
+re-state periodically -- reads as "still refusing" rather than "stopped
+running". Use it anywhere the state can persist.
+
+**WHAT IS SAFE TO SILENCE:** anything restating an unchanging fact. Vent node
+wiring was ~45% of a 10,000-line log and re-stated identical topology every
+refresh, so `VENT_DEBUG` is off and the port emits one change-gated summary
+instead. That is the shape to reach for: not less information, the same
+information once per change.
+
+**WHAT IS NOT SAFE TO SILENCE:** anything on the path currently being built.
+Live work stays verbose even when it is noisy, because the alternative is
+guessing, and guessing costs a cycle.
 
 ## Process note
 
