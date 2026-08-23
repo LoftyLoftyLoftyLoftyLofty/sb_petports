@@ -76,6 +76,16 @@
 --  is spawned ABOVE the tile and falls onto it, which is also what tilled
 --  soil's topOnly liquidInteractions expect.
 --
+--  "animal" -- walk to a farm animal and take its produce. The act is one
+--  call, world.callScriptedEntity(target, "dropMonsterHarvest"), which spawns
+--  the treasure AND resets the animal's own harvest timer in the same function.
+--  We never touch that timer, so we cannot corrupt it -- faking the harvest with
+--  spawnTreasure would leave the animal permanently ready, which is a
+--  duplication exploit rather than a farm.
+--
+--  Drops land on the ground at the animal, so collection and deposit take it
+--  from there unchanged, exactly as with crops.
+--
 --  DIAGNOSTIC TASK
 --
 --  type "diag" is throwaway. Walk to a point inside the rect, stand there,
@@ -367,6 +377,16 @@ local WATER_DROP_HEIGHT = 1.0
 --  How close the unit must be to a tile before watering it.
 local WATER_REACH = 4.0
 
+--  How close the unit has to be to poke an animal.
+--
+--  More generous than the crop reach because ANIMALS MOVE and nothing chases
+--  them: the standable ground target is resolved once, so an animal that
+--  ambled a couple of tiles during the approach should still be reachable
+--  rather than failing outright. Small roving livestock may outwalk even this,
+--  which is the measurement worth having before any catch-up behaviour is
+--  designed.
+local ANIMAL_REACH = 6.0
+
 --  How close the unit has to be before it fires the harvest.
 --
 --  world.damageTiles ENFORCES NO RANGE -- it is a world call, and a unit could
@@ -611,7 +631,8 @@ function petportsTaskAction.enterWith(args)
   --  sweep and the unit entering the state.
   --
   --  So: report and clear before refusing.
-  if (task.type == "collect" or task.type == "harvest")
+  if (task.type == "collect" or task.type == "harvest"
+      or task.type == "animal")
      and not world.entityExists(task.target) then
     if task.port then
       world.sendEntityMessage(task.port, "petports_taskReport", {
@@ -1341,7 +1362,11 @@ local function currentTarget(task)
     return { tile[1] + 0.5, tile[2] + 1.5 }
   end
 
-  if task.type ~= "collect" and task.type ~= "harvest" then
+  --  "animal" resolves live for the same reason "collect" does, and more so:
+  --  a farm animal wanders while the unit walks to it, so the position it was
+  --  dispatched against is stale on arrival.
+  if task.type ~= "collect" and task.type ~= "harvest"
+     and task.type ~= "animal" then
     return task.position
   end
 
@@ -2058,7 +2083,8 @@ function petportsTaskAction.update(dt, stateData)
   --  somewhere near the crop and then times out.
   local approachTo = target
   if task.type == "collect" or task.type == "harvest"
-     or task.type == "replant" or task.type == "water" then
+     or task.type == "replant" or task.type == "water"
+     or task.type == "animal" then
     approachTo = approachTargetFor(stateData, target)
 
     if approachTo == nil then
@@ -2384,6 +2410,92 @@ function petportsTaskAction.update(dt, stateData)
     end
 
     return false
+  end
+
+  if task.type == "animal" then
+    if not world.entityExists(task.target) then
+      report(stateData, "failed", "animal was gone on arrival")
+      return true
+    end
+
+    local here = mcontroller.position()
+    local there = world.entityPosition(task.target)
+    local reach = world.magnitude(here, there)
+
+    --  NOTHING CHASES. If the animal walked further than ANIMAL_REACH during
+    --  the approach, this fails and says by how much -- which is the number
+    --  that decides whether catch-up behaviour is worth building.
+    if reach > ANIMAL_REACH then
+      report(stateData, "failed", string.format(
+        "animal %s moved out of reach: %s away (limit %s), unit at %s animal at %s",
+        sb.printJson(task.target), sb.printJson(reach),
+        sb.printJson(ANIMAL_REACH), sb.printJson(here), sb.printJson(there)))
+      return true
+    end
+
+    --  THE TYPE IS CHECKED ON THIS SIDE TOO, and not as belt-and-braces: both
+    --  calls below run inside the ANIMAL's script, where a throw kills the
+    --  animal rather than failing the task. A task can outlive the dispatch
+    --  that created it, and being wrong here costs livestock.
+    --
+    --  root.monsterParameters reads the type's config, so this is free and
+    --  cannot itself trigger anything.
+    local animalType = world.monsterType(task.target)
+    local okParams, params = pcall(root.monsterParameters, animalType)
+    local base = (okParams and type(params) == "table"
+      and type(params.baseParameters) == "table") and params.baseParameters or {}
+    local harvestable = okParams and type(params) == "table"
+      and (params.harvestPool or base.harvestPool) ~= nil
+      and (params.harvestTime or base.harvestTime) ~= nil
+
+    if not harvestable then
+      report(stateData, "failed", string.format(
+        "animal %s is type %s, which declares no harvest -- not poking it",
+        sb.printJson(task.target), tostring(animalType)))
+      return true
+    end
+
+    --  STILL READY? It was at dispatch, but a player may have milked it in the
+    --  meantime, or another network's unit may have got there first.
+    local okBefore, before = pcall(world.callScriptedEntity, task.target,
+      "hasMonsterHarvest")
+
+    if not okBefore or before ~= true then
+      report(stateData, "failed", string.format(
+        "animal %s is not ready (hasMonsterHarvest %s) -- harvested by someone else?",
+        sb.printJson(task.target), tostring(before)))
+      return true
+    end
+
+    local okDrop, dropped = pcall(world.callScriptedEntity, task.target,
+      "dropMonsterHarvest")
+
+    --  VERIFIED BY ASKING AGAIN, NOT BY THE RETURN VALUE. callScriptedEntity
+    --  returns nil SILENTLY when the target has no such function, so a nil here
+    --  is indistinguishable from a call that ran and returned nothing. The
+    --  animal itself is the authority: dropMonsterHarvest calls
+    --  resetMonsterHarvest, so a successful poke flips hasMonsterHarvest to
+    --  false immediately.
+    local okAfter, after = pcall(world.callScriptedEntity, task.target,
+      "hasMonsterHarvest")
+
+    sb.logInfo("UNIT animal poke %s: drop ok %s returned %s, ready %s -> %s",
+      sb.printJson(task.target), tostring(okDrop), tostring(dropped),
+      tostring(before), tostring(after))
+
+    if okAfter and after == false then
+      --  NO CARGO. The produce is on the ground and ordinary collection takes
+      --  it, seed-style.
+      report(stateData, "done",
+        "harvested animal " .. sb.printJson(task.target)
+        .. " at " .. sb.printJson(there))
+      return true
+    end
+
+    report(stateData, "failed", string.format(
+      "poked %s and it is still ready (%s) -- dropMonsterHarvest did not run",
+      sb.printJson(task.target), tostring(after)))
+    return true
   end
 
   if task.type == "water" then

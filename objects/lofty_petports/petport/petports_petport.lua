@@ -2409,6 +2409,252 @@ local function refreshFarmables(dt)
 	end
 end
 
+--------------------------------------------------------------------------------
+--  FARM ANIMALS
+--------------------------------------------------------------------------------
+--
+--  Mooshi, Fluffalo and anything else running the "farmable" behavior.
+--
+--  MUCH SIMPLER THAN CROPS, and for one reason: animals are SCRIPTED monsters,
+--  where farmable objects have no script at all. /scripts/actions/monsters/
+--  farmable.lua defines hasMonsterHarvest and dropMonsterHarvest as plain
+--  globals in the monster's environment, and NEITHER USES ITS args OR board
+--  parameters -- they are declared (args, board) and ignore both. So they are
+--  callable out of band with no arguments.
+--
+--  world.callScriptedEntity(id, "hasMonsterHarvest") is therefore a near-exact
+--  mirror of world.farmableStage:
+--
+--      nil    not a farmable animal at all (no such global)
+--      false  farmable, not ready yet
+--      true   ready to harvest
+--
+--  The documented trap that callScriptedEntity returns nil SILENTLY for a
+--  missing function is what makes that work. Here it is the feature rather
+--  than the hazard: one call is both the type test and the readiness test.
+--  Can this monster TYPE be harvested, per its own config?
+--
+--  root.monsterParameters reads the type, so this costs nothing on the entity
+--  and cannot make anything throw. BOTH fields are required: harvestTime is
+--  what hasMonsterHarvest compares against -- its absence is exactly what
+--  killed babies -- and harvestPool is what dropMonsterHarvest spawns from.
+--
+--  Checked at two levels because the binding's shape is unconfirmed: mooshi
+--  carries these under baseParameters in its .monstertype, and whether
+--  monsterParameters returns that table flattened or nested is not documented.
+--  Looking in both costs one index.
+local animalTypeCache = {}
+
+local function animalHarvestable(monsterType)
+	if monsterType == nil then return false end
+
+	local key = tostring(monsterType)
+	if animalTypeCache[key] ~= nil then return animalTypeCache[key] end
+
+	local harvestable = false
+	local ok, params = pcall(root.monsterParameters, key)
+
+	if ok and type(params) == "table" then
+		local base = type(params.baseParameters) == "table"
+			and params.baseParameters or {}
+
+		local pool = params.harvestPool or base.harvestPool
+		local time = params.harvestTime or base.harvestTime
+
+		harvestable = (pool ~= nil and time ~= nil)
+
+		sb.logInfo("PETPORT %s monster type %s: harvestPool %s harvestTime %s -> %s",
+			stationUniqueId(), key, tostring(pool ~= nil), tostring(time ~= nil),
+			harvestable and "HARVESTABLE" or "not livestock")
+	else
+		sb.logInfo("PETPORT %s monster type %s: root.monsterParameters gave nothing",
+			stationUniqueId(), key)
+	end
+
+	animalTypeCache[key] = harvestable
+	return harvestable
+end
+
+local function scanAnimals()
+	local rects = self.networkRects
+	if rects == nil or #rects == 0 then rects = { coverageRect() } end
+
+	local found = {}
+	local seen = {}
+	local monsters = 0
+
+	for _, rect in ipairs(rects) do
+		local ids = world.entityQuery({ rect[1], rect[2] }, { rect[3], rect[4] }, {
+			includedTypes = { "monster" }
+		})
+
+		for _, id in ipairs(ids or {}) do
+			if not seen[id] then
+				seen[id] = true
+				monsters = monsters + 1
+
+				--  ASKED ABOUT THE TYPE, NOT THE ANIMAL. Nothing runs inside
+				--  the entity here, which is the whole point.
+				--
+				--  This replaces a probe that CALLED hasMonsterHarvest on every
+				--  monster in coverage to find out what it was. That worked on
+				--  adults and KILLED BABIES: baby livestock runs the same
+				--  farmable behavior, so the function exists, but babies have no
+				--  "harvestTime" in config -- resetMonsterHarvest stores nil and
+				--  farmable.lua:34 compares nil with a number. Our pcall caught
+				--  it on our side; the error had already happened inside the
+				--  MONSTER's script, and a script error kills the monster. The
+				--  scan was culling baby Fluffalo once every five seconds.
+				--
+				--  root.monsterParameters answers from the type's config, so a
+				--  baby is filtered before anything is invoked on it. Our own
+				--  units fall out here too, having neither field.
+				local monsterType = world.monsterType(id)
+
+				if animalHarvestable(monsterType) then
+					local ok, ready = pcall(world.callScriptedEntity, id,
+						"hasMonsterHarvest")
+
+					if ok and type(ready) == "boolean" then
+						table.insert(found, {
+							id = id,
+							name = monsterType,
+							ready = ready,
+							position = world.entityPosition(id)
+						})
+					end
+				end
+			end
+		end
+	end
+
+	return found, monsters
+end
+
+local function refreshAnimals(dt)
+	self.animalTimer = (self.animalTimer or 0) - dt
+	if self.animalTimer > 0 then return end
+	self.animalTimer = HARVEST_INTERVAL
+
+	local found, monsters = scanAnimals()
+	self.animals = found
+
+	local ready = 0
+	local parts = {}
+
+	for _, animal in ipairs(found) do
+		if animal.ready then ready = ready + 1 end
+		table.insert(parts, string.format("%s#%s%s", tostring(animal.name),
+			tostring(animal.id), animal.ready and " READY" or ""))
+	end
+
+	table.sort(parts)
+	local signature = table.concat(parts, " | ")
+
+	if signature ~= self.animalSignature then
+		self.animalSignature = signature
+		sb.logInfo("PETPORT %s animals: %s farmable of %s monster(s), %s ready -- %s",
+			stationUniqueId(), sb.printJson(#found), sb.printJson(monsters),
+			sb.printJson(ready), signature == "" and "none" or signature)
+	end
+end
+
+--  Send a unit at a ready animal.
+--
+--  READINESS IS RE-READ AT SELECTION, exactly as crop ripeness is, and for the
+--  same reason: the scan is up to HARVEST_INTERVAL old and the most likely way
+--  for it to be wrong is the case this task creates itself -- an animal
+--  harvested a second ago is still READY in the cache for another five seconds.
+--  Dispatching against that would send a unit to poke an animal with nothing to
+--  give and land it on the failure backoff ladder for a fault that was ours.
+--
+--  ANIMALS MOVE, and nothing here chases them. The dispatch position is where
+--  the animal stood at selection; the unit re-reads the live position while
+--  approaching, but the standable ground target is resolved once. A Mooshi
+--  ambles slowly enough that this does not matter. Smaller roving livestock may
+--  outwalk it, which will present as an arrival that is out of reach -- logged
+--  with the distance, deliberately, so the decision to add catch-up behaviour
+--  can be made from a measurement rather than a guess.
+local function animalWork()
+	local animals = self.animals
+
+	if animals == nil or #animals == 0 then
+		return nil, "no farm animals in network coverage"
+	end
+
+	local from = entity.position()
+	if self.petId ~= nil and world.entityExists(self.petId) then
+		from = world.entityPosition(self.petId)
+	end
+
+	local best, bestDistance = nil, nil
+	local rejected = { notReady = 0, claimed = 0, backedOff = 0, gone = 0 }
+
+	for _, animal in ipairs(animals) do
+		local workId = "animal:" .. animal.id
+		local failure = self.workFailures[workId]
+		local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
+
+		if not world.entityExists(animal.id) then
+			rejected.gone = rejected.gone + 1
+		elseif not animalHarvestable(animal.name) then
+			--  Cheap and cached, and it keeps a stale self.animals entry from
+			--  reaching a call it should not.
+			rejected.notReady = rejected.notReady + 1
+		else
+			local ok, ready = pcall(world.callScriptedEntity, animal.id,
+				"hasMonsterHarvest")
+
+			if not (ok and ready == true) then
+				rejected.notReady = rejected.notReady + 1
+			elseif backedOff then
+				rejected.backedOff = rejected.backedOff + 1
+			elseif not claimFree(workId) then
+				rejected.claimed = rejected.claimed + 1
+			else
+				--  Live position, not the scanned one. The animal has had up to
+				--  five seconds to wander since.
+				local position = world.entityPosition(animal.id)
+				local distance = world.magnitude(from, position)
+
+				if bestDistance == nil or distance < bestDistance then
+					best = { id = animal.id, name = animal.name, position = position }
+					bestDistance = distance
+				end
+			end
+		end
+	end
+
+	if best == nil then
+		local reason = string.format(
+			"%s farm animal(s), none harvestable: %s not ready, %s claimed, "
+			.. "%s backed off, %s gone",
+			#animals, rejected.notReady, rejected.claimed,
+			rejected.backedOff, rejected.gone)
+
+		if reason ~= self.animalRejectReason then
+			self.animalRejectReason = reason
+			sb.logInfo("PETPORT %s animals: %s", stationUniqueId(), reason)
+		end
+
+		return nil, reason
+	end
+
+	self.animalRejectReason = nil
+
+	sb.logInfo("PETPORT %s ANIMAL dispatch: %s#%s at %s, %s away",
+		stationUniqueId(), tostring(best.name), sb.printJson(best.id),
+		sb.printJson(best.position), sb.printJson(bestDistance))
+
+	return {
+		id = "animal:" .. best.id,
+		type = "animal",
+		port = stationUniqueId(),
+		target = best.id,
+		position = best.position
+	}
+end
+
 --  Pick a ripe crop to send the unit at.
 --
 --  NO DEFERRAL HERE, unlike collection, and that is deliberate rather than an
@@ -3313,6 +3559,12 @@ local function findWork()
   local crop, noCrop = harvestWork()
   if crop ~= nil then return crop end
 
+  --  BESIDE CROP HARVESTING, below collection, for the same reason: an animal
+  --  that is ready stays ready, where a drop on the ground is on a despawn
+  --  timer. Nothing is lost by clearing the ground first.
+  local beast, noBeast = animalWork()
+  if beast ~= nil then return beast end
+
   --  Fetching is the lowest-priority thing a unit can do: it is the only work
   --  that MANUFACTURES cargo rather than clearing something. See withdrawWork.
   local fetch, noFetch = withdrawWork()
@@ -3335,6 +3587,7 @@ local function findWork()
     return nil, tostring(why) .. "; " .. tostring(noCrop)
       .. "; " .. tostring(noFetch or noPutBack or "no replant work")
       .. "; " .. tostring(noWet or noFetchWater or "no watering work")
+      .. "; " .. tostring(noBeast or "no animal work")
   end
 
   return nil, why
@@ -3396,7 +3649,7 @@ local function dispatchWork()
   --  GENERATED itself are checked against its own rect.
   if work.type ~= "collect" and work.type ~= "harvest"
      and work.type ~= "replant" and work.type ~= "withdraw"
-     and work.type ~= "water"
+     and work.type ~= "water" and work.type ~= "animal"
      and not petports_rectContains(coverageRect(), work.position) then
     return reject(string.format(
       "generated point outside rect: %s type %s at %s, own rect %s",
@@ -3525,6 +3778,7 @@ local function workUpdate(dt)
   refreshNetwork()
   refreshBeacons(WORK_INTERVAL)
   refreshFarmables(WORK_INTERVAL)
+  refreshAnimals(WORK_INTERVAL)
   sweepReplants(WORK_INTERVAL)
   publishUnitPosition()
 
