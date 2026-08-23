@@ -22,9 +22,9 @@
 --
 --  TASK SHAPE
 --
---      { id = <workId>, type = <"diag" | "collect">,
+--      { id = <workId>, type = <"diag" | "collect" | "harvest" | ...>,
 --        port = <petport uniqueId>, position = {x, y},
---        target = <entity id, "collect" only>,
+--        target = <entity id, "collect" and "harvest" only>,
 --        dwell = <seconds, "diag" only> }
 --
 --  TASK TYPES
@@ -39,6 +39,18 @@
 --  runs makes every subsequent run harder to read. The real sinks are the
 --  petport's own storage, then crate routing. A collection task is "claim,
 --  path, pick up, dispose" and only the last step changes.
+--
+--  "harvest" -- walk to a ripe farmable and pick it. The act is a
+--  world.damageTiles call on the crop's own tile: FarmableObject overrides
+--  damageTiles and calls harvest() for Beamish, Blockish and Plantish damage,
+--  consuming the damage when the harvest succeeds. The engine handles
+--  resetToStage, so a crop that regrows and a crop that is destroyed take the
+--  same call and need no distinction here.
+--
+--  The unit does NOT pick up what it harvested. The drops are ordinary drops,
+--  and the ordinary collection task takes them on a later dispatch -- including
+--  any seed, which walks back to storage like anything else. That is the whole
+--  of the v1 scope.
 --
 --  DIAGNOSTIC TASK
 --
@@ -224,6 +236,37 @@ local PROGRESS_STRIKES = 2
 --  Survivable ONLY because probe results are banked on the port and outlive the
 --  task that paid for them. Still needs the port to tell a BUSY unit from a
 --  STUCK one -- see the note on TASK_DEADLINE.
+--  Tile damage dealt to harvest, matching the Harvester Beam mod's value.
+--
+--  DELIBERATELY TINY. The damage is not what harvests the crop -- reaching
+--  FarmableObject::damageTiles at all is, since that override calls harvest()
+--  for Beamish, Blockish and Plantish damage and consumes the damage when it
+--  succeeds. The amount only matters in the FAILURE case, where the call falls
+--  through to Object::damageTiles and becomes real damage to a crop that was
+--  not ready.
+local HARVEST_DAMAGE = 0.2
+
+--  Harvest level 1. REQUIRED: it is what makes destroyed materials and mods
+--  drop as items, and a harvest that drops nothing is indistinguishable from
+--  one that never happened.
+local HARVEST_LEVEL = 1
+
+--  How close the unit has to be before it fires the harvest.
+--
+--  world.damageTiles ENFORCES NO RANGE -- it is a world call, and a unit could
+--  harvest a crop across the room the moment its arrival test passed for some
+--  other reason. This is a sanity bound rather than a game rule: if the unit
+--  believes it has arrived but is nowhere near the crop, something upstream is
+--  wrong and firing anyway would hide it.
+local HARVEST_REACH = 4.0
+
+--  How long to keep firing before giving up.
+--
+--  A harvest is not necessarily instant from the caller's side: the crop has to
+--  still be there, still be ripe, and the engine has to accept the damage. The
+--  budget is small because a harvest that is going to work works immediately.
+local HARVEST_TIMEOUT = 3.0
+
 local MAX_VENT_HOPS = 10
 
 --  How long a single reachability probe may run before its answer is taken as
@@ -436,12 +479,13 @@ function petportsTaskAction.enterWith(args)
   --  sweep and the unit entering the state.
   --
   --  So: report and clear before refusing.
-  if task.type == "collect" and not world.entityExists(task.target) then
+  if (task.type == "collect" or task.type == "harvest")
+     and not world.entityExists(task.target) then
     if task.port then
       world.sendEntityMessage(task.port, "petports_taskReport", {
         id = task.id,
         outcome = "failed",
-        reason = "drop was gone before the unit could start",
+        reason = "target was gone before the unit could start",
         unit = entity.uniqueId()
       })
     end
@@ -465,7 +509,10 @@ function petportsTaskAction.enterWith(args)
   return {
     task = task,
     approachTimer = APPROACH_TIMEOUT,
-    dwellTimer = task.dwell or 3.0,
+    --  For "diag" this is the dwell; for "collect" and "harvest" it doubles as
+    --  the retry budget once the unit has arrived.
+    dwellTimer = task.dwell
+      or ((task.type == "harvest") and HARVEST_TIMEOUT or 3.0),
     arrived = false,
     searchingTimer = 0,
     settleTimer = 0,
@@ -843,6 +890,10 @@ local function freshPather()
   --  globally. Same technique as the exploreRate override above.
   self.pather.moveJump = petportsJumpMover
   self.pather.moveWalk = petportsWalkMover
+  self.pather.timedDrop = function(pather, time)
+	pather.downHoldTimer = math.min(time or 0, 0.5)
+	mcontroller.controlDown()
+  end
 end
 
 function petportsTaskAction.enteringState(stateData)
@@ -992,7 +1043,9 @@ end
 --  For "collect" this is the drop's CURRENT position, not the one the task was
 --  issued with. Returns nil if the drop is gone.
 local function currentTarget(task)
-  if task.type ~= "collect" then return task.position end
+  if task.type ~= "collect" and task.type ~= "harvest" then
+    return task.position
+  end
 
   if not world.entityExists(task.target) then return nil end
   return world.entityPosition(task.target)
@@ -1332,9 +1385,27 @@ function petportsTaskAction.update(dt, stateData)
   --  Re-read every tick. A drop that fell off a ledge mid-walk moves.
   local target = currentTarget(task)
   if target == nil then
-    --  Despawned, or someone picked it up first. Not a failure worth alarm --
-    --  drops expiring is the normal case this task was chosen to exercise.
-    report(stateData, "failed", "drop is gone")
+    --  A CROP THAT VANISHES AFTER WE SWUNG AT IT IS A HARVEST, NOT A LOSS.
+    --
+    --  This is the ordinary success path for any crop without resetToStage,
+    --  and it arrives here rather than in the act branch below because the
+    --  engine does not remove the entity within the tick that harvested it.
+    --  MEASURED: swing at 19:01:52.088 read the crop as present and unchanged;
+    --  81ms later it was gone and its two drops were on the ground. Checking
+    --  in the same tick reports every successful harvest as a failure.
+    if task.type == "harvest" and stateData.swung then
+      report(stateData, "done",
+        "harvested " .. sb.printJson(task.target)
+        .. " at " .. sb.printJson(task.position) .. " (crop consumed)")
+      return true
+    end
+
+    --  Despawned, or someone got there first. Not a failure worth alarm --
+    --  drops expiring is the normal case this task was chosen to exercise, and
+    --  a player harvesting their own crop is the equivalent for farming.
+    report(stateData, "failed",
+      (task.type == "harvest") and "crop is gone before the swing"
+        or "drop is gone")
     return true
   end
   task.position = target
@@ -1671,10 +1742,16 @@ function petportsTaskAction.update(dt, stateData)
     return false
   end
 
-  --  For collection, walk to standable ground near the drop rather than to the
-  --  drop's own position.
+  --  For collection and harvesting, walk to standable ground NEAR the target
+  --  rather than to the target's own position. A drop rests where it rests and
+  --  a crop is rooted where it is rooted; neither is a place to stand.
+  --
+  --  NOTE the upward bias documented in the handoff applies here too: a crop on
+  --  a floor with a ledge two tiles above it resolves to the LEDGE. Not fixed,
+  --  same one-line fix as collection, and it presents as a unit that walks
+  --  somewhere near the crop and then times out.
   local approachTo = target
-  if task.type == "collect" then
+  if task.type == "collect" or task.type == "harvest" then
     approachTo = approachTargetFor(stateData, target)
 
     if approachTo == nil then
@@ -1691,7 +1768,8 @@ function petportsTaskAction.update(dt, stateData)
 
       if stateData.settleTimer >= SETTLE_GRACE then
         report(stateData, "failed",
-          "no standable position near drop at " .. sb.printJson(target)
+          "no standable position near " .. tostring(task.type) .. " target at "
+          .. sb.printJson(target)
           .. " after " .. sb.printJson(SETTLE_GRACE) .. "s")
         return true
       end
@@ -1982,6 +2060,108 @@ function petportsTaskAction.update(dt, stateData)
     if self.pathing.stuck then
       sb.logInfo("UNIT pathing.stuck is set -- vanilla PathMover gave up")
       report(stateData, "failed", "stuck at " .. sb.printJson(mcontroller.position()))
+      return true
+    end
+
+    return false
+  end
+
+  if task.type == "harvest" then
+    --  ONE SWING PER DISPATCH, THEN WATCH.
+    --
+    --  The swing and the verification cannot share a tick: the engine does not
+    --  remove a harvested crop, or settle its new stage, before this script
+    --  regains control. So the act runs once, sets a flag, and every tick after
+    --  that is verification -- either the crop vanishes (caught at the top of
+    --  update, where the target resolves to nil) or its stage moves.
+    --
+    --  Swinging once rather than every tick also bounds the damage if the
+    --  ripeness test is ever wrong: FarmableObject::damageTiles falls through
+    --  to ordinary object damage when harvest() declines, and a unit hammering
+    --  an unripe crop once a frame would eventually break it.
+    if not stateData.swung then
+      local here = mcontroller.position()
+      local cropPosition = world.entityPosition(task.target)
+      local reach = world.magnitude(here, cropPosition)
+
+      --  See HARVEST_REACH. damageTiles does not care how far away the caller
+      --  is, so this is the only thing standing between an upstream arrival bug
+      --  and a unit harvesting a field it is not standing in.
+      if reach > HARVEST_REACH then
+        report(stateData, "failed", string.format(
+          "arrived but %s tiles from the crop at %s (unit at %s)",
+          tostring(reach), sb.printJson(cropPosition), sb.printJson(here)))
+        return true
+      end
+
+      local okBefore, before = pcall(world.farmableStage, task.target)
+      stateData.stageBefore = okBefore and before or nil
+
+      --  TILE COORDS ARE INTEGERS. world.damageTiles takes List<Vec2I>, and a
+      --  farmable's entityPosition is a float pair, so floor it rather than
+      --  relying on whatever the conversion happens to do.
+      --
+      --  ONE TILE, THE ANCHOR. A crop occupies two tiles -- spaces [0,0] and
+      --  [0,1], anchored bottom -- but it is ROOTED in the anchor, which is
+      --  what the Harvester Beam mod damages and what tile damage propagates
+      --  from. Confirmed working against a crop at [1203,715].
+      local tile = { math.floor(cropPosition[1]), math.floor(cropPosition[2]) }
+
+      --  sourcePosition only sets the direction the damage PARTICLES fly.
+      --  Passing the unit's own position makes debris fly away from it, which
+      --  is both correct-looking and free.
+      local okDamage, damaged = pcall(world.damageTiles, { tile }, "foreground",
+        here, "plantish", HARVEST_DAMAGE, HARVEST_LEVEL)
+
+      stateData.swung = true
+      stateData.verifyTimer = HARVEST_TIMEOUT
+
+      --  THE RETURN VALUE IS NOISE. It is documented as "was tile damage done",
+      --  and FarmableObject::damageTiles returns FALSE on a successful harvest
+      --  because it consumed the damage instead. Measured, it came back TRUE on
+      --  a harvest that unambiguously worked -- so it is unreliable in BOTH
+      --  directions and is logged only, never branched on.
+      sb.logInfo("UNIT harvest swing at %s tile %s: damageTiles ok %s returned %s "
+        .. "(ignored), stage before %s -- watching for the result",
+        sb.printJson(task.target), sb.printJson(tile), tostring(okDamage),
+        tostring(damaged), sb.printJson(stateData.stageBefore))
+
+      return false
+    end
+
+    --  VERIFYING. The crop vanishing is handled at the top of update; what is
+    --  left to catch here is a crop that RESET, which stays alive with a lower
+    --  stage number.
+    local okAfter, after = pcall(world.farmableStage, task.target)
+    if not okAfter then after = nil end
+
+    if type(after) == "number" and type(stateData.stageBefore) == "number"
+       and after ~= stateData.stageBefore then
+      --  NO CARGO. The drops are on the ground and the collection task comes
+      --  back for them, seed included. See the header.
+      sb.logInfo("UNIT harvest confirmed on %s: stage %s -> %s (crop survived)",
+        sb.printJson(task.target), sb.printJson(stateData.stageBefore),
+        sb.printJson(after))
+
+      report(stateData, "done",
+        "harvested " .. sb.printJson(task.target)
+        .. " at " .. sb.printJson(task.position)
+        .. " (crop reset to stage " .. sb.printJson(after) .. ")")
+      return true
+    end
+
+    stateData.verifyTimer = (stateData.verifyTimer or HARVEST_TIMEOUT) - dt
+    if stateData.verifyTimer <= 0 then
+      --  THIS IS THE GUARD ON A WRONG FARMABLE_STAGE_BASE. If the port's notion
+      --  of "ripe" is off by one, harvest() declines, damageTiles falls through
+      --  to ordinary object damage, and nothing changes -- so this path fires,
+      --  the port records a failure, and the backoff ladder stops the unit
+      --  swinging at that crop once a second.
+      report(stateData, "failed", string.format(
+        "swung at %s and nothing changed in %ss (stage still %s) "
+        .. "-- crop was not ready, or FARMABLE_STAGE_BASE is wrong",
+        sb.printJson(task.target), sb.printJson(HARVEST_TIMEOUT),
+        sb.printJson(after)))
       return true
     end
 

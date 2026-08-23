@@ -118,6 +118,55 @@ local BEACON_KEY = "petports_sortingBeaconBehavior"
 
 --  How long a claim survives without a refresh. Long enough to walk across the
 --  rect, short enough that an abandoned job frees up while the player watches.
+--------------------------------------------------------------------------------
+--  HARVESTING
+--------------------------------------------------------------------------------
+--
+--  How often the network is swept for farmables. SLOW ON PURPOSE, for the same
+--  reason the beacon scan is: crops change state on the order of twenty
+--  minutes, and an entityQuery for every object across the whole network is
+--  not something to run on the work tick.
+--
+--  KNOWN COST, NOT YET PAID DOWN: this is a SECOND full object sweep of the
+--  network alongside scanContainers, on its own timer. Folding both into one
+--  query is the obvious saving and was deliberately not done here -- it means
+--  editing a verified working path to add an unverified one, and the process
+--  note in the handoff is emphatic about not stacking changes like that. Fold
+--  it once harvesting is proven.
+local HARVEST_INTERVAL = 5.0
+
+--  WHICH NUMBER world.farmableStage COUNTS FROM. UNVERIFIED.
+--
+--  The stages array in a farmable's config is a Lua list, so its harvest stage
+--  sits at Lua index #stages. What world.farmableStage returns for that same
+--  stage is not documented and HarvesterBeam never compares it to anything --
+--  it only ever tests the value for nil-ness and number-ness, so it proves
+--  nothing either way.
+--
+--  0 assumes engine-side indexing, which is the ordinary C++ convention and
+--  what corn's "resetToStage" : 2 reads as (its harvest stage is the fourth
+--  entry, resetting to the third).
+--
+--  IF THIS IS WRONG the symptom is specific and visible: ripeness is tested
+--  with EQUALITY, so a wrong base means the unit either never harvests at all,
+--  or fires one stage early. The farmable scan logs every crop's stage against
+--  its stage count on change, so ONE LOOK AT THE LOG SETTLES IT -- find a crop
+--  you can see is fully grown and read what number it reports.
+--
+--  Firing early is bounded rather than harmless: FarmableObject::damageTiles
+--  falls through to ordinary object damage when harvest() declines, so an
+--  early fire damages the crop rather than picking it. HARVEST_DAMAGE, on the
+--  unit, is sized so that costs little, and a harvest that does not change it is
+--  reported as a failure, which puts it on the standard backoff ladder instead
+--  of hammering it once a second.
+local FARMABLE_STAGE_BASE = 0
+
+--  NOTE the damage amount and harvest level live on the UNIT, in
+--  petportsTaskAction.lua, because the unit is what swings. Every script in a
+--  monstertype shares one environment and an object has its own; a constant
+--  declared here would be a nil global there, inside a pcall, presenting as
+--  "damageTiles does not work" rather than as a missing value.
+
 local CLAIM_TTL = 30.0
 
 --  How often to look for work and to push claim expiry out.
@@ -1840,6 +1889,235 @@ function depositCargo(containerId)
   flushCargo()
 end
 
+--------------------------------------------------------------------------------
+--  FARMABLES
+--------------------------------------------------------------------------------
+
+--  A farmable's stages array.
+--
+--  world.getObjectParameter reads the object's own config, which is where
+--  "stages" lives, and works whether or not the object has an item form.
+--  root.itemConfig is kept as a fallback because HarvesterBeam reaches
+--  farmables that way and it is the better-travelled path -- but it is gated on
+--  hasObjectItem there for a reason, so it cannot be the primary.
+local function farmableStages(id)
+	local ok, stages = pcall(world.getObjectParameter, id, "stages")
+	if ok and type(stages) == "table" and #stages > 0 then
+		return stages
+	end
+
+	local name = world.entityName(id)
+	if name == nil then return nil end
+
+	local okItem, config = pcall(root.itemConfig, name)
+	if okItem and type(config) == "table" and type(config.config) == "table"
+	   and type(config.config.stages) == "table" then
+		return config.config.stages
+	end
+
+	return nil
+end
+
+--  Which stage number means "ready to pick".
+--
+--  THE HARVEST STAGE IS THE ONE CARRYING harvestPool, never a fixed index.
+--  Potato has three stages and corn has four, so anything of the form
+--  "is this stage 2" is wrong for half the crops in the game.
+local function harvestStageOf(stages)
+	for index, stage in ipairs(stages) do
+		if type(stage) == "table" and stage.harvestPool ~= nil then
+			--  Lua lists count from 1; the engine is assumed to count from
+			--  FARMABLE_STAGE_BASE. See that constant.
+			return index - 1 + FARMABLE_STAGE_BASE
+		end
+	end
+
+	return nil
+end
+
+--  Every farmable in network coverage, with its ripeness already decided.
+local function scanFarmables()
+	local rects = self.networkRects
+	if rects == nil or #rects == 0 then rects = { coverageRect() } end
+
+	local found = {}
+	local seen = {}
+	local objects = 0
+
+	for _, rect in ipairs(rects) do
+		local ids = world.entityQuery({ rect[1], rect[2] }, { rect[3], rect[4] }, {
+			includedTypes = { "object" }
+		})
+
+		for _, id in ipairs(ids or {}) do
+			if not seen[id] then
+				seen[id] = true
+				objects = objects + 1
+
+				--  world.farmableStage DOES DOUBLE DUTY: it returns nil for
+				--  anything that is not a farmable, so this single call is both
+				--  the type test and the ripeness read. No objectType check
+				--  needed alongside it.
+				local ok, stage = pcall(world.farmableStage, id)
+
+				if ok and type(stage) == "number" then
+					local stages = farmableStages(id)
+					local harvestAt = stages ~= nil and harvestStageOf(stages) or nil
+
+					if harvestAt ~= nil then
+						table.insert(found, {
+							id = id,
+							name = world.entityName(id),
+							stage = stage,
+							harvestAt = harvestAt,
+							stageCount = #stages,
+							position = world.entityPosition(id),
+							ripe = (stage == harvestAt)
+						})
+					end
+				end
+			end
+		end
+	end
+
+	return found, objects
+end
+
+--  THIS LOG IS THE INSTRUMENT THAT SETTLES FARMABLE_STAGE_BASE. Every crop
+--  reports its stage against its stage count and against the index this port
+--  believes is the harvest stage, so a fully grown crop on screen that reads
+--  "stage 3 of 3 harvestAt 2" says the base is wrong and by how much.
+--
+--  Change-gated on the signature rather than the count, like the beacon scan:
+--  crops growing IS the interesting event, and it does not move the count.
+local function refreshFarmables(dt)
+	self.harvestTimer = (self.harvestTimer or 0) - dt
+	if self.harvestTimer > 0 then return end
+	self.harvestTimer = HARVEST_INTERVAL
+
+	local found, objects = scanFarmables()
+	self.farmables = found
+
+	local ripe = 0
+	local parts = {}
+
+	for _, crop in ipairs(found) do
+		if crop.ripe then ripe = ripe + 1 end
+		table.insert(parts, string.format("%s#%s stage %s of %s harvestAt %s%s",
+			tostring(crop.name), tostring(crop.id),
+			tostring(crop.stage), tostring(crop.stageCount),
+			tostring(crop.harvestAt), crop.ripe and " RIPE" or ""))
+	end
+
+	table.sort(parts)
+	local signature = table.concat(parts, " | ")
+
+	if signature ~= self.farmableSignature then
+		self.farmableSignature = signature
+		sb.logInfo("PETPORT %s farmables: %s of %s object(s), %s ripe -- %s",
+			stationUniqueId(), sb.printJson(#found), sb.printJson(objects),
+			sb.printJson(ripe), signature == "" and "none" or signature)
+	end
+end
+
+--  Pick a ripe crop to send the unit at.
+--
+--  NO DEFERRAL HERE, unlike collection, and that is deliberate rather than an
+--  omission. Deferral exists because two ports racing for one DROP waste a walk
+--  on something that may despawn before either arrives. A crop does not
+--  despawn, does not move, and will still be there on the next tick -- so the
+--  claim is sufficient arbitration and the loser simply picks a different crop.
+--  The handoff already argues for deleting deferral outright; there is no
+--  reason to grow a second copy of it here first.
+local function harvestWork()
+	local crops = self.farmables
+
+	if crops == nil or #crops == 0 then
+		return nil, "no farmables in network coverage"
+	end
+
+	--  Distance is measured from the UNIT, since it is the unit that walks.
+	local from = entity.position()
+	if self.petId ~= nil and world.entityExists(self.petId) then
+		from = world.entityPosition(self.petId)
+	end
+
+	local best, bestDistance = nil, nil
+	local rejected = { unripe = 0, claimed = 0, backedOff = 0, gone = 0 }
+
+	for _, crop in ipairs(crops) do
+		local workId = "harvest:" .. crop.id
+		local claim = petports_claimGet(workId)
+		local failure = self.workFailures[workId]
+		local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
+
+		local free = not backedOff and ((claim == nil)
+			or claim.owner == stationUniqueId()
+			or (claim.expires or 0) <= world.time())
+
+		--  RIPENESS IS RE-READ HERE, NOT TAKEN FROM THE SCAN.
+		--
+		--  The scan is up to HARVEST_INTERVAL old, and the single most likely
+		--  way for it to be wrong is the case this task creates itself: a crop
+		--  with resetToStage is ripe when scanned, harvested a second later,
+		--  and immediately unripe -- while the cache still says RIPE for
+		--  another five seconds. The port would dispatch a unit to swing at it
+		--  for nothing, the swing would fall through to ordinary object damage,
+		--  and the crop would land on the failure backoff ladder for a fault
+		--  that was entirely ours.
+		--
+		--  Cheap: one call per FARMABLE, not per object. The expensive part of
+		--  the scan is the entityQuery and the config read, and both stay on
+		--  the slow timer.
+		local okStage, stage = pcall(world.farmableStage, crop.id)
+		local ripe = okStage and type(stage) == "number"
+			and stage == crop.harvestAt
+
+		if not ripe then
+			rejected.unripe = rejected.unripe + 1
+		elseif backedOff then
+			sb.logInfo("PETPORT %s crop %s SKIPPED: backed off until %s (failures %s)",
+				stationUniqueId(), sb.printJson(crop.id),
+				sb.printJson(failure["until"]), sb.printJson(failure.count))
+			rejected.backedOff = rejected.backedOff + 1
+		elseif not free then
+			sb.logInfo("PETPORT %s crop %s SKIPPED: claimed by %s until %s",
+				stationUniqueId(), sb.printJson(crop.id),
+				tostring(claim.owner), sb.printJson(claim.expires))
+			rejected.claimed = rejected.claimed + 1
+		elseif not world.entityExists(crop.id) then
+			--  Harvested by the player, or by another network's unit, between
+			--  the scan and now.
+			rejected.gone = rejected.gone + 1
+		else
+			local distance = world.magnitude(from, crop.position)
+
+			if bestDistance == nil or distance < bestDistance then
+				sb.logInfo("PETPORT %s crop %s (%s) RIPE at %s, %s away -- new best",
+					stationUniqueId(), sb.printJson(crop.id), tostring(crop.name),
+					sb.printJson(crop.position), sb.printJson(distance))
+				best, bestDistance = crop, distance
+			end
+		end
+	end
+
+	if best == nil then
+		return nil, string.format(
+			"%s farmable(s) in coverage, none harvestable: %s unripe, "
+			.. "%s claimed, %s backed off, %s gone",
+			#crops, rejected.unripe, rejected.claimed,
+			rejected.backedOff, rejected.gone)
+	end
+
+	return {
+		id = "harvest:" .. best.id,
+		type = "harvest",
+		port = stationUniqueId(),
+		target = best.id,
+		position = best.position
+	}
+end
+
 local function findWork()
   --  Before anything else: a unit that has strayed cannot reach work anyway.
   local recall = returnWork()
@@ -1855,12 +2133,29 @@ local function findWork()
   local work, why = collectionWork()
   if work ~= nil then return work end
 
+  --  HARVEST SITS BELOW COLLECT, and the reason is perishability. An item drop
+  --  has a despawn timer; a ripe crop does not, and will be exactly as ripe in
+  --  a minute. So clearing the ground first costs nothing and losing a drop to
+  --  a harvest detour costs the item.
+  --
+  --  It also produces a rhythm that reads well: harvest, drops appear, collect
+  --  them, deposit runs because deposit outranks collect, come back, harvest
+  --  the next one.
+  local crop, noCrop = harvestWork()
+  if crop ~= nil then return crop end
+
   --  A unit with cargo and nowhere to put it should say THAT, not "no drops in
   --  rect". The storage-full indicator hangs off this state.
   if noDrop ~= nil then return nil, noDrop end
 
   if DIAG_FALLBACK then
     return diagnosticWork()
+  end
+
+  --  Both reasons, because "no drops in network coverage" alone reads as though
+  --  the port never looked at the farm.
+  if noCrop ~= nil then
+    return nil, tostring(why) .. "; " .. tostring(noCrop)
   end
 
   return nil, why
@@ -1917,7 +2212,11 @@ local function dispatchWork()
   --  Belt and braces: the rect is authoritative for what may be claimed, and
   --  findStandingPoint is supposed to respect it. If this ever fires, the
   --  generator is wrong, not the check.
-  if work.type ~= "collect" and not petports_rectContains(coverageRect(), work.position) then
+  --  "collect" and "harvest" both name a target the NETWORK found, which may
+  --  legitimately sit inside another member port's rect. Only points this port
+  --  GENERATED itself are checked against its own rect.
+  if work.type ~= "collect" and work.type ~= "harvest"
+     and not petports_rectContains(coverageRect(), work.position) then
     return reject("generated point outside rect")
   end
 
@@ -2041,6 +2340,7 @@ local function workUpdate(dt)
 
   refreshNetwork()
   refreshBeacons(WORK_INTERVAL)
+  refreshFarmables(WORK_INTERVAL)
   publishUnitPosition()
 
   --  Cheap: loadUniqueEntity on an existing stagehand and out.
