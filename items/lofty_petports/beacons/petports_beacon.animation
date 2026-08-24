@@ -1,17 +1,50 @@
+//  PETPORTS -- BEACON ANIMATION
+//
+//  Carries the ON/OFF icon state, and that is not a side job -- it is the ONLY
+//  mechanism that works.
+//
+//  An activeitem's inventory icon is rendered from THIS FILE, not from the
+//  `inventoryIcon` config field, once the item has an animation. Global tags
+//  substitute into the part image live, so animator.setGlobalTag("state", ...)
+//  in the item script repaints the icon in the player's inventory immediately.
+//
+//  Tested and rejected before finding this: setInstanceValue("inventoryIcon"),
+//  and a build script writing config.inventoryIcon. Neither does anything,
+//  because nothing reads that field for an animated activeitem. Vanilla's
+//  relocator does the same trick with an <absorbed> tag to show how many
+//  creatures it holds.
+//
+//  BONUS PROPERTY, AND THE REASON THIS BEATS THE ALTERNATIVES. A global tag is
+//  not an item parameter, so an on beacon and an off beacon differ visually
+//  while remaining stack-identical -- no split stacks, nothing to clear on
+//  default.
+//
+//  <partImage> resolves through "animationParts" in the .activeitem. Frame
+//  names come from default.frames in this folder.
 {
-  "animatedParts" : {
-    "parts" : {
-      "blueprint" : {
-        "properties" : {
-          "centered" : true,
-          "offset" : [0, 0],
-          "image" : "petports_beacon_deposit.png"
-        }
-      }
-    }
-  },
+	"animatedParts" : {
+		"stateTypes" : {
+		},
 
-  "sounds" : {
-    "learnBlueprint" : []
-  }
+		"parts" : {
+			"beacon" : {
+				"properties" : {
+					"centered" : true,
+					"offset" : [0, 0],
+					"image" : "<partImage>:<state>"
+				}
+			}
+		}
+	},
+
+	//  A beacon with no parameters has never been configured, and an
+	//  unconfigured beacon is ON. Matches beaconBehaviorOf on the port, where
+	//  absence also means on.
+	"globalTagDefaults" : {
+		"state" : "on"
+	},
+
+	"sounds" : {
+		"learnBlueprint" : []
+	}
 }

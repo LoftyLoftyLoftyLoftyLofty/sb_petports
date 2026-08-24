@@ -116,6 +116,10 @@ local BEACON_INTERVAL = 5.0
 --  /items/lofty_petports/beacons/petports_beacon_deposit.activeitem.
 local BEACON_KEY = "petports_sortingBeaconBehavior"
 
+--  Set by the beacon's configuration pane. Absent means ON -- see
+--  beaconBehaviorOf.
+local BEACON_ENABLED_KEY = "petports_beaconEnabled"
+
 --  How long a claim survives without a refresh. Long enough to walk across the
 --  rect, short enough that an abandoned job frees up while the player watches.
 --------------------------------------------------------------------------------
@@ -1171,6 +1175,22 @@ end
 local function beaconBehaviorOf(item)
   if item == nil or item.name == nil then return nil end
 
+  --  OFF IS INVISIBLE, NOT A SEPARATE STATE.
+  --
+  --  A disabled beacon is not "a beacon the port ignores" -- it is not a
+  --  beacon at all as far as everything downstream is concerned. That is what
+  --  lets a player park spares in a chest: an off beacon is an ordinary item,
+  --  it tasks nothing, and the scan walks straight past it to whatever else is
+  --  in the container.
+  --
+  --  Instance parameters only. There is no config default here on purpose --
+  --  a beacon that has never been opened has no parameter and is ON, which is
+  --  safe because a loose beacon can only ever land in a container that was
+  --  ALREADY a target. It cannot task a new one.
+  if item.parameters ~= nil and item.parameters[BEACON_ENABLED_KEY] == false then
+    return nil
+  end
+
   if item.parameters ~= nil and item.parameters[BEACON_KEY] ~= nil then
     return item.parameters[BEACON_KEY]
   end
@@ -1209,9 +1229,25 @@ local function scanContainers()
 
           local okItems, items = pcall(world.containerItems, id)
           if okItems and items ~= nil then
-            --  pairs, not ipairs: containerItems is keyed by SLOT and empty
-            --  slots leave holes, so ipairs stops at the first gap.
-            for _, item in pairs(items) do
+            --  SLOT ORDER, EXPLICITLY.
+            --
+            --  containerItems is keyed by SLOT and empty slots leave holes, so
+            --  ipairs stops at the first gap and pairs is the only way to see
+            --  every item. But pairs order is nondeterministic, and with two
+            --  beacons in one container that made the winner change between
+            --  scans -- a chest that silently swapped roles every five seconds
+            --  and would have been diagnosed as anything but this.
+            --
+            --  Collect the keys, sort them, then walk. First ENABLED beacon in
+            --  slot order decides the container, every time.
+            local slots = {}
+            for slot in pairs(items) do
+              table.insert(slots, slot)
+            end
+            table.sort(slots)
+
+            for _, slot in ipairs(slots) do
+              local item = items[slot]
               local behavior = beaconBehaviorOf(item)
 
               if behavior ~= nil then
@@ -1221,8 +1257,9 @@ local function scanContainers()
                   behavior = behavior,
                   name = world.entityName(id)
                 })
-                --  One beacon decides a container. A second is the player's
-                --  business, not ours.
+                --  One ENABLED beacon decides a container. A second is the
+                --  player's business, not ours -- and a disabled one never got
+                --  here, so it cannot shadow an enabled beacon below it.
                 break
               end
             end
@@ -3545,6 +3582,37 @@ local function findWork()
   local drop, noDrop = depositWork()
   if drop ~= nil then return drop end
 
+	--  ORDERING IS NOT A GUARD.
+	--
+	--  Everything above claims cargo outranks collection, and it does -- but only
+	--  while depositWork RETURNS something. With no beacon in coverage it returns
+	--  nil and a reason, and collection below ran unguarded: a unit picked up a
+	--  stack, then a second stack of the same item, then an unrelated third, and
+	--  kept going. Precedence cannot order an option that does not exist.
+	--
+	--  ANY CARGO IS A FULL LOAD. One stack per trip is the design -- more
+	--  throughput means more units, which is the point of the scaling loop. So
+	--  this is not "stop when full", it is "stop when holding anything".
+	--
+	--  The FIRST pickup with no crate anywhere is still allowed, and that is
+	--  deliberate rather than an exemption: cargo is empty at that moment, so the
+	--  guard does not fire. A drop is on a despawn timer and a unit is not, so
+	--  rescuing one is strictly better than watching it evaporate.
+	--
+	--  THIS IS ALSO THE ORPHAN CONDITION. A unit holding cargo that deposit
+	--  cannot place is precisely the state the hand-it-back interaction exists
+	--  for; when that lands it hangs off this branch rather than a second test.
+	--
+	--  Blocks harvest, animals and withdraw as well, by returning outright.
+	--  Harvesting while unable to deposit only manufactures drops that cannot be
+	--  collected either, and withdrawWork manufactures cargo on top of cargo.
+	if self.petData ~= nil and self.petData.cargo ~= nil
+	   and #self.petData.cargo > 0 then
+		return nil, noDrop
+			or ("carrying " .. sb.printJson(#self.petData.cargo)
+				.. " stack(s) with no dispatchable deposit target")
+	end
+
   local work, why = collectionWork()
   if work ~= nil then return work end
 
@@ -3573,9 +3641,9 @@ local function findWork()
   local fetchWater, noFetchWater = withdrawWaterWork()
   if fetchWater ~= nil then return fetchWater end
 
-  --  A unit with cargo and nowhere to put it should say THAT, not "no drops in
-  --  rect". The storage-full indicator hangs off this state.
-  if noDrop ~= nil then return nil, noDrop end
+	--  The old noDrop fallback lived here and is now unreachable: noDrop is only
+	--  ever set when cargo is non-empty, and the guard above returns on that
+	--  condition before anything below runs.
 
   if DIAG_FALLBACK then
     return diagnosticWork()

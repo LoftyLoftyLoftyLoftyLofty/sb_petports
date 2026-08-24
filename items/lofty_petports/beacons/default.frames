@@ -1,0 +1,23 @@
+//  BEACON ICON SHEETS -- ONE IMAGE, TWO STATES.
+//
+//  Every beacon icon in this folder is a 32x16 sheet: frame "on" at x=0 with a
+//  green status dot, frame "off" at x=16 with a red one.
+//
+//  WHY A SHEET RATHER THAN TWO FILES. An activeitem's INVENTORY ICON is
+//  rendered from its animation, and global tags substitute into the part image
+//  live -- so `<partImage>:<state>` plus animator.setGlobalTag("state", ...)
+//  changes the icon with no item parameter, no rebuild, and therefore no effect
+//  on stacking. Copied from vanilla's relocator, which shows its stored-creature
+//  count exactly this way.
+//
+//  This is why swapping the inventoryIcon STRING does nothing: nothing reads it
+//  after the animation exists.
+{
+	"frameGrid" : {
+		"size" : [16, 16],
+		"dimensions" : [2, 1],
+		"names" : [
+			[ "on", "off" ]
+		]
+	}
+}
