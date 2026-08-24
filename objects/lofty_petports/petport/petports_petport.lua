@@ -1,6 +1,7 @@
 require "/scripts/util.lua"
 require "/scripts/messageutil.lua"
 require "/scripts/lofty_petports/petports_work.lua"
+require "/scripts/lofty_petports/petports_filters.lua"
 
 --  M.A.U.S. PETPORT
 --
@@ -119,6 +120,10 @@ local BEACON_KEY = "petports_sortingBeaconBehavior"
 --  Set by the beacon's configuration pane. Absent means ON -- see
 --  beaconBehaviorOf.
 local BEACON_ENABLED_KEY = "petports_beaconEnabled"
+
+--  The deposit filter, shape documented in petports_filters.lua. Absent means
+--  accept everything.
+local BEACON_FILTER_KEY = "petports_beaconFilter"
 
 --  How long a claim survives without a refresh. Long enough to walk across the
 --  rect, short enough that an abandoned job frees up while the player watches.
@@ -1251,11 +1256,33 @@ local function scanContainers()
               local behavior = beaconBehaviorOf(item)
 
               if behavior ~= nil then
+                --  THE FILTER RIDES ALONG, FOR FREE.
+                --
+                --  world.containerItems returns full descriptors including
+                --  parameters, so the beacon's filter is already in hand here.
+                --  No registry, no second lookup, nothing to keep in sync --
+                --  and a filter edited in the pane takes effect on the next
+                --  scan without anyone being told.
+                --
+                --  nil for a beacon that has never been configured, and nil
+                --  means accept everything, which is what the unconditional
+                --  deposit beacon did before filters existed.
+                local filter = nil
+                if item.parameters ~= nil then
+                  filter = item.parameters[BEACON_FILTER_KEY]
+                end
+
                 table.insert(found, {
                   id = id,
                   position = world.entityPosition(id),
                   behavior = behavior,
-                  name = world.entityName(id)
+                  name = world.entityName(id),
+                  filter = filter,
+
+                  --  The deciding beacon's slot. Eviction needs it: a beacon
+                  --  rarely matches its own crate's filter, and without the
+                  --  exemption a crate hauls away its own configuration.
+                  beaconSlot = slot
                 })
                 --  One ENABLED beacon decides a container. A second is the
                 --  player's business, not ours -- and a disabled one never got
@@ -1847,14 +1874,48 @@ end
 --
 --  Returns nil when the engine cannot be asked, so the caller can fall back
 --  rather than treating "unknown" as "no".
-local function containerTakesAny(containerId)
-  if world.containerItemsCanFit == nil then return nil end
+--  Will this crate take ANY stack the unit is carrying?
+--
+--  TWO QUESTIONS, ASKED TOGETHER. "Does the player allow it here" and "is there
+--  physical room" are independent, and asking them in separate places is how a
+--  denied item still ends up in a crate: containerItemsCanFit answers yes on
+--  stack-merge grounds for an item the filter rejects, because the engine has
+--  never heard of the filter. The filter is asked FIRST and a rejected stack is
+--  never offered to the engine at all.
+--
+--  PER STACK, NEVER PER CONTAINER. The deposit-beacon bug this loop already
+--  guards against: one steak needing a free slot backed off the whole crate and
+--  diverted every stackable item in the load. A filter that rejects one stack
+--  must likewise reject one stack.
+--
+--  Returns nil when the engine cannot answer, which is a different thing from
+--  false and drives the time-based backoff fallback downstream. Filter-only
+--  rejection is a real false, not a nil -- the player's rules are knowable
+--  whether or not containerItemsCanFit exists.
+local function containerTakesAny(containerId, filter)
   if self.petData == nil or self.petData.cargo == nil then return nil end
 
+  local anyAllowed = false
+
   for _, stack in ipairs(self.petData.cargo) do
-    local fits = world.containerItemsCanFit(containerId, stack)
-    if fits ~= nil and fits > 0 then return true end
+    if petports_filterAccepts(filter, stack.name) then
+      anyAllowed = true
+
+      if world.containerItemsCanFit == nil then
+        --  Allowed by the filter, and the engine will not tell us about room.
+        --  Fall through to the caller's backoff, which is what nil means.
+        return nil
+      end
+
+      local fits = world.containerItemsCanFit(containerId, stack)
+      if fits ~= nil and fits > 0 then return true end
+    end
   end
+
+  --  Nothing in the load is allowed here. Not a full crate -- a wrong crate --
+  --  and the distinction matters because a full one clears itself and a wrong
+  --  one never will.
+  if not anyAllowed then return false end
 
   return false
 end
@@ -1878,7 +1939,7 @@ local function depositWork()
   for _, beacon in ipairs(targets) do
     --  Ask the crate directly. Only if the engine will not answer do we fall
     --  back to the blunt time-based backoff.
-    local takesAny = containerTakesAny(beacon.id)
+    local takesAny = containerTakesAny(beacon.id, beacon.filter)
     local backedOff
 
     if takesAny == nil then
@@ -1901,8 +1962,24 @@ local function depositWork()
             tostring(stack.name), tostring(stack.count or 1)))
         end
 
-        sb.logInfo("PETPORT %s deposit target %s SKIPPED: cannot take any of [%s]",
-          stationUniqueId(), sb.printJson(beacon.id), table.concat(held, ", "))
+        --  WHY it was skipped, not just that it was. A full crate empties and
+        --  retries; a crate whose filter rejects the load never will. Reading
+        --  "cannot take any of [...]" for both is how an afternoon goes into
+        --  diagnosing a filter as a capacity problem.
+        local reason = "full"
+        if beacon.filter ~= nil then
+          local allowed = false
+          for _, stack in ipairs(self.petData.cargo) do
+            if petports_filterAccepts(beacon.filter, stack.name) then
+              allowed = true
+              break
+            end
+          end
+          if not allowed then reason = "filter rejects every stack" end
+        end
+
+        sb.logInfo("PETPORT %s deposit target %s SKIPPED (%s): cannot take any of [%s]",
+          stationUniqueId(), sb.printJson(beacon.id), reason, table.concat(held, ", "))
       end
     end
 

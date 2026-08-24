@@ -45,7 +45,15 @@ local DEFAULTS =
 --  beacon could be edited into a different kind of beacon.
 local FIELDS =
 {
-	enabled = "petports_beaconEnabled"
+	enabled = "petports_beaconEnabled",
+
+	--  The deposit filter, shape documented in petports_filters.lua. Absent
+	--  means accept everything -- identical to the unconditional deposit beacon
+	--  that shipped before filters existed, which is what a fresh beacon must
+	--  behave like. There is no DEFAULTS entry for it: a table would never
+	--  compare equal to one anyway, so it is always written rather than
+	--  compared away.
+	filter = "petports_beaconFilter"
 }
 
 --  ICON: A DEDICATED SETTER FOR THE SLOT, A GLOBAL TAG FOR THE HAND.
@@ -79,6 +87,32 @@ local ICON_BASE = "/items/lofty_petports/beacons/petports_beacon_deposit.png"
 --  Comfortably longer than the pane's own 0.25s poll, short enough that a pane
 --  which died without saying so unblocks quickly.
 local PANE_ALIVE = 1.0
+
+--  Verbose while this is being built. Flip to false before shipping; leave the
+--  calls. See the pane script for why the inputs matter more than the verdicts.
+local DEBUG = true
+
+--  FORMATTED HERE, NOT BY sb.logInfo.
+--
+--  Starbound's logger accepts %s and nothing else -- %d, %q and %.2f all
+--  raise "Improper lua log format specifier" and take down whatever was
+--  logging. Running string.format first means the log call only ever sees one
+--  %s, so every specifier Lua supports is available at the call sites.
+--
+--  pcall'd because a debug line must never be the thing that breaks a script.
+--  A malformed format string prints itself instead of throwing.
+local function dbg(fmt, ...)
+	if not DEBUG then return end
+	local ok, text = pcall(string.format, fmt, ...)
+	sb.logInfo("petports beacon: %s", ok and text or ("<badformat> " .. tostring(fmt)))
+end
+
+local function j(value)
+	if value == nil then return "nil" end
+	local ok, text = pcall(sb.printJson, value)
+	if ok then return text end
+	return "<unprintable " .. type(value) .. ">"
+end
 
 --  EVERY PANE MESSAGE CARRIES A TOKEN, AND HERE IS WHY.
 --
@@ -156,6 +190,7 @@ function init()
 
 		local out = readConfig()
 		out.token = self.paneToken
+		dbg("read -> %s", j(out))
 		return out
 	end)
 
@@ -191,14 +226,29 @@ function init()
 
 	message.setHandler("petports_beaconWrite", function(_, _, token, data)
 		--  The write that was landing on the wrong beacon.
-		if token == nil or token ~= self.paneToken then return false end
-		if type(data) ~= "table" then return false end
+		if token == nil or token ~= self.paneToken then
+			--  Expected and harmless when the player has swapped beacons: the
+			--  pane is about to dismiss itself. Logged because a token mismatch
+			--  in any OTHER circumstance means a write was silently dropped.
+			dbg("write REFUSED: token=%s mine=%s",
+				tostring(token), tostring(self.paneToken))
+			return false
+		end
+
+		if type(data) ~= "table" then
+			dbg("write REFUSED: data is %s not table", type(data))
+			return false
+		end
+
+		dbg("write accepted -> %s", j(data))
 
 		for field, key in pairs(FIELDS) do
 			if data[field] ~= nil then
 				if data[field] == DEFAULTS[field] then
+					dbg("  clear %s (equals default)", key)
 					activeItem.setInstanceValue(key, nil)
 				else
+					dbg("  set %s = %s", key, j(data[field]))
 					activeItem.setInstanceValue(key, data[field])
 				end
 			end
@@ -231,7 +281,10 @@ function activate(fireMode, shifting)
 	--  0.25s to check it is still held; that poll refreshes this timer, so
 	--  "open" means "something answered recently" and stops being true on its
 	--  own the moment nothing does.
-	if (self.paneTimer or 0) > 0 then return end
+	if (self.paneTimer or 0) > 0 then
+		dbg("activate ignored, pane still alive (%.2fs left)", self.paneTimer)
+		return
+	end
 
 	--  Armed here rather than waiting for the first poll: init sends its read
 	--  immediately but the first heartbeat is 0.25s out, and a fast second
@@ -242,6 +295,11 @@ function activate(fireMode, shifting)
 	--  Both buttons open it. There is no second thing a beacon could do when
 	--  used, and a player who tries the other button and gets nothing assumes
 	--  the item is broken.
+	dbg("activate: opening %s at %s token=%s",
+		tostring(config.getParameter("interactAction")),
+		tostring(config.getParameter("interactData")),
+		tostring(self.paneToken))
+
 	activeItem.interact(config.getParameter("interactAction"),
 		config.getParameter("interactData"))
 end

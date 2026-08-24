@@ -87,6 +87,26 @@ local TASK_SCORE = 150
 local LEASH_SCORE = 120
 
 function petBehavior.init()
+  --  DO NOT SET THE SCRIPT UPDATE DELTA HERE. TRIED, AND IT MADE THINGS WORSE.
+  --
+  --  script.setUpdateDelta(1) IS accepted in a monster context -- it logged
+  --  "delta set to 1 (dt now 0.0166667)" cleanly. But the cadence did not
+  --  change: pre-move samples stayed at 0.0820s median, 4.92 engine ticks,
+  --  and the repro drop came out bit-identical to the four runs before it.
+  --
+  --  So the call moves what script.updateDt() REPORTS without moving when
+  --  update() is actually called, which is strictly worse than doing nothing.
+  --  Every timer in this mod accumulates that dt -- petBehavior.run's cadence
+  --  clock, THINK_DELAY, AIRBORNE_EDGE_STALL, SETTLE_GRACE, APPROACH_TIMEOUT,
+  --  the vent timeouts, keepDropping's countdown. All of them would run at a
+  --  fifth of real time while the world ran at full speed, and a 30-second lap
+  --  is short enough to hide that.
+  --
+  --  "scriptDelta" in the monstertype's baseParameters was also tried, with no
+  --  effect at all. If the update rate is ever worth chasing again, find a
+  --  VANILLA monstertype that changes it and copy the key and its placement --
+  --  do not infer either.
+
   petBehavior.entityTypeReactions = {
     ["player"] = petBehavior.reactToPlayer,
     ["itemDrop"] = petBehavior.reactToItemDrop,

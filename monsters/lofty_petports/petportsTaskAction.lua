@@ -109,6 +109,31 @@ local ARRIVAL_DISTANCE = 1.5
 --  Per-second approach tracing. Noisy; off once reachability is understood.
 local TASK_DEBUG = true
 
+--  BUILD STAMP.
+--
+--  Printed once per state entry. Twice now a fix has been diagnosed as not
+--  working when the running game was simply loading an older copy of the file
+--  -- once because a whole tree was stale, once because one file of two did not
+--  get copied. Both times the symptom was identical to a failed fix, and both
+--  times it cost a launch.
+--
+--  Grep the stamp before believing anything else in the log. Bump it on every
+--  handoff; a stamp that never changes is worse than none.
+--
+--  NOT LOGGED AT FILE SCOPE. THIS IS A CRASH, NOT A STYLE POINT.
+--
+--  Starbound loads and RUNS a script chunk when the context is created, and
+--  binds the root callback tables -- sb, world, root, mcontroller -- afterward.
+--  So at chunk-execution time `sb` is still nil, and any top-level `sb.logInfo`
+--  raises "attempt to index global 'sb' (a nil value)" before a single function
+--  in this file is defined. The unit never gets a task action at all.
+--
+--  Every other engine call in this mod lives inside a function for this reason.
+--  If a stamp is wanted earlier than first entry, put it in a function the
+--  monstertype's script list will call, never beside the local it names.
+local BUILD_STAMP = "2026-08-24f scoot through platform, no controlDown"
+local stampLogged = false
+
 --  How long to let A* search without producing a path before calling the
 --  target unreachable.
 --
@@ -944,15 +969,62 @@ end
 --  a formality, it CLAMPS ordinary drops. 0.5 was vanilla's own intended
 --  ceiling and is far longer than anything here needs.
 --
---  At 0.1s the unit presses down for roughly six ticks, which is ample to pass
---  through a platform, and it stops pressing well before it reaches the next
---  one down.
+--  THIS IS NOW A BACKSTOP, NOT THE RELEASE. See DROP FLOOR below.
 --
---  THE FAILURE MODE IF THIS GOES TOO LOW is worse than over-dropping and looks
---  different: the unit does not fall through at all, stands on the platform,
---  and the path stalls rather than overshooting. If that shows up, this is the
---  number -- the hold actually used is printed on every drop.
-local DROP_HOLD_MAX = 0.1
+--  A WALL CLOCK CANNOT EXPRESS "ONE PLATFORM", AND THE LOG PROVES IT.
+--  Measured on a stack of platforms two tiles apart, dropping from 712.8 with
+--  a target of 711.8:
+--
+--    52.161  y 712.8    hold 0.1 armed
+--    52.254  y 712.303  v -11.97  descended 0.50  -- keepDropping presses down
+--    52.352  y 710.972  v -21.97  descended 1.83  -- presses down AGAIN
+--    52.412  y 708.808  v -31.97  two platforms past the target, path LOST
+--
+--  The tick rate in that session was 0.082s median across 120 samples -- 12.2
+--  FPS, not 60. Every constant in this file that is expressed in SECONDS was
+--  reasoned about at a tick five times shorter than the one the game actually
+--  ran. 0.1s is "roughly six ticks" at 60Hz and exactly TWO here, and the
+--  second of those two lands on the tick where the unit sits 0.17 above the
+--  platform it was aiming for. Down is held, it passes through, and it is now
+--  falling at 22 tiles per second with nothing left to catch it.
+--
+--  Lowering the number does not fix this and 0.034 would not have either: any
+--  positive hold survives at least one keepDropping call, and one call at 12
+--  FPS is worth 1.3 tiles of fall. Below one tick the hold stops working at
+--  60Hz instead. There is no value that is correct at both frame rates.
+--
+--  DROP_DESCENT_EPSILON cannot rescue it either. That guard needs to SEE the
+--  unit grounded, and between takeoff and the overshoot the unit is sampled at
+--  712.303, 710.972 and 708.808 -- it is never observed touching a platform,
+--  because it covers more than a tile per tick.
+--
+--  So 0.5 here is deliberately loose: vanilla's own intended ceiling, kept only
+--  to bound a drop whose floor test never resolves. The floor test below is
+--  what actually ends every ordinary drop.
+local DROP_HOLD_MAX = 0.5
+
+--  RELEASE AT THE PLAN'S OWN TARGET, WHICH IS FRAME-RATE INDEPENDENT.
+--
+--  The Drop edge already states where the drop ends: origin minus the descent
+--  in pather.delta IS the edge's target y. Recording it at arming turns the
+--  release into a position test, which does not care how long a tick is.
+--
+--  Replaying the trace above against it: floor is 712.8 - 1 = 711.8.
+--
+--    y 712.303  above the floor  -> press, correct, still inside the platform
+--    y 710.972  below the floor  -> RELEASE
+--
+--  and the step out of 710.972 then collides with the platform at 710.8 the
+--  way it was always meant to.
+--
+--  IT HANDLES MULTI-TILE DROPS CORRECTLY, which a fixed clearance distance
+--  would not. The 3-tile Drop edge in the same log runs 714.8 -> 711.8 and is
+--  MEANT to pass through the platforms at 712.8 on the way; the floor says so,
+--  a "release after 0.75 tiles" rule would have caught it on the first one.
+--
+--  The margin is slack for a unit that lands fractionally high. Small, because
+--  overshooting the floor by a margin is exactly the failure being fixed.
+local DROP_FLOOR_MARGIN = 0.05
 
 --  How far below the drop point the unit must be before a landing is believed.
 --  A platform is one tile, so anything well under 1 works; this is deliberately
@@ -981,6 +1053,222 @@ local DROP_DESCENT_EPSILON = 0.35
 --  moves on -- which is correct, because the unit is already past that node.
 local MIN_DROP_DISTANCE = 0.5
 
+--  WHY THERE IS NO PER-EDGE ARMING GUARD HERE.
+--
+--  An earlier pass added one, on the theory that moveDrop runs every tick the
+--  Drop edge is current and re-arms downHoldTimer on each of them, so
+--  keepDropping's landing release was being undone the same tick it fired.
+--
+--  THAT THEORY IS FALSE, and vanilla's own source says so. PathMover:moveDrop
+--  calls timedDrop and then calls advancePath UNCONDITIONALLY, in the same
+--  call. The Drop edge is consumed the tick it becomes current, so timedDrop
+--  already runs exactly once per Drop edge. There is nothing to de-duplicate.
+--
+--  The guard was not merely inert. It keyed on currentEdgeIndex, which is
+--  per-path and restarts at 1 on every replan -- so a fresh path whose Drop
+--  edge happened to land on a previously-used index would have its drop
+--  silently refused, and the unit would stand on the platform forever. That is
+--  the inverse failure the handoff warns about, introduced by the fix for a
+--  bug that was not there.
+--
+--  If over-dropping shows up again, the numbers to look at are DROP_HOLD_MAX
+--  and MIN_DROP_DISTANCE, and the line to grep is "UNIT drop hold" -- one per
+--  Drop edge. Two of those lines for the same edge index would be evidence for
+--  the re-arming theory. There have never been two.
+
+--  WHAT IS ACTUALLY UNDER THE UNIT. GROUND TRUTH, NOT INFERENCE.
+--
+--  Two drops in the same log, same x, same landing surface, opposite outcomes:
+--  released at y 710.917 moving -31.53 and was caught, released at y 710.972
+--  moving -21.97 and went through. Closer and faster survived; further and
+--  slower did not. No model built on position and velocity separates those,
+--  which means the assumption underneath -- that the surfaces are where the
+--  grounded y-values in the log say they are -- is the thing to stop assuming.
+--
+--  So ask the world instead. Scans the column under the unit's own footprint
+--  and reports each occupied row as P (platform) or B (solid), so the next log
+--  says where the collision actually is rather than where a standing position
+--  implies it was.
+--
+--  The x span is the collisionPoly's, via boundBox, because a platform that
+--  only covers part of the footprint is one of the shapes that would explain
+--  the pair above.
+local DROP_PROBE_DEPTH = 6
+
+--  Tile rows and surfaces: a platform tile at row N collides at y = N + 1, and
+--  a unit standing on it rests with its feet at N + 1. Confirmed by probe --
+--  the stack in the test world reads P713 P711 P709 P707 P705 and the unit
+--  stands at 714.8, 712.8, 710.8, 708.8, 706.8.
+local PROBE_EPSILON = 0.001
+
+--  IS THERE STILL A PLATFORM TO GET THROUGH?
+--
+--  A drop presses down for exactly one reason: to pass a platform the plan
+--  wants it below. The plan states how far in the Drop edge's descent, so any
+--  platform whose surface sits ABOVE the floor is one to pass, and any platform
+--  at or below the floor is one to land on. Pressing down near the second kind
+--  is the whole bug.
+--
+--  MEASURED, four drops, same geometry, released above the same platform at
+--  row 709 (surface 710.0):
+--
+--    feet 710.609  v -29.53   1.24 engine ticks to contact   caught
+--    feet 706.862  v -17.53   2.95 engine ticks              caught
+--    feet 710.244  v -21.53   0.68 engine ticks              through
+--    feet 710.172  v -21.97   0.47 engine ticks              through
+--
+--  About one engine tick of down survives the script's decision to stop. Which
+--  mechanism produces that is still not established -- a single stale tick and
+--  a whole stale block each explain three of these four and not the fourth --
+--  so this deliberately does NOT try to time the release. It removes the
+--  reason to press instead: once no unpassed platform remains, down is not
+--  wanted on any tick, stale or otherwise, and the window cannot open.
+--
+--  Returns the surface y of the highest platform still to be passed, or nil.
+local function platformToPass(position, floorFeet)
+  local bounds = mcontroller.boundBox()
+  local feet = position[2] + bounds[2]
+
+  --  Rows whose surface is at or below the FEET, working downward.
+  --
+  --  floor, not ceil. A dry run of this against the four logged drops caught
+  --  ceil admitting the row directly above the feet: at feet 711.503 it
+  --  returned surface 712, which the unit was already half a tile below and had
+  --  therefore already passed. That would have kept down pressed for exactly
+  --  the tick that has to be quiet, reproducing the bug through the fix.
+  local first = math.floor(feet + PROBE_EPSILON) - 1
+
+  for row = first, first - DROP_PROBE_DEPTH, -1 do
+    local surface = row + 1
+
+    --  At or below the floor: this is a landing surface, not one to pass.
+    --  Everything further down is lower still, so stop.
+    if surface <= floorFeet + PROBE_EPSILON then break end
+
+    local region = { position[1] + bounds[1], row,
+                     position[1] + bounds[3], row + 1 }
+
+    if world.rectTileCollision(region, {"Platform"}) then
+      return surface
+    end
+  end
+
+  return nil
+end
+
+local function probeBelow(position)
+  local bounds = mcontroller.boundBox()
+  local rows = {}
+
+  local feet = position[2] + bounds[2]
+
+  for step = 0, DROP_PROBE_DEPTH do
+    local row = math.floor(feet) - step
+    local region = { position[1] + bounds[1], row,
+                     position[1] + bounds[3], row + 1 }
+
+    if world.rectTileCollision(region, {"Platform"}) then
+      table.insert(rows, "P" .. tostring(row))
+    elseif world.rectTileCollision(region, {"Null", "Block", "Dynamic"}) then
+      table.insert(rows, "B" .. tostring(row))
+    end
+  end
+
+  if #rows == 0 then return "nothing within " .. tostring(DROP_PROBE_DEPTH) end
+  return table.concat(rows, " ")
+end
+
+--  HOW FAR BELOW A PLATFORM SURFACE TO PLACE THE FEET.
+--
+--  Two pixels. Starbound is 8 pixels to the tile, so 0.25 -- far enough that
+--  the feet are unambiguously below the surface and no rounding puts them back
+--  on top of it, small enough that the placement is not visible as a jump.
+local DROP_SCOOT = 0.25
+
+--  THE LOWEST PLATFORM THIS DROP IS MEANT TO GET THROUGH.
+--
+--  platformToPass answers "is there one left"; this answers "where does the
+--  passing end", which is what a placement needs. Same rule: a platform above
+--  the floor is one to pass, at or below the floor is one to land on.
+local function lastPlatformToPass(position, floorFeet)
+  local bounds = mcontroller.boundBox()
+  local feet = position[2] + bounds[2]
+  local lowest = nil
+
+  for row = math.floor(feet + PROBE_EPSILON) - 1, math.floor(feet) - DROP_PROBE_DEPTH, -1 do
+    local surface = row + 1
+    if surface <= floorFeet + PROBE_EPSILON then break end
+
+    local region = { position[1] + bounds[1], row,
+                     position[1] + bounds[3], row + 1 }
+
+    if world.rectTileCollision(region, {"Platform"}) then
+      lowest = surface
+    end
+  end
+
+  return lowest
+end
+
+--  Would the unit be inside something solid if its feet were placed here?
+--  Platforms are excluded deliberately -- being inside one is the entire point.
+local function bodyFitsWithFeetAt(position, feet)
+  local bounds = mcontroller.boundBox()
+  local centre = feet - bounds[2]
+  local region = { position[1] + bounds[1], centre + bounds[2],
+                   position[1] + bounds[3], centre + bounds[4] }
+
+  return not world.rectTileCollision(region, {"Null", "Block", "Dynamic"})
+end
+
+--  PLACE THE UNIT THROUGH THE PLATFORM INSTEAD OF ASKING THE CONTROLLER TO.
+--
+--  MEASURED, build 24e, and this is why controlDown was abandoned entirely.
+--  The release fired exactly where the dry run said it would, after a SINGLE
+--  arming press and nothing after it:
+--
+--    27.732  arm      feet 712.000  toPass 712   press
+--    27.802  release  feet 711.503  toPass nil
+--
+--  and the unit still passed surface 712 AND surface 710 before landing on
+--  708. One press carries it through two platforms. controlDown is not a
+--  per-tick gate on platform collision; it starts a fall-through state whose
+--  duration is not observable from script. So no hold length can be correct --
+--  not 0.5, not 0.1, not 0.034, not "until nothing is left to pass". Three
+--  rewrites of the release condition were all solving a problem that was never
+--  about the release.
+--
+--  A placement has none of that. The feet end up below the surface, the unit is
+--  through, gravity does the rest, and no engine state is left running. Both
+--  vanilla movers this file already replaces do the same thing: moveJump calls
+--  setPosition(source), moveDrop calls setPosition on the x axis.
+--
+--  FAILS CLOSED. If the destination is inside something solid, or no platform
+--  needs passing, nothing is placed and the drop is skipped rather than
+--  guessed at -- a unit that does not drop stalls visibly and replans, which is
+--  recoverable. A unit placed inside terrain is not.
+local function scootThroughPlatform(pather, floorFeet)
+  local position = mcontroller.position()
+  local surface = lastPlatformToPass(position, floorFeet)
+
+  if surface == nil then
+    return false, "no platform above the floor to pass"
+  end
+
+  local feet = surface - DROP_SCOOT
+
+  if not bodyFitsWithFeetAt(position, feet) then
+    return false, "solid tiles at feet " .. sb.printJson(feet)
+  end
+
+  local was = position[2]
+  mcontroller.setPosition({ position[1], feet - mcontroller.boundBox()[2] })
+
+  return true, string.format("%s -> %s (through surface %s)",
+    sb.printJson(was), sb.printJson(mcontroller.position()[2]),
+    sb.printJson(surface))
+end
+
 function petportsTimedDrop(pather, time)
   local delta = pather.delta
   local descent = (delta ~= nil and delta[2] ~= nil) and -delta[2] or 0
@@ -990,6 +1278,8 @@ function petportsTimedDrop(pather, time)
     --  drop would otherwise keep keepDropping pressing on this edge too.
     pather.downHoldTimer = nil
     pather.petportsDropOrigin = nil
+    pather.petportsDropFloor = nil
+    pather.petportsDropFloorFeet = nil
 
     sb.logInfo("UNIT drop SKIPPED at y %s: next node is %s below (delta %s) "
       .. "-- already past it, not pressing down",
@@ -998,15 +1288,58 @@ function petportsTimedDrop(pather, time)
     return
   end
 
+  local floorFeet = mcontroller.position()[2] - descent + mcontroller.boundBox()[2]
+
+  --  PLACEMENT FIRST. controlDown is only reached if the placement refuses.
+  local scooted, why = scootThroughPlatform(pather, floorFeet)
+
+  if scooted then
+    --  downHoldTimer deliberately left nil. PathMover:move early-returns for
+    --  the whole of a hold -- no finder update, no edgeMove, no controlParameters
+    --  -- so leaving it set would blind the pather for a drop that is already
+    --  finished. Nothing to keep dropping.
+    pather.downHoldTimer = nil
+    pather.petportsDropOrigin = nil
+    pather.petportsDropFloor = nil
+    pather.petportsDropFloorFeet = nil
+
+    sb.logInfo("UNIT drop SCOOTED %s for a %s tile descent", why,
+      sb.printJson(descent))
+    return
+  end
+
+  sb.logInfo("UNIT drop scoot refused (%s) -- falling back to controlDown", why)
+
   --  The argument vanilla throws away.
   pather.downHoldTimer = math.min(time or 0, DROP_HOLD_MAX)
   pather.petportsDropOrigin = mcontroller.position()[2]
 
+  --  Where the edge says this drop ends. keepDropping releases here.
+  pather.petportsDropFloor = pather.petportsDropOrigin - descent
+
+  --  The same line expressed at the feet, which is what tile surfaces are
+  --  measured against.
+  pather.petportsDropFloorFeet =
+    pather.petportsDropFloor + mcontroller.boundBox()[2]
+
   mcontroller.controlDown()
 
-  sb.logInfo("UNIT drop hold %s from y %s for a %s tile descent",
+  local here = mcontroller.position()
+
+  sb.logInfo("UNIT drop hold %s from y %s to floor %s (a %s tile descent) "
+    .. "| feet %s | below: %s",
     sb.printJson(pather.downHoldTimer),
-    sb.printJson(pather.petportsDropOrigin), sb.printJson(descent))
+    sb.printJson(pather.petportsDropOrigin),
+    sb.printJson(pather.petportsDropFloor), sb.printJson(descent),
+    sb.printJson(here[2] + mcontroller.boundBox()[2]),
+    probeBelow(here))
+end
+
+local function releaseDrop(pather)
+  pather.downHoldTimer = nil
+  pather.petportsDropOrigin = nil
+  pather.petportsDropFloor = nil
+  pather.petportsDropFloorFeet = nil
 end
 
 function petportsKeepDropping(pather, dt)
@@ -1014,17 +1347,68 @@ function petportsKeepDropping(pather, dt)
 
   local y = mcontroller.position()[2]
   local origin = pather.petportsDropOrigin or y
-  local descended = (origin - y) >= DROP_DESCENT_EPSILON
+  local floor = pather.petportsDropFloor
 
-  --  CHECKED BEFORE THE PRESS, NOT AFTER. This is fault two.
-  if descended and mcontroller.onGround() then
+  --  AT OR BELOW THE PLAN'S TARGET. The drop is over regardless of what the
+  --  clock says, and regardless of whether the unit has touched anything --
+  --  at a long tick it will not have. Checked FIRST because it is the only one
+  --  of the three tests that holds at any frame rate.
+  --  EVERY HELD TICK, not just the release. The interesting question is what
+  --  the unit passed while down was held, and that is only answerable if each
+  --  tick says where it was and what was under it.
+  if TASK_DEBUG then
+    sb.logInfo("UNIT drop tick y %s feet %s v %s timer %s floor %s | below: %s",
+      sb.printJson(y),
+      sb.printJson(y + mcontroller.boundBox()[2]),
+      sb.printJson(mcontroller.velocity()[2]),
+      sb.printJson(pather.downHoldTimer),
+      tostring(floor),
+      probeBelow(mcontroller.position()))
+
+    sb.logInfo("UNIT drop tick toPass %s (floorFeet %s)",
+      tostring(pather.petportsDropFloorFeet ~= nil
+        and platformToPass(mcontroller.position(), pather.petportsDropFloorFeet)),
+      tostring(pather.petportsDropFloorFeet))
+  end
+
+  --  NOTHING LEFT TO PASS. Checked before the floor, because it is the reason
+  --  the floor test existed and it is exact where the floor test was a proxy.
+  local floorFeet = pather.petportsDropFloorFeet
+  if floorFeet ~= nil then
+    local pass = platformToPass(mcontroller.position(), floorFeet)
+
+    if pass == nil then
+      sb.logInfo("UNIT drop done passing at y %s feet %s (fell %s, floor %s) "
+        .. "-- no platform above the floor left, releasing down",
+        sb.printJson(y), sb.printJson(y + mcontroller.boundBox()[2]),
+        sb.printJson(origin - y), tostring(floor))
+
+      releaseDrop(pather)
+      return
+    end
+  end
+
+  --  Retained as a backstop for a drop with no floorFeet recorded, and for a
+  --  plan whose descent runs past every platform the probe can see.
+  if floor ~= nil and y <= floor + DROP_FLOOR_MARGIN then
+    sb.logInfo("UNIT drop reached floor %s at y %s (fell %s) -- floor backstop, "
+      .. "the platform test should have released first",
+      sb.printJson(floor), sb.printJson(y), sb.printJson(origin - y))
+
+    releaseDrop(pather)
+    return
+  end
+
+  --  CHECKED BEFORE THE PRESS, NOT AFTER. This is fault two. Still worth
+  --  keeping: it catches a drop that lands EARLY, on something the plan did
+  --  not know about, before the floor is reached.
+  if (origin - y) >= DROP_DESCENT_EPSILON and mcontroller.onGround() then
     if TASK_DEBUG then
-      sb.logInfo("UNIT drop landed at y %s (fell %s), releasing down",
-        sb.printJson(y), sb.printJson(origin - y))
+      sb.logInfo("UNIT drop landed short at y %s (fell %s, floor was %s), releasing down",
+        sb.printJson(y), sb.printJson(origin - y), tostring(floor))
     end
 
-    pather.downHoldTimer = nil
-    pather.petportsDropOrigin = nil
+    releaseDrop(pather)
     return
   end
 
@@ -1032,8 +1416,11 @@ function petportsKeepDropping(pather, dt)
 
   pather.downHoldTimer = pather.downHoldTimer - dt
   if pather.downHoldTimer <= 0 then
-    pather.downHoldTimer = nil
-    pather.petportsDropOrigin = nil
+    sb.logInfo("UNIT drop hold EXPIRED at y %s (fell %s, floor %s) -- backstop fired, "
+      .. "the floor test should have released first",
+      sb.printJson(y), sb.printJson(origin - y), tostring(floor))
+
+    releaseDrop(pather)
   end
 end
 
@@ -1199,6 +1586,12 @@ local function freshPather(why)
 end
 
 function petportsTaskAction.enteringState(stateData)
+  --  First entry only. See BUILD_STAMP for why this is not at file scope.
+  if not stampLogged then
+    stampLogged = true
+    sb.logInfo("PETPORTS taskAction build: %s", BUILD_STAMP)
+  end
+
   sb.logInfo("UNIT entering task state for %s at %s",
     tostring(stateData.task.id), sb.printJson(mcontroller.position()))
 
@@ -1576,10 +1969,46 @@ function petportsTaskAction.update(dt, stateData)
   --  Deliberately not a fix to the 7% over-estimate. That lives inside
   --  world.platformerPathStart, and shrinking planned jumps to compensate is
   --  how the smallJumpMultiplier mess started.
+  --  GROUNDED COUNTS TOO, AND THAT WAS THE HOLE.
+  --
+  --  The gate above was `not onGround() and falling`, which stops skipping at
+  --  the exact moment the leftover waypoints become permanently unreachable:
+  --  touchdown. Measured, on a stack of platforms:
+  --
+  --    [1210.11,712.8]  onGround TRUE   Arc edge 12   dst [1210.56,713.839]
+  --    [1210.54,712.8]  velocity 8.13   still Arc edge 12
+  --    [1211.49,712.8]  velocity 11.8   -> Land edge 14, already passed
+  --    [1212.48,712.303] onGround FALSE -- off the platform edge, falling
+  --
+  --  The unit landed a tile BELOW an arc waypoint it was still holding. Being
+  --  grounded, moveArc's grounded branch takes over, and that branch
+  --  repositions HORIZONTALLY ONLY -- so it set off toward the waypoint's x
+  --  across a 0.45 tile gap, accelerated to full run speed doing it, blew past
+  --  that node AND the Land node behind it, and ran off the platform. Eight
+  --  tiles down, grounded far from an airborne edge, stall detector fires,
+  --  replan, mirrored arc from the other side, forever.
+  --
+  --  A waypoint above a GROUNDED unit is exactly as unreachable as one above a
+  --  falling unit -- more so, since the unit is now standing on something. The
+  --  original reasoning applies unchanged; the predicate was just too narrow.
+  --
+  --  Still excluded: rising. A unit on its way up has not reached its apex and
+  --  its waypoints are legitimately ahead of it.
   local arcFinder = self.pather and self.pather.finder
 
-  if arcFinder ~= nil and arcFinder.hasPath and not mcontroller.onGround()
-     and mcontroller.velocity()[2] < 0 then
+  local arcSkippable = false
+  if arcFinder ~= nil and arcFinder.hasPath then
+    if mcontroller.onGround() then
+      --  Landed. Whatever is left of the arc is over, whether the plan agrees
+      --  or not.
+      arcSkippable = true
+    elseif mcontroller.velocity()[2] < 0 then
+      --  Airborne and descending: the original case.
+      arcSkippable = true
+    end
+  end
+
+  if arcSkippable then
     local skipped = 0
 
     while skipped < MAX_ARC_SKIP do
@@ -1599,8 +2028,10 @@ function petportsTaskAction.update(dt, stateData)
     end
 
     if skipped > 0 then
-      sb.logInfo("UNIT skipped %s unreachable arc waypoint(s) while falling from %s -- now on edge %s of %s",
-        sb.printJson(skipped), sb.printJson(mcontroller.position()),
+      sb.logInfo("UNIT skipped %s unreachable arc waypoint(s) while %s from %s -- now on edge %s of %s",
+        sb.printJson(skipped),
+        mcontroller.onGround() and "GROUNDED" or "falling",
+        sb.printJson(mcontroller.position()),
         tostring(arcFinder.currentEdgeIndex),
         tostring(arcFinder.edges and #arcFinder.edges))
     end

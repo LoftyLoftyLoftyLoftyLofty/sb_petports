@@ -58,6 +58,7 @@
     "persistent" : true,
     "damageTeamType" : "ghostly",
 
+
     "scripts" : [
       "/monsters/pets/groundPet.lua",
       "/scripts/pathing.lua",
