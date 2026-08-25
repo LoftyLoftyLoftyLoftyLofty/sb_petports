@@ -1,0 +1,665 @@
+0:00
+Good day ladies and gents. Kibikmeter here. Everyone is talking about the copper golem and already people are
+0:06
+copying my multi item sword design even before I've published it. Wait, what?
+0:11
+What happened to my head? Anyway, the copper golem is being heralded as this amazing solution for players. But to
+0:17
+comprehend the efficacy of a solution, one must first consider the problem that is being solved. The most abstract
+0:24
+framing of the problem is right there in the name. We mine resources. We craft those resources into tools. We use those
+0:31
+tools to mine better resources. We use better resources to make better tools. And between all of these steps is the
+0:38
+player's inventory. But even at Minecraft's inception, there have been many more item types than the player can
+0:43
+hold at any given time. Thus, an important aspect of game play is for the player to make use of containers outside
+0:51
+their own inventory to plan and store materials that they might need for the future. This game play will normally
+0:58
+result in a lot of mess and it takes a lot of effort for the player to keep their inventories organized. It turns
+1:04
+out there is a really neat metric we can use to measure the states of inventories and that metric is entropy, a concept
+1:12
+from thermodynamics. A common assumption is that entropy is simply a measure of how disordered a system is, which would
+1:19
+certainly explain how it might be applied to Minecraft storage problem. To understand entropy, we should start with
+1:26
+the laws of thermodynamics, which goes something along the lines of something is hot if you spontaneously catch fire
+1:32
+by just being near it. Item duplication is a bug and must be reported to your
+1:37
+nearest merging employee. Good times with Scar joining Hermitcraft would have an appreciable impact on the world's
+1:43
+file size. And some boring thing about zero entropy and healing crystals. Making fun of serious scientific topics
+1:50
+aside, we're yet to define what entropy is, how to actually measure it, or why we should even care. But it turns out
+1:57
+there is a very simple explanation for entropy and how it relates to whatever the most common interactions in
+2:03
+Minecraft. I want to build a house, and I need these specific materials in order
+2:08
+to do it. But fortunately, I have these materials in these chests ready to go.
+2:15
+Now, let's ask the question. What is the difference between this chest and this
+2:21
+chest? They both have exactly the same amount of exactly the same items, but
+2:27
+one of the chests just feels like it's more something, more disordered,
+2:33
+more disorganized. No, more entropy.
+2:40
+What happens when I open a chest is that my squishy eyes and my squishy human
+2:45
+brain are trying to recognize patterns in the UI.
+2:51
+And if I open a chest that is more organized, my brain can quickly recognize the items that I need. But if
+2:58
+I open a disorganized chest, my brain has to do more work to figure out if
+3:03
+this image contains the things that I need. In this context, entropy is not
+3:09
+necessarily a measure of how disorganized the chest is. It's a measure for the amount of work that is
+3:16
+required by me, the player, to get the information that I need. To emphasize
+3:21
+the difference between disorder and entropy, let's take a look at this system of containers. This is our nine
+3:27
+core randomizer where we start with items perfectly organized in these chests. We then pick
+3:34
+a random slot and send that item to these chests at the front. This is a
+3:40
+perfectly random process. And yet, if we open a chest, we will often find these
+3:46
+structures of the same item type clustered together. This runs contrary to the idea that entropy is just a
+3:52
+measure of disorder, as order can form spontaneously from chaos. In fact,
+3:58
+breaking up these item clusters to increase the disorder of the container
+4:03
+would actually demand more work than just using the nine core randomizer.
+4:09
+A great example for this is the average redstone toolbox. Every slot has a
+4:15
+different item type. Every item has its place. When using this container,
+4:20
+everything feels perfectly ordered. But if I did not know what this box is
+4:26
+or what it is used for, my interaction with this container would incur the
+4:31
+maximum possible effort from my brain to find the item that I need.
+4:37
+This is quite interesting because you might have noticed we're starting to build a basis for defining containers
+4:43
+that have more entropy or less entropy. Let's see if we can take this further
+4:48
+and establish an objective measure, a number that we can assign to a container to actually measure its entropy.
+4:56
+Consider an item X. It does not matter what this item is. All that matters is
+5:02
+that we need to find this item by interacting with containers. If I open a container and it's empty, I
+5:10
+can immediately infer that the item is not in the container. This incurs the minimum possible cost for the
+5:16
+interaction. The same thing happens if I open a container and it has only a single item
+5:23
+type. I pretty much know instantly if the container has the item that I want. Note how it doesn't matter if X is in
+5:30
+the container or not. We only care about the effort involved in cross referencing the container with X. Thus, as we start
+5:38
+adding more item types, the cost of the interaction increases.
+5:43
+Structured patterns of the same item type tend to reduce this cost and the
+5:49
+larger the pattern, the lower the cost. Mixing item types increases the cost as
+5:55
+this tends to break up the consistent patterns our brains can use to reduce cognitive load. Therefore, we can define
+6:02
+the maximum effort being a container where every single item slot is a
+6:08
+different item type. So how can we measure this effort and translate it
+6:13
+into an objective measure of entropy? Well, consider two item types. If I swap
+6:20
+the items, we produce a state that is visually distinct. But rearranging the
+6:25
+items this way doesn't change the effort involved in recognizing them. If these
+6:32
+two items are the same, then swapping them does not change the state of the container, but also does not change the
+6:39
+effort involved in recognizing them. In the most extreme case, with a different
+6:44
+item type in every slot, we can arrange the items in a staggering amount of
+6:49
+unique states, but to the effort of our interaction, these states all incur the
+6:56
+same amount of work to distinguish the items. How about we count the number of ways we
+7:02
+can arrange the items to look different but not change the effort of our interaction? Well, the average container
+7:07
+in Minecraft has three rows and nine columns. That is 27 slots in total. If
+7:13
+we add an item to the container, there are 27 slots to choose from. If we add
+7:19
+another item to the container, for each position of the first item, there are 26
+7:24
+other locations to choose from. Meaning the total number of choices between two items is 27 * 26. If we add a third item
+7:34
+for each position of the first and the second item, there are 25 other locations to choose from. Meaning the
+7:41
+total number of choices is 27 * 26 * 25.
+7:46
+This pattern will continue until we have filled the container. This product of the sequence from 1 to 27 is the
+7:54
+factorial of 27 which ends up being a very big number. This is the number of
+8:00
+ways we can arrange 27 different item types in our container. The factorial of
+8:05
+the number of item types gets us to a solid number we can calculate for any container. So a container with 26 item
+8:12
+types has 26 factorial distinct states and so on until the container is just a
+8:19
+single item type at which point one factorial is just one. A single distinct
+8:25
+container state regardless of how you arrange the item in the container. But
+8:30
+hang on if there are empty slots then wouldn't they count towards our choices of where to put an item? Well, yes, this
+8:38
+is true if you are thinking strictly in the state of the container, but I'm thinking in terms of the state of the
+8:43
+container in our minds. If a container is partially full, your brain can
+8:49
+quickly identify slots that are air and simply ignore them and bunch all the
+8:55
+items together. Thus, empty slots are not counted towards our choices. Another
+9:01
+case is when the same item appears in different slots. Swapping any item with
+9:06
+a different item is counted in our arrangements as this is a visually distinct state. However, if you swap the
+9:14
+same item with itself, the resulting state is not visually distinct. If the same item is found
+9:21
+adjacent to itself, we apply even stricter conditions. Dropping any item
+9:27
+with an item adjacent to itself is visually distinct but also impacts the
+9:32
+effort of interaction. Thus, patterns with the same item type
+9:38
+adjacent to itself are treated as their own substructure and can only be chosen
+9:44
+for locations which fit the substructure. These conditions ensure that our
+9:50
+eventual measurement for entropy will take into consideration arrangements that better organize the items. Like for
+9:57
+example, given our conditions, this column-wise arrangement has the same number of distinct arrangements as
+10:03
+simply nine different item types. The really big numbers from our factorials can be reduced to much more manageable
+10:09
+numbers by taking their natural logarithm. In fact, this is how you define entropy
+10:14
+for strictlyformational systems, which was best described by Claude Shannon at
+10:20
+the formation of information theory. It's important to note that this type of entropy measurement doesn't really have
+10:26
+units as it's simply the logarithm of an abstract quantity. Apparently, if you use the natural logarithm to define this
+10:33
+type of entropy, we can refer to the units as nats. This number gives us an
+10:39
+effective measure for how badly items are sorted with respect to the effort involved in opening containers and
+10:44
+searching their contents. With all this theory established, we gain access to a
+10:49
+measuring stick that we can apply to do some really cool science. Like for example, what would it look like to
+10:56
+measure the storage entropy of a Minecraft world? For this, I had Velisar
+11:01
+make a program that can scan a Minecraft world for containers and give us data about their contents. I then made my own
+11:08
+programs to extract this data and apply our constraints for defining the entropy of each container. I even went as far as
+11:16
+designing a shader which can overlay a thermal heat map of our entropy data. Of
+11:21
+course, with a lot of help from the shader labs discord. This is still very much in the prototyping stage and is
+11:27
+currently extremely complicated to set up with very specific programs and tools that most of you would not have access
+11:33
+to. I'll be sure to let you guys know if there are any further developments with this tech, but for now, please be
+11:38
+patient. Let's take our Entropy Heat Vision for a spin on the main storage of the Wavete server. This is an enormous
+11:46
+advanced item sorder and storage system capable of storing up to half a billion
+11:51
+items. If we go into one of our storage halls and activate the overlay, you immediately start to notice that the
+11:57
+vast majority of our containers have a very low entropy. In fact, this deep
+12:02
+blue coloration indicates that these containers effectively have zero entropy. And the reason for that is that
+12:09
+all the items are perfectly organized. In each one of these slices, you can only find a single item type in every
+12:16
+container. Every now and then, you'll come across these hot spots. For example, this one here is the overflow,
+12:23
+which also functions as a multiem sorder. So in this chest we can find a various
+12:31
+mix of items like all the pottery shards for example meaning that this container has a relatively high entropy. We also
+12:38
+make use of the multiom sorting functionality of our overflow to sort all the various copper item variants
+12:44
+meaning that these particular item types contribute a very small amount of entropy. If we head up to the second
+12:51
+floor of our storage, we can start to find some very hot
+12:56
+areas. For example, this is the unstackable item sorder. And
+13:03
+here is essentially all the unstackable items that we couldn't be bothered to sort. And as a result, this container
+13:09
+has a relatively high entropy. And the same goes for this container over here
+13:14
+that contains all the various music disc types. Now, it's important to note that we
+13:20
+actually treat a shocker box inside of a container as its own container and then
+13:26
+we add the entropy of the shocker box to the block location of that container.
+13:32
+Meaning that each one of these individual shulker boxes is effectively treated as its own container which the
+13:40
+player has to interact with to determine its contents. Because of this, shulker
+13:45
+boxes with mixed item types can contribute to extremely large entropy concentrations in individual containers
+13:52
+like this chest. If we continue to look around the second floor of our storage, you'll come across this tiny little
+13:58
+entropy concentration over here. Now, this is particularly interesting because
+14:04
+this is the interface to our super bulk. This is possibly the most efficient
+14:10
+storage system with regards to the effort of interaction as each one of
+14:15
+these individual items in each of these slots represents almost 50,000
+14:21
+of that particular item type. Meaning the entropy concentration from this one double chest effectively encapsulates
+14:28
+the entire effort of interaction with this entire bulk storage system. And of
+14:34
+course, the containers from our bulk all contribute zero entropy because they're all perfectly organized. Continuing our
+14:41
+tour of the main storage, we'll also find this area over here. Now, this is a
+14:46
+simple buffer that we use for storing various items for certain projects. Like, for example, in this chest, we can
+14:52
+find some shoger boxes of mixed item types. And these are materials that have been prepared for a future project.
+14:59
+There are also a couple of hot spots over on this wall here, and that's because these are the personal item
+15:06
+cases for various players around the server. And it's not surprising that you might find various containers with
+15:12
+different item types in these locations. Just beyond these item cases is the
+15:18
+parallel entity item sorder for our main storage. This is the engine that drives
+15:24
+the item sorting for our main storage. And if you have a look, we'll find that
+15:30
+there is an area of extremely high entropy in this particular mechanism here. And this is actually the fixed
+15:37
+item set that we use for sorting particular item types at double the
+15:43
+sorting speed of other item types. So sometimes high entropy containers can
+15:49
+have a practical use. A very good example of this is this redstone box
+15:55
+maker. Here you can find that every slot is occupied with a redstone box where
+16:01
+every slot in the redstone box is a different item type. This is effectively the maximum possible entropy you can
+16:08
+have in a single container. If you have a look at the actual box maker itself,
+16:14
+we can see a really cool effect. We effectively get a gradient of entropy
+16:19
+values which is created by the fact that our redstone boxes are gradually filled
+16:25
+with each item type before they reach the end and make their way into the
+16:31
+finished redstone box buffer. Some hotspots don't appear to be connected to any function of the storage until I
+16:37
+realize this was put here deliberately. I guess Eagle has been inactive for a while and somebody decided to bury all
+16:45
+their stuff in a grave. By analyzing the main storage this way, I hope I can provide some point of reference to what
+16:51
+a functional storage system can do. It's not about every single container in your world being perfectly organized. In
+16:58
+fact, we've demonstrated that some circumstances necessitate dumping items in some random location so you can just
+17:04
+forget about them. High containers aren't necessarily the problem. They only become problematic if those
+17:11
+containers are the bottleneck between you and what you want to build. What I want to accomplish with this video is
+17:18
+demonstrate the problem of inventory and management faced by players. And our fancy new measuring stick is the exact
+17:24
+tool that we need for the job. If only there were a series of worlds spanning Minecraft's history built from multiple
+17:31
+players adopting a consistent play style throughout that time. So yeah, I might have downloaded every season of
+17:38
+Hermitcraft and run a whole bunch of analysis. Here is the pretty famous historical example of the chest monster
+17:45
+from season 6. Without overlay enabled, this thing looks freaking radioactive.
+17:51
+But all Green did was take all his items and concentrate them in one place. In
+17:56
+fact, pretty much everywhere you look on any Hermitcraft world, you will find various item caches, little clusters of
+18:03
+chaos in the middle of major project areas. This is simply how most people play the game. And it's possible to
+18:10
+imagine how this style of gameplay might place constraints on the player's productivity and creativity. Here's a
+18:15
+cool analysis we can do. Since we calculate the entropy of every container in a Minecraft world, what if we remove
+18:23
+a particular item type from every container, then we measure the entropy
+18:28
+again and assign the difference to that item? Well, in that case, what we are
+18:33
+measuring is the degree to which specific items constrain the arrangements of other items in
+18:39
+containers. For example, if we rank the entropy by item for the Way Tech server, at the top of the list are all of these
+18:46
+Nether resources. And there's actually a very interesting reason for this. Recently, we've run this enormous quarry
+18:52
+in the Nether. And many of the resources gathered by this quarry were not sorted.
+18:58
+Instead, they sit in mixed item caches like this one.
+19:04
+And as you can tell, these item caches are scorching. The fact of the matter is
+19:09
+that these resources were not really valuable to us. So, we did not consider it necessary to actually sort them. If
+19:16
+we analyze the entropy by item for every season of Hermitcraft, a trend emerges
+19:21
+where individual item types appear to be contributing a consistent amount of entropy over time. If players were
+19:27
+utilizing more advanced sorting techniques, you would expect this trend to decrease over time. If we consider
+19:33
+the entropy by item for wavete, you can observe that we have considerably less
+19:38
+entropy contribution per item type. This is in spite of the fact that wave tech
+19:44
+has just over 10 times the amount of items as every season of Hermitcraft
+19:49
+combined. And don't let the log scale fool you. This is what the comparison
+19:55
+really looks like on a linear scale. Of
+20:00
+course, the simpler explanation for this is that Wavete implements storage systems and item sorders on a massive
+20:07
+scale. Beating people with my own measuring stick aside, this data paints a grim picture for the future of
+20:13
+Minecraft. The amount of items in the game has been increasing steadily for over a decade. But if we assume the way
+20:20
+the hermits play the game is indicative of the larger player base, then the utilization of better item sorting
+20:26
+techniques isn't changing or adapting to this new content. So naturally, the total entropy of Minecraft worlds should
+20:33
+also be steadily increasing. But apparently it was high in the past, then decreased, then increased again. Here's
+20:41
+an important lesson in data analysis. If we investigate the entropy heat maps of earlier seasons, you will notice a
+20:48
+pattern. Seasons 1 to 3 appear to have many small entropy concentrations in all
+20:54
+of the explored terrain. There is a good explanation for this. Ever since 1.9,
+21:00
+loot tables were implemented for loot chests, meaning they would not generate their contents until they were opened.
+21:05
+In versions prior to 1.9, simply generating terrain would add containers of items to your world. So, the first
+21:13
+three seasons of Hermitcraft have an enormous amount of loot chests from all the generated terrain messing with our
+21:19
+data. If we filter out these edge cases, then the true trend emerges. Minecraft's
+21:26
+container entropy is increasing with each new update.
+21:32
+But what exactly does this mean? Thinking strictly in terms of how we define the entropy for containers, it
+21:39
+means the items that you need are scattered in more places, increasing the
+21:44
+cost of your labor, increasing cognitive load, increasing burnout, and reducing
+21:50
+your desire to play the game. Could it be possible that by adding more content to the game, merging is
+21:56
+counterintuitively, making the game less engaging the longer that your world goes on? Could this be the life cycle of a
+22:04
+Minecraft world to wither and decay as the work you do to gather resources and
+22:09
+build cool things grows too cumbersome to be worth the effort? Is Minecraft headed towards its own entropic demise?
+22:17
+A heat death of Minecraft? This is the crisis in storage tech. But what is the
+22:24
+solution? Well, one obvious fix is to just remove items from the game.
+22:31
+Like for example, what if we removed all stairs, slabs, fences, doors, any variant of a base
+22:39
+material and then we simply allow the base material to be placed directly as a
+22:45
+block from the base material. Well, calling all material variations from our
+22:51
+Hermitcraft data and it barely makes a dent. The reality is that variations of
+22:57
+a material are often only crafted in very small quantities and consumed as
+23:03
+they are crafted. They do not really contribute much to container entropy. So all of those copper item variants being
+23:10
+added to the game aren't really having much of an impact as these items usually
+23:15
+need to go through the step of crafting which is a deliberate action the player controls. The majority of container
+23:22
+entropy is caused by the base materials themselves. Any item that the player can
+23:28
+obtain accidentally or without intention is what dramatically increases entropy.
+23:33
+This can clearly be seen as ranking the entry by item across Hermacross seasons
+23:38
+lists the kind of items that you would often encounter when trying to mine for specific resources. The player goes
+23:44
+mining for various minerals while the player grows a bunch of tree variants and drops them down. They have access to
+23:51
+a diverse block pallet and what they're left with is a bunch of materials that they just need to get rid of. We would
+23:57
+need to fundamentally change the way the player inventory functions to maintain the current diversity of blocks while
+24:04
+limiting their impacts as items. But hang on, Minecraft already had a feature
+24:09
+that basically did this. During the peak of suppression exploits, there was a way
+24:14
+to make shadowed item stacks. These would effectively be item stacks
+24:22
+that were quantum entangled with each other and could be manipulated remotely between the player's inventory and an
+24:28
+external container. A feature like this would have been revolutionary
+24:34
+as changing the ways that players can interact with containers would fundamentally mitigate the problem of
+24:41
+container entropy by addressing the problem at the effort of interaction. The only issue is that this particular
+24:49
+feature would lead to certain duplication exploits. However, merging
+24:55
+rarely listens to feature requests. So, I should probably focus on other solutions.
+25:03
+Of course, another solution is to give players access to better item sorders, which is why I'm surprised that Mo
+25:10
+didn't implement Waveex main storage as a structure that can generate in your world. Players need access to powerful
+25:16
+and reliable item sortters. However, that doesn't always go to plan.
+25:23
+Using a sorting system demands skills and knowledge not often accessible to most players. If a hermit was dropped
+25:30
+into a main storage, they would certainly not need to work very hard to find the items that they need. But if
+25:36
+anything goes wrong, they'd have to go into the machinery and fix it. And believe me, I've had to fix this storage
+25:43
+at least a dozen times. And honestly, the amount of work it takes to maintain
+25:48
+this storage is orders of magnitude less than the effort it would take to gather
+25:53
+materials for projects without it. But for most players, fixing a machine like this is simply a non-starter. There are
+26:00
+too many specific details and ways to make the problem worse if you don't know exactly what you're doing. So Mojang's
+26:08
+solution is to give us the copper golem. But is it actually good? Well, to find
+26:13
+out, I've pitted the copper golem against this, the Mooney multi item
+26:19
+sorder version 5.1, designed by Rapcallion, Mooney, and Sergi D. This
+26:25
+represents the standard you would expect for a redstonebased multiom sorder that is fairly accessible to many players. In
+26:33
+the 30hour test, it managed to sort about 210,000
+26:38
+items, giving us a sorting speed of about 6,300 items per hour. For reference, a hopper
+26:46
+transfers items at 9,000 per hour. So, the Mooney multiom sorder can sort items
+26:52
+at roughly 2/3 hopper speed. Representing the copper golem, we have this behemoth, a multi-ite item sorder
+27:00
+with fixed item sets as well as dustless item filters for extra star points. It
+27:07
+managed to sort 47 12,000 items in the allotted time, giving us a sorting speed
+27:12
+of about 1,400 items per hour. To decide whether this is a good sorting speed,
+27:19
+let's compare it to some applications. I can't believe this is the first time I've crafted an iron pickaxe on this
+27:25
+server. Using primitive tools, the player can mine blocks at about 1.3 blocks per second. That is almost 4,700
+27:33
+blocks per hour. So, for every hour I spend mining in the early game, I would
+27:38
+need to wait 3 hours and 20 minutes for my items to be sorted. That isn't too
+27:44
+bad, but consider what happens when the player progresses to better tools. With my fully enchanted Netherite pickaxe, I
+27:51
+can mine blocks at about 2.3 blocks per second, which just so happens to be
+27:57
+9,000 blocks per hour. So now my hourong mining session is costing me 6 and 1/2
+28:03
+hours of sorting time. And we haven't even considered instant mining yet. So the copper golem might be good for the
+28:10
+early game. But as the player progresses and the scale of their creativity grows,
+28:15
+the copper golem is not going to be able to keep up. May I propose a solution?
+28:21
+What if the copper golem could also sort shocker boxes? I don't mean sorting the
+28:26
+shocker boxes by color. What I mean is sorting them by their contents. Let me
+28:32
+explain. If I'm the copper golem and I pick up a shulker box, when I look
+28:37
+inside of a chest, I check whether the item inside the shocker box is also in the chest. If that is the case, I put
+28:45
+the shocker box in the chest. If I pick up a shocker box and every item inside
+28:50
+the shocker box is also in the chest, then we put the shocker box in the
+28:57
+chest. But if we pick up a shocker box and it contains an item that is not
+29:03
+found anywhere in that chest, then that box is rejected from that chest and the copper golem tries
+29:10
+elsewhere. But what if I still want to be able to sort sher boxes by their color? Well, if the chest contains
+29:15
+shocker box items, then the golem will not only match the items inside the box to the items inside the chest, but also
+29:22
+match the color of the box to the color of a box already inside the chest. And if we are so bold, perhaps even matching
+29:30
+the pattern inside the box, the box is already inside the chest.
+29:37
+This is basically the same sorting logic the Golem implements, but treating the whole shocker box like it would treat
+29:43
+each individual item inside of it. It would make for the perfect compromise,
+29:48
+as the Golem could provide a simple and balanced method of sorting items for the early game, but also increase its
+29:55
+capabilities as the player progresses to obtaining shocker boxes. Being able to sort boxes by the items that are buried
+30:02
+inside of them is also an area of storage tech that is extremely prohibitive with redstone. So, this
+30:09
+would also mean the copper golem would add behavior completely unique to redstone instead of simply competing
+30:15
+with existing storage technology. So, how do item sources relate to our
+30:20
+definition of entropy? Well, as we've established, using item sources will reduce the entropy of your world. But
+30:27
+how is that possible? Doesn't that violate the second law of thermodynamics?
+30:33
+Well, actually, no. And the reason is quite interesting. You see, item sources
+30:38
+are mechanisms that perform work, like an engine. In fact, Wave Tech's main storage item sorder very much resembles
+30:45
+an engine in that over revving it for a prolonged period causes it to fail. But how do we measure the work done by an
+30:51
+item sorder? And what would the units be called? Engine power is usually measured in kilowatt or horsepower, but these
+30:59
+units have their definitions rooted in real dynamics. Our entropy definition for containers in Minecraft, however,
+31:05
+measure an abstract quantity from a block game. What I'm trying to get at is we need to define a unit for our
+31:10
+container entropy. We've already established that NATS are what we call units of information entropy defined
+31:16
+using the natural logarithm, but that sounds weird and doesn't quite roll off
+31:21
+a tongue. We're measuring container information and information on a computer is stored in bits. So, what
+31:29
+about container bits, cubits? To characterize the work done by our item
+31:34
+sortters, I measured the entropy before and after the 30-hour test. And in fact,
+31:40
+the container entropy did decrease. The Mooney multi-item sword managed to eat
+31:45
+over 10,000 cubits of entropy, while the copper golems ate just over 6,000
+31:50
+cubits. This is quite interesting because the copper golems had a five times slower item throughput, but only a
+31:58
+1.8 time slower throughput of container entropy. This might indicate that the items sorted by the copper golem were
+32:05
+slightly more organized than in the redstone based system. You can see why this might be the case
+32:11
+when you look inside the containers. This is quite common for these types of multiom sorders. Even though they are
+32:17
+sorting the items, they still end up in a fairly chaotic state. This also might indicate a limitation in our entropy
+32:24
+definition as technically the entropy of the container states for a storage system like this would decrease with
+32:31
+each interaction as the player builds up a mental image of what items to expect in each slice of the storage. But we
+32:38
+can't exactly measure how many times a player interacted with a container while it was in a certain configuration.
+32:45
+So, we just assume that every container we measure is always the first time the player has seen that container. Looking
+32:51
+at how the items have been organized in each storage system, and there doesn't
+32:57
+seem to be much of a difference in the way that the items have been organized. In fact, the Mooney multi-item sortter
+33:04
+has this mechanism known as a def fragmenter, which will actually bundle the same item type together in a
+33:10
+continuous stream. This results in many slots in sequence having the same item type, which would drastically reduce the
+33:17
+entropy of the container. Surprisingly, the copper golem actually produces a very similar behavior in that they pick
+33:24
+up batches of items, meaning that they tend to be defragmented as they go into the multi item sorder. So perhaps a
+33:31
+subtle optimization for the copper golem could be to add a tag that remembers the last item it interacted with and simply
+33:38
+prioritize that item first when looking inside of a copper chest. This could
+33:43
+potentially tweak the copper golem to give it a slight edge when organizing your items. Okay, but if item sortters
+33:50
+lower the entropy of your Minecraft world, then where is their entropy going? After all, the second law states
+33:57
+that entropy must always increase. Well, item sworders perform work and that work
+34:03
+is translated into processing power by your computer, which gets exhausted as heat from your computer fans. Item
+34:10
+solders literally take the entropy from your Minecraft world and dump it into the real world. Isn't that crazy? But
+34:18
+now that would mean the copper golem is an entity that lives inside of your computer and dumps entropy into the
+34:25
+environment. Oh god, I just realized I made a grave mistake.
+34:31
+Ah, they're on to me. Well, it appears I'm now being hunted by Maxwell's demons. I guess this is the price we pay
+34:37
+for organizing our items. Spread the word. Save yourselves.
+
