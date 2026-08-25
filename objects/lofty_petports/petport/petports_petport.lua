@@ -803,6 +803,15 @@ function init()
         self.task.count)
     end
 
+    --  Arrived at a crate holding something that does not belong in it. Same
+    --  shape as the withdraw above -- the unit only ever walks and stands, and
+    --  the container call happens on the port.
+    if report.outcome == "done" and self.task ~= nil
+       and self.task.type == "tidy" and self.task.id == report.id then
+      withdrawMisfit(self.task.target, self.task.item, self.task.count,
+        self.task.id, self.task.slot)
+    end
+
     --  Tiles were wetted. Spend one item per tile actually done.
     --
     --  COUNTED FROM THE REPORT, not from the task's tile list. A unit that ran
@@ -2091,6 +2100,50 @@ function withdrawSeed(containerId, seedName, workId, count)
     sb.printJson(containerId))
 
   receiveCargo({ name = seedName, count = count })
+end
+
+--  Take a misfiled stack out of a crate. The eviction half of tidying.
+--
+--  Global for the same reason withdrawSeed is: the petports_taskReport handler
+--  is registered in init(), earlier in this file than this definition.
+--
+--  BY NAME AND COUNT, NOT BY SLOT. The slot is what tidyWork FOUND the misfit
+--  in, and it is not stable -- a player rearranging the crate between dispatch
+--  and arrival moves it, and containerConsume works on descriptors anyway. The
+--  slot survives on the task only so the log can say where it was seen.
+--
+--  Symmetric with withdrawSeed on failure: a withdraw that takes nothing must
+--  be recorded, or the port re-dispatches the identical walk forever with
+--  nothing in the log looking wrong.
+function withdrawMisfit(containerId, name, count, workId, slot)
+  if name == nil then return end
+  count = count or 1
+
+  local function empty(reason)
+    sb.logInfo("PETPORT %s tidy of %s from %s took nothing: %s",
+      stationUniqueId(), tostring(name), sb.printJson(containerId), reason)
+
+    if workId ~= nil then noteFailure(workId, reason) end
+  end
+
+  if not world.entityExists(containerId) then
+    empty("container no longer exists")
+    return
+  end
+
+  local took = world.containerConsume(containerId, { name = name, count = count })
+
+  if took ~= true then
+    empty("containerConsume returned " .. tostring(took)
+      .. " -- crate rearranged between dispatch and arrival?")
+    return
+  end
+
+  sb.logInfo("PETPORT %s tidied %s %s out of %s (was slot %s)",
+    stationUniqueId(), sb.printJson(count), tostring(name),
+    sb.printJson(containerId), tostring(slot))
+
+  receiveCargo({ name = name, count = count })
 end
 
 --  Remove one seed from cargo after it has gone into the ground.
@@ -3629,6 +3682,143 @@ local function withdrawWork()
 		wanted)
 end
 
+--  DEFRAGMENT STORAGE. Eviction, and therefore disperse.
+--
+--  A crate's filter says what belongs in it. Anything else in there is a
+--  misfit, and moving misfits to where they belong is the whole feature.
+--  petports_filterMisfits owns the question; this owns the dispatching.
+--
+--  DISPERSE IS NOT A SECOND MECHANISM. A dropbox is a deposit beacon whose
+--  filter accepts nothing -- base "deny", no allow rules -- so every stack in
+--  it is a misfit and the whole crate empties outward by tag. No second beacon
+--  type, no second work generator, and a dropbox can never be its own
+--  destination because its own filter rejects everything.
+--
+--  A MISFIT WITH NOWHERE TO GO STAYS PUT. Both halves are checked before
+--  anything moves: some other beacon's filter must ACCEPT the stack, and that
+--  crate must have ROOM for it.
+--
+--  The room half is the player's call, and it is about not wasting their unit.
+--  Tidying a stack into a full network means the unit picks it up, depositWork
+--  finds no target, and the cargo guard in findWork then blocks collection,
+--  harvest, animals and fetching outright -- one misfiled stack takes a unit
+--  out of the working pool and stalls everything it would have done. Someone
+--  mid-reorganisation of their base should not have to think about that. So
+--  full storage simply postpones defragmenting until there is space.
+--
+--  It is also the deadlock withdrawWork's header describes having already been
+--  bitten by, arrived at from the other direction.
+--
+--  LOWEST PRIORITY, below collection and harvest. A drop on the ground is on a
+--  despawn timer; a misfiled stack is in a box and will be exactly as misfiled
+--  in a minute.
+--
+--  SELF-LIMITING. One stack per trip is the standing design, so a crate with
+--  forty misfits produces forty sequential trips rather than forty tasks.
+local function tidyWork()
+  local beacons = petports_beaconsFor("deposit")
+  if #beacons < 2 then
+    --  Nowhere to move anything TO. One crate cannot tidy into itself.
+    return nil, "fewer than two deposit beacons in coverage"
+  end
+
+  --  Counted so the no-work reason can tell "nothing is misfiled" from
+  --  "plenty is misfiled and storage is full", which are very different
+  --  states and look identical from a silent port.
+  local misfiled, homeless, full = 0, 0, 0
+
+  for _, source in ipairs(beacons) do
+    if world.entityExists(source.id) then
+      local items = world.containerItems(source.id)
+
+      if type(items) == "table" then
+        local misfits = petports_filterMisfits(source.filter, items,
+          source.beaconSlot)
+
+        for _, misfit in ipairs(misfits) do
+          misfiled = misfiled + 1
+
+          local workId = "tidy:" .. tostring(source.id)
+            .. ":" .. tostring(misfit.name) .. "@" .. stationUniqueId()
+
+          local failure = self.workFailures[workId]
+          local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
+
+          if not backedOff and claimFree(workId) then
+            --  The full descriptor, not just the name: containerItemsCanFit
+            --  runs the real merge rules and parameters decide whether a stack
+            --  tops up an existing one or needs a free slot.
+            local stack = items[misfit.slot]
+            local accepted, roomFor = false, false
+
+            for _, destination in ipairs(beacons) do
+              if destination.id ~= source.id
+                 and world.entityExists(destination.id)
+                 and petports_filterAccepts(destination.filter, misfit.name) then
+                accepted = true
+
+                --  nil means the engine will not answer. Treated as NO here,
+                --  deliberately: this is optional housekeeping, and guessing
+                --  wrong costs a unit out of the pool. Deposit falls back to a
+                --  backoff because it has cargo it must place; tidying has the
+                --  luxury of simply waiting.
+                local fits = world.containerItemsCanFit ~= nil
+                  and world.containerItemsCanFit(destination.id, stack) or nil
+
+                if fits ~= nil and fits > 0 then
+                  roomFor = true
+                  break
+                end
+              end
+            end
+
+            if not accepted then
+              homeless = homeless + 1
+            elseif not roomFor then
+              full = full + 1
+            else
+              local stand = standingPointNear(source.position, 4)
+
+              if stand == nil then
+                sb.logInfo("PETPORT %s tidy source %s SKIPPED: no standable spot within 4 tiles of %s",
+                  stationUniqueId(), sb.printJson(source.id),
+                  sb.printJson(source.position))
+              else
+                sb.logInfo("PETPORT %s tidying %s x%s out of %s (slot %s)",
+                  stationUniqueId(), tostring(misfit.name),
+                  sb.printJson(misfit.count), sb.printJson(source.id),
+                  sb.printJson(misfit.slot))
+
+                return {
+                  id = workId,
+                  type = "tidy",
+                  target = source.id,
+                  item = misfit.name,
+                  count = misfit.count,
+                  slot = misfit.slot,
+                  position = stand,
+                  containerPosition = source.position,
+                  port = stationUniqueId(),
+                  dwell = 0
+                }
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  if misfiled == 0 then
+    return nil, "nothing misfiled in coverage"
+  end
+
+  return nil, string.format(
+    "%s misfiled stack(s), none actionable: %s with no crate that wants them, "
+    .. "%s with the right crate full",
+    misfiled, homeless, full)
+end
+
 local function findWork()
   --  Before anything else: a unit that has strayed cannot reach work anyway.
   local recall = returnWork()
@@ -3718,6 +3908,13 @@ local function findWork()
   local fetchWater, noFetchWater = withdrawWaterWork()
   if fetchWater ~= nil then return fetchWater end
 
+  --  BELOW EVERYTHING, INCLUDING FETCHING. Tidying is the only work that is
+  --  purely cosmetic from the network's point of view -- nothing is lost, no
+  --  timer is running, and every other job represents something that either
+  --  perishes or is already half done.
+  local tidy, noTidy = tidyWork()
+  if tidy ~= nil then return tidy end
+
 	--  The old noDrop fallback lived here and is now unreachable: noDrop is only
 	--  ever set when cargo is non-empty, and the guard above returns on that
 	--  condition before anything below runs.
@@ -3733,6 +3930,7 @@ local function findWork()
       .. "; " .. tostring(noFetch or noPutBack or "no replant work")
       .. "; " .. tostring(noWet or noFetchWater or "no watering work")
       .. "; " .. tostring(noBeast or "no animal work")
+      .. "; " .. tostring(noTidy or "no tidying work")
   end
 
   return nil, why

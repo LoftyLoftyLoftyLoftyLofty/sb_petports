@@ -17,6 +17,36 @@ known players survive. Unsocketing despawns it. Socket-cycling does not leak
 units. Placement validation is live: a unit that gets sleepy in a doorway walks
 clear of it and sleeps beside it, centred in a single-tile gap.
 
+**Filters sort, and storage defragments itself.** Deposit beacons route items to
+the right crate by tag and category. Eviction is built on the same predicate:
+anything in a crate that fails that crate's own filter is a misfit and gets
+hauled to one that wants it. Auto-disperse falls out for free — a dropbox is
+just a beacon whose filter accepts nothing, so everything in it is a misfit. A
+misfit is never moved unless somewhere both accepts it AND has room, so full
+storage postpones tidying rather than parking a unit with an unplaceable stack.
+
+**Dropping through platforms works, by placement rather than by holding down.**
+The unit is positioned two pixels below the last platform its plan wants passed
+and falls from there. Six earlier builds tried to time a `controlDown` hold and
+none of them could have worked; see the traps section for why.
+
+**Beacons are `maxStack` 1.** They carry a filter, an on/off state and an icon,
+all per-instance. Mixed stacking cannot be expressed: `setInstanceValue(key, nil)`
+writes an explicit null rather than removing a key, and `setInventoryIcon` marks
+the descriptor permanently — so a beacon stops being blank the first time it is
+looked at. Stacking two configured beacons would silently merge two filters.
+
+**Sorting is measured against the whole vanilla asset tree.** 29 groups, 193
+subgroups. Every colonyTag and every category on 2879 objects is claimed, and
+4931 of 4974 scanned items route somewhere. The manifest is keyed by id so mods
+patch by name rather than by index, and there is a written guide for them.
+
+**The beacon pane is functional and ugly.** Rules add in one click, each rule row
+carries its own accept/deny checkbox and delete button, and selecting a rule
+swaps the lower panel to a grid of its subgroups where each tile is a checkbox.
+Tile art is placeholder. 19 groups and 177 subgroups behind it, all 98 vanilla
+categories covered.
+
 **Vents link and report it.** One wire links a pair both ways, confirmed by log:
 vent A finds B through its OUTPUT node while B finds A through its INPUT node.
 The `linked` animation state fires. Two bugs were in the way — a stray patch
@@ -710,6 +740,176 @@ poisons the whole queue.
 were gated behind `DEBUG = false`, so the one code path under test printed
 nothing at all. If a log line exists to explain a silent failure, it must not
 itself be silent by default.
+
+**`sb` is nil at chunk scope. Any top-level engine call kills the script.** A
+build stamp written as a bare `sb.logInfo` beside the local it named raised
+`attempt to index global 'sb'` before a single function in the file was defined,
+so the unit had no task action at all — and every behaviour observed afterwards
+was the previous build with a dead script on top. Root callback tables are bound
+AFTER a script's chunk runs. Every engine call in this mod lives inside a
+function for this reason; if a stamp is wanted early, put it in a function the
+scripts list will call.
+
+**`controlDown` is not a per-tick gate on platform collision. It starts a
+fall-through state whose duration script cannot observe.** Measured with the
+hold released after a single arming press: the unit still passed through TWO
+platform surfaces before landing on a third. Six builds tried to control this by
+timing — 0.5, 0.1, 0.034, release-at-the-plan's-floor, release-when-no-platform-
+remains — and all six were tuning a release condition for a problem that was
+never about the release. The fix is not to press down at all; see the movers
+section.
+
+Two mechanism models were tested against four measured drops and each explains
+three of them. Neither is the answer. The behaviour is real, reproducible, and
+still unexplained.
+
+**`PathMover:move` goes blind for the whole of a drop hold.**
+
+    if self.downHoldTimer ~= nil then
+      self:keepDropping(dt)
+      return "running"
+    end
+
+No `finder:update`, no `edgeMove`, no `mcontroller.controlParameters`. And
+vanilla never reaches it for more than a tick, because `timedDrop` assigns the
+undeclared global `holdTime` — always 0. Fixing that typo ENABLES a branch no
+shipped Starbound has exercised. Worth knowing before trusting anything about
+how it behaves.
+
+**The entity script update rate is not reachable from either place it looks like
+it should be.** `"scriptDelta"` in a monstertype's `baseParameters` had no
+measurable effect: the pre-move sample interval stayed at 0.0820s median — 4.92
+engine ticks — across three runs, with the repro drop bit-identical each time.
+`primaryScriptDelta` is the status controller and unrelated.
+
+`script.setUpdateDelta(1)` IS accepted in a monster context and logs cleanly
+("dt now 0.0166667"), but the cadence does not change. It moves what
+`script.updateDt()` REPORTS without moving when `update` is called, which is
+strictly worse than doing nothing — every timer in the mod accumulates that dt,
+so they all run at a fifth of real time while the world runs at full speed. A
+short lap hides it. Backed out. If the update rate is ever worth chasing again,
+find a VANILLA monstertype that changes it and copy the key and its placement;
+do not infer either.
+
+**Items use `itemTags`; objects use `colonyTags`.** Reading only `itemTags` is
+why 133 subgroups of tenant tags matched nothing at all. Measured:
+
+    floranchair     category "furniture"  colonyTags ["floran","floranvillage"]
+    tier1switch     category "wire"       colonyTags ["wired","tier1"]
+    frogfurnishing  category "other"      colonyTags ["outpost","commerce"]
+    retroscifibed   category "furniture"  colonyTags ["retroscifi"]
+
+Not one carries `itemTags`. `petports_itemFacts` now merges both into one set.
+Objects also carry a `race` field, unused so far and available if a race-themed
+object with no `colonyTags` ever needs to sort.
+
+**Categories are camelCase, item tags are lowercase, and they are not copies of
+each other.** From `commonassaultrifle.activeitem`:
+
+    "category" : "assaultRifle"
+    "itemTags" : ["weapon","ranged","assaultrifle"]
+
+`subgroupMatches` compares with `==`, so a wrong name is a SILENT no-match.
+Auditing the manifest against vanilla's `/items/categories.config` found four
+dead entries: `cookingingredient` and `petcollar` mis-cased, `augment` and
+`reagent` not categories at all.
+
+**`category` survives the build script, so it is safe to sort weapons by.**
+Checked on a generated weapon, a unique weapon and a generated gun: `rarestaff`
+and `teslastaff` both report `staff`, `commonassaultrifle` reports
+`assaultRifle`. This matters because `petports_itemFacts` reads the BASE config
+— the same reason `root.itemHasTag` is a static lookup — so anything a builder
+invents at runtime would be invisible. Category is not invented at runtime.
+
+**A widget inside a list row cannot use a `scriptWidgetCallbacks` name.** The
+engine throws at CONSTRUCTION, not at click:
+
+    ListWidget::addItem -> ListWidget::constructWidget
+      -> WidgetParser::constructImpl -> WidgetParser::buttonHandler
+      -> WidgetParserException: Failed to find callback named: ruleRowAction
+
+Those callbacks are registered on the parser that builds the PANE; `ListWidget`
+constructs rows with a different one. `addListItem` throws and takes down
+whatever called it. This is why vanilla's crafting list writes
+`"callback" : "null"` — a name that parser does know.
+
+**Row callbacks are registered at runtime instead, and it must happen before the
+first `addListItem`.**
+
+    widget.registerMemberCallback(listName, callbackName, luaFunction)
+
+Added in 1.3, documented as registering a member callback for a ListWidget's
+list items. It takes a Lua function directly, so the name appears in the
+listTemplate and in the registration call, and deliberately NOT in
+`scriptWidgetCallbacks`.
+
+**A `local function` called from ABOVE its own definition is a nil global, and
+it can hide for months.** `freshPather` was defined at line 1543 and called at
+601. Locals are only in scope after their definition, so from above the name
+resolves as a global, that global is nil, and the call throws:
+
+    Exception while invoking lua function 'update'
+    attempt to call a nil value (global 'freshPather')
+      in upvalue 'tryVentRoute'
+
+That kills `update()` outright — the unit stops running its state machine and
+the port eventually re-homes it, which reads as a pathfinding failure and is
+not one. It survived because `tryVentRoute` reaches that line on ONE branch.
+Now forward-declared, with the definition changed to an assignment; writing
+`local function` there again would declare a second local shadowing the first
+and put the bug straight back.
+
+**A whole-mod sweep for this shape found exactly one instance.** Worth re-running
+after any large reorganisation: strip comments and strings, find every
+`^local function NAME`, and look for `NAME(` before it.
+
+**A `checkable` button inside a list row fires its member callback normally.**
+That was the last open question about row widgets and the answer is yes — both
+the rule rows' accept/deny icon and the subgroup grid's tiles work.
+
+**`ListWidget::setSelected` invokes the list's callback itself.** So code that
+calls `widget.setListSelected` and then calls the callback by hand runs it
+twice. That was rebuilding the subgroup grid twice per click, and the grid is
+explicitly not supposed to rebuild under a click at all — it survived on luck.
+The fix was making the handler idempotent rather than deleting the manual call,
+which would have left the pane depending on an engine callback firing.
+
+**Python's `json` rejects what Starbound's parser accepts.** Vanilla puts raw
+control characters inside strings freely — codex bodies are full of literal
+newlines — and `json.loads` throws `Invalid control character` on them. The
+first full asset scan silently dropped 111 of 123 `.codex` files, and the
+symptom was *the codex category appearing not to exist* rather than a read
+failure. `strict=False` fixes it. A parse setting that deletes a whole category
+from a report is worse than a crash.
+
+**A NAME SUFFIX IS A BLUNT INSTRUMENT AND VANILLA IS FULL OF NEAR-MISSES.**
+Matching ores by names ending in `ore` also caught `signstore` and `neonstore`
+(shop signs), `stationbackgroundcore` (station scenery) and three materials —
+so shop signs sorted into the ore crate. `bar` likewise catches `saloonbar`.
+Both are enumerated by name now. A missing entry sorts nothing, which is
+recoverable; a bad suffix sorts the wrong thing and the player has to work out
+why.
+
+**VANILLA USES BOTH CASES FOR THE SAME CATEGORY.** `Tool` (33 items) and `tool`
+(13). `Junk` (3) and `junk` (2). `Other` (1) and `other` (40). Claiming only the
+lowercase silently lost every pickaxe, drill and the matter manipulator. There
+is also `Upgrade Component` **with a space** — the display label of
+`upgradeComponent` used as a category on ten ship unlocks — plus `Blueprint`
+and `Drone`, neither in `categories.config`.
+
+`categories.config` is a LABEL TABLE, not the set of legal categories. An item
+can use a category with no label and it still sorts.
+
+**A member callback is handed `(memberLeafName, widgetData)`.** Measured:
+
+    ruleRowRemove fired with [1] string = rowRemove, [2] number = 1
+
+Arg 1 is the LEAF name only — identical on every row in the list — so only arg 2
+identifies a row, and every row widget needs `widget.setData`. A first version
+resolved by suffix-matching arg 1 against known widget paths and appeared to
+work; it only did because that test had one rule. `"rowRemove"` is a suffix of
+every row's path, so with three rules the winner was whichever `pairs()` reached
+first and the X would have deleted an arbitrary rule.
 
 ---
 
@@ -3300,6 +3500,281 @@ exceptions, and the player is better placed to decide all three. It would also
 be constantly running work nobody asked for, on a system whose entire cost model
 is "work only happens where a player is".
 
+### Tidying and auto-disperse — built
+
+`tidyWork` walks every deposit beacon, asks `petports_filterMisfits` what does
+not belong in it, and dispatches a `tidy` task to pull one misfit stack out. The
+unit only walks and stands; `withdrawMisfit` on the port does the transfer on
+report, the same shape as `withdrawSeed`. It consumes by name and count rather
+than slot, because a player rearranging the crate between dispatch and arrival
+invalidates the slot; the slot rides along only so the log can say where the
+misfit was seen. `depositWork` then routes the stack normally on the next tick.
+
+**Disperse needs no code.** A dropbox is a deposit beacon whose filter accepts
+nothing — `base: "deny"`, no allow rules — so every stack in it is a misfit and
+it empties outward by tag. It also cannot loop, because its own filter rejects
+everything and it can never be its own destination.
+
+**Both halves are checked before anything moves.** Some other beacon's filter
+must ACCEPT the stack, and `world.containerItemsCanFit` must say that crate has
+ROOM for the actual descriptor. Where the engine will not answer, tidying treats
+that as no — deposit falls back to a time-based backoff because it is holding
+cargo it must place, and tidying has the luxury of waiting.
+
+**The room check is the player-facing decision, and it is about not wasting a
+unit.** Tidying into a full network means the unit picks the stack up,
+`depositWork` finds no target, and the cargo guard in `findWork` then blocks
+collection, harvest, animals and fetching outright — one misfiled stack takes a
+unit out of the working pool and stalls everything it would have done. Someone
+mid-reorganisation of their base should not have to think about that, so full
+storage simply postpones defragmenting until there is space. It is also the
+deadlock `withdrawWork`'s header describes, arrived at from the other direction.
+
+**Lowest priority in `findWork`, below even fetching.** A drop on the ground is
+on a despawn timer; a misfiled stack is in a box and will be exactly as misfiled
+in a minute. One stack per trip is the standing design, so a crate with forty
+misfits produces forty sequential trips rather than forty tasks.
+
+**Known cost:** `tidyWork` calls `world.containerItems` per deposit beacon per
+work tick. It only runs when nothing else has work, so an active network rarely
+reaches it, but an idle one with many crates scans them every second. The fix if
+it ever shows up is a timer like `refreshBeacons` uses, not anything structural.
+
+### Requester beacons — designed, not built
+
+Factorio's requester chest names what it wants and the network delivers. Our
+beacons never ask for anything: units bring things and the filter says yes or
+no. A requester is therefore a genuinely new capability rather than a filter
+feature, and it gets **its own beacon type**.
+
+**A separate beacon, not a mode on the deposit beacon.** Restocking is per-ITEM
+and a filter is per-CATEGORY; bolting quotas onto subgroups would bend the
+schema to do a job it is not for. More importantly it keeps
+`petports_filterAccepts(filter, name)` a pure function of its name, which is the
+property that lets it be memoised.
+
+Behaviour is already a config field the port dispatches on, so a `"request"`
+value plus a second `.activeitem` is most of the plumbing.
+
+**MIN AND MAX, NOT A SINGLE QUOTA.** One number thrashes: fetch one, drop below,
+fetch again. Min is when to start, max is when to stop, and the gap is what
+stops a unit making forty one-item trips. The pane should make setting a gap the
+obvious thing to do.
+
+**Naming the item is the real UI problem, and vanilla already solved it.** Text
+entry means typing `avesmingoseed` correctly. An `itemslot` widget — drop a
+sample in to name the request — needs no keyboard and cannot be misspelled.
+Prototype that first: if it misbehaves in a ScriptPane the whole UI shape
+changes.
+
+**Above max costs no new code.** A request crate holding more than max makes the
+excess a misfit, `tidyWork` hauls it off, and the existing "somewhere accepts AND
+has room" guard stops it looping. Only understock needs a new work generator.
+
+**The source rule, which is what stops it ping-ponging.** A quota is a claim, and
+explicit intent outranks catch-all: a crate with no quota for an item may be
+drained by one that has a quota; a crate with a quota may only be drained down to
+its own quota; two crates with a quota for the same item never trade. That last
+clause makes it a fixed point rather than a loop, and it is checkable locally
+without a global solver.
+
+Restock belongs at the bottom of `findWork` beside tidy. A player who asked for
+2000 dirt did ask for it, but not more urgently than a drop on a despawn timer.
+An unmeetable quota must back off through `workFailures` rather than becoming a
+unit walking a circuit forever.
+
+### The filter vocabulary is measured, not guessed
+
+`workbench/petports_tagdump.py` reads an unpacked asset tree and reports every
+category and tag with example item names, plus a spelling-traps section listing
+names that differ only by case. `--extensions` lists what file types exist and
+which the scanner reads; run that FIRST against any tree, because an extension
+that does not exist scans as zero files and looks identical to a category
+nothing uses. It found two extensions that had been recited from memory and do
+not exist.
+
+**Scanned 4974 files across 24 extensions. 4931 items now route somewhere.** The
+43 that do not are the tutorial mission's background scenery, which no player
+accumulates.
+
+**All five tags that were marked UNVERIFIED were dead.** `ore`, `ingot`, `bar`,
+`gem`, `crystal`, `produce` — none exists on anything. What replaced them:
+
+- Ore matches a name SUFFIX, exact across all 26. Bars are listed by NAME,
+  because a `bar` suffix also catches `saloonbar`, which is furniture.
+- `produce` does not exist but the split does, and it is the category: raw crops
+  are `food`, cooked is `preparedFood`.
+- Vanilla has essentially one gem, `diamond`, filed as `craftingMaterial` like
+  every other input.
+
+**Three matchers exist beyond categories/tags/items, and each earned itself.**
+
+`suffixes` — for GENERATED items that have no file to tag. Blueprints end
+`-recipe`, codexes end `-codex`. Both confirmed in game. Deliberately a suffix
+and not a pattern: a pattern field is evaluated per item per scan and lets a
+mod author write something expensive into a manifest.
+
+`nameParts` — prefix and suffix, **ANDed**, the only matcher that is not ORed.
+Codexes carry no category, no tags and no race field, so the only thing
+identifying an Apex codex is its name. A bare `apex` prefix would match every
+Apex chair in the game; the `-codex` suffix is what makes the prefix safe. 89 of
+123 vanilla codexes are race-prefixed, so this sorts them by species with no
+`.patch` files against vanilla assets — which matters because a mod adding
+seventy codex entries would otherwise bury every other species.
+
+`unclassified` — a subgroup that catches what no sibling can DESCRIBE. Two
+earlier designs failed and both are documented in the resolver: a normal
+subgroup matching everything won over its siblings so unticking a race did
+nothing, and a fallback consulted "when nothing else matched this time" meant
+unticking Glitch pushed Glitch codexes into the bucket. The test now runs
+against the manifest rather than the player's switches, so what lands there does
+not change as a rule is edited, and it narrows automatically when a mod patches
+in a new subgroup.
+
+### Five matchers, and what each one is for
+
+A subgroup matches if ANY of these hit — they are ORed, and one is usually
+enough.
+
+`categories` — the item's `category`, compared exactly. camelCase.
+`tags` — present in `itemTags` OR `colonyTags`; the resolver merges both and
+does not care which file a tag came from.
+`items` — the item's name, exactly.
+`suffixes` — the name ends with this. For GENERATED items that have no file to
+tag: blueprints end `-recipe`, codexes end `-codex`, both confirmed in game.
+Deliberately a suffix and not a pattern — a pattern field is evaluated per item
+per scan and lets a mod author write something expensive into a manifest.
+`nameParts` — prefix and suffix, **ANDed**. The only matcher that is not ORed.
+
+**`nameParts` exists because of codexes and nothing else would do.** No codex
+file carries a category, a tag or a race field, so the only thing identifying an
+Apex codex is its name. A bare `apex` prefix would match every Apex chair in the
+game; the `-codex` suffix is what makes the prefix safe. 89 of 123 vanilla
+codexes are race-prefixed, so this sorts them by species with no `.patch` files
+against vanilla assets — which matters because a mod adding seventy codex
+entries would otherwise bury every other species in one bucket.
+
+### `unclassified`, and the two designs that failed first
+
+A subgroup flagged `unclassified` catches what its SIBLINGS cannot describe. A
+group flagged `unclassified` catches what the whole MANIFEST cannot describe —
+that is the `Unsorted` group, and `petports_isUnclassified` is memoised per name
+because it otherwise walks 200-odd subgroups per item per scan.
+
+Both ask the MANIFEST, never the player's rules. That distinction is the entire
+design, and it was arrived at by getting it wrong twice:
+
+1. A normal subgroup matching everything. Subgroups are ORed, so it won over its
+   siblings and unticking a race silently did nothing.
+2. A fallback consulted when nothing else matched THIS TIME. Better, but
+   unticking Glitch pushed the Glitch codexes into the bucket, so its contents
+   changed depending on which boxes were ticked.
+
+Both made one switch depend on the others. The current test asks whether a
+sibling DESCRIBES the item, whether or not the player has that sibling on — so
+unticking a race removes those items from the crate instead of relocating them,
+and the bucket holds the same things no matter how anyone has configured
+anything.
+
+**Vanilla puts one item in `Unsorted`** — `colonymanual`, which has no species
+and no description. Everything else is placed. So that bucket is a mod detector.
+
+### THE MANIFEST IS KEYED BY ID, NOT AN ARRAY
+
+`groups` and `subgroups` are objects keyed by id. A mod patches
+`/groups/species/subgroups/mycoolrace`, never `/groups/20/subgroups/-`. An index
+is a promise about everyone else's file that cannot be kept — one group added
+upstream silently redirects every positional patch in the ecosystem.
+
+The cost is that Lua key order is meaningless, so display order is stated: every
+entry carries `order`, ties break on id. The manifest is normalised once at
+load, ids copied onto entries and ordered arrays built. **Nothing may iterate
+`group.subgroups` directly** — use `petports_filterGroups()` and
+`petports_filterSubgroups(group)`, or the beacon UI reshuffles between openings.
+
+That refactor surfaced a real bug: `subgroupToggled` indexed
+`shownGroup.subgroups[index]` numerically to find the clicked tile, which
+against a keyed table returns nil and makes every tile click do nothing.
+
+### Order is stated in one table, and a literal has broken three times
+
+Group order lives in an `ORDER` dict in the generator, in HUNDREDS. Tens ran out:
+the `Furniture - Tagged` block needs forty consecutive numbers.
+
+`PINNED` renders a group as `parent + 1` rather than as a literal, because a
+literal has broken three times now — Filled Capture Pods was 81 when Pets was 80
+and silently moved ABOVE Pets when a group was inserted earlier; `Unsorted` was
+290 until forty tagged groups grew into it; and the same shape is what made
+positional patch paths untenable. **A number that encodes a relationship has to
+be computed.**
+
+### The taxonomy: what an item IS versus what it looks like
+
+74 groups, 209 subgroups. The organising principle is that those are two
+different axes and an object answers both.
+
+**Furniture is its own group, split by category** — furniture, decorative,
+lighting, storage, doors, wiring, traps, teleporters, terraformers, spawners,
+breakables, ship fittings, uncategorised. It used to be one 19-category tile
+buried inside Building Materials, while what an object LOOKED like got a whole
+top-level group each. That was backwards.
+
+**Themes are siblings, not subgroups**: Furniture - Species, - Biome,
+- Location, - Themed (the twelve purchasable Frögg sets), - Tiered, and forty
+`Furniture - Tagged: <tag>` groups.
+
+**Forty single-tag groups is deliberate.** A rule picks a group and unticks
+subgroups it does not want — right for "Weapons except whips", useless for "only
+the odd things", which would mean unticking thirty. A group per tag makes that
+one click, which is what a player filling a crate of lamps or chasing a tenant's
+fetch quest actually does. They carry contiguous order numbers and a shared
+prefix so they read as a submenu rather than forty scattered rows.
+
+**One subgroup each, and that is load bearing.** `petports_filterAccepts` matches
+by walking a group's subgroups; `Unsorted` only survives having none because its
+flag short-circuits first. Tagged groups built with no subgroups matched NOTHING,
+silently — caught in a dry run against the item scan before launch.
+
+**`fossil` was the one tag that meant two things.** It is a colonyTag on three
+display shelves AND an itemTag on 55 pocket fossils, and the matcher does not
+care which field a tag came from — so `Furniture - Tagged: fossil` quietly held
+both. There is now a `Fossils` group: specimens by size category, uncleaned by
+`dirtyfossil`, displays by name. Watch for this if another tag turns up in both
+vocabularies.
+
+### What is written down for modders
+
+`workbench/SORTING_FOR_MODDERS.md`. Part 1 is the minimum — three fields, the
+casing trap, and the fact that following vanilla conventions needs no
+cooperation from us. Part 2 covers patching, all five matchers, `unclassified`,
+and why exclusion storage means a subgroup you add is inside every existing rule
+immediately.
+
+### The audit that started it
+
+The manifest now covers all 98 vanilla categories with none invalid, up from 26
+covered with 4 dead. Weapons lead with categories and keep their tags as a
+secondary net for modded weapons that set `itemTags` but pick a nonstandard
+category. Codexes are their own group rather than a subgroup, because a player
+who wants a library wants ONLY codexes and a subgroup cannot express that
+without excluding everything around it.
+
+133 tenant-tag subgroups were transcribed from the wiki's Tag page into seven
+groups: species, decor themes, object themes, biome themes, locations, crafting
+tiers, holidays. Seven of those tags are verified against real object files;
+the other 126 are transcription and are marked UNVERIFIED in the manifest.
+
+**Modded species add themselves.** A race mod patches one entry into the species
+group's subgroups and its furniture sorts everywhere immediately. That is the
+whole reason subgroups are stored as EXCLUSIONS — a beacon already set to
+"Species Themed" picks the new race up without being reconfigured.
+
+**Button scope, for the UI work.** 19 groups, 177 subgroups, and the
+distribution is lopsided: Biome Themed 37, Object Themes 27, Location Themed 25,
+Decor Themes 21, and everything else 11 or fewer. Four groups carry 110 of the
+177. The group picker at 19 rows is fine; a 37-row subgroup scroll is not, which
+is what the tile grid exists to fix.
+
 ---
 
 ## Presentation and readout -- specified, unbuilt
@@ -3554,6 +4029,85 @@ what this exists to stop.
 **If a route test says "impossible" after a terrain edit, suspect the cache before
 the geometry.**
 
+### The leash: three bugs, and only one of them was the symptom
+
+A port had platforms directly beneath it. Removing them made the unit walk to
+where the platforms had been, fail, try a vent route, and eventually get
+re-homed. Three separate faults, all latent, all needing that terrain edit to
+surface — and the one that produced the visible symptom was the last found.
+
+**`freshPather` was a nil global.** See the engine traps section. This is what
+produced the re-homing: an exception in `update()` on one branch of
+`tryVentRoute`.
+
+**`groundTarget` was cached for the life of a hold task.** Every place that
+clears it hangs off a MOVEMENT event — starting a vent leg, exiting a vent,
+stepping to the next watering tile. A unit parked at its port triggers none of
+them, so a leash held the floor it resolved on arrival forever. Now cleared on
+arrival and on push-off, with `onStation` reset too — without that, only the
+FIRST arrival would ever clear it.
+
+**`return` was missing from the list of task types that resolve their approach
+target, and THAT was the loop.** A leash ran its arrival test against the raw
+port position. A port is a 4x4 object and its origin is inside itself; nothing
+can stand within `ARRIVAL_DISTANCE` of it unless the floor happens to be close
+underneath. Measured: port origin `[1203,708]`, floor `[1203.5,704.8]`, unit
+parked at `[1202.9,704.8]` — 0.6 from where it belonged and 3.2 from the port,
+against an arrival radius of 1.5. It never arrived, the progress watchdog struck
+it for moving 0 of a required 2.5 tiles, and it replanned through the vents 129
+times in 11 seconds.
+
+**ROUTING WAS ALWAYS CORRECT, WHICH IS WHY IT LOOKED LIKE A PATHING BUG.**
+`routeTarget` already resolved through `approachTargetFor`, so `planRoute` named
+the right tile and the unit walked to exactly the right place. Only the question
+"are you there yet" was asked about somewhere else. **The giveaway in a log is
+`planRoute` naming one position while `approach ... target` names another.**
+
+All three hid for the same reason: with platforms two tiles under the port the
+floor sat 1.2 from the origin, inside the arrival radius, and everything worked
+by luck.
+
+### Dropping through a platform is a PLACEMENT, not a control press
+
+`petportsTimedDrop` no longer calls `controlDown` at all in the ordinary case. It
+finds the lowest platform whose surface sits above the Drop edge's floor — the
+last one the plan wants passed — and places the feet 0.25 tiles (two pixels)
+below it with `mcontroller.setPosition`. Gravity does the rest and no engine
+state is left running.
+
+**This is idiomatic here, not a workaround.** `moveJump` already calls
+`setPosition(source)` because approaching a takeoff point by velocity is not
+precise enough, and vanilla's own `moveDrop` already calls `setPosition` on the x
+axis for the same reason. The drop is the third instance of the same pattern.
+What got skipped is not physics — gravity, collision and the landing are all
+still the controller's job — it is an input whose effect cannot be observed. See
+the `controlDown` trap for why no hold length could ever have been correct.
+
+`downHoldTimer` is deliberately left nil on a successful placement, so
+`PathMover:move` never takes its blind early-return branch.
+
+**It fails closed.** If the destination overlaps `Null`, `Block` or `Dynamic` the
+placement is refused, logged with the reason, and it falls back to `controlDown`.
+Platforms are excluded from that check on purpose — being inside one is the
+point. A unit that does not drop stalls visibly and replans; a unit placed inside
+terrain does not.
+
+**The limit to know about:** a placement bypasses the collision sweep between
+origin and destination. `bodyFitsWithFeetAt` checks the destination, not the
+path. Fine at 0.25 tiles, not fine at a larger `DROP_SCOOT` — raise that constant
+and the check has to become a sweep.
+
+Tile arithmetic here was validated by replaying every drop in a real log against
+the new rule before launching. That caught `ceil` instead of `floor` for the
+start row, which would have kept down pressed on exactly the tick that has to be
+quiet — reproducing the bug through the fix and looking like the rule was wrong.
+Keep that habit for any tile-arithmetic change.
+
+**Platform geometry, since it is easy to get off by one.** A platform tile at row
+N collides at y = N + 1, and a unit standing on it rests with its feet at N + 1.
+Confirmed by probe: a stack reading `P713 P711 P709 P707 P705` puts the unit at
+714.8, 712.8, 710.8, 708.8, 706.8.
+
 ---
 
 ## Known problems — probably later
@@ -3699,6 +4253,21 @@ rescued by the guard.
 **WATCH FOR THE INVERSE.** If a unit ever stalls standing on a platform instead
 of over-dropping, this guard is refusing a drop it should allow, and
 `MIN_DROP_DISTANCE` is the number.
+
+**THERE WAS A SECOND, UNRELATED OVER-DROP, AND THIS SECTION DOES NOT COVER IT.**
+Everything above is still true and `MIN_DROP_DISTANCE` is still live — an edge
+the unit has already fallen past really was a bug and really is fixed. But a
+different one survived it: a drop whose edge was perfectly valid, on a stack of
+platforms two tiles apart, missing its target by one platform every time.
+
+That one is not about which edge runs. It is about `controlDown` itself, which
+starts a fall-through state script cannot observe or cancel — one press carried
+the unit through two platform surfaces. The sentence above, "this is why tuning
+the hold duration never worked", was right about the reason it never worked
+HERE and wrong as a general claim: four further hold values were tried against
+the second bug and none could have worked either, for a completely different
+reason. See the `controlDown` trap and "Dropping through a platform is a
+PLACEMENT" in the movers section.
 
 ### The two vanilla drop faults underneath it, both still fixed
 
@@ -3981,6 +4550,41 @@ matching when someone rewords a log line.
 ---
 
 ## Where this goes next
+
+**Requester beacons are designed and not built** — see the section under Cargo,
+beacons and deposit. It is the next feature-sized piece of work.
+
+**Two scan passes are specified and not built.** Hunting weapons are not
+identifiable from any field the manifest can reach — whether a weapon yields
+meat rather than shredding the drop is a property of the DAMAGE TYPE on the
+projectile it fires. Finding them means scanning `.projectile` for that damage
+type, walking back to the weapons that fire them, and listing those by name.
+Separately, natural biome formations do not carry their biome's colonyTag the
+way crafted furniture does — the geode rocks are listed by hand and the same gap
+exists for every other biome. Both want the tag dumper extended rather than new
+machinery.
+
+**Superseded, ignore below this line if it contradicts the above.** Verify the 126 unverified tenant tags — a tier-2
+workbench settles all ten tiers at once, one Frögg Furnishing purchase settles
+the 21-tick decor group, one biome object settles the 37-tick one. Confirm a
+`checkable` row button fires its member callback; only `ruleRowRemove` has been
+seen firing, and if checkables are inert the subgroup tiles are too. Fold
+`race` into `petports_itemFacts` alongside `colonyTags` once tag matching is
+confirmed.
+
+**The pane wants the collections treatment.** `columns` + `fillDown` +
+`createTooltip` with `widget.inMember` is the whole recipe for an icon grid, and
+`radioGroup` with per-button `data` suits 19 groups better than a scrolling
+list. Note that anything per-row — reorder arrows, per-rule enable — has to live
+outside the list and act on the selection, unless it can be expressed as a
+member callback.
+
+**Still open on movement.** `moveLand` is untouched vanilla and is four lines
+with no `else`. The arc-skip predicate leaves the unit grounded on an Arc edge
+at the port, recovering only when the stall detector fires 0.35s later. The
+planner over-estimates jump height by about 7%. All three want their own
+session and none of them block content work.
+
 
 **Pets get a break.** Farming, animal harvesting and item collection all work,
 and most of the pathing quirks are solved or sidestepped. The unit layer is in

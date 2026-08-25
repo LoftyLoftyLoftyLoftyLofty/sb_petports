@@ -29,11 +29,31 @@
   //  room for per-instance configuration later without changing how it is found.
   "petports_sortingBeaconBehavior" : "deposit",
 
-  //  Stackable, deliberately. One beacon per container is what matters, and a
-  //  player with twelve deposit chests should carry one stack, not twelve
-  //  slots. Nothing per-instance is stored yet; when the config UI lands, a
-  //  CONFIGURED beacon will need maxStack 1 while a blank one stays stackable.
-  "maxStack" : 1000,
+  //  ONE. NOT STACKABLE, AND THIS IS NOT AN OVERSIGHT.
+  //
+  //  It was 1000, with a note saying a CONFIGURED beacon would need maxStack 1
+  //  "when the config UI lands". The config UI has landed. A beacon now carries
+  //  a filter, an on/off state and an icon, all per-instance, and two beacons
+  //  with different filters are not the same item.
+  //
+  //  MIXED STACKING WAS TRIED AND IS UNTENABLE. Two engine behaviours kill it:
+  //
+  //    setInstanceValue(key, nil) writes an explicit JSON null rather than
+  //    removing the key, so a beacon reset to blank does not become identical
+  //    to a pristine one -- it becomes one carrying a null.
+  //
+  //    setInventoryIcon marks the descriptor permanently, so the moment a
+  //    beacon's icon reflects its on/off state it stops matching a beacon that
+  //    has never been toggled.
+  //
+  //  Between them, "configured beacons are 1, blank ones stack" cannot be
+  //  expressed: a beacon stops being blank the first time it is looked at.
+  //  Stacking configured beacons would silently merge two different filters
+  //  into one, and the player would lose whichever lost the merge.
+  //
+  //  The cost is a slot per crate. That is the correct trade for not losing
+  //  someone's filter setup, and it is what the handoff records as decided.
+  "maxStack" : 1,
 
   //  ACTIVE ITEM, THOUGH IT DOES NOTHING WHEN USED YET.
   //

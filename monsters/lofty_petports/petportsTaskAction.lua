@@ -131,7 +131,7 @@ local TASK_DEBUG = true
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-08-24f scoot through platform, no controlDown"
+local BUILD_STAMP = "2026-08-25d leash arrival resolves the ground"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -489,6 +489,29 @@ local VENT_USE_DISTANCE = 2.0
 --  Probing costs a full A* search per unknown exit, but only ONCE per
 --  destination tile -- terrain decides reachability, not the drop, so every
 --  later target in the same neighbourhood is a table lookup.
+--  FORWARD DECLARED, because tryVentRoute below calls it ~940 lines before it
+--  is defined.
+--
+--  A `local function` is only in scope AFTER its definition. Called from above
+--  it, the name resolves as a GLOBAL, that global is nil, and the call throws:
+--
+--    Exception while invoking lua function 'update'
+--    attempt to call a nil value (global 'freshPather')
+--      in upvalue 'tryVentRoute'
+--
+--  That kills update() outright. The unit stops running its state machine, the
+--  port sees it going nowhere, and it eventually gets re-homed -- which reads
+--  as a pathfinding failure and is not one.
+--
+--  It survived because tryVentRoute reaches this line only on ONE branch, the
+--  one where the target is walkable and no hops are needed. Every other caller
+--  of freshPather is below 1543.
+--
+--  THE DEFINITION BELOW MUST STAY AN ASSIGNMENT. Writing `local function
+--  freshPather` there would declare a SECOND local that shadows this one, and
+--  line 601 would go straight back to calling nil.
+local freshPather
+
 local function tryVentRoute(stateData, target)
   if petports_planRoute == nil then return "none" end
 
@@ -1540,7 +1563,7 @@ function petportsJumpMover(pather)
   return "running"
 end
 
-local function freshPather(why)
+freshPather = function(why)
   local options = petports_pathOptions()
   options.run = false
 
@@ -2513,7 +2536,40 @@ function petportsTaskAction.update(dt, stateData)
   --  same one-line fix as collection, and it presents as a unit that walks
   --  somewhere near the crop and then times out.
   local approachTo = target
-  if task.type == "collect" or task.type == "harvest"
+
+  --  A LEASH RESOLVES TOO, AND FOR THE STRONGEST REASON OF ANY TASK HERE.
+  --
+  --  This list was collect/harvest/replant/water/animal, and "return" was not on
+  --  it -- so a unit walking home ran its ARRIVAL test against the raw port
+  --  position. A port is a 4x4 object and its origin is inside itself; nothing
+  --  can ever stand within ARRIVAL_DISTANCE of it unless the floor happens to be
+  --  close underneath.
+  --
+  --  MEASURED: port origin [1203,708], floor [1203.5,704.8], unit parked at
+  --  [1202.9,704.8]. That is 0.6 from where it belongs and 3.2 from the port,
+  --  against an arrival radius of 1.5. approachPoint never returned true, the
+  --  unit never arrived, the progress watchdog struck it for moving 0 of a
+  --  required 2.5 tiles, and it replanned through the vents forever -- 129 times
+  --  in 11 seconds.
+  --
+  --  ROUTING WAS ALREADY CORRECT, WHICH IS WHY THIS LOOKED LIKE A PATHING BUG.
+  --  routeTarget above resolves through approachTargetFor, so planRoute names
+  --  the right tile and the unit walks to exactly the right place. Only the
+  --  question "are you there yet" was asked about somewhere else.
+  --
+  --  It hid while the port had platforms two tiles under it: the floor was then
+  --  1.2 from the origin, inside 1.5, and arrival fired by luck.
+  --
+  --  approachTargetFor has a homeward branch that exists ONLY for this task
+  --  type -- down-only, so a port under a shelter does not resolve to its roof.
+  --  That branch was unreachable from here.
+  --
+  --  Falls back to the raw target rather than the nil path below: that path is
+  --  for a drop still falling and ends in a failure report, and a leash must
+  --  never fail.
+  if task.type == "return" then
+    approachTo = approachTargetFor(stateData, target) or target
+  elseif task.type == "collect" or task.type == "harvest"
      or task.type == "replant" or task.type == "water"
      or task.type == "animal" then
     approachTo = approachTargetFor(stateData, target)
@@ -3262,13 +3318,54 @@ function petportsTaskAction.update(dt, stateData)
   --  The unit leaves this by exactly one route: the check at the top of this
   --  function, when the port dispatches real work.
   if task.hold then
-    local home = world.magnitude(mcontroller.position(), task.position)
+    --  MEASURED AGAINST THE RESOLVED GROUND, NOT THE PORT ORIGIN.
+    --
+    --  task.position is the raw port position and petports_leashTask says so in
+    --  as many words: a port is an object and its position is not somewhere a
+    --  unit can stand, so the task carries the raw value and the unit resolves
+    --  it. Everything downstream honoured that. This test did not.
+    --
+    --  MEASURED: port origin [1203,708], floor beneath it [1203.5,704.8], unit
+    --  standing at [1203.13,704.8] -- 0.37 from where it belongs and 3.2 from
+    --  the port, against a slack of 3.0. So it never arrived, kept approaching,
+    --  and the progress watchdog saw it move 0 of the 2.5 tiles it wanted, took
+    --  two strikes and forced a vent replan. 137 replans in 64 seconds, and it
+    --  would have gone on forever.
+    --
+    --  IT ONLY SHOWS WHEN THE FLOOR IS FAR FROM THE PORT. With a row of
+    --  platforms two tiles under the port the floor was 1.2 away and inside
+    --  slack; mining them out put the next standable ground 3.2 down and over
+    --  the line. Raising TETHER_SLACK would have hidden this exact case and
+    --  left the bug for a port on a ledge.
+    local station = approachTargetFor(stateData, task.position) or task.position
+    local home = world.magnitude(mcontroller.position(), station)
 
     --  Pushed off station -- shoved by a player, a door, an explosion. Walk
     --  back rather than holding a position the unit is no longer standing in.
     if home > (task.slack or 3.0) then
       sb.logInfo("UNIT pushed off station (%s from port), returning",
         sb.printJson(home))
+
+      --  RE-RESOLVE THE FLOOR. THE TERRAIN MAY BE WHY IT LEFT.
+      --
+      --  groundTarget is resolved once and cached for the life of a task, which
+      --  is fine for work that finishes. A leash never finishes -- see the
+      --  arrival block below -- so its cached floor outlives any change to the
+      --  ground it names.
+      --
+      --  MEASURED: a port with a row of platforms beneath it. The platforms are
+      --  mined out; the unit falls, is now further than slack from its station,
+      --  walks back -- to the cached platform tile, which is no longer there.
+      --  The port is not involved and never issues a recall: returnWork reports
+      --  "inNetwork true stranded false" and returns nil, so nothing upstream
+      --  looks wrong while the unit walks to a spot in mid-air.
+      --
+      --  onStation is cleared as well so the arrival block runs again and clears
+      --  this a second time. Without that, only the FIRST arrival ever resets
+      --  it and the second walk home re-caches a target nothing will invalidate.
+      stateData.groundTarget = nil
+      stateData.onStation = false
+
       stateData.arrived = false
       stateData.approachTimer = APPROACH_TIMEOUT
       stateData.progressStrikes = 0
@@ -3298,6 +3395,17 @@ function petportsTaskAction.update(dt, stateData)
       stateData.planIndex = 1
       stateData.ventHops = 0
       stateData.viaVent = nil
+
+      --  AND THE GROUND TARGET, which this list missed the first time.
+      --
+      --  It is the same residue as the four fields above and the same argument
+      --  applies -- but it is not cosmetic. Every other place that clears
+      --  groundTarget hangs off a MOVEMENT event: starting a vent leg, coming
+      --  out of a vent, stepping to the next watering tile. A unit parked at its
+      --  port triggers none of them, so a leash held the floor it resolved on
+      --  arrival for as long as the unit stood there, and kept walking to it
+      --  after that floor was mined out.
+      stateData.groundTarget = nil
       stateData.routing = false
 
       sb.logInfo("UNIT on station at %s (port %s), holding until dispatched",
