@@ -53,7 +53,26 @@ local FIELDS =
 	--  behave like. There is no DEFAULTS entry for it: a table would never
 	--  compare equal to one anyway, so it is always written rather than
 	--  compared away.
-	filter = "petports_beaconFilter"
+	filter = "petports_beaconFilter",
+
+	--  RESTOCK BEACON ONLY -- and this table is deliberately the UNION of every
+	--  beacon type's fields rather than one table per type.
+	--
+	--  The write handler only writes what the pane SENDS, and readConfig only
+	--  returns what the item CARRIES, so a deposit beacon answers nil for all
+	--  three of these and its pane never mentions them. A per-type table would
+	--  have to be selected from somewhere, and the only thing available to
+	--  select on is the behaviour tag -- which this script is careful never to
+	--  read, because that is the one piece of state that must stay in config
+	--  and never become a parameter. See the header.
+	--
+	--  No DEFAULTS entries. A fresh restock beacon requests nothing, and
+	--  "nothing" is absence rather than a value; the pane materialises numbers
+	--  when an item is first sampled, the same way the deposit pane
+	--  materialises an empty filter table.
+	item = "petports_beaconItem",
+	min = "petports_beaconMin",
+	max = "petports_beaconMax"
 }
 
 --  ICON: A DEDICATED SETTER FOR THE SLOT, A GLOBAL TAG FOR THE HAND.
@@ -81,7 +100,14 @@ local FIELDS =
 --  ABSENCE IS STILL CANONICAL for the enabled PARAMETER -- see the write
 --  handler. The icon is not a parameter at all, so it has no bearing on
 --  stacking either way.
-local ICON_BASE = "/items/lofty_petports/beacons/petports_beacon_deposit.png"
+--
+--  PER TYPE, FROM CONFIG. This was a constant naming the deposit sheet, which
+--  was correct while there was one beacon. It is a config field for the same
+--  reason interactAction and interactData are: one script serves every beacon
+--  type, and a second type is then a new .activeitem rather than a branch in
+--  here. A beacon that omits the field keeps its animated icon -- the global
+--  tag below still fires -- and only loses the slot-renderer half.
+local ICON_KEY = "petports_beaconIcon"
 
 --  How long after the pane's last sign of life it is still assumed open.
 --  Comfortably longer than the pane's own 0.25s poll, short enough that a pane
@@ -124,9 +150,28 @@ end
 --  beacon held", and writes landed on the wrong item.
 --
 --  So the item mints a token when it opens a pane, the pane echoes it back on
---  every message, and a beacon that did not mint it refuses. Runtime state, not
---  a parameter -- it must never reach the item's data or two beacons that are
---  otherwise identical would stop stacking.
+--  every message, and a beacon that did not mint it refuses.
+--
+--  IT IS AN INSTANCE VALUE, AND THAT IS A REVERSAL.
+--
+--  This used to be runtime state only, on the reasoning that a per-pane random
+--  value written into the item would stop two otherwise identical beacons
+--  stacking. That reasoning is dead twice over. Beacons are maxStack 1, so
+--  there is no stacking to protect; and runtime state does not survive, which
+--  a log settled rather than a guess:
+--
+--    petports beacon: write REFUSED: token=ab5b61a2... mine=nil
+--
+--  The item was RUNNING and ANSWERING -- so this is not the shadowing case --
+--  and had simply lost the token. Taking an item onto the cursor and putting it
+--  back re-creates the held item, init() runs again, and self.paneToken is gone
+--  for good, because activate() is the only thing that ever set it. The pane
+--  could then never write, and the player's edit was lost every time.
+--
+--  Restoring it in init() closes that. NOT IN FIELDS, deliberately: this is the
+--  item's own bookkeeping and the pane must not be able to read or write it.
+local TOKEN_KEY = "petports_beaconPaneToken"
+
 local function newToken()
 	--  Guarded rather than assumed. If sb.makeUuid is unavailable the fallback
 	--  is weaker but sufficient: this only has to distinguish a handful of
@@ -142,7 +187,19 @@ local function setIcon(enabled)
 	animator.setGlobalTag("state", frame)
 
 	--  Every slot that draws the item without running it.
-	activeItem.setInventoryIcon(ICON_BASE .. ":" .. frame)
+	--
+	--  GUARDED, LOUDLY. A nil here would concatenate into a runtime error and
+	--  take init() down with it, which presents as "the beacon does nothing
+	--  when used" -- several steps from a missing field in a .activeitem.
+	local base = config.getParameter(ICON_KEY)
+
+	if type(base) ~= "string" then
+		sb.logError("petports beacon: no %s in item config; slot icon will not "
+			.. "track on/off state", ICON_KEY)
+		return
+	end
+
+	activeItem.setInventoryIcon(base .. ":" .. frame)
 end
 
 local function readConfig()
@@ -154,13 +211,30 @@ local function readConfig()
 end
 
 function init()
-	--  The pane's liveness check. It polls this every tick and dismisses
-	--  itself when the answer stops arriving, which is how it notices the
-	--  player swapped items mid-edit. Without it, a save would write the
-	--  filter into whatever ended up in hand instead.
-	--  Answers only for the pane THIS item opened. A beacon the player has
-	--  swapped to returns false, and the pane dismisses itself rather than
-	--  silently retargeting.
+	--  FIRST, BEFORE ANY HANDLER CAN BE ASKED ANYTHING.
+	--
+	--  init() runs again every time the held item is re-created, which the
+	--  player triggers just by moving something through the cursor. Without
+	--  this the token minted by activate() is gone and the open pane can never
+	--  write again -- see TOKEN_KEY for the log that proved it.
+	--
+	--  TYPE-CHECKED, NOT NIL-CHECKED. setInstanceValue(key, nil) writes an
+	--  explicit JSON null rather than removing the key, so a beacon whose pane
+	--  has closed reads back a null here. That is not a token and must not be
+	--  treated as one, or the next pane would be compared against it.
+	self.paneToken = config.getParameter(TOKEN_KEY)
+
+	if type(self.paneToken) ~= "string" then
+		self.paneToken = nil
+	else
+		--  Worth a line. A restore means the item was re-created underneath a
+		--  live pane, which is invisible from anywhere else.
+		dbg("init: restored pane token %s", tostring(self.paneToken))
+	end
+
+	--  The pane's liveness check. It polls this every tick and reports the
+	--  answer rather than acting on it, which is how it notices the player
+	--  swapped items mid-edit. Answers only for the pane THIS item opened.
 	message.setHandler("petports_beaconHeld", function(_, _, token)
 		if token == nil or token ~= self.paneToken then return false end
 
@@ -177,6 +251,13 @@ function init()
 
 		self.paneTimer = 0
 		self.paneToken = nil
+
+		--  The stored copy goes too, or a beacon carries a dead token around
+		--  forever. It lands as an explicit JSON null rather than a removed
+		--  key, which init() type-checks for.
+		activeItem.setInstanceValue(TOKEN_KEY, nil)
+
+		dbg("pane closed cleanly, token cleared")
 		return true
 	end)
 
@@ -224,7 +305,23 @@ function init()
 	--  absent both read as the default here, in the pane, and in
 	--  beaconBehaviorOf on the port.
 
-	message.setHandler("petports_beaconWrite", function(_, _, token, data)
+	--  CLEARING IS ITS OWN ARGUMENT, BECAUSE nil IS NOT A VALUE IN LUA.
+	--
+	--  `data` is a table, and a table cannot carry "this field is now nothing"
+	--  -- setting a key to nil removes it, which is indistinguishable from the
+	--  pane never having mentioned it. The loop below reads absence as "leave
+	--  this alone", which is what makes one write handler serve two panes that
+	--  each touch a different subset of FIELDS.
+	--
+	--  So a pane that wants a field GONE names it in `clear`. The deposit pane
+	--  never has -- its filter is always written, never removed -- and passes
+	--  nothing, which is why this is a fourth argument rather than a change to
+	--  the third.
+	--
+	--  What lands is still an explicit JSON null rather than a removed key. See
+	--  the note above: that is a settled engine behaviour, and null and absent
+	--  read identically everywhere either is looked at.
+	message.setHandler("petports_beaconWrite", function(_, _, token, data, clear)
 		--  The write that was landing on the wrong beacon.
 		if token == nil or token ~= self.paneToken then
 			--  Expected and harmless when the player has swapped beacons: the
@@ -250,6 +347,26 @@ function init()
 				else
 					dbg("  set %s = %s", key, j(data[field]))
 					activeItem.setInstanceValue(key, data[field])
+				end
+			end
+		end
+
+		--  AFTER the writes, not before. A pane that both sets and clears in
+		--  one message is not a shape anything produces today, but if one ever
+		--  does, "clear wins" is the answer that matches what the player just
+		--  clicked -- clearing is always the more recent, more deliberate act.
+		if type(clear) == "table" then
+			for _, field in ipairs(clear) do
+				local key = FIELDS[field]
+
+				if key == nil then
+					--  Same rule as the write loop above: a field this script
+					--  does not know is ignored rather than acted on, so a
+					--  stale pane cannot reach anything it was never given.
+					dbg("  clear IGNORED: %s is not a known field", tostring(field))
+				else
+					dbg("  clear %s", key)
+					activeItem.setInstanceValue(key, nil)
 				end
 			end
 		end
@@ -291,6 +408,11 @@ function activate(fireMode, shifting)
 	--  click lands inside that gap.
 	self.paneTimer = PANE_ALIVE
 	self.paneToken = newToken()
+
+	--  PERSISTED IMMEDIATELY, NOT ON FIRST USE. The re-init that loses a
+	--  runtime token can happen at any point after this, including before the
+	--  pane has sent a single message. See TOKEN_KEY.
+	activeItem.setInstanceValue(TOKEN_KEY, self.paneToken)
 
 	--  Both buttons open it. There is no second thing a beacon could do when
 	--  used, and a player who tries the other button and gets nothing assumes

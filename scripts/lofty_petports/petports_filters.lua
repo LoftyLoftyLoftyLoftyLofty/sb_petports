@@ -536,6 +536,86 @@ function petports_filterMisfits(filter, items, exemptSlot)
 	return misfits
 end
 
+--  Which items in a RESTOCK crate do not belong there?
+--
+--  The eviction half of the restock beacon, and the sibling of
+--  petports_filterMisfits above. A restock crate has no filter -- it has a
+--  REQUEST -- so the question it answers is different in one specific way:
+--
+--    Anything that is not the requested item is a misfit outright.
+--    The requested item is a misfit only in EXCESS of max.
+--
+--  That second clause is the whole reason this cannot be expressed as a filter.
+--  petports_filterAccepts is a pure function of an item NAME, deliberately, so
+--  that it can be memoised -- and "yes up to a thousand of them" is not a fact
+--  about a name. Bolting counts onto the filter schema would have cost that
+--  property everywhere.
+--
+--  `request` is { item = "name", min = n, max = n }, as the beacon stores it.
+--  `min` is not consulted here: min decides when to START FETCHING and has
+--  nothing to say about what is already in the box.
+--
+--  SLOT ORDER DECIDES WHAT SURVIVES. The earliest slots fill the quota and
+--  later ones are evicted, which means two scans of an unchanged crate produce
+--  the same list -- the same property petports_filterMisfits needs and for the
+--  same reason: an eviction list that shuffles makes claim behaviour
+--  unreproducible.
+--
+--  A PARTIAL STACK CAN BE A MISFIT. A crate wanting 500 and holding a stack of
+--  800 reports 300, not 800 and not nothing. withdrawMisfit consumes by name
+--  and count rather than by slot, so a partial count is something it can
+--  already act on.
+--
+--  Returns the same { slot, name, count } shape, so tidyWork does not care
+--  which of the two produced its list.
+function petports_restockMisfits(request, items, exemptSlot)
+	local misfits = {}
+
+	if type(request) ~= "table" or type(request.item) ~= "string" then
+		return misfits
+	end
+
+	if type(items) ~= "table" then return misfits end
+
+	local slots = {}
+	for slot in pairs(items) do
+		if slot ~= exemptSlot then table.insert(slots, slot) end
+	end
+	table.sort(slots)
+
+	--  A max of zero would make the whole request a misfit, which is not a
+	--  shape the pane can produce -- but a hand-edited save can, and evicting
+	--  everything on the strength of a missing number is a bad way to find out.
+	local max = tonumber(request.max) or 0
+	local kept = 0
+
+	for _, slot in ipairs(slots) do
+		local item = items[slot]
+
+		if type(item) == "table" and type(item.name) == "string" then
+			local count = item.count or 1
+
+			if item.name ~= request.item then
+				table.insert(misfits, { slot = slot, name = item.name, count = count })
+			else
+				local room = max - kept
+
+				if room <= 0 then
+					table.insert(misfits, { slot = slot, name = item.name, count = count })
+				elseif count > room then
+					table.insert(misfits,
+						{ slot = slot, name = item.name, count = count - room })
+					kept = max
+				else
+					kept = kept + count
+				end
+			end
+		end
+	end
+
+	return misfits
+end
+
 --  Drops memoised item facts. Only useful if item definitions can change under
 --  a running session; kept because a stale category is invisible and would be
 --  diagnosed as a filter bug.

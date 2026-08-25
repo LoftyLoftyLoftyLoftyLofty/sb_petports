@@ -87,6 +87,16 @@
   "interactAction" : "ScriptPane",
   "interactData" : "/interface/lofty_petports/beaconconfig/beaconconfig.config",
 
+  //  THE ON/OFF SHEET, for activeItem.setInventoryIcon.
+  //
+  //  Was a constant in petports_beacon.lua while there was one beacon type.
+  //  It moved here alongside interactData when the restock beacon landed, for
+  //  the same reason: one script, many types, no branching on behaviour.
+  //
+  //  ABSOLUTE. A relative path resolves against the item definition's
+  //  directory, and a runtime setter is not read in that context.
+  "petports_beaconIcon" : "/items/lofty_petports/beacons/petports_beacon_deposit.png",
+
   //  NO BUILDER, AND THIS IS A TESTED CONCLUSION RATHER THAN AN OMISSION.
   //
   //  Two build scripts were written for this item and both were deleted. The

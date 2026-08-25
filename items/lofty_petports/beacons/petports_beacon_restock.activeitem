@@ -1,0 +1,66 @@
+{
+	"itemName" : "petports_beacon_restock",
+	"price" : 0,
+	"rarity" : "Common",
+	"category" : "petports_beacon",
+	"inventoryIcon" : "petports_beacon_restock.png:on",
+	"description" : "Drop this in a container and name one item to keep stocked there. Units will fetch it from storage.",
+	"shortdescription" : "Restock Beacon",
+	"itemTags" : [ "petports", "petports_beacon" ],
+
+	//  A SECOND BEACON TYPE, NOT A MODE ON THE FIRST.
+	//
+	//  Restocking is per ITEM and a deposit filter is per CATEGORY. Bolting
+	//  quotas onto filter subgroups would bend that schema to do a job it is
+	//  not for, and -- more importantly -- it would stop
+	//  petports_filterAccepts(filter, name) being a pure function of the name,
+	//  which is the property that lets it be memoised.
+	//
+	//  ONE BEACON DECIDES A CONTAINER. scanContainers takes the first ENABLED
+	//  beacon in slot order and stops, so a crate is a deposit target or a
+	//  restock request, never both. That falls out of the existing scan rather
+	//  than being enforced anywhere, and it is what stops the two systems
+	//  fighting over the same box.
+	//
+	//  IT FOLLOWS THAT A RESTOCK CRATE IS NOT DEPOSIT STORAGE. depositWork and
+	//  tidyWork both iterate petports_beaconsFor("deposit"), so nothing routes
+	//  stray cargo into a restock crate and nothing evicts anything out of one.
+	//  Overstock -- a player hand-loading more than the quota -- therefore just
+	//  sits there. See PETPORTS_HANDOFF: the "above max is free, tidyWork hauls
+	//  it off" line in the requester design assumed restock was a MODE on the
+	//  deposit beacon, and stopped being true the moment it became its own type.
+	"petports_sortingBeaconBehavior" : "restock",
+
+	//  ONE, for the same reasons the deposit beacon is. The full argument is in
+	//  petports_beacon_deposit.activeitem and it applies unchanged: this beacon
+	//  carries an item name, two numbers and an on/off state, all per-instance,
+	//  and setInstanceValue(key, nil) plus setInventoryIcon between them make
+	//  "blank ones stack" unreachable rather than merely unimplemented.
+	"maxStack" : 1,
+
+	"scripts" : [ "/items/lofty_petports/beacons/petports_beacon.lua" ],
+	"animation" : "/items/lofty_petports/beacons/petports_beacon.animation",
+
+	//  Resolves <partImage> in the animation. Without this the part has no
+	//  image and the icon renders nothing at all.
+	"animationParts" : {
+		"beacon" : "petports_beacon_restock.png"
+	},
+	"inspectionKind" : "",
+
+	//  ITS OWN PANE, AND THAT IS THE WHOLE REASON THESE ARE CONFIG FIELDS.
+	//
+	//  The deposit beacon's header predicted this: "a one-line difference in
+	//  its .activeitem rather than a branch in Lua". A restock beacon has
+	//  nothing to filter and one item to name, so it gets a small pane with an
+	//  itemslot instead of the wide two-list filter editor.
+	"interactAction" : "ScriptPane",
+	"interactData" : "/interface/lofty_petports/restockconfig/restockconfig.config",
+
+	//  ABSOLUTE, frame-qualified by the script. See default.frames in this
+	//  folder for why every beacon icon is one 32x16 two-frame sheet.
+	"petports_beaconIcon" : "/items/lofty_petports/beacons/petports_beacon_restock.png",
+
+	"twoHanded" : true,
+	"handPosition" : [-4, -2]
+}
