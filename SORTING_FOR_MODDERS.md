@@ -5,7 +5,12 @@ what your mod needs to do to work with that.
 
 **Short version: if you tag your items the way vanilla does, you are already
 done and there is nothing to read here.** Part 1 is one page and covers almost
-everyone. Part 2 is for when you want your own categories in the beacon UI.
+everyone. Part 2 is for when you want your own categories in the beacon UI, or
+your own display name for an item family.
+
+Petports never rewrites your items. It reads three fields off your files to
+decide where something goes, and it preserves every instance parameter on the
+things it moves.
 
 ---
 
@@ -83,6 +88,25 @@ py petports_tagdump.py path\to\your\mod
 
 It also prints a **spelling traps** section listing names that differ only by
 case from a vanilla one. If your category shows up there, that is your bug.
+
+### Your item's parameters are safe
+
+Sorting reads your item's **file**. Moving your item preserves its
+**instance** — every parameter on that specific stack survives being collected,
+carried, deposited, evicted and merged.
+
+This matters most for items where the name is not the whole identity. Betabound's
+music sheets are all `sb_musicsheet` and differ only by which song they hold;
+dyed clothing is the vanilla version of the same idea. Petports treats those
+parameters as part of what the item *is*:
+
+- two stacks merge only if their name **and** parameters match
+- a fetch spanning two variants arrives as two stacks, not one
+- stack compaction buckets by parameters, so two songs never become two copies
+  of one song
+
+If you have an item family behind a single name, you do not need to do anything.
+It already works.
 
 ---
 
@@ -247,6 +271,38 @@ decided against. If that would be surprising — your subgroup is very broad, or
 it overlaps something they are likely to have tuned — a new group is the more
 honest choice than squeezing into an existing one.
 
+### Giving a one-name item family a display name
+
+Restock beacons request items **by name**, so a request for `sb_musicsheet` means
+*any* music sheet. That is deliberate — it is what keeps matching a pure function
+of a name — but it makes the label awkward, because petports asks
+`root.itemConfig` for a display name with a bare descriptor, and a generated item
+rebuilds itself with a fresh random seed. The pane would name one arbitrary song
+for a request that means all of them.
+
+If your mod has an item family behind a single name, patch it a family label:
+
+```json
+[
+  {
+    "op" : "add",
+    "path" : "/displayNames/sb_musicsheet",
+    "value" : "Music Sheets (Betabound!)"
+  }
+]
+```
+
+in `scripts/lofty_petports/petports_polymorphic.config.patch`.
+
+Name the **family**, not an example of it, and say whose it is — a player with
+forty mods needs to know which one filled their storage. About thirty characters
+fit in a request row; past that it is trimmed with a trailing `..`, which breaks
+nothing but reads worse than a name chosen to fit.
+
+**Display only.** It changes no matching, no counting and no eviction. An entry
+for an item the game does not have is simply never looked up, so patching this
+does not make your mod depend on petports or petports on you.
+
 ### Do not iterate the manifest yourself
 
 If you are writing Lua against this rather than just patching data, use
@@ -264,10 +320,15 @@ openings.
 tag at runtime, petports cannot see it. Put it in the file.
 
 **Anything that is not a category, a tag or a name.** Damage types, rarity,
-level, parameters on a specific instance — none of it is reachable. Notably this
-means capture pods cannot be sorted by the species inside them, and hunting
-weapons cannot be told apart from other weapons, because both live in places
-this system cannot read.
+level, parameters on a specific instance — none of it is reachable *for
+matching*. Notably this means capture pods cannot be sorted by the species inside
+them, and hunting weapons cannot be told apart from other weapons, because both
+live in places this system cannot read.
+
+Not reachable for matching is **not** the same as not respected. Petports never
+rewrites or discards an instance's parameters — see "Your item's parameters are
+safe" in Part 1. The rule is that a filter cannot *read* them, not that the
+sorter will damage them.
 
 **Case-insensitive matching.** There is none, anywhere. `==` throughout.
 

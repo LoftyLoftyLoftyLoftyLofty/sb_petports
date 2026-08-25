@@ -202,6 +202,21 @@ local STUCK_MOVE = 0.1
 --  reset does.
 local AIRBORNE_EDGE_STALL = 0.35
 
+--  The same idea for a GROUNDED WALK edge, and deliberately much longer.
+--
+--  A walker can be legitimately motionless for a tick or two -- against a step,
+--  or while the controller reverses direction -- and replanning on that would
+--  thrash a path that was about to work. Over a second of a grounded walk going
+--  nowhere is never legitimate.
+--
+--  ABOVE vanilla's 0.5, unlike AIRBORNE_EDGE_STALL, and that is the trade. If
+--  vanilla's stuckTimer is working it resets the path first and this never
+--  fires, which is fine -- this exists for the case where it demonstrably did
+--  not: a leash walk that sat on one Walk edge for seven seconds with no
+--  replan and no path LOST, on an open platform, until the unit was resocketed
+--  by hand.
+local WALK_EDGE_STALL = 1.25
+
 --  Cap on arc waypoints skipped in one tick. Only a bound on the loop below --
 --  reaching it would mean the whole descending half of an arc was above the
 --  unit, which cannot happen. It exists so a malformed path cannot spin here.
@@ -1940,12 +1955,36 @@ function petportsTaskAction.update(dt, stateData)
       and preFinder.edges[preFinder.currentEdgeIndex]
     local preSource = preEdge and preEdge.source and preEdge.source.position
 
-    sb.logInfo("UNIT pre-move at %s: action %s edge %s of %s srcDist %s velocity %s onGround %s",
-      sb.printJson(mcontroller.position()),
+    --  THE DESTINATION, NOT JUST THE DISTANCE FROM THE SOURCE.
+    --
+    --  srcDist alone cannot tell a unit that is BLOCKED from one whose edge
+    --  destination is somewhere it will never satisfy -- both read as a frozen
+    --  number. Measured, on a leash walk home across an open platform:
+    --
+    --    pre-move at [1202.8,706.8]: action Walk edge 5 of 6
+    --      srcDist 1.79626 velocity [0,-1.53333] onGround true
+    --
+    --  sixty times, unchanged, x-velocity decayed to exactly zero. With no
+    --  destination in the line there is no way to see whether the unit had
+    --  already passed it, was short of it, or was aiming at a point off the
+    --  platform entirely.
+    --
+    --  dstDist and dx are both here on purpose: the magnitude says how far, the
+    --  signed x says which SIDE, and "already past it" is the case a walker can
+    --  stall on without anything looking wrong.
+    local preDest = preEdge and preEdge.target and preEdge.target.position
+    local here = mcontroller.position()
+
+    sb.logInfo("UNIT pre-move at %s: action %s edge %s of %s srcDist %s dst %s "
+      .. "dstDist %s dx %s velocity %s onGround %s",
+      sb.printJson(here),
       tostring(preEdge and preEdge.action),
       tostring(preFinder.currentEdgeIndex),
       tostring(preFinder.edges and #preFinder.edges),
-      sb.printJson(preSource and world.magnitude(mcontroller.position(), preSource)),
+      sb.printJson(preSource and world.magnitude(here, preSource)),
+      sb.printJson(preDest),
+      sb.printJson(preDest and world.magnitude(here, preDest)),
+      sb.printJson(preDest and (preDest[1] - here[1])),
       sb.printJson(mcontroller.velocity()),
       tostring(mcontroller.onGround()))
   end
@@ -2091,6 +2130,7 @@ function petportsTaskAction.update(dt, stateData)
   --  catalogued rather than rediscovered.
   local pathFinder = self.pather and self.pather.finder
   local stalledEdge = nil
+  local stalledLimit = AIRBORNE_EDGE_STALL
 
   --  NOT WHILE ROUTING. Once stateData.routing is set, update() returns from
   --  the routing branch below and approachPoint is never called -- so the
@@ -2109,6 +2149,33 @@ function petportsTaskAction.update(dt, stateData)
     if edge ~= nil and (edge.action == "Jump" or edge.action == "Arc"
                         or edge.action == "Land") then
       stalledEdge = edge
+
+    --  A GROUNDED WALK THAT HAS STOPPED ADVANCING, WHICH NOTHING WATCHED.
+    --
+    --  Walk was excluded here on the reasoning that a grounded run-up toward an
+    --  arc must not read as a stall. True, and handled elsewhere: the
+    --  stuckAnchor check below zeroes this the moment the unit moves more than
+    --  STUCK_MOVE, so anything actually walking never accumulates.
+    --
+    --  What was left uncovered is a walk that is going nowhere. Measured on a
+    --  leash home across an OPEN PLATFORM -- so not blocked by anything:
+    --
+    --    pre-move at [1202.8,706.8]: action Walk edge 5 of 6
+    --      srcDist 1.79626 velocity [0,-1.53333] onGround true
+    --
+    --  for seven seconds and sixty frames, x-velocity decayed to exactly zero,
+    --  srcDist frozen, no replan and no path LOST. Vanilla's stuckTimer should
+    --  have reset the path after half a second on one edge and did not, for
+    --  reasons the log does not show. The unit had to be resocketed by hand.
+    --
+    --  LONGER THAN THE AIRBORNE LIMIT, and not by a little. 0.35s is tuned for
+    --  a unit hanging mid-arc; a walker can legitimately be motionless for a
+    --  moment against a step or while the controller reverses direction, and
+    --  replanning on that would thrash a path that was about to work. Over a
+    --  second of a grounded walk going nowhere is never legitimate.
+    elseif edge ~= nil and edge.action == "Walk" then
+      stalledEdge = edge
+      stalledLimit = WALK_EDGE_STALL
     end
   end
 
@@ -2117,16 +2184,20 @@ function petportsTaskAction.update(dt, stateData)
   else
     stateData.airborneEdgeStall = (stateData.airborneEdgeStall or 0) + dt
 
-    if stateData.airborneEdgeStall >= AIRBORNE_EDGE_STALL then
+    if stateData.airborneEdgeStall >= stalledLimit then
       local source = stalledEdge.source and stalledEdge.source.position
+      local dest = stalledEdge.target and stalledEdge.target.position
+      local here = mcontroller.position()
 
-      sb.logInfo("UNIT stalled on %s edge %s of %s: grounded and motionless at %s, edge source %s srcDist %s -- replanning",
+      sb.logInfo("UNIT stalled on %s edge %s of %s: grounded and motionless at %s, edge source %s srcDist %s dst %s dstDist %s -- replanning",
         tostring(stalledEdge.action),
         tostring(pathFinder.currentEdgeIndex),
         tostring(pathFinder.edges and #pathFinder.edges),
-        sb.printJson(mcontroller.position()),
+        sb.printJson(here),
         sb.printJson(source),
-        sb.printJson(source and world.magnitude(mcontroller.position(), source)))
+        sb.printJson(source and world.magnitude(here, source)),
+        sb.printJson(dest),
+        sb.printJson(dest and world.magnitude(here, dest)))
 
       --  reset() clears edges and hasPath but leaves aStar alone; find() starts
       --  a fresh search next tick, and the unit is grounded so canPathfind()

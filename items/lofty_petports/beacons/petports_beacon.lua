@@ -60,16 +60,29 @@ local FIELDS =
 	--
 	--  The write handler only writes what the pane SENDS, and readConfig only
 	--  returns what the item CARRIES, so a deposit beacon answers nil for all
-	--  three of these and its pane never mentions them. A per-type table would
-	--  have to be selected from somewhere, and the only thing available to
-	--  select on is the behaviour tag -- which this script is careful never to
-	--  read, because that is the one piece of state that must stay in config
-	--  and never become a parameter. See the header.
+	--  of these and its pane never mentions them. A per-type table would have
+	--  to be selected from somewhere, and the only thing available to select on
+	--  is the behaviour tag -- which this script is careful never to read,
+	--  because that is the one piece of state that must stay in config and
+	--  never become a parameter. See the header.
 	--
 	--  No DEFAULTS entries. A fresh restock beacon requests nothing, and
-	--  "nothing" is absence rather than a value; the pane materialises numbers
+	--  "nothing" is absence rather than a value; the pane materialises the list
 	--  when an item is first sampled, the same way the deposit pane
 	--  materialises an empty filter table.
+	--
+	--  `requests` is an ARRAY of { item, min, max }. One crate, many items --
+	--  see petports_restockMisfits for why that beat one request per beacon.
+	requests = "petports_beaconRequests",
+
+	--  SUPERSEDED BY `requests`, AND STILL LISTED ON PURPOSE.
+	--
+	--  These are what a restock beacon carried before the list existed. They
+	--  stay readable so the pane can migrate one on open, and stay CLEARABLE so
+	--  the same write that stores the list can name them in its clear list. A
+	--  field dropped from this table would be a field nothing could ever remove
+	--  again -- it would sit in the save forever, and the port would keep
+	--  finding it.
 	item = "petports_beaconItem",
 	min = "petports_beaconMin",
 	max = "petports_beaconMax"
@@ -116,7 +129,7 @@ local PANE_ALIVE = 1.0
 
 --  Verbose while this is being built. Flip to false before shipping; leave the
 --  calls. See the pane script for why the inputs matter more than the verdicts.
-local DEBUG = true
+local DEBUG = false
 
 --  FORMATTED HERE, NOT BY sb.logInfo.
 --

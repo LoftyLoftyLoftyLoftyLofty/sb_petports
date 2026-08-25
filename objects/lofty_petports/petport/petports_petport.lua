@@ -125,16 +125,23 @@ local BEACON_ENABLED_KEY = "petports_beaconEnabled"
 --  accept everything.
 local BEACON_FILTER_KEY = "petports_beaconFilter"
 
---  THE RESTOCK REQUEST, written by the restock beacon's pane.
+--  THE RESTOCK REQUESTS, written by the restock beacon's pane.
 --
---  Three separate parameters rather than one nested table, because that is what
---  the beacon's FIELDS table can express -- one Lua field to one instance key
---  -- and flattening here costs one read each rather than a schema.
+--  An ARRAY of { item, min, max }. One crate can name as many items as the
+--  player adds -- "all my building materials in one box" is the case that drove
+--  it, and the obvious alternative (several beacons in one crate) fails exactly
+--  there, since twenty materials would need twenty beacons AND twenty stacks
+--  competing for the same slots.
 --
---  A beacon carrying no item is a beacon nobody has configured yet. It scans as
---  a restock beacon, takes its crate out of the deposit pool, and requests
+--  A beacon carrying no requests is one nobody has configured yet. It scans as
+--  a restock beacon, takes its crate out of the deposit pool, and asks for
 --  nothing, which is the honest reading of "I put this here but have not said
 --  what I want".
+local BEACON_REQUESTS_KEY = "petports_beaconRequests"
+
+--  THE SHAPE THAT CAME BEFORE THE LIST. Read only so a beacon configured under
+--  the earlier build keeps working until its pane is next opened, which is when
+--  it gets rewritten as a one-entry list. See restockRequestsOf.
 local BEACON_ITEM_KEY = "petports_beaconItem"
 local BEACON_MIN_KEY = "petports_beaconMin"
 local BEACON_MAX_KEY = "petports_beaconMax"
@@ -1313,27 +1320,56 @@ local function scanContainers()
                   filter = item.parameters[BEACON_FILTER_KEY]
                 end
 
-                --  THE REQUEST RIDES ALONG THE SAME WAY THE FILTER DOES, and
+                --  THE REQUESTS RIDE ALONG THE SAME WAY THE FILTER DOES, and
                 --  for the same reason: containerItems already handed us the
                 --  full descriptor, so a quota edited in the pane takes effect
                 --  on the next scan with no registry and nothing to keep in
                 --  sync.
                 --
-                --  TYPE-CHECKED, NOT NIL-CHECKED. A cleared request is stored
-                --  as an explicit JSON null rather than a removed key -- see
-                --  setInstanceValue in petports_beacon.lua -- so `item` comes
-                --  back as a null, which is not a string and not a name.
-                local request = nil
-                if behavior == "restock" and item.parameters ~= nil then
-                  local wanted = item.parameters[BEACON_ITEM_KEY]
+                --  TYPE-CHECKED THROUGHOUT, NOT NIL-CHECKED. A cleared field is
+                --  stored as an explicit JSON null rather than a removed key --
+                --  see setInstanceValue in petports_beacon.lua -- so a migrated
+                --  beacon reads back nulls where its old single request used to
+                --  be, and a null is neither a string nor a table.
+                local requests = nil
 
-                  if type(wanted) == "string" and wanted ~= "" then
-                    request = {
-                      item = wanted,
-                      min = tonumber(item.parameters[BEACON_MIN_KEY]) or 1,
-                      max = tonumber(item.parameters[BEACON_MAX_KEY]) or 1
-                    }
+                if behavior == "restock" and item.parameters ~= nil then
+                  local stored = item.parameters[BEACON_REQUESTS_KEY]
+
+                  if type(stored) == "table" then
+                    requests = {}
+
+                    for _, request in ipairs(stored) do
+                      if type(request) == "table"
+                         and type(request.item) == "string"
+                         and request.item ~= "" then
+                        table.insert(requests, {
+                          item = request.item,
+                          min = tonumber(request.min) or 1,
+                          max = tonumber(request.max) or 1
+                        })
+                      end
+                    end
+                  else
+                    --  LEGACY SINGLE REQUEST. A beacon configured before the
+                    --  list existed keeps working; the pane rewrites it as a
+                    --  one-entry list the next time it is opened.
+                    local wanted = item.parameters[BEACON_ITEM_KEY]
+
+                    if type(wanted) == "string" and wanted ~= "" then
+                      requests = { {
+                        item = wanted,
+                        min = tonumber(item.parameters[BEACON_MIN_KEY]) or 1,
+                        max = tonumber(item.parameters[BEACON_MAX_KEY]) or 1
+                      } }
+                    end
                   end
+
+                  --  An empty list is no list. Everything downstream tests for
+                  --  a table and then walks it, so leaving an empty one behind
+                  --  would make "configured with nothing" and "not configured"
+                  --  two states that behave identically but read differently.
+                  if requests ~= nil and #requests == 0 then requests = nil end
                 end
 
                 table.insert(found, {
@@ -1342,7 +1378,7 @@ local function scanContainers()
                   behavior = behavior,
                   name = world.entityName(id),
                   filter = filter,
-                  request = request,
+                  requests = requests,
 
                   --  The deciding beacon's slot. Eviction needs it: a beacon
                   --  rarely matches its own crate's filter, and without the
@@ -1377,14 +1413,20 @@ local function refreshBeacons(dt)
   --  one scan every five seconds forever, an unconditional line is noise.
   local parts = {}
   for _, beacon in ipairs(found) do
-    --  THE REQUEST IS PART OF THE SIGNATURE, so re-quotaing a crate in the
+    --  THE REQUESTS ARE PART OF THE SIGNATURE, so re-quotaing a crate in the
     --  pane logs a line rather than passing silently. Behaviour alone would
     --  make "wants 500 hazard" and "wants 2000 dirt" identical.
     local what = tostring(beacon.behavior)
-    if beacon.request ~= nil then
-      what = what .. ":" .. tostring(beacon.request.item)
-        .. "/" .. tostring(beacon.request.min)
-        .. "-" .. tostring(beacon.request.max)
+
+    if beacon.requests ~= nil then
+      local wants = {}
+
+      for _, request in ipairs(beacon.requests) do
+        table.insert(wants, string.format("%s/%s-%s", tostring(request.item),
+          tostring(request.min), tostring(request.max)))
+      end
+
+      what = what .. ":" .. table.concat(wants, ",")
     end
 
     table.insert(parts, string.format("%s@%s,%s=%s", tostring(beacon.id),
@@ -2112,34 +2154,127 @@ local function depositWork()
   return nil, "every deposit beacon is backed off as full"
 end
 
---  Take one seed out of a container and put it on the unit.
+--  Take up to `count` from ONE slot, and hand back what actually left.
+--
+--  THIS EXISTS BECAUSE containerConsume LOSES PARAMETERS. Both withdraw paths
+--  used to consume `{ name = ..., count = ... }` and then hand receiveCargo a
+--  descriptor rebuilt from the same two values. receiveCargo has always stored
+--  parameters correctly -- it even compares them when merging stacks -- so the
+--  damage was entirely in what its callers passed it.
+--
+--  What that cost, measured: a request for 500 sb_musicsheet collected every
+--  sheet in storage regardless of track and delivered them as one stack of
+--  parameterless sheets. The same shape strips the dye off clothing, which
+--  makes this a data-loss bug in the SORTER rather than anything restock
+--  specific -- tidying a dyed shirt out of a deposit crate would have done it
+--  too. It never surfaced because seeds and liquids, the only things this path
+--  carried until now, have no parameters.
+--
+--  SLOT-PRECISE, SO NOTHING HAS TO BE MATCHED. containerTakeNumItemsAt names an
+--  offset rather than a descriptor, and RETURNS what it consumed -- so the
+--  parameters come back from the engine rather than being predicted, and there
+--  is no read-then-consume window for the crate to change in.
+--
+--  It also fixes the eviction artifact at its source. withdrawMisfit took its
+--  count by NAME, so evicting 2 hazard blocks came off the front of a
+--  thousand-stack and left 998 + 2. tidyWork has always known the real slot; it
+--  was only being logged.
+--
+--  THE KEYS FROM containerItems ARE NOT THE OFFSETS THIS WANTS. SUBTRACT ONE.
+--
+--  The container's own slots are 0-indexed and so is this offset, but the Lua
+--  table the binding hands back is 1-based -- a JsonArray converted to Lua, and
+--  the two claims were never the same claim. Assuming they matched produced:
+--
+--    withdraw of liquidhealing from 105 took nothing:
+--      every slot holding it refused to give any up
+--
+--  Every take returned nil with the mismatch guard silent, which is an offset
+--  landing on an EMPTY slot rather than on the wrong item.
+--
+--  MEASURED, NOT ASSUMED. A build that tried offset+0 then offset-1 and cached
+--  whichever verified reported `container slot bias is -1: containerItems key 7
+--  is offset 6`, twice in separate sessions, and -1 is the convention visible
+--  in other scripts. The probe is gone: it had to TAKE a stack to test a
+--  candidate, and putting a rejected one back with containerAddItems can land
+--  it in a different slot and stale the snapshot the next attempt uses.
+local SLOT_KEY_TO_OFFSET = -1
+
+--  Take up to `count` from ONE slot, and hand back what actually left.
+--
+--  THIS EXISTS BECAUSE containerConsume LOSES PARAMETERS. Both withdraw paths
+--  used to consume `{ name = ..., count = ... }` and then hand receiveCargo a
+--  descriptor rebuilt from the same two values. receiveCargo has always stored
+--  parameters correctly -- it even compares them when merging stacks -- so the
+--  damage was entirely in what its callers passed it.
+--
+--  What that cost, measured: a request for 500 sb_musicsheet collected every
+--  sheet in storage regardless of track and delivered them as one stack of
+--  parameterless sheets. The same shape strips the dye off clothing, which
+--  makes this a data-loss bug in the SORTER rather than anything restock
+--  specific -- tidying a dyed shirt out of a deposit crate would have done it
+--  too. It never surfaced because seeds and liquids, the only things this path
+--  carried until now, have no parameters.
+--
+--  SLOT-PRECISE, SO NOTHING HAS TO BE MATCHED. containerTakeNumItemsAt names an
+--  offset rather than a descriptor, and RETURNS what it consumed -- so the
+--  parameters come back from the engine rather than being predicted, and there
+--  is no read-then-consume window for the crate to change in.
+--
+--  It also fixes the eviction artifact at its source. withdrawMisfit took its
+--  count by NAME, so evicting 2 hazard blocks came off the front of a
+--  thousand-stack and left 998 + 2. tidyWork has always known the real slot; it
+--  was only being logged.
+--
+--  VERIFIED AND PUT BACK IF WRONG. The check earns its keep on more than the
+--  offset: two music sheets share a name and differ only in parameters, so
+--  `taken.name == expected.name` alone would have accepted the wrong track.
+--  compare() is what makes this safe for items whose identity is not their
+--  name -- which is the whole point of the change.
+local function takeFromSlot(containerId, slot, count, expected)
+  if count == nil or count < 1 then return nil end
+
+  local offset = slot + SLOT_KEY_TO_OFFSET
+  local taken = world.containerTakeNumItemsAt(containerId, offset, count)
+
+  if taken == nil or taken.name == nil or (taken.count or 0) < 1 then
+    return nil
+  end
+
+  if expected ~= nil then
+    local same = taken.name == expected.name
+      and compare(taken.parameters, expected.parameters)
+
+    if not same then
+      --  Loud. With the offset settled, this can only mean the crate changed
+      --  between the scan and the take -- or that the numbering assumption
+      --  above has stopped holding, which would be worth knowing immediately.
+      sb.logError("PETPORT %s slot key %s (offset %s) held %s, not the %s the "
+        .. "scan found there -- returning it and refusing",
+        stationUniqueId(), sb.printJson(slot), sb.printJson(offset),
+        sb.printJson(taken.name), sb.printJson(expected.name))
+
+      world.containerAddItems(containerId, taken)
+      return nil
+    end
+  end
+
+  return taken
+end
+
+--  Take a named item out of a container and put it on the unit.
 --
 --  GLOBAL for the same reason depositCargo is: the petports_taskReport handler
 --  is registered in init(), earlier in this file than the definition, so a
 --  local would not be in scope at the call site.
 --
---  containerConsume is all-or-nothing -- it succeeds only if the FULL count can
---  be consumed -- which is exactly the semantics wanted for taking exactly one.
+--  `seedName` is a fossil of the replanting work this was written for. It has
+--  been general since watering started using it for liquid, and restocking now
+--  uses it for anything a player can name.
 function withdrawSeed(containerId, seedName, workId, count)
   if seedName == nil then return end
-
-  --  count is 1 for seeds and the run length for liquid. Same call either way;
-  --  containerConsume is all-or-nothing on the full count, so asking for more
-  --  than the crate holds fails cleanly rather than half-filling the unit.
   count = count or 1
 
-  --  A WITHDRAW THAT TAKES NOTHING MUST BE RECORDED AS A FAILURE, and this is
-  --  the whole reason this function knows its work id.
-  --
-  --  The unit walked there and reported "done" -- it did arrive, and arriving
-  --  is all it was asked to do. The report handler treats done as success and
-  --  CLEARS the failure record for that id. So if containerAvailable and
-  --  containerConsume ever disagree persistently, the port re-dispatches the
-  --  identical walk immediately, and the unit shuttles to an empty crate
-  --  forever with no backoff and nothing in the log that looks wrong.
-  --
-  --  Ordinarily that disagreement means a player emptied the crate mid-walk,
-  --  which resolves itself. The backoff exists for the case where it does not.
   local function empty(reason)
     sb.logInfo("PETPORT %s withdraw of %s from %s took nothing: %s",
       stationUniqueId(), tostring(seedName), sb.printJson(containerId), reason)
@@ -2152,20 +2287,80 @@ function withdrawSeed(containerId, seedName, workId, count)
     return
   end
 
-  local took = world.containerConsume(containerId,
-    { name = seedName, count = count })
+  local ok, items = pcall(world.containerItems, containerId)
 
-  if took ~= true then
-    empty("containerConsume returned " .. tostring(took)
-      .. " -- crate emptied between dispatch and arrival?")
+  if not ok or type(items) ~= "table" then
+    empty("container contents unreadable")
     return
   end
 
-  sb.logInfo("PETPORT %s withdrew %s %s from %s",
-    stationUniqueId(), sb.printJson(count), tostring(seedName),
-    sb.printJson(containerId))
+  --  SLOTS IN ORDER, so two runs against an unchanged crate take the same
+  --  stacks. pairs, not ipairs: containerItems is keyed by slot and empty slots
+  --  leave holes that ipairs stops at.
+  local slots = {}
+  for slot, stack in pairs(items) do
+    if type(stack) == "table" and stack.name == seedName then
+      table.insert(slots, slot)
+    end
+  end
+  table.sort(slots)
 
-  receiveCargo({ name = seedName, count = count })
+  if #slots == 0 then
+    empty("crate holds none of it -- emptied between dispatch and arrival?")
+    return
+  end
+
+  --  ACROSS SLOTS, AND EACH ONE ARRIVES AS ITS OWN CARGO STACK.
+  --
+  --  A fetch that spans two dye variants is two descriptors, not one wrong one.
+  --  receiveCargo merges what genuinely matches -- it compares parameters -- so
+  --  identical stacks still collapse and different ones stay apart.
+  local remaining = count
+  local got = 0
+
+  for _, slot in ipairs(slots) do
+    if remaining < 1 then break end
+
+    local expected = items[slot]
+    local want = math.min(remaining, expected.count or 1)
+    local taken = takeFromSlot(containerId, slot, want, expected)
+
+    if taken ~= nil then
+      receiveCargo(taken)
+      got = got + (taken.count or 1)
+      remaining = remaining - (taken.count or 1)
+    end
+  end
+
+  if got < 1 then
+    --  NAMES WHAT IT TRIED. "every slot refused" on its own says nothing about
+    --  WHY, and the first build of this failed exactly here with no way to tell
+    --  an empty crate from a wrong offset.
+    local tried = {}
+    for _, slot in ipairs(slots) do
+      table.insert(tried, string.format("%s->%s(x%s)", tostring(slot),
+        tostring(slot + SLOT_KEY_TO_OFFSET),
+        tostring((items[slot] or {}).count)))
+    end
+
+    empty("every slot holding it refused: key->offset " .. table.concat(tried, " "))
+    return
+  end
+
+  --  PARTIAL IS NOW POSSIBLE, where containerConsume was all-or-nothing on the
+  --  full count. That is a graceful degradation rather than a regression: the
+  --  unit carries what it got and the next tick asks for the rest. Callers cap
+  --  their request by containerAvailable first, so a short take means the crate
+  --  changed under us.
+  if got < count then
+    sb.logInfo("PETPORT %s withdrew %s of the %s %s asked for from %s",
+      stationUniqueId(), sb.printJson(got), sb.printJson(count),
+      tostring(seedName), sb.printJson(containerId))
+  else
+    sb.logInfo("PETPORT %s withdrew %s %s from %s",
+      stationUniqueId(), sb.printJson(got), tostring(seedName),
+      sb.printJson(containerId))
+  end
 end
 
 --  Take a misfiled stack out of a crate. The eviction half of tidying.
@@ -2173,10 +2368,23 @@ end
 --  Global for the same reason withdrawSeed is: the petports_taskReport handler
 --  is registered in init(), earlier in this file than this definition.
 --
---  BY NAME AND COUNT, NOT BY SLOT. The slot is what tidyWork FOUND the misfit
---  in, and it is not stable -- a player rearranging the crate between dispatch
---  and arrival moves it, and containerConsume works on descriptors anyway. The
---  slot survives on the task only so the log can say where it was seen.
+--  BY SLOT, AND THAT IS A REVERSAL.
+--
+--  This used to take by name and count, on the reasoning that the slot is not
+--  stable -- a player rearranging the crate between dispatch and arrival moves
+--  it -- and that containerConsume works on descriptors anyway. Both halves of
+--  that were true and the conclusion was still wrong.
+--
+--  Taking by name let the engine choose which stack to take from, so evicting 2
+--  hazard blocks came off the front of a thousand-stack and left 998 + 2: the
+--  right total in the wrong shape, and the whole reason compaction exists.
+--  Worse, a descriptor rebuilt from a name and a count carries no PARAMETERS,
+--  so the same path stripped the dye off clothing and the track off a music
+--  sheet. See takeFromSlot.
+--
+--  The instability is real and is handled rather than avoided: the slot is
+--  checked against what the scan expected to find there, and a crate that moved
+--  under us is refused so the next scan can look again.
 --
 --  Symmetric with withdrawSeed on failure: a withdraw that takes nothing must
 --  be recorded, or the port re-dispatches the identical walk forever with
@@ -2197,25 +2405,55 @@ function withdrawMisfit(containerId, name, count, workId, slot)
     return
   end
 
-  local took = world.containerConsume(containerId, { name = name, count = count })
-
-  if took ~= true then
-    empty("containerConsume returned " .. tostring(took)
-      .. " -- crate rearranged between dispatch and arrival?")
+  if slot == nil then
+    --  Every caller passes one -- petports_filterMisfits and
+    --  petports_restockMisfits both report the slot they found it in -- so a
+    --  nil here is a new caller that has not been told this is load-bearing.
+    empty("no slot given; refusing to guess which stack to take")
     return
   end
 
-  sb.logInfo("PETPORT %s tidied %s %s out of %s (was slot %s)",
-    stationUniqueId(), sb.printJson(count), tostring(name),
+  local ok, items = pcall(world.containerItems, containerId)
+
+  if not ok or type(items) ~= "table" then
+    empty("container contents unreadable")
+    return
+  end
+
+  local expected = items[slot]
+
+  --  THE CRATE MOVED UNDER US. The scan that found this misfit ran on the work
+  --  tick and the unit has walked here since, so the player has had ample time
+  --  to rearrange it. Refusing is right: the next scan will find whatever is
+  --  actually there now.
+  if type(expected) ~= "table" or expected.name ~= name then
+    empty(string.format("slot %s now holds %s, not %s -- crate rearranged "
+      .. "between dispatch and arrival?", tostring(slot),
+      sb.printJson(expected ~= nil and expected.name or nil), tostring(name)))
+    return
+  end
+
+  --  BY SLOT, NOT BY NAME, and this is what fixes the fragmentation the tidy
+  --  pass used to create. Consuming "2 hazard blocks" let the engine take them
+  --  off the front of a thousand-stack, leaving 998 + 2 -- the right total in
+  --  the wrong shape. The scan already knew which stack it meant.
+  local taken = takeFromSlot(containerId, slot, math.min(count, expected.count or 1),
+    expected)
+
+  if taken == nil then
+    empty("slot " .. tostring(slot) .. " gave nothing up")
+    return
+  end
+
+  sb.logInfo("PETPORT %s tidied %s %s out of %s (slot %s)",
+    stationUniqueId(), sb.printJson(taken.count or 1), tostring(name),
     sb.printJson(containerId), tostring(slot))
 
-  --  THE EVICTION ITSELF IS WHAT FRAGMENTS THE CRATE. containerConsume works
-  --  on a descriptor, not on the slot the scan found, so taking 2 of something
-  --  can come off the front of a full stack and leave 998 beside the 2 that
-  --  were supposed to go. Tidy up behind it.
+  --  Still worth doing: taking from the right slot stops this pass fragmenting
+  --  the crate, but says nothing about fragmentation that was already there.
   compactContainer(containerId)
 
-  receiveCargo({ name = name, count = count })
+  receiveCargo(taken)
 end
 
 --  Remove one seed from cargo after it has gone into the ground.
@@ -4346,11 +4584,11 @@ local function restockHeld(containerId, name)
 end
 
 --  Every configured restock beacon in coverage.
-local function restockRequests()
+local function restockBeacons()
   local out = {}
 
   for _, beacon in ipairs(petports_beaconsFor("restock")) do
-    if beacon.request ~= nil and world.entityExists(beacon.id) then
+    if beacon.requests ~= nil and world.entityExists(beacon.id) then
       table.insert(out, beacon)
     end
   end
@@ -4371,71 +4609,79 @@ end
 --  contents every tick rather than remembered on the task, so a request the
 --  player edits or deletes mid-walk simply stops matching and deposit takes the
 --  cargo to storage like anything else.
+--
+--  NEAREST CRATE, THEN ITS REQUESTS IN ORDER. petports_beaconsFor already
+--  sorts by distance, so a unit holding something two crates both want goes to
+--  the closer one.
 local function restockDeliverWork()
   if self.petData == nil or self.petData.cargo == nil then return nil end
   if #self.petData.cargo == 0 then return nil end
 
-  local requests = restockRequests()
-  if #requests == 0 then return nil end
+  local beacons = restockBeacons()
+  if #beacons == 0 then return nil end
 
-  for _, beacon in ipairs(requests) do
-    local request = beacon.request
-
-    --  Is any of what we hold what this crate asked for?
-    local carried = nil
-    for _, stack in ipairs(self.petData.cargo) do
-      if stack.name == request.item then
-        carried = stack
-        break
+  for _, beacon in ipairs(beacons) do
+    for _, request in ipairs(beacon.requests) do
+      --  Is any of what we hold what this crate asked for?
+      local carried = nil
+      for _, stack in ipairs(self.petData.cargo) do
+        if stack.name == request.item then
+          carried = stack
+          break
+        end
       end
-    end
 
-    if carried ~= nil then
-      local have = restockHeld(beacon.id, request.item)
+      if carried ~= nil then
+        local have = restockHeld(beacon.id, request.item)
 
-      --  ALREADY AT MAX MEANS DO NOT DELIVER, which is also what stops an
-      --  overshoot ping-ponging: the excess goes back to storage through
-      --  depositWork, and this refuses to bring it out again.
-      if have ~= nil and have < request.max then
-        --  nil means the engine will not answer. Treated as YES here, unlike
-        --  tidying: the unit is already holding this and has to put it
-        --  somewhere, so refusing would strand it. A crate that turns out to
-        --  be full returns a leftover and depositWork places the remainder.
-        local fits = world.containerItemsCanFit ~= nil
-          and world.containerItemsCanFit(beacon.id, carried) or nil
+        --  ALREADY AT MAX MEANS DO NOT DELIVER, which is also what stops an
+        --  overshoot ping-ponging: the excess goes back to storage through
+        --  depositWork, and this refuses to bring it out again.
+        if have ~= nil and have < request.max then
+          --  nil means the engine will not answer. Treated as YES here, unlike
+          --  tidying: the unit is already holding this and has to put it
+          --  somewhere, so refusing would strand it. A crate that turns out to
+          --  be full returns a leftover and depositWork places the remainder.
+          local fits = world.containerItemsCanFit ~= nil
+            and world.containerItemsCanFit(beacon.id, carried) or nil
 
-        if fits == nil or fits > 0 then
-          local stand = standingPointNear(beacon.position, 4)
+          if fits == nil or fits > 0 then
+            local stand = standingPointNear(beacon.position, 4)
 
-          if stand == nil then
-            sb.logInfo("PETPORT %s restock delivery to %s SKIPPED: no standable spot within 4 tiles of %s",
-              stationUniqueId(), sb.printJson(beacon.id),
-              sb.printJson(beacon.position))
-          else
-            sb.logInfo("PETPORT %s delivering %s x%s to request crate %s (has %s of %s)",
-              stationUniqueId(), tostring(request.item),
-              sb.printJson(carried.count or 1), sb.printJson(beacon.id),
-              sb.printJson(have), sb.printJson(request.max))
+            if stand == nil then
+              sb.logInfo("PETPORT %s restock delivery to %s SKIPPED: no standable spot within 4 tiles of %s",
+                stationUniqueId(), sb.printJson(beacon.id),
+                sb.printJson(beacon.position))
+            else
+              sb.logInfo("PETPORT %s delivering %s x%s to request crate %s (has %s of %s)",
+                stationUniqueId(), tostring(request.item),
+                sb.printJson(carried.count or 1), sb.printJson(beacon.id),
+                sb.printJson(have), sb.printJson(request.max))
 
-            return {
-              --  PORT-SUFFIXED, like deposit and for the same reason. There is
-              --  nothing to serialise -- containerAddItems gives each arrival
-              --  a truthful answer about what it took -- and an exclusive
-              --  claim on one crate would refuse every other port's unit and
-              --  strand them mid-shuffle.
-              id = "restockput:" .. tostring(beacon.id) .. "@" .. stationUniqueId(),
-              type = "deposit",
-              target = beacon.id,
+              return {
+                --  KEYED BY CRATE AND ITEM. The crate alone would serialise two
+                --  units delivering different materials to one box for no
+                --  reason; containerAddItems gives each arrival a truthful
+                --  answer about what it took.
+                --
+                --  PORT-SUFFIXED, like deposit and for the same reason: an
+                --  exclusive claim would refuse every other port's unit and
+                --  strand them mid-shuffle.
+                id = "restockput:" .. tostring(beacon.id)
+                  .. ":" .. tostring(request.item) .. "@" .. stationUniqueId(),
+                type = "deposit",
+                target = beacon.id,
 
-              --  What makes this a delivery rather than a deposit. See the
-              --  report handler and depositCargoOnly.
-              only = request.item,
+                --  What makes this a delivery rather than a deposit. See the
+                --  report handler and depositCargoOnly.
+                only = request.item,
 
-              position = stand,
-              containerPosition = beacon.position,
-              port = stationUniqueId(),
-              dwell = 0
-            }
+                position = stand,
+                containerPosition = beacon.position,
+                port = stationUniqueId(),
+                dwell = 0
+              }
+            end
           end
         end
       end
@@ -4445,7 +4691,7 @@ local function restockDeliverWork()
   return nil
 end
 
---  A request crate is below its minimum. Go and get some.
+--  A request crate is below one of its minimums. Go and get some.
 --
 --  BOTTOM OF findWork, BESIDE TIDY. A player who asked for 2000 dirt did ask
 --  for it, but not more urgently than a drop on a despawn timer -- and this is
@@ -4455,113 +4701,120 @@ end
 --  Runs only with empty cargo, because the cargo guard in findWork returns
 --  before reaching here. So a fetched stack is the unit's whole load and
 --  restockDeliverWork above is guaranteed to match it on the next tick.
+--
+--  ONE REQUEST PER TRIP. A crate naming twenty materials produces twenty
+--  sequential trips rather than twenty tasks, which is the same standing design
+--  tidying uses -- and it means a crate short on two things fills the first,
+--  then the second, rather than needing a unit that can carry both.
 local function restockFetchWork()
-  local requests = restockRequests()
-  if #requests == 0 then return nil, "no configured restock beacon in coverage" end
+  local beacons = restockBeacons()
+  if #beacons == 0 then return nil, "no configured restock beacon in coverage" end
 
   local short, unstocked, noRoom = 0, 0, 0
 
-  for _, beacon in ipairs(requests) do
-    local request = beacon.request
-    local have = restockHeld(beacon.id, request.item)
+  for _, beacon in ipairs(beacons) do
+    for _, request in ipairs(beacon.requests) do
+      local have = restockHeld(beacon.id, request.item)
 
-    if have ~= nil and have < request.min then
-      --  WANT IS MEASURED AGAINST MAX, NOT MIN. Filling only to min guarantees
-      --  the crate is at the fetch threshold the moment the unit walks away.
-      --
-      --  This is also what makes min > max a defined state rather than a loop:
-      --  want comes out zero or negative, nothing dispatches, and the crate
-      --  settles at max. The pane allows that configuration precisely because
-      --  this line copes with it.
-      local want = request.max - have
+      if have ~= nil and have < request.min then
+        --  WANT IS MEASURED AGAINST MAX, NOT MIN. Filling only to min
+        --  guarantees the crate is at the fetch threshold the moment the unit
+        --  walks away.
+        --
+        --  This is also what makes min > max a defined state rather than a
+        --  loop: want comes out zero or negative, nothing dispatches, and the
+        --  crate settles at max. The pane allows that configuration precisely
+        --  because this line copes with it.
+        local want = request.max - have
 
-      if want <= 0 then
-        --  Nothing to do, and not a shortage worth reporting.
-      else
-        short = short + 1
+        if want > 0 then
+          short = short + 1
 
-        --  NETWORK-EXCLUSIVE, WITH NO PORT SUFFIX, unlike deposit and delivery.
-        --  Two ports each fetching 500 for a crate that wants 500 total
-        --  overshoots by a full load. The claim releases when the fetch task
-        --  reports, so a second port can still slip in while the first unit
-        --  walks its stack over -- the same residual race withdrawWork lives
-        --  with, and it self-corrects the same way: the second delivery finds
-        --  the crate at max, refuses, and the cargo goes to storage.
-        local workId = "restock:" .. tostring(beacon.id) .. ":" .. tostring(request.item)
+          --  NETWORK-EXCLUSIVE, WITH NO PORT SUFFIX, unlike deposit and
+          --  delivery. Two ports each fetching 500 for a request that wants
+          --  500 total overshoots by a full load. The claim releases when the
+          --  fetch task reports, so a second port can still slip in while the
+          --  first unit walks its stack over -- the same residual race
+          --  withdrawWork lives with, and it self-corrects the same way: the
+          --  second delivery finds the crate at max, refuses, and the cargo
+          --  goes to storage.
+          local workId = "restock:" .. tostring(beacon.id)
+            .. ":" .. tostring(request.item)
 
-        local failure = self.workFailures[workId]
-        local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
+          local failure = self.workFailures[workId]
+          local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
 
-        if not backedOff and claimFree(workId) then
-          --  SOURCES ARE DEPOSIT BEACONS ONLY. Never another request crate --
-          --  that is what stops two quotas trading forever, and it is
-          --  structural rather than a rule anything has to enforce.
-          --
-          --  containerAvailable asks the same question containerConsume will
-          --  ask when the unit arrives, which is stronger than reading
-          --  containerItems and matching names.
-          local source, available = nil, 0
+          if not backedOff and claimFree(workId) then
+            --  SOURCES ARE DEPOSIT BEACONS ONLY. Never another request crate --
+            --  that is what stops two quotas trading forever, and it is
+            --  structural rather than a rule anything has to enforce.
+            --
+            --  containerAvailable asks the same question containerConsume will
+            --  ask when the unit arrives, which is stronger than reading
+            --  containerItems and matching names.
+            local source, available = nil, 0
 
-          for _, crate in ipairs(petports_beaconsFor("deposit")) do
-            if world.entityExists(crate.id) then
-              local n = world.containerAvailable(crate.id,
-                { name = request.item, count = 1 })
+            for _, crate in ipairs(petports_beaconsFor("deposit")) do
+              if world.entityExists(crate.id) then
+                local n = world.containerAvailable(crate.id,
+                  { name = request.item, count = 1 })
 
-              if type(n) == "number" and n >= 1 then
-                source = crate
-                available = n
-                break
+                if type(n) == "number" and n >= 1 then
+                  source = crate
+                  available = n
+                  break
+                end
               end
             end
-          end
 
-          if source == nil then
-            unstocked = unstocked + 1
-          else
-            --  ONE STACK PER TRIP, and never more than the crate has.
-            --  containerConsume is all-or-nothing on the full count, so asking
-            --  for more than is there fails cleanly and takes nothing -- which
-            --  would read as a mysteriously idle unit.
-            local count = math.min(want, available, stackSizeOf(request.item))
-
-            --  BOTH HALVES BEFORE ANYTHING MOVES, the same rule tidying uses.
-            --  Fetching into a full request crate means the unit picks the
-            --  stack up, delivery refuses it, deposit puts it back in storage,
-            --  and this fetches it again next tick. nil means the engine will
-            --  not answer and is treated as YES -- unlike tidying, because a
-            --  crate under its own minimum is work someone explicitly asked
-            --  for rather than housekeeping.
-            local fits = world.containerItemsCanFit ~= nil
-              and world.containerItemsCanFit(beacon.id,
-                { name = request.item, count = count }) or nil
-
-            if fits ~= nil and fits <= 0 then
-              noRoom = noRoom + 1
+            if source == nil then
+              unstocked = unstocked + 1
             else
-              sb.logInfo("PETPORT %s RESTOCK dispatch: %s x%s from %s for crate %s (has %s, wants %s-%s)",
-                stationUniqueId(), tostring(request.item), sb.printJson(count),
-                sb.printJson(source.id), sb.printJson(beacon.id),
-                sb.printJson(have), sb.printJson(request.min),
-                sb.printJson(request.max))
+              --  ONE STACK PER TRIP, and never more than the crate has.
+              --  containerConsume is all-or-nothing on the full count, so
+              --  asking for more than is there fails cleanly and takes nothing
+              --  -- which would read as a mysteriously idle unit.
+              local count = math.min(want, available, stackSizeOf(request.item))
 
-              return {
-                id = workId,
-                type = "withdraw",
-                port = stationUniqueId(),
-                target = source.id,
+              --  BOTH HALVES BEFORE ANYTHING MOVES, the same rule tidying uses.
+              --  Fetching into a full request crate means the unit picks the
+              --  stack up, delivery refuses it, deposit puts it back in
+              --  storage, and this fetches it again next tick. nil means the
+              --  engine will not answer and is treated as YES -- unlike
+              --  tidying, because a crate under its own minimum is work someone
+              --  explicitly asked for rather than housekeeping.
+              local fits = world.containerItemsCanFit ~= nil
+                and world.containerItemsCanFit(beacon.id,
+                  { name = request.item, count = count }) or nil
 
-                --  `seed` is what withdrawSeed reads. The name is a fossil of
-                --  the replanting work it was written for; the function has
-                --  been general since watering started using it for liquid.
-                seed = request.item,
-                count = count,
+              if fits ~= nil and fits <= 0 then
+                noRoom = noRoom + 1
+              else
+                sb.logInfo("PETPORT %s RESTOCK dispatch: %s x%s from %s for crate %s (has %s, wants %s-%s)",
+                  stationUniqueId(), tostring(request.item), sb.printJson(count),
+                  sb.printJson(source.id), sb.printJson(beacon.id),
+                  sb.printJson(have), sb.printJson(request.min),
+                  sb.printJson(request.max))
 
-                --  Raw container position, matching withdrawWork and
-                --  withdrawWaterWork. The unit resolves a standing point
-                --  itself for this task type; deposit-shaped tasks are the
-                --  ones that arrive pre-resolved.
-                position = world.entityPosition(source.id)
-              }
+                return {
+                  id = workId,
+                  type = "withdraw",
+                  port = stationUniqueId(),
+                  target = source.id,
+
+                  --  `seed` is what withdrawSeed reads. The name is a fossil of
+                  --  the replanting work it was written for; the function has
+                  --  been general since watering started using it for liquid.
+                  seed = request.item,
+                  count = count,
+
+                  --  Raw container position, matching withdrawWork and
+                  --  withdrawWaterWork. The unit resolves a standing point
+                  --  itself for this task type; deposit-shaped tasks are the
+                  --  ones that arrive pre-resolved.
+                  position = world.entityPosition(source.id)
+                }
+              end
             end
           end
         end
@@ -4570,7 +4823,7 @@ local function restockFetchWork()
   end
 
   if short == 0 then
-    return nil, "every restock beacon is at or above its minimum"
+    return nil, "every restock request is at or above its minimum"
   end
 
   return nil, string.format(
@@ -4587,9 +4840,10 @@ end
 --
 --  DEFINED ABOVE ITS FIRST CALLER, and that is not incidental. A `local
 --  function` called from earlier in the file resolves as a nil GLOBAL and
---  throws at the call -- the trap that hid in freshPather for months, and the
---  one a whole-mod sweep exists to catch. This was written below compactWork
---  first and the sweep found it immediately.
+--  throws at the call -- the trap that hid in freshPather for months. It was
+--  also deleted outright once, by a block rewrite of the restock generators
+--  that ran up to the header below; the two call sites survived and nothing in
+--  a syntax check noticed. Grep for callers after moving anything near here.
 local function tidySources()
   local sources = {}
 
@@ -4598,7 +4852,7 @@ local function tidySources()
   end
 
   for _, beacon in ipairs(petports_beaconsFor("restock")) do
-    if beacon.request ~= nil then
+    if beacon.requests ~= nil then
       table.insert(sources, beacon)
     end
   end
@@ -4678,7 +4932,7 @@ local function tidyWork()
         local misfits
 
         if source.behavior == "restock" then
-          misfits = petports_restockMisfits(source.request, items,
+          misfits = petports_restockMisfits(source.requests, items,
             source.beaconSlot)
         else
           misfits = petports_filterMisfits(source.filter, items,

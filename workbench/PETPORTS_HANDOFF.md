@@ -25,6 +25,18 @@ just a beacon whose filter accepts nothing, so everything in it is a misfit. A
 misfit is never moved unless somewhere both accepts it AND has room, so full
 storage postpones tidying rather than parking a unit with an unplaceable stack.
 
+**RESTOCK BEACONS ARE BUILT AND VERIFIED, INCLUDING COMPOUND CRATES.** A restock
+beacon names a LIST of items, each with its own min and max, and units keep that
+crate stocked out of the network's ordinary storage. Verified end to end: fetch
+from a deposit crate, deliver, evict overstock, evict anything unrequested, and
+several requests in one crate all serviced. See "Restock beacons — built".
+
+**Storage compacts itself.** One item spread across more slots than it needs is
+merged, both after every port-side container mutation (free — the unit is already
+standing there) and by a dedicated bottom-priority walk for crates nothing else
+visits. Split stacks are bucketed by PARAMETERS, so two copies of one Betabound
+music sheet merge and two different songs do not.
+
 **Dropping through platforms works, by placement rather than by holding down.**
 The unit is positioned two pixels below the last platform its plan wants passed
 and falls from there. Six earlier builds tried to time a `controlDown` hold and
@@ -164,7 +176,7 @@ arbitrary footprint, and watering of dry tilled soil -- all of it surviving vent
 traversal in both directions. **The cycle runs with no sprinkler
 infrastructure.** Animal produce is the only piece of Task 2 still unspecified.
 
-**Still not built.** Docking, request beacons, per-item routing, and any notion
+**Still not built.** Docking, per-item routing, a trash can, and any notion
 of cargo capacity -- ANY cargo is treated as a full load, deliberately, and
 `findWork` orders deposit above collect so a loaded unit ferries before it
 gathers anything else. The participate/ID interface does not exist: networks
@@ -235,8 +247,13 @@ Same argument as the mod split: cheap now, not later.
       petports_unit_test.item, .png
       beacons/
         petports_beacon_deposit.activeitem, .png
-        petports_beacon.lua        -- activation stub; the CONFIG carries the meaning
+        petports_beacon_restock.activeitem, .png
+        petports_beacon.lua        -- pane channel + token; the CONFIG carries the meaning
         petports_beacon.animation
+    interface/lofty_petports/
+      beaconconfig/    beaconconfig.config, .lua, panewide_* + tile art
+      restockconfig/   restockconfig.config, .lua, panesmall_*,
+                       slot_backing.png, field_backing.png
     scripts/lofty_petports/
       petports_work.lua          -- claims + coverage rects, shared both sides
     stagehands/lofty_petports/
@@ -289,6 +306,90 @@ eventually carry its own markers or drop the concept.
 
 Hard-won, mostly by getting them wrong first. Several are vanilla bugs or
 undocumented engine behaviour rather than anything specific to this mod.
+
+**A PANE TOKEN HELD IN `self` DOES NOT SURVIVE.** The beacon mints a token in
+`activate()` so a pane can prove which beacon it is editing. Held as runtime
+state, it is gone the moment the player moves anything through the cursor: that
+re-creates the held item, `init()` runs again, and `activate()` was the only
+thing that ever set it. Measured:
+
+    petports beacon: write REFUSED: token=ab5b61a2... mine=nil
+
+The item was RUNNING and ANSWERING — so not the shadowing case below — and had
+simply forgotten. The pane could then never write, and the player's edit was lost
+every single time. It is now an instance value, `petports_beaconPaneToken`,
+restored at the top of `init()`. TYPE-CHECKED, not nil-checked: a cleared token
+reads back as an explicit JSON null, which is not a token.
+
+Not in `FIELDS` — it is the item's own bookkeeping and the pane must not reach
+it. The old comment claiming a token must never touch item data was
+stacking-based reasoning, and beacons are `maxStack` 1.
+
+**THE SWAP SLOT SHADOWS THE HELD ITEM for message routing.**
+`world.sendEntityMessage(player.id(), ...)` goes to whatever the player is
+HOLDING, and an item on the CURSOR counts — so while a sample is on the cursor,
+nothing answers and every write is refused. Writes are HELD and retried on the
+first answering heartbeat rather than dropped, because every edit worth making is
+made with something on the cursor.
+
+**Distinguishing "shadowed" from "put away" needs the cursor**, since both answer
+nil:
+
+    beacon UNREACHABLE (answer=nil, cursor=true)   sampling -- stay open
+    beacon UNREACHABLE (answer=nil, cursor=false)  stowed   -- close
+
+and it needs a GRACE, because taking an item onto the cursor and putting it back
+leaves a real window where the cursor is already empty and the item is not yet
+answering — measured at 0.51s. Four checks at 0.25s is roughly twice that. Too
+high lingers harmlessly; too low closes the pane mid-sample and loses any pending
+write, so that dial only goes up.
+
+**`root.itemConfig(...).config.maxStack` is ABSENT unless the item declares one.**
+The engine applies its default when it builds the Item, not into the config table.
+The default lives in `/items/defaultParameters.config` as `defaultMaxStack` and is
+**1000**, not 1. Measured across seven items: `nicemice_gentlereminder` answered 1
+from config, `oculemon` 1000 from config, everything undeclared 1000 from
+defaultParameters.
+
+Reading only the config field and defaulting to 1 silently switches any
+stack-size arithmetic OFF, and it presents as "nothing needs doing" rather than
+as an error — `no crate has stacks worth merging`, every tick, on crates that had
+compacted correctly minutes earlier. Defaulting to 1000 was accidentally right
+for the opposite reason. Read the asset.
+
+**A TEXTBOX CALLBACK IS NOT OPTIONAL, and omitting it is a construction-time
+crash.** Measured:
+
+    (WidgetParserException) Failed to find textbox callback named: 'tbMin'
+
+Note the NAME — nothing had asked for a callback called `tbMin`; that is the
+WIDGET's name. The parser defaults a textbox's callback to the widget's own name
+and then requires it to resolve. So vanilla's pixel printer, whose textbox
+declares none, must be listing `tbSpinCount` in its `scriptWidgetCallbacks`.
+
+Same failure shape as row callbacks: the pane does not open at all and the client
+throws in its main loop.
+
+**`widget.clearListItems` INVOKES THE LIST'S OWN CALLBACK.** Clearing a list is a
+selection change, so tearing one down to rebuild it looks exactly like the player
+clicking away. Measured:
+
+    commitField(min, 100) -> ... is 100-1000
+    requestSelected rowId=nil(nil) -> index=nil
+    refreshRequests: 2 row(s)
+
+The callback ran BEFORE the rebuild finished. Typing a number blanked the row
+highlight, and the fields then wiped because nothing was selected. Guard the
+rebuild with a flag the callback checks, then re-select. This is the same engine
+behaviour already recorded for `ListWidget::setSelected`, through a different
+door.
+
+**Assigning nil into an ENGINE-BACKED table writes a null rather than removing
+the key.** A pane read returned no `filter` at all, the script did
+`state.filter = nil`, and the payload went out carrying `"filter":null` — which
+is not nil in Lua, so the item's write handler stamped it onto a beacon with no
+filter. Build message payloads by naming the fields you own; do not send a table
+that came back through a promise.
 
 **`initialStorage` and `initialStatus` do NOT seed a monster's `storage`.**
 `petspawner.lua` appears to nest them under `scriptConfig`; it does not —
@@ -912,6 +1013,32 @@ every row's path, so with three rules the winner was whichever `pairs()` reached
 first and the X would have deleted an arbitrary rule.
 
 ---
+
+## Two diagnoses that were wrong, and what gave them away
+
+Both cost a round trip. Both were caught by evidence already in the log.
+
+**"The compaction loop."** Container 120 was compacted twice, ten seconds apart,
+with identical numbers — read as a livelock, and a maxStack-learning fix was
+written for it. The disproof was 0.2 seconds after the first pass:
+
+    no dispatch: ... no crate has stacks worth merging
+
+The crate WAS compact, stayed compact for seven seconds, and then fragmented
+again because the player was splitting stacks by hand with the container open.
+The 8-second gap between passes was itself the tell: had it stayed fragmented,
+`compactWork` would have re-dispatched on the next work tick, not eight seconds
+later. The fix was backed out; it would have cached a wrong stack size from a
+read that caught a player mid-edit.
+
+**"maxStack 50."** Chosen in a Python simulation because it reproduced the
+observed six slots, then the simulation working was read as confirmation. The log
+never contained a 50. Fitting a number to an outcome is not evidence, and the
+mod author's "I have 84 of them in a stack" refuted it in one line.
+
+**The rule both point at:** when a log and a hypothesis disagree, the log has
+already answered. Grep the quiet intervals as well as the noisy ones — an absence
+of dispatches is data.
 
 ## Design direction and architecture
 
@@ -3540,48 +3667,149 @@ work tick. It only runs when nothing else has work, so an active network rarely
 reaches it, but an idle one with many crates scans them every second. The fix if
 it ever shows up is a timer like `refreshBeacons` uses, not anything structural.
 
-### Requester beacons — designed, not built
+### Restock beacons — BUILT, and the design that survived contact
 
 Factorio's requester chest names what it wants and the network delivers. Our
-beacons never ask for anything: units bring things and the filter says yes or
-no. A requester is therefore a genuinely new capability rather than a filter
-feature, and it gets **its own beacon type**.
+deposit beacons never ask for anything: units bring things and the filter says
+yes or no. A restock beacon is therefore a genuinely new capability rather than
+a filter feature, and it got **its own beacon type**.
 
-**A separate beacon, not a mode on the deposit beacon.** Restocking is per-ITEM
-and a filter is per-CATEGORY; bolting quotas onto subgroups would bend the
+**A separate beacon, not a mode on the deposit beacon.** Restocking is per ITEM
+and a filter is per CATEGORY; bolting quotas onto subgroups would bend the
 schema to do a job it is not for. More importantly it keeps
 `petports_filterAccepts(filter, name)` a pure function of its name, which is the
-property that lets it be memoised.
+property that lets it be memoised — and "yes, up to a thousand of them" is not a
+fact about a name.
 
-Behaviour is already a config field the port dispatches on, so a `"request"`
-value plus a second `.activeitem` is most of the plumbing.
+**ONE BEACON, MANY REQUESTS.** It shipped as one item per beacon first. The
+obvious workaround for "all my building materials in one box" — several beacons
+in one crate — fails on exactly that case: twenty materials would need twenty
+beacons AND twenty stacks competing for the same chest slots. So the beacon
+carries an ARRAY of `{ item, min, max }` under `petports_beaconRequests`.
+
+The three older keys `petports_beaconItem` / `Min` / `Max` are still READ by the
+port and still listed in the beacon's `FIELDS`. The port falls back to them, so a
+beacon configured under the earlier build keeps working untouched; the pane
+migrates it to a one-entry list on open and the same write names the three keys
+in its clear list. **A field dropped from `FIELDS` is a field nothing can ever
+remove again** — it would sit in the save forever with the port still finding it.
 
 **MIN AND MAX, NOT A SINGLE QUOTA.** One number thrashes: fetch one, drop below,
 fetch again. Min is when to start, max is when to stop, and the gap is what
-stops a unit making forty one-item trips. The pane should make setting a gap the
-obvious thing to do.
+stops a unit making forty one-item trips.
 
-**Naming the item is the real UI problem, and vanilla already solved it.** Text
-entry means typing `avesmingoseed` correctly. An `itemslot` widget — drop a
-sample in to name the request — needs no keyboard and cannot be misspelled.
-Prototype that first: if it misbehaves in a ScriptPane the whole UI shape
-changes.
+**Min above max is a DEFINED state, not an error.** The fetch computes
+`max - have`, which is zero or negative once the crate is at max, so it settles
+at max and stops. The pane allows the configuration and says what it will do,
+rather than clamping — see "the clamp that needed a timer" below.
 
-**Above max costs no new code.** A request crate holding more than max makes the
-excess a misfit, `tidyWork` hauls it off, and the existing "somewhere accepts AND
-has room" guard stops it looping. Only understock needs a new work generator.
+**Naming the item: an itemslot that SAMPLES.** Vanilla's mech assembly reads
+`player.swapSlotItem()` and genuinely STORES the part. A restock beacon needs a
+NAME, not an item, so the slot samples and the player keeps their sample. That
+also sidesteps the whole "give it back when the pane dies badly" problem the
+deposit beacon needed `dismissed()` plus a heartbeat for — sampling has nothing
+to give back. `player.setSwapSlotItem(swap)` is still re-asserted afterwards,
+unconditionally, because "vanilla does the swap in Lua so the engine probably
+does not" is not verified and the failure it would hide is a player's item
+disappearing.
 
-**The source rule, which is what stops it ping-ponging.** A quota is a claim, and
-explicit intent outranks catch-all: a crate with no quota for an item may be
-drained by one that has a quota; a crate with a quota may only be drained down to
-its own quota; two crates with a quota for the same item never trade. That last
-clause makes it a fixed point rather than a loop, and it is checkable locally
-without a global solver.
+**HOTBAR ONLY, AND THIS IS NOT A CHOICE.** Starbound locks the inventory's
+category tabs while anything is on the cursor — the rule that stops a rifle
+being parked in a food slot. A beacon held on the CURSOR can therefore only ever
+see items in its own category, which rules out most of the game. The pane
+detects that case and opens as a refusal notice instead. The test is by name and
+has one known hole: one beacon on the hotbar and a second on the cursor is
+refused when it should not be. Fixing that needs a way to ask which hotbar slot
+is selected, which this mod has not verified exists in retail.
 
-Restock belongs at the bottom of `findWork` beside tidy. A player who asked for
-2000 dirt did ask for it, but not more urgently than a drop on a despawn timer.
-An unmeetable quota must back off through `workFailures` rather than becoming a
-unit walking a circuit forever.
+That check lives in the PANE, not in `activate()`, because an activeitem script
+has no `player` table and cannot read its own swap slot.
+
+**Two work generators, no changes to `petportsTaskAction.lua` at all.**
+
+`restockDeliverWork` sits ABOVE `depositWork` in `findWork`, for the third time
+in this file and the same reason as `replantWork` and `waterWork`: deposit fires
+on ANY cargo, so a unit that just fetched 500 hazard blocks for a request crate
+would otherwise carry them to the nearest deposit beacon — and then fetch them
+straight back out. Every individual task succeeds and nothing in the log looks
+wrong. It reuses `type = "deposit"` with an `only` field the report handler
+branches on, so the unit's side is the proven walk-and-stand path.
+
+`restockFetchWork` sits at the bottom beside tidy. It reuses `type = "withdraw"`
+outright. One request per trip; a crate naming twenty materials produces twenty
+sequential trips.
+
+**A restock crate is never a SOURCE.** Only deposit beacons are searched for
+stock, so two request crates cannot drain each other — the handoff's old "two
+crates with a quota never trade" rule costs no code, it is structural. Eviction
+goes out through `depositWork` into ordinary storage, and if a second request
+crate wants that item it fetches it from there like anything else.
+
+**Overstock did NOT come for free, and the old note here was wrong.** This
+section used to claim above-max costs no new code because `tidyWork` would
+already see it. True while restock was a MODE on the deposit beacon; false the
+moment it became its own behaviour, because everything in `tidyWork` iterated
+`petports_beaconsFor("deposit")` and a request crate is not in that list.
+`petports_restockMisfits(requests, items, exemptSlot)` is the sibling predicate:
+anything no request names is a misfit outright, and a requested item is a misfit
+only in EXCESS of its own max. Duplicates resolve first-wins in array order.
+
+**One beacon decides a container**, still. `scanContainers` takes the first
+ENABLED beacon in slot order and breaks, so a crate is a deposit target or a
+request crate, never both. That falls out of the existing scan rather than being
+enforced anywhere — and it is slot-order dependent if someone puts both in one
+crate: no error, no warning, the top one wins.
+
+### Stack compaction — built
+
+One item's worth of something across more slots than it needs is an artifact,
+and a bot can fix it. It surfaced from eviction: a crate holding 2 hazard blocks
+took a delivery of 1000, the 2 became overstock, and `withdrawMisfit` consumes BY
+NAME AND COUNT — so the engine took its 2 off the front of the thousand-stack
+and left 998 + 2. Right total, wrong shape.
+
+**Fixing the slot selection would stop one source; compaction stops all of
+them**, including the player putting two half stacks in a chest by hand.
+
+**Consume the whole NAME, add back per DESCRIPTOR.** That order is what makes it
+safe without knowing how `containerConsume` matches. `Item::matches` takes an
+`exactMatch` flag and which way `containerConsume` passes it is unverified. If it
+matches by NAME, the single consume takes every stack of that name — exactly what
+was intended, since all of it goes back bucket by bucket with its own parameters.
+If it matches EXACTLY, a bare descriptor cannot account for parameterised stacks,
+the consume fails all-or-nothing, and nothing moved. What is impossible either
+way is taking a parameterised stack and handing back a bare one.
+
+**Bucketed by parameters, hashed first.** Betabound's `sb_musicsheet` is one item
+name with one parameter block per song, and a collector fills a crate with sixty.
+Matching each slot against every bucket is quadratic there, so the parameter
+block is serialised once via `sb.printJson` and used as a table key, with a deep
+compare consulted only to CONFIRM a hit. Measured: 60 unique songs went from 1770
+deep compares to 0; 20 songs across 3 slots each from 610 to 40. Correctness
+never rests on the hash — a collision is caught by the deep compare, and two
+equal blocks that somehow serialised differently would land in separate buckets
+and report the crate as already compact. A missed merge, never a wrong one.
+
+**Key-present-with-null is NOT key-absent**, and the deep compare says so. A
+stamped null is stuck, so such an item genuinely will not merge.
+
+**Compaction runs two ways.** After every port-side container mutation, which
+costs no trip; and from `compactWork`, the lowest-priority generator in
+`findWork`, for crates nothing else visits. One crate per trip, all its
+fragmented items merged on arrival.
+
+**`compactWork` has NO `workFailures` backoff**, unlike every other generator
+here. If `needed` were ever too low the crate would still read as fragmented
+after a merge that could not fix it, and a unit would walk back every idle tick
+with each pass logging a success. That is instrumented rather than defended: the
+per-group line says `predicted`, and the crate is read back afterwards so a
+disagreement names both numbers and what `stackSizeOf` returned.
+
+**A backoff and a learned stack size were both written and both backed out.** The
+learned-maxStack version inferred the real number from a post-compaction read —
+and that read can catch a crate the PLAYER just edited, which would cache a wrong
+small value and silently stop the network compacting that item forever. See the
+traps section: the bug it was built for did not exist.
 
 ### The filter vocabulary is measured, not guessed
 
@@ -4551,8 +4779,66 @@ matching when someone rewords a log line.
 
 ## Where this goes next
 
-**Requester beacons are designed and not built** — see the section under Cargo,
-beacons and deposit. It is the next feature-sized piece of work.
+**Two small open items on the restock beacon.**
+
+An `itemslot` inside the request list's `listTemplate`, to show each request's
+icon. UNVERIFIED whether one can be constructed there, and the failure shape is
+`addListItem` throwing at construction — the pane does not open at all. Worth
+trying STANDALONE rather than bundled with anything, so a failed experiment costs
+one file revert instead of blocking a feature. It is one widget in the template
+plus one `widget.setItemSlotItem(path .. ".rowIcon", { name = ..., count = 1 })`
+in `refreshRequests`.
+
+Making the player SAY the hotbar-only refusal instead of opening a notice pane.
+`entity.say` belongs to monsters and NPCs; an activeitem has no `player` table at
+all, and no channel reachable from a ScriptPane has been verified. The notice
+pane is species-keyed via `player.species()` against `hotbarOnlyMessage` and
+works, so this is polish.
+
+**A TRASH CAN is the next feature-sized piece of work, and it is designed only.**
+Restock beacons are built; see the section under Cargo, beacons and deposit.
+
+The shape, and the reasoning that has to survive into the implementation:
+
+**A beacon, not a self-voiding object.** Nobody drops a beacon into a chest for
+looks, so the aesthetic footgun — someone placing a nice-looking bin and losing
+their arsenal to it — cannot happen. Ship the pretty object as an ordinary
+container if one is wanted; it becomes a void only when a trash beacon is put in
+it. That is the mod's standing rule: a container declares its own purpose by its
+contents.
+
+**ABSENCE MUST MEAN DENY, and everything else rests on that.**
+`petports_filterAccepts` returns true for a nil filter, deliberately, because a
+blank DEPOSIT beacon has to behave like the unconditional one that shipped before
+filters. Inherit that and a fresh trash beacon eats anything homeless the moment
+it is dropped in. The trash predicate must be
+`filter ~= nil and petports_filterAccepts(filter, name)` — a blank trash beacon
+is INERT until the player names what may be destroyed.
+
+**"Nothing wants it" is not "nowhere has room", and conflating them is the
+catastrophic bug.** Full storage is routine and transient; deleting a load
+because every crate happened to be full is unrecoverable.
+`petports_filterAcceptsNothing` already draws exactly that line for the
+loaded-unit case. Trash may only ever be offered an item no deposit beacon's
+filter ACCEPTS — a permanent condition needing the player, never one that clears
+itself in a minute.
+
+**Two hard-no cases regardless of the filter.** Petports beacons themselves:
+`petports_filterMisfits` exempts only the DECIDING beacon's slot, so a spare
+configured beacon is ordinary cargo today and a trash can would delete someone's
+filter setup. And anything under an active restock quota, since a request is a
+claim and destroying what another crate asked for is two systems disagreeing.
+
+**Worth considering: destroy on OVERFLOW, not on arrival.** Let the trash crate
+fill normally and void only what will not fit. The void becomes the overflow
+rather than the box, so a mis-configured trash can presents as a chest full of
+your arsenal before any of it is gone. It does not cover a thousand-item load
+pushing earlier contents out, so it is mitigation rather than a guarantee — but
+it turns a silent unrecoverable mistake into a visible one.
+
+**Ordering:** below `depositWork`, strictly last resort, and NEVER in
+`petports_beaconsFor("deposit")` or the nearest-first loop could pick the void
+ahead of a real crate.
 
 **Two scan passes are specified and not built.** Hunting weapons are not
 identifiable from any field the manifest can reach — whether a weapon yields

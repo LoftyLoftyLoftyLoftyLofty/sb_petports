@@ -539,27 +539,35 @@ end
 --  Which items in a RESTOCK crate do not belong there?
 --
 --  The eviction half of the restock beacon, and the sibling of
---  petports_filterMisfits above. A restock crate has no filter -- it has a
---  REQUEST -- so the question it answers is different in one specific way:
+--  petports_filterMisfits above. A restock crate has no filter -- it has a LIST
+--  OF REQUESTS -- so the question it answers differs in one specific way:
 --
---    Anything that is not the requested item is a misfit outright.
---    The requested item is a misfit only in EXCESS of max.
+--    Anything no request names is a misfit outright.
+--    A requested item is a misfit only in EXCESS of that request's max.
 --
 --  That second clause is the whole reason this cannot be expressed as a filter.
 --  petports_filterAccepts is a pure function of an item NAME, deliberately, so
---  that it can be memoised -- and "yes up to a thousand of them" is not a fact
---  about a name. Bolting counts onto the filter schema would have cost that
---  property everywhere.
+--  that it can be memoised -- and "yes, up to a thousand of them" is not a fact
+--  about a name.
 --
---  `request` is { item = "name", min = n, max = n }, as the beacon stores it.
+--  `requests` is an ARRAY of { item = "name", min = n, max = n }, as the beacon
+--  stores it. ONE CRATE HOLDS AS MANY AS THE PLAYER ADDS, which is what makes
+--  "all my building materials in one box" something they can build. It was one
+--  request per beacon first, and the obvious workaround -- several beacons in
+--  one crate -- fails on exactly that use case: twenty materials would mean
+--  twenty beacons AND twenty stacks competing for the same slots.
+--
+--  DUPLICATES RESOLVE FIRST-WINS, in array order. The pane will not create one,
+--  but a hand-edited save can, and silently summing two maxes for one item
+--  would make the quota depend on how the duplicate arose.
+--
 --  `min` is not consulted here: min decides when to START FETCHING and has
 --  nothing to say about what is already in the box.
 --
---  SLOT ORDER DECIDES WHAT SURVIVES. The earliest slots fill the quota and
---  later ones are evicted, which means two scans of an unchanged crate produce
---  the same list -- the same property petports_filterMisfits needs and for the
---  same reason: an eviction list that shuffles makes claim behaviour
---  unreproducible.
+--  SLOT ORDER DECIDES WHAT SURVIVES. The earliest slots fill each quota and
+--  later ones are evicted, so two scans of an unchanged crate produce the same
+--  list -- the property petports_filterMisfits needs, for the same reason: an
+--  eviction list that shuffles makes claim behaviour unreproducible.
 --
 --  A PARTIAL STACK CAN BE A MISFIT. A crate wanting 500 and holding a stack of
 --  800 reports 300, not 800 and not nothing. withdrawMisfit consumes by name
@@ -568,14 +576,27 @@ end
 --
 --  Returns the same { slot, name, count } shape, so tidyWork does not care
 --  which of the two produced its list.
-function petports_restockMisfits(request, items, exemptSlot)
+function petports_restockMisfits(requests, items, exemptSlot)
 	local misfits = {}
 
-	if type(request) ~= "table" or type(request.item) ~= "string" then
+	if type(requests) ~= "table" or type(items) ~= "table" then
 		return misfits
 	end
 
-	if type(items) ~= "table" then return misfits end
+	--  Name -> allowance. Built once rather than searched per slot, and first
+	--  entry wins so a duplicate cannot quietly raise its own ceiling.
+	local allowed = {}
+
+	for _, request in ipairs(requests) do
+		if type(request) == "table" and type(request.item) == "string"
+		   and allowed[request.item] == nil then
+			--  A max of zero would make the whole request a misfit, which is not
+			--  a shape the pane can produce -- but a hand-edited save can, and
+			--  evicting everything on the strength of a missing number is a bad
+			--  way to find out.
+			allowed[request.item] = { max = tonumber(request.max) or 0, kept = 0 }
+		end
+	end
 
 	local slots = {}
 	for slot in pairs(items) do
@@ -583,31 +604,27 @@ function petports_restockMisfits(request, items, exemptSlot)
 	end
 	table.sort(slots)
 
-	--  A max of zero would make the whole request a misfit, which is not a
-	--  shape the pane can produce -- but a hand-edited save can, and evicting
-	--  everything on the strength of a missing number is a bad way to find out.
-	local max = tonumber(request.max) or 0
-	local kept = 0
-
 	for _, slot in ipairs(slots) do
 		local item = items[slot]
 
 		if type(item) == "table" and type(item.name) == "string" then
 			local count = item.count or 1
+			local quota = allowed[item.name]
 
-			if item.name ~= request.item then
+			if quota == nil then
 				table.insert(misfits, { slot = slot, name = item.name, count = count })
 			else
-				local room = max - kept
+				local room = quota.max - quota.kept
 
 				if room <= 0 then
-					table.insert(misfits, { slot = slot, name = item.name, count = count })
+					table.insert(misfits,
+						{ slot = slot, name = item.name, count = count })
 				elseif count > room then
 					table.insert(misfits,
 						{ slot = slot, name = item.name, count = count - room })
-					kept = max
+					quota.kept = quota.max
 				else
-					kept = kept + count
+					quota.kept = quota.kept + count
 				end
 			end
 		end

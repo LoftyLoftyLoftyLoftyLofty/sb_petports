@@ -32,7 +32,7 @@ local HOLD_CHECK_INTERVAL = 0.25
 --  of decision WITH INPUTS -- not just verdicts -- is what tells them apart.
 --
 --  Flip to false before shipping; leave the calls in place.
-local DEBUG = true
+local DEBUG = false
 
 --  BUILD STAMP.
 --
@@ -49,7 +49,7 @@ local DEBUG = true
 --  and kills the script before a single function in it is defined. That is
 --  exactly how the monster taskAction was broken for three launches. init()
 --  logs it instead.
-local BUILD_STAMP = "2026-08-25e wider pane, no group label wrap"
+local BUILD_STAMP = "2026-08-25k rule row hover"
 
 --  FORMATTED HERE, NOT BY sb.logInfo.
 --
@@ -115,6 +115,33 @@ local shownRuleIndex = nil
 --  placeholder art and no label, so hover text is the only thing naming them.
 local tileSubgroup = {}
 local groupRowIds = {}
+
+--  Row art, set per row rather than by the list schema.
+--
+--  selectedBG and unselectedBG never drew anything in this mod. Vanilla's
+--  crafting and vending lists carry a `background` image at zlevel -1 inside
+--  listTemplate and drive it from script, which is what these mirror -- and
+--  driving it per row is also what makes the alternating shade possible.
+--
+--  Sized to each list's own memberSize. Art cut for a different row size is
+--  exactly how the schema attempt went wrong.
+local RULE_ROW_ART = "/interface/lofty_petports/shared/row_144.png"
+local RULE_ROW_ART_ALT = "/interface/lofty_petports/shared/row_144_alt.png"
+local RULE_ROW_ART_SELECTED = "/interface/lofty_petports/shared/row_144_selected.png"
+
+local GROUP_ROW_ART = "/interface/lofty_petports/shared/row_155.png"
+local GROUP_ROW_ART_ALT = "/interface/lofty_petports/shared/row_155_alt.png"
+
+--  index -> the row's widget path prefix, so a selection change can repaint
+--  without rebuilding. Rebuilding calls clearListItems, which invokes the
+--  list's own callback -- so a repaint that rebuilt would fire the very
+--  callback that asked for it.
+--
+--  The rules list uses it for the selection bar; the group picker uses it for
+--  the alternating shade that sits UNDER its row buttons, since a button has
+--  only one base image and cannot alternate on its own.
+local ruleRowPaths = {}
+local groupRowPaths = {}
 
 --  ---------------------------------------------------------------------------
 --  TALKING TO THE ITEM
@@ -210,9 +237,48 @@ local function ruleLabel(rule)
 	return truncate(name)
 end
 
+--  Repaint the rule rows' backgrounds for the current selection.
+--
+--  SELECTION HERE IS THE BAR ALONE. The restock pane tints its selected label
+--  yellow as well; this list cannot, because ruleLabel's colour already carries
+--  MEANING -- green accept, red deny, set by setFontColor above. A third colour
+--  competing with those would make the list harder to read, not easier.
+--
+--  REPAINTS IN PLACE. Rebuilding to show a selection change would call
+--  clearListItems, which invokes the list's own callback -- so the repaint
+--  would fire the thing that asked for it.
+local function paintRuleRows()
+	for index, path in pairs(ruleRowPaths) do
+		local art = RULE_ROW_ART_ALT
+
+		if index == self.selected then
+			art = RULE_ROW_ART_SELECTED
+		elseif index % 2 == 1 then
+			art = RULE_ROW_ART
+		end
+
+		pcall(widget.setImage, path .. ".rowBG", art)
+	end
+end
+
+
+--  Alternating shade for the group picker, painted UNDER its row buttons.
+--
+--  NO SELECTED STATE, DELIBERATELY. This list is a menu of ACTIONS rather than
+--  a selection: clicking a group adds a rule, the row is not "current"
+--  afterwards, and the same group can be added again. A row left lit would say
+--  otherwise. Hover is the button's own job.
+local function paintGroupRows()
+	for index, path in ipairs(groupRowPaths) do
+		pcall(widget.setImage, path .. ".rowBGShade",
+			(index % 2 == 1) and GROUP_ROW_ART or GROUP_ROW_ART_ALT)
+	end
+end
+
 local function refreshRules()
 	widget.clearListItems("rulesScroll.rulesList")
 	ruleRowIds = {}
+	ruleRowPaths = {}
 	rowWidgetIndex = {}
 
 	--  Row ids are all new after this, so whatever the grid was built against
@@ -223,6 +289,7 @@ local function refreshRules()
 	for index, rule in ipairs(self.state.filter.rules) do
 		local rowId = widget.addListItem("rulesScroll.rulesList")
 		ruleRowIds[rowId] = index
+		ruleRowPaths[index] = string.format("rulesScroll.rulesList.%s", rowId)
 
 		local path = string.format("rulesScroll.rulesList.%s.ruleText", rowId)
 		local label = ruleLabel(rule)
@@ -269,11 +336,15 @@ local function refreshRules()
 	--  Selection does not survive a rebuild, so the buttons that act on a
 	--  selection have to go dead with it.
 	self.selected = nil
+
+	--  The rows exist now, so the selection can be shown on them.
+	paintRuleRows()
 end
 
 local function refreshGroups()
 	widget.clearListItems("groupsScroll.groupsList")
 	groupRowIds = {}
+	groupRowPaths = {}
 
 	local manifest = petports_filterManifest()
 
@@ -289,10 +360,23 @@ local function refreshGroups()
 	for _, group in ipairs(groups) do
 		local rowId = widget.addListItem("groupsScroll.groupsList")
 		groupRowIds[rowId] = group.id
+
+		--  THE ROW BUTTON CARRIES ITS OWN GROUP ID. A member callback is handed
+		--  (leafName, widgetData) and the leaf name is "rowBG" for every row, so
+		--  the data is the only thing that can say WHICH row was clicked. Same
+		--  mechanism the rule rows' action and remove buttons already use.
+		widget.setData(string.format("groupsScroll.groupsList.%s.rowBG", rowId),
+			group.id)
+
+		table.insert(groupRowPaths,
+			string.format("groupsScroll.groupsList.%s", rowId))
 		widget.setText(string.format("groupsScroll.groupsList.%s.groupText", rowId),
 			group.label or group.id)
 		dbg("group row id=%s(%s) -> %s", tostring(rowId), type(rowId), tostring(group.id))
 	end
+
+
+	paintGroupRows()
 end
 
 --  Every argument a callback was handed, with types. The argument shape of a
@@ -613,8 +697,17 @@ local function registerRowCallbacks()
 			"ruleRowAction", ruleRowAction)
 		widget.registerMemberCallback("rulesScroll.rulesList",
 			"ruleRowRemove", ruleRowRemove)
+		--  The hover layer is a button, so it needs a member callback like every
+		--  other row widget -- even though it does nothing. See rowHovered.
+		widget.registerMemberCallback("rulesScroll.rulesList",
+			"rowHovered", rowHovered)
 		widget.registerMemberCallback("subgroupsScroll.subgroupsList",
 			"subgroupToggled", subgroupToggled)
+
+		--  The group picker's rows are full-width BUTTONS now, so they need a
+		--  member callback like any other row widget. See groupRowPicked.
+		widget.registerMemberCallback("groupsScroll.groupsList",
+			"groupRowPicked", groupRowPicked)
 	end)
 
 	--  LOUD ON FAILURE. If registration does not take, the next addListItem
@@ -765,92 +858,68 @@ function ruleSelected()
 
 	--  Selecting a rule swaps the lower panel to its subgroups; deselecting
 	--  swaps back to the picker.
+	--  The bar is the only thing marking the selected rule, so it has to
+	--  follow the click. In place, not by rebuilding -- see paintRuleRows.
+	paintRuleRows()
+
 	showPanelFor(rule)
 end
-function groupPicked()
-	local rowId = widget.getListSelected("groupsScroll.groupsList")
-	local groupId = rowId and groupRowIds[rowId] or nil
-
-	dbg("groupPicked rowId=%s(%s) -> group=%s",
-		tostring(rowId), type(rowId), tostring(groupId))
-
+--  Add a rule for a group. The one place that acts.
+--
+--  TAKES THE GROUP ID DIRECTLY, because a row button knows which row it is via
+--  setData while the list only knows what is SELECTED -- and a full-width button
+--  may well be consuming the click the list needs to notice a selection change.
+local function addGroupRule(groupId, why)
 	if groupId == nil then return end
 
-	--  APPENDED, never inserted. The newest thing a player asked for is the
-	--  most specific, which is exactly what last-match-wins means -- so adding
-	--  a rule always does something visible rather than being shadowed by a
-	--  rule further down.
-	--
-	--  THE FIRST RULE TURNS "ACCEPT EVERYTHING" OFF.
-	--
-	--  A player who opens a fresh beacon and picks a group is saying "put THIS
-	--  in the box". Leaving the base at accept made that mean "put everything in
-	--  the box, and also mention this group", which is never what was meant, and
-	--  getting to the intended result took three clicks: pick the group, uncheck
-	--  Accept everything, then flip the rule from deny to accept.
-	--
-	--  Only when the list is EMPTY. Once there are rules the base is a
-	--  deliberate choice -- "everything except..." is a real filter -- and
-	--  silently rewriting it underneath someone mid-edit would be worse than
-	--  the three clicks.
+	dbg("addGroupRule(%s) via %s", tostring(groupId), tostring(why))
+
+	--  A FIRST RULE ON AN ACCEPT-ALL FILTER FLIPS THE BASE. Adding "accept
+	--  ores" to a filter that already accepts everything says nothing; the
+	--  player plainly means "ores and not the rest".
 	if #self.state.filter.rules == 0 and self.state.filter.base ~= "deny" then
 		self.state.filter.base = "deny"
 		widget.setChecked("baseCheckbox", false)
-		dbg("groupPicked: first rule on an accept-all filter, base -> deny")
+		dbg("addGroupRule: first rule on an accept-all filter, base -> deny")
 	end
 
-	--  A NEW RULE IS AN ACCEPT.
-	--
-	--  This used to be "the opposite of the base verdict", on the reasoning that
-	--  a rule matching the base is a no-op. True, but it made the default depend
-	--  on a checkbox two panels away, and the flip above means the base is deny
-	--  for the case that actually happens -- so it computed "accept" almost every
-	--  time anyway while being harder to predict.
-	--
-	--  The one case it now gets wrong is adding a rule to a filter deliberately
-	--  left on "accept everything", where an accept rule changes nothing. That is
-	--  visible and one click from fixed: the row's own verb icon flips it.
-	local action = "accept"
+	table.insert(self.state.filter.rules, { action = "accept", group = groupId })
 
-	--  No `except` key: an absent exclusion list means the whole group, and it
-	--  stays absent so a subgroup added later by another mod is inside this
-	--  rule automatically.
-	table.insert(self.state.filter.rules, { action = action, group = groupId })
-	dbg("groupPicked: appended %s rule for %s (base %s)",
-		action, tostring(groupId), tostring(self.state.filter.base))
+	dbg("addGroupRule: appended accept rule for %s (base %s)",
+		tostring(groupId), tostring(self.state.filter.base))
 
 	write()
+
 	refreshRules()
+	selectRuleAt(#self.state.filter.rules, "addGroupRule")
 
-	--  SELECT WHAT WAS JUST ADDED.
+	--  THE PICKER IS NOT REBUILT, AND THAT IS A REMOVAL RATHER THAN AN
+	--  OVERSIGHT.
 	--
-	--  Row widgets cannot exist -- see the pane config header, the engine throws
-	--  at construction -- so the accept/deny checkbox and the remove button below
-	--  the list are the only way to act on a rule, and they act on the SELECTION.
-	--  Leaving nothing selected after an add meant the player had to click the
-	--  row they had just created before they could touch it.
+	--  It used to be. The picker's selection had to be cleared or its list
+	--  callback -- which only fires on CHANGE -- would not fire again when the
+	--  same group was clicked twice, and adding the same rule twice is a
+	--  legitimate thing to want. setListSelected(list, nil) cannot do it: the
+	--  engine converts that argument to a String and nil throws
+	--  LuaConversionException. So the list got rebuilt, which dropped the
+	--  selection as a side effect.
 	--
-	--  Appended, so it is the last one.
-	selectRuleAt(#self.state.filter.rules, "groupPicked")
-
-	--  REBUILD RATHER THAN DESELECT.
+	--  None of that applies now. The rows are buttons with their own callback
+	--  and the list's callback is "null", so nothing is ever selected and there
+	--  is nothing to clear. The content is the static manifest either way -- 74
+	--  rows that do not depend on the rules at all.
 	--
-	--  The picker's selection has to be cleared or the list callback -- which
-	--  only fires on CHANGE -- will not fire again when the same group is
-	--  clicked a second time, and adding the same rule twice is a legitimate
-	--  thing to want.
-	--
-	--  widget.setListSelected(list, nil) is NOT the way to do it: the engine
-	--  converts that argument to a String and nil throws
-	--  LuaConversionException, taking the callback down with it. Tested. The
-	--  wiki carries a related warning about out-of-range values crashing
-	--  setSelectedOption, so treat "clear the selection" as unsupported across
-	--  both widget families.
-	--
-	--  Rebuilding the list drops the selection as a side effect and costs one
-	--  pass over nine rows.
-	refreshGroups()
+	--  REBUILDING ALSO ATE THE HOVER. Every row is a fresh widget afterwards,
+	--  and a fresh button has had no mouse-enter -- so the row under the cursor
+	--  drew its base image and the highlight did not come back after a click
+	--  until the pointer moved away and returned.
 end
+
+--  THE ROW BUTTON. This is expected to be the one that fires.
+function groupRowPicked(_, data)
+	addGroupRule(data, "row button")
+end
+
 function createTooltip(screenPosition)
 	for path, subgroup in pairs(tileSubgroup) do
 		local ok, inside = pcall(widget.inMember, path, screenPosition)
@@ -873,4 +942,16 @@ function createTooltip(screenPosition)
 			return tooltip
 		end
 	end
+end
+
+--  THE HOVER LAYER'S CALLBACK, WHICH DOES NOTHING BY DESIGN.
+--
+--  Its button exists only to own a hover state -- a list schema has none, and a
+--  row can only get one from a button. Selection is still the LIST's job: a
+--  full-width row button and the list callback both fire on one click, measured
+--  on the group picker, so nothing here needs to act.
+--
+--  IT CANNOT SIMPLY BE OMITTED. A row widget naming a callback that does not
+--  resolve throws inside addListItem and takes the pane down at construction.
+function rowHovered()
 end
