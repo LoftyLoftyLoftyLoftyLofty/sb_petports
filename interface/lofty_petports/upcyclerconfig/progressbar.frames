@@ -1,0 +1,41 @@
+//  PETPORTS -- UPCYCLER PROGRESS BAR FRAMES
+//
+//  21 frames, p0..p20, in 5% steps. Addressed as
+//  "progressbar.png:p<n>" by widget.setImage.
+//
+//  A SHEET RATHER THAN 21 FILES, and a frames file rather than a `progress`
+//  widget type. The widget type may well exist, but an unknown one fails at
+//  CONSTRUCTION and takes the whole pane -- or the client -- with it, which is
+//  how the first two builds of this pane died. A bad image path renders a red
+//  placeholder and logs "Could not load image asset", which is a soft failure
+//  we can read and correct.
+
+{
+	"frameGrid" : {
+		"size" : [120, 8],
+		"dimensions" : [1, 21],
+		"names" : [
+			[ "p0" ],
+			[ "p1" ],
+			[ "p2" ],
+			[ "p3" ],
+			[ "p4" ],
+			[ "p5" ],
+			[ "p6" ],
+			[ "p7" ],
+			[ "p8" ],
+			[ "p9" ],
+			[ "p10" ],
+			[ "p11" ],
+			[ "p12" ],
+			[ "p13" ],
+			[ "p14" ],
+			[ "p15" ],
+			[ "p16" ],
+			[ "p17" ],
+			[ "p18" ],
+			[ "p19" ],
+			[ "p20" ]
+		]
+	}
+}

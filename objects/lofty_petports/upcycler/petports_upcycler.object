@@ -1,0 +1,150 @@
+//  PETPORTS -- UPCYCLER
+//
+//  A machine that converts surplus items into pet fuel. NOT A BEACON, and that
+//  is the first design decision rather than an implementation detail: a beacon
+//  is an item that can be dropped into any container by accident, and this is
+//  the one device in the mod that destroys value. It gets a body, a sprite, and
+//  a place you have to deliberately build.
+//
+//  WHAT IT WILL DO, so the skeleton below reads in context:
+//
+//  The player names ITEMS -- not categories -- each with a threshold. When the
+//  network holds more than that many, the surplus is routed here and converted
+//  to petports_petfuel at a deliberately lossy rate. Nothing without a matching
+//  rule ever reaches this object; it is NEVER a fallback for cargo that had
+//  nowhere else to go. A unit holding an unwanted item keeps holding it.
+//
+//  THREE SLOTS, AND THE THIRD IS RESERVED.
+//
+//    0  input     units deliver here, and only here
+//    1  output    petports_petfuel accumulates; units haul it to storage
+//    2  reagent   UNUSED IN V1
+//
+//  Slot 2 exists now because adding it later would shift the offsets of every
+//  already-placed machine, and slot offsets are save-game identity in the same
+//  way objectName is. The reagent idea -- a scorched core making a Spicy Pet
+//  Treat, brewing-style -- may or may not happen; the slot costs nothing and
+//  the migration would.
+//
+//  UNITS USE containerPutItemsAt(id, stack, 0), NEVER containerAddItems.
+//  The generic add fills any free slot, which would let a unit drop dirt into
+//  the output. Slot-targeted delivery makes that unreachable rather than
+//  policed.
+
+{
+	"objectName" : "petports_upcycler",
+	"rarity" : "Rare",
+	"objectType" : "container",
+	"category" : "crafting",
+	"price" : 1200,
+	"printable" : false,
+	"description" : "Converts surplus items into fuel for utility units. Configure it before switching it on -- it destroys what it processes.",
+	"shortdescription" : "Upcycler",
+	"race" : "generic",
+
+	"health" : 5,
+
+	//  Same reasoning as the petport: an assistant-team object is ignored by
+	//  hostiles and does not show a health bar on mouseover.
+	"damageTeam" : { "type" : "assistant", "team" : 0 },
+
+	//  Input, output, reagent. See the header.
+	"slotCount" : 3,
+
+	//  ---- HOW THE NETWORK RECOGNISES THIS -------------------------------------
+	//
+	//  A CAPABILITY, NOT AN IDENTITY. A petport finds machines by reading this
+	//  parameter, never by matching objectName -- a name says "this exact
+	//  object" and would have to be relearned for every tier, variant and
+	//  third-party copy, where a marker says "this is a machine of kind X" and
+	//  keeps working for all of them.
+	//
+	//  Read with world.getObjectParameter, which sees anything in this file.
+	"petports_machine" : "upcycler",
+
+	//  A MACHINE'S SLOTS ARE NOT STORAGE.
+	//
+	//  This is a container, so without this tag a beacon dropped into the input
+	//  slot would make the petport treat the machine as a sorting destination --
+	//  and units would start filing cargo into the one device in the mod that
+	//  destroys things. scanContainers skips beacons inside anything carrying
+	//  this tag and logs an error naming the object, because a beacon that has
+	//  visibly stopped working is worth explaining rather than silently
+	//  ignoring.
+	//
+	//  itemTags, NOT colonyTags. Objects use colonyTags for tenant matching and
+	//  itemTags for everything else, and this is a statement about the item, not
+	//  about who would live in a house containing one.
+	"itemTags" : [ "petports", "petports_machine", "petports_no_upcycling",
+		"petports_ignore_inserted_beacons" ],
+
+	"uiConfig" : "/interface/lofty_petports/upcyclerconfig/upcyclerconfig.config",
+
+	//  MANDATORY ON A CONTAINER. A container object without frameCooldown
+	//  crashes the client on interact. Vanilla's cropshipper carries it for the
+	//  same reason.
+	"frameCooldown" : 5,
+
+	//  The pane holds a rule list the player edits at length. Auto-close while
+	//  they are typing a threshold would discard the edit.
+	"autoCloseCooldown" : 3600,
+
+	"openFrameIndex" : 1,
+
+	//  UNVERIFIED, AND THE SKELETON TEST SETTLES IT.
+	//
+	//  Rules must survive the machine being mined and re-placed -- losing a
+	//  configured rule set to a pickaxe is the kind of thing a player only
+	//  forgives once. This is believed to be the vanilla field that carries an
+	//  object's parameters into its dropped item, but it is recalled rather
+	//  than confirmed against an asset, so treat a missing rule set after a
+	//  break-and-replace as THIS not working rather than as a write bug.
+	//
+	//  If it turns out not to exist, the fallback is writing the rules into the
+	//  drop by hand from die().
+	"retainObjectParametersInItem" : true,
+
+	"inventoryIcon" : "petports_upcyclericon.png",
+
+	"orientations" : [
+		{
+			"image" : "petports_upcycler.png:default.<frame>",
+			"imagePosition" : [-12, 0],
+			"direction" : "left",
+			"flipImages" : true,
+			"spaceScan" : 0.1,
+			"anchors" : [ "bottom" ]
+		},
+		{
+			"image" : "petports_upcycler.png:default.<frame>",
+			"imagePosition" : [-12, 0],
+			"direction" : "right",
+			"spaceScan" : 0.1,
+			"anchors" : [ "bottom" ]
+		}
+	],
+
+	"scripts" : [ "/objects/lofty_petports/upcycler/petports_upcycler.lua" ],
+
+	//  CONVERSION RUNS HERE, so this is the cadence the machine thinks at. 5 is
+	//  roughly twelve calls a second, matching the residency stagehand and the
+	//  petport. The rate below is expressed in items per SECOND and carries its
+	//  own fractional remainder between ticks, so changing this changes cost
+	//  and smoothness but not throughput.
+	"scriptDelta" : 5,
+
+	//  TUNING KNOBS. Read in init, defaulted there too, and deliberately not
+	//  constants in Lua -- see the header in petports_upcycler.lua.
+	//
+	//  1000 points per Treat with a floor of 1 point per item means a full
+	//  stack of dirt is exactly one Treat, and a deliberately lossy rate for
+	//  everything above worthless. Whether that is generous or stingy cannot be
+	//  known until fuel is consumed by something.
+	"petports_pointsPerFuel" : 1000,
+	"petports_valueFloor" : 1,
+	"petports_itemsPerSecond" : 5,
+
+	//  How often banked points are mirrored into a parameter so they survive
+	//  the machine being mined. Change-gated, so an idle machine writes nothing.
+	"petports_pointsFlushInterval" : 5.0
+}

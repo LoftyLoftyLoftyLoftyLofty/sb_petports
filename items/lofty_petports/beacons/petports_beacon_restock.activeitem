@@ -6,7 +6,7 @@
 	"inventoryIcon" : "petports_beacon_restock.png:on",
 	"description" : "Drop this in a container and name one item to keep stocked there. Units will fetch it from storage.",
 	"shortdescription" : "Restock Beacon",
-	"itemTags" : [ "petports", "petports_beacon" ],
+	"itemTags" : [ "petports", "petports_beacon", "petports_no_upcycling" ],
 
 	//  A SECOND BEACON TYPE, NOT A MODE ON THE FIRST.
 	//

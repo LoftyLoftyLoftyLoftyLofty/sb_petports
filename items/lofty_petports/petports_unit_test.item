@@ -6,7 +6,7 @@
   "inventoryIcon" : "petports_unit_test.png",
   "description" : "A dormant M.A.U.S. utility unit. Socket it into a Petport to bring it online.",
   "shortdescription" : "Utility Unit",
-  "itemTags" : [ "petports", "petports_unit" ],
+  "itemTags" : [ "petports", "petports_unit", "petports_no_upcycling" ],
 
   //  Not stackable: each unit carries its own saved state in parameters below.
   "maxStack" : 1,

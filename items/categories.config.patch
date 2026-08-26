@@ -8,5 +8,10 @@
 		"op" : "add",
 		"path" : "/labels/petports_beacon",
 		"value" : "Petport Beacon"
+	},
+	{
+		"op" : "add",
+		"path" : "/labels/petports_fuel",
+		"value" : "Petport Fuel"
 	}
 ]

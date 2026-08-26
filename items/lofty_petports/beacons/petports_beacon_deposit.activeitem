@@ -10,7 +10,7 @@
   "inventoryIcon" : "petports_beacon_deposit.png:on",
   "description" : "Drop this in a container and units will deposit what they collect there.",
   "shortdescription" : "Deposit Beacon",
-  "itemTags" : [ "petports", "petports_beacon" ],
+  "itemTags" : [ "petports", "petports_beacon", "petports_no_upcycling" ],
 
   //  BEACONS ARE READ WHERE THEY SIT.
   //

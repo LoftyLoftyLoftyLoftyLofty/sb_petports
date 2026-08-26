@@ -916,6 +916,18 @@ function petports_drawRouteDebug(stateData)
       world.debugText("deposit -> %s", tostring(task.target),
         {task.containerPosition[1], task.containerPosition[2] + 1.5}, "orange")
     end
+
+    --  AN UPCYCLE TARGET, IN RED, because it is the one delivery that cannot be
+    --  undone. Same drawing as a deposit and deliberately a different colour:
+    --  watching a unit walk tells you nothing about whether it is filing cargo
+    --  or feeding it to a machine, and that is the single most important thing
+    --  to be able to see at a glance while this is being built.
+    if task.type == "upcycle" and task.containerPosition ~= nil then
+      world.debugLine(here, task.containerPosition, "red")
+      world.debugPoint(task.containerPosition, "red")
+      world.debugText("UPCYCLE -> %s", tostring(task.target),
+        {task.containerPosition[1], task.containerPosition[2] + 1.5}, "red")
+    end
   end
 
   --  The planned route, leg by leg.

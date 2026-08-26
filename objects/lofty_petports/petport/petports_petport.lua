@@ -125,6 +125,27 @@ local BEACON_ENABLED_KEY = "petports_beaconEnabled"
 --  accept everything.
 local BEACON_FILTER_KEY = "petports_beaconFilter"
 
+--  MACHINES DECLARE A CAPABILITY, NOT AN IDENTITY.
+--
+--  An upcycler is found by reading this parameter off the object, never by
+--  matching objectName. A name would have to be relearned for every tier,
+--  variant and third-party copy; a marker keeps working for all of them, and
+--  the next machine kind costs the port nothing.
+local MACHINE_KEY = "petports_machine"
+
+--  Rules live on the machine object, written by its own pane. Same principle as
+--  the beacon filter: read the thing itself and it cannot disagree with itself.
+local MACHINE_RULES_KEY = "petports_upcyclerRules"
+local MACHINE_ENABLED_KEY = "petports_upcyclerEnabled"
+
+--  A MACHINE'S SLOTS ARE NOT STORAGE.
+--
+--  An upcycler is a container, so a beacon dropped into its input slot would
+--  otherwise make it a sorting destination -- and units would begin filing
+--  cargo into the one device in the mod that destroys things. Anything carrying
+--  this tag has its contents ignored by beacon scanning entirely.
+local IGNORE_BEACONS_TAG = "petports_ignore_inserted_beacons"
+
 --  THE RESTOCK REQUESTS, written by the restock beacon's pane.
 --
 --  An ARRAY of { item, min, max }. One crate can name as many items as the
@@ -825,6 +846,15 @@ function init()
       end
     end
 
+    --  Arrived at an upcycler. Same shape as deposit -- the unit only ever
+    --  walked and stood, and the container work happens here -- but the
+    --  transfer is slot-precise and re-checks the threshold, because this is
+    --  the one destination that destroys what it receives.
+    if report.outcome == "done" and self.task ~= nil
+       and self.task.type == "upcycle" and self.task.id == report.id then
+      depositCargoToMachine(self.task.target, self.task.id)
+    end
+
     --  Arrived at a crate holding a seed. Symmetric with deposit above: the
     --  container call happens HERE, on the port, so the unit never needs a
     --  container primitive of its own.
@@ -832,6 +862,25 @@ function init()
        and self.task.type == "withdraw" and self.task.id == report.id then
       withdrawSeed(self.task.target, self.task.seed, self.task.id,
         self.task.count)
+    end
+
+    --  Arrived at a crate holding over-quota stock. IDENTICAL to a tidy: take
+    --  a slot-precise count out of the crate and onto the unit. What makes it a
+    --  drain rather than housekeeping is only where the load goes next, and
+    --  that is depositWork's decision, not this one's.
+    if report.outcome == "done" and self.task ~= nil
+       and self.task.type == "drain" and self.task.id == report.id then
+      withdrawMisfit(self.task.target, self.task.item, self.task.count,
+        self.task.id, self.task.slot)
+    end
+
+    --  Arrived at a machine holding finished fuel. Same shape again -- the unit
+    --  walked and stood, the container work happens here -- and slot-precise so
+    --  only the output slot is ever touched.
+    if report.outcome == "done" and self.task ~= nil
+       and self.task.type == "fuel" and self.task.id == report.id then
+      withdrawMisfit(self.task.target, self.task.item, self.task.count,
+        self.task.id, self.task.slot)
     end
 
     --  Arrived at a crate holding something that does not belong in it. Same
@@ -1255,6 +1304,67 @@ local function beaconBehaviorOf(item)
 end
 
 --  Every container in coverage that holds a beacon.
+--  Does this object declare a tag?
+--
+--  world.getObjectParameter reads the object's CONFIG, so anything declared in
+--  the .object file is visible -- no descriptor, no root.itemConfig, and no
+--  dependence on what happens to be in the container.
+local function objectHasTag(id, tag)
+  local ok, tags = pcall(world.getObjectParameter, id, "itemTags")
+  if not ok or type(tags) ~= "table" then return false end
+
+  for _, candidate in ipairs(tags) do
+    if candidate == tag then return true end
+  end
+
+  return false
+end
+
+--  A machine in coverage, or nil.
+--
+--  READ FRESH EVERY SCAN, deliberately. Rules are edited in the machine's own
+--  pane and written straight to its parameters, so re-reading is how an edit
+--  takes effect -- exactly as a beacon filter does. Caching would introduce a
+--  staleness window on the one thing in the mod that destroys items.
+local function machineAt(id)
+  local ok, kind = pcall(world.getObjectParameter, id, MACHINE_KEY)
+  if not ok or type(kind) ~= "string" or kind == "" then return nil end
+
+  local machine = {
+    id = id,
+    kind = kind,
+    position = world.entityPosition(id),
+    name = world.entityName(id),
+    enabled = false,
+    rules = {}
+  }
+
+  local okEnabled, enabled = pcall(world.getObjectParameter, id, MACHINE_ENABLED_KEY)
+
+  --  ABSENCE IS OFF. A machine that has never been configured has no parameter
+  --  at all, and the whole off-on-placement guarantee depends on reading that
+  --  as false rather than as missing data.
+  machine.enabled = okEnabled and enabled == true
+
+  local okRules, rules = pcall(world.getObjectParameter, id, MACHINE_RULES_KEY)
+
+  --  TYPE-CHECKED ON EVERY READ, NOT NIL-CHECKED. A cleared parameter is stored
+  --  as an explicit JSON null rather than a removed key, and a null is not a
+  --  table.
+  if okRules and type(rules) == "table" then
+    for _, rule in ipairs(rules) do
+      if type(rule) == "table" and type(rule.item) == "string" and rule.item ~= "" then
+        table.insert(machine.rules, {
+          item = rule.item,
+          max = tonumber(rule.max) or 0
+        })
+      end
+    end
+  end
+
+  return machine
+end
+
 local function scanContainers()
   local rects = self.networkRects
   if rects == nil or #rects == 0 then rects = { coverageRect() } end
@@ -1262,6 +1372,23 @@ local function scanContainers()
   local found = {}
   local seen = {}
   local containers = 0
+
+  --  THE CENSUS: how many of each item name the network holds.
+  --
+  --  NEARLY FREE, which is why it lives here rather than in a pass of its own.
+  --  This loop already calls world.containerItems on every container in every
+  --  network rect; tallying names on the way past is arithmetic on data already
+  --  in hand. A separate scan would double the queries to learn nothing new.
+  --
+  --  DEPOSIT CRATES ONLY. Restock crates are excluded because a request IS the
+  --  correct amount to hold by definition -- counting a maintained stock as
+  --  surplus would have the network fetch items in order to destroy them.
+  --  Unbeaconed chests are excluded because they are the player's own business,
+  --  and a mushroom collection in a personal chest is not network surplus.
+  --  Machines are excluded because their contents are in transit.
+  local census = {}
+  local censusStacks = 0
+  local machines = {}
 
   for _, rect in ipairs(rects) do
     local ids = world.entityQuery({ rect[1], rect[2] }, { rect[3], rect[4] }, {
@@ -1271,6 +1398,9 @@ local function scanContainers()
     for _, id in ipairs(ids) do
       if not seen[id] then
         seen[id] = true
+
+        local machine = machineAt(id)
+        if machine ~= nil then table.insert(machines, machine) end
 
         --  containerSize is the test for "is this a container". Checking the
         --  object name against a list would miss every modded chest, and there
@@ -1299,7 +1429,44 @@ local function scanContainers()
             end
             table.sort(slots)
 
-            for _, slot in ipairs(slots) do
+            --  A MACHINE'S SLOTS ARE NOT STORAGE.
+            --
+            --  An upcycler is a container, so without this a beacon dropped
+            --  into its input would make it a sorting destination and units
+            --  would file cargo into the one device that destroys things.
+            --
+            --  LOUD, NOT SILENT. A beacon that has visibly stopped working is
+            --  worth explaining -- a player who put one there had a reason, and
+            --  "it does nothing and nobody said why" is the worst of the three
+            --  possible behaviours. Change-gated on the container id so it says
+            --  it once per machine rather than every scan forever.
+            local ignoresBeacons = objectHasTag(id, IGNORE_BEACONS_TAG)
+
+            if ignoresBeacons then
+              local offender = nil
+
+              for _, slot in ipairs(slots) do
+                if beaconBehaviorOf(items[slot]) ~= nil then
+                  offender = items[slot].name
+                  break
+                end
+              end
+
+              self.beaconInMachine = self.beaconInMachine or {}
+
+              if offender ~= nil and self.beaconInMachine[id] ~= offender then
+                self.beaconInMachine[id] = offender
+                sb.logError("PETPORT %s: a %s is sitting in %s, which is a "
+                  .. "petports machine -- beacons inside machines are IGNORED. "
+                  .. "Machine slots are not storage; take it back out.",
+                  stationUniqueId(), tostring(offender),
+                  tostring(world.entityName(id)))
+              elseif offender == nil then
+                self.beaconInMachine[id] = nil
+              end
+            end
+
+            for _, slot in ipairs(ignoresBeacons and {} or slots) do
               local item = items[slot]
               local behavior = beaconBehaviorOf(item)
 
@@ -1385,6 +1552,37 @@ local function scanContainers()
                   --  exemption a crate hauls away its own configuration.
                   beaconSlot = slot
                 })
+
+                --  TALLY, NOW THAT THE CRATE'S ROLE IS KNOWN.
+                --
+                --  It has to happen here rather than in the walk above, because
+                --  whether this container counts depends on the behaviour of a
+                --  beacon that might sit in its last slot. Deposit crates only;
+                --  see the census comment at the top of this function.
+                --
+                --  SUMMED BY NAME ACROSS DIFFERING PARAMETERS, which matches
+                --  how rules match -- a rule is a pure function of a name, so
+                --  the count has to be too. The only items this reads oddly for
+                --  are genuinely polymorphic one-offs, and nobody sorts two
+                --  hundred music sheets by song title.
+                if behavior == "deposit" then
+                  for _, tallySlot in ipairs(slots) do
+                    --  THE DECIDING BEACON IS NOT INVENTORY. Counting a crate's
+                    --  own configuration as network stock would be wrong in the
+                    --  same way as counting the machine's input slot.
+                    if tallySlot ~= slot then
+                      local tallied = items[tallySlot]
+
+                      if type(tallied) == "table"
+                         and type(tallied.name) == "string" then
+                        census[tallied.name] = (census[tallied.name] or 0)
+                          + (tallied.count or 0)
+                        censusStacks = censusStacks + 1
+                      end
+                    end
+                  end
+                end
+
                 --  One ENABLED beacon decides a container. A second is the
                 --  player's business, not ours -- and a disabled one never got
                 --  here, so it cannot shadow an enabled beacon below it.
@@ -1397,7 +1595,70 @@ local function scanContainers()
     end
   end
 
-  return found, containers
+  return found, containers, census, censusStacks, machines
+end
+
+--  THE CENSUS READOUT. REPORTS, DECIDES NOTHING.
+--
+--  Nothing acts on any of this yet -- no routing, no drain, no dispatch change.
+--  That is deliberate: the numbers here decide what gets fed into a machine
+--  that destroys items, and they should be read off a real base before they are
+--  allowed to move anything.
+--
+--  DELIBERATELY VERBOSE. Every rule prints every scan it changes, with the
+--  count, the threshold, the surplus and the verdict, because a wrong number
+--  found in one pass is worth more than a tidy log. This gets gated down once
+--  routing is trusted; until then, fail loudly.
+local function reportCensus(census, censusStacks, machines)
+  local distinct = 0
+  for _ in pairs(census) do distinct = distinct + 1 end
+
+  --  THE TOTALS LINE SEPARATES TWO FAILURES THAT LOOK IDENTICAL. "No rule is
+  --  over threshold" and "the census saw nothing at all" produce the same
+  --  silence otherwise, and they have completely different causes.
+  local totals = string.format("%s name(s) across %s stack(s), %s machine(s)",
+    tostring(distinct), tostring(censusStacks), tostring(#machines))
+
+  local lines = {}
+
+  for _, machine in ipairs(machines) do
+    if #machine.rules == 0 then
+      table.insert(lines, string.format("%s@%s,%s [%s] no rules",
+        tostring(machine.kind),
+        tostring(math.floor(machine.position[1])),
+        tostring(math.floor(machine.position[2])),
+        machine.enabled and "on" or "OFF"))
+    end
+
+    for _, rule in ipairs(machine.rules) do
+      local held = census[rule.item] or 0
+      local surplus = held - rule.max
+
+      --  STRICTLY GREATER, so a threshold of N means the network may hold
+      --  exactly N. "Upcycle above this many" has to leave N reachable and
+      --  stable, or a rule set to 500 would sit forever oscillating at 499.
+      table.insert(lines, string.format("%s@%s,%s [%s] %s held %s max %s -> %s",
+        tostring(machine.kind),
+        tostring(math.floor(machine.position[1])),
+        tostring(math.floor(machine.position[2])),
+        machine.enabled and "on" or "OFF",
+        tostring(rule.item), tostring(held), tostring(rule.max),
+        surplus > 0 and ("OVER by " .. tostring(surplus)) or "under"))
+    end
+  end
+
+  table.sort(lines)
+
+  local report = totals .. " || " .. (#lines == 0 and "no machine rules"
+    or table.concat(lines, " || "))
+
+  --  Change-gated on the WHOLE report, so a count ticking up by one prints.
+  --  That is a lot of lines while a unit is ferrying cargo, and it is meant to
+  --  be: this is the pass where the arithmetic gets checked.
+  if report == self.censusReport then return end
+  self.censusReport = report
+
+  sb.logInfo("PETPORT %s census: %s", stationUniqueId(), report)
 end
 
 local function refreshBeacons(dt)
@@ -1405,8 +1666,11 @@ local function refreshBeacons(dt)
   if self.beaconTimer > 0 then return end
   self.beaconTimer = BEACON_INTERVAL
 
-  local found, containers = scanContainers()
+  local found, containers, census, censusStacks, machines = scanContainers()
+
   self.beacons = found
+  self.census = census
+  self.machines = machines
 
   --  Change-gated on the SIGNATURE, not the count. Two chests swapping roles
   --  keeps the count identical and is exactly the event worth seeing; and at
@@ -1443,6 +1707,8 @@ local function refreshBeacons(dt)
       stationUniqueId(), sb.printJson(#found), sb.printJson(containers),
       signature == "" and "none" or signature)
   end
+
+  reportCensus(census, censusStacks, machines)
 end
 
 --  Beacons matching a behaviour, nearest first. The deposit task will want the
@@ -1919,11 +2185,30 @@ local function returnWork()
   --  THIS DECISION PRE-EMPTS ALL COLLECTION. returnWork is consulted before
   --  collectionWork, so whenever it returns a task the port collects nothing --
   --  and until now it did that silently.
-  sb.logInfo("PETPORT %s returnWork: unit at %s inNetwork %s stranded %s (unreachableFailures %s of %s, recallFailures %s of %s)",
-    stationUniqueId(), sb.printJson(world.entityPosition(self.petId)),
-    tostring(inside), tostring(stranded),
-    sb.printJson(self.unreachableFailures or 0), sb.printJson(STRANDED_LIMIT),
-    sb.printJson(self.recallFailures or 0), sb.printJson(RECALL_LIMIT))
+  --
+  --  CHANGE-GATED ON THE VERDICT, NOT ON THE POSITION. This ran every tick and
+  --  was 159 lines of one short session, restating "inNetwork true stranded
+  --  false" while a unit walked back and forth doing its job. Position is in
+  --  the line because it is what makes a verdict actionable, but position is
+  --  also what changes constantly -- so gating on it would gate on nothing.
+  --
+  --  The verdict and the two counters are the state worth seeing. Gated this
+  --  way the line appears when the unit leaves the network, when it is judged
+  --  stranded, and when either counter moves, which is exactly the set of
+  --  moments anyone would go looking for it.
+  local recallState = string.format("%s/%s/%s/%s", tostring(inside),
+    tostring(stranded), tostring(self.unreachableFailures or 0),
+    tostring(self.recallFailures or 0))
+
+  if recallState ~= self.recallState then
+    self.recallState = recallState
+
+    sb.logInfo("PETPORT %s returnWork: unit at %s inNetwork %s stranded %s (unreachableFailures %s of %s, recallFailures %s of %s)",
+      stationUniqueId(), sb.printJson(world.entityPosition(self.petId)),
+      tostring(inside), tostring(stranded),
+      sb.printJson(self.unreachableFailures or 0), sb.printJson(STRANDED_LIMIT),
+      sb.printJson(self.recallFailures or 0), sb.printJson(RECALL_LIMIT))
+  end
 
   if not stranded and inside then
     self.recallFailures = 0
@@ -2037,9 +2322,358 @@ local function containerTakesAny(containerId, filter)
   return false
 end
 
+--  ---------------------------------------------------------------------------
+--  UPCYCLER ROUTING
+--  ---------------------------------------------------------------------------
+
+--  FORWARD-DECLARED, AND NOT OPTIONAL.
+--
+--  machineInputRoom below needs stackSizeOf, which is defined several hundred
+--  lines further down. A `local function` is only in scope AFTER its
+--  declaration, so a call from above it compiles as a GLOBAL lookup and is nil
+--  at runtime -- no error at load, no error at parse, just a nil call the first
+--  time a unit reaches an upcycler. This mod has already paid for that once:
+--  see the leash bug caused by a forward-referenced local.
+--
+--  Declaring the name here and ASSIGNING to it at the original site keeps one
+--  definition and makes the whole file see it.
+local stackSizeOf
+
+--  Forward-declared for the same reason, and used by placeStack below -- which
+--  every deposit path now goes through, and which is defined long before
+--  stackSizeFor's original site.
+local stackSizeFor
+
+--  An upcycler's input slot. Zero-based, like every container OFFSET; the keys
+--  world.containerItems returns are one-based, which is what SLOT_KEY_TO_OFFSET
+--  exists to reconcile. Nothing here goes through those keys.
+local MACHINE_SLOT_INPUT = 0
+
+--  DO NOT WALK ACROSS A BASE TO DELIVER TWENTY BLOCKS.
+--
+--  Measured: with a machine consuming 5 items a second and a round trip of
+--  about 4.6 seconds, a drain sized to "whatever room exists right now" settles
+--  at ~23 items a trip. The unit spends its entire life topping up one
+--  already-full machine, every other machine starves, and the network's
+--  throughput collapses to one stack per four minutes.
+--
+--  A minimum batch turns that into "wait until the machine has burned enough to
+--  be worth the walk". Expressed as a FRACTION OF A STACK rather than a count,
+--  so it means the same thing for blocks that stack to 1000 and for weapons
+--  that stack to 1.
+--
+--  CAPPED BY THE SURPLUS ITSELF, at the call site: a network only 30 items over
+--  its threshold should still deliver those 30 and finish the job, rather than
+--  holding out for a batch that will never exist.
+local MACHINE_MIN_BATCH = 0.25
+
+--  How many of `stack` the machine's INPUT slot could take right now.
+--
+--  NOT world.containerItemsCanFit, which answers for the WHOLE container -- it
+--  would count the output and reagent slots as room and send a unit walking to
+--  a machine whose input is full. Slot-precise, because delivery is
+--  slot-precise: containerPutItemsAt(id, stack, 0) and nothing else.
+local function machineInputRoom(machineId, stack)
+  local ok, held = pcall(world.containerItemAt, machineId, MACHINE_SLOT_INPUT)
+  if not ok then return 0 end
+
+  local limit = stackSizeOf(stack.name)
+
+  if type(held) ~= "table" or held.name == nil then return limit end
+
+  --  A DIFFERENT ITEM IS NOT ROOM. The player can park anything in any slot by
+  --  hand, and a machine chewing through someone's ore is not a state to route
+  --  more cargo into.
+  if held.name ~= stack.name then return 0 end
+
+  local room = limit - (held.count or 0)
+  if room < 0 then return 0 end
+
+  return room
+end
+
+--  How empty is the input slot, regardless of what we intend to put there.
+--
+--  SEPARATE FROM machineInputRoom, WHICH IS NAME-SPECIFIC. That one answers
+--  "could this stack go in", and returns zero when the slot holds something
+--  else -- correct for deciding a delivery, useless for ranking machines
+--  against each other, because every busy machine would score zero and the
+--  ordering would collapse back to scan order.
+--
+--  Reads the slot's OWN item to size it, so a slot holding 200 of something
+--  that stacks to 1000 scores 800 whatever the unit happens to be carrying.
+local function machineInputFree(machineId)
+  local ok, held = pcall(world.containerItemAt, machineId, MACHINE_SLOT_INPUT)
+  if not ok then return 0 end
+
+  if type(held) ~= "table" or held.name == nil then
+    --  Empty slot. Ranked above every partly-full one, which is the whole
+    --  point: a starving machine should win.
+    return math.huge
+  end
+
+  local free = stackSizeOf(held.name) - (held.count or 0)
+  if free < 0 then return 0 end
+
+  return free
+end
+
+--  Does this machine currently want any of the load?
+--
+--  THREE CONDITIONS, ALL REQUIRED, AND THE ORDER IS THE ARGUMENT.
+--
+--    1  a rule names the item -- the machine may only ever receive things the
+--       player explicitly named. This is NOT a fallback destination; an item
+--       with no rule is refused here exactly as it would be by a crate whose
+--       filter rejects it.
+--    2  the census says the network holds MORE than the threshold -- strictly
+--       greater, so a threshold of N leaves N reachable and stable rather than
+--       oscillating at N-1.
+--    3  the input slot has room for it.
+--
+--  Condition 3 is deliberately part of "wants", not a separate backoff. A
+--  machine that cannot take the stack right now should be passed over so the
+--  load falls through to ordinary storage -- overshooting the threshold is soft
+--  and self-correcting, where a unit parked holding cargo is not.
+--  Returns true, or false and WHY NOT.
+--
+--  THE REASON IS THE POINT. Four conditions decline for four completely
+--  different causes with four different fixes -- switch it on, name the item,
+--  lower the threshold, empty the input -- and from outside they are one
+--  identical silence: a unit walking past a machine to a crate.
+local function machineWantsAny(machine)
+  if machine.kind ~= "upcycler" then return false, "not an upcycler" end
+  if not machine.enabled then return false, "switched off" end
+
+  if self.petData == nil or self.petData.cargo == nil then
+    return false, "no cargo"
+  end
+
+  local reasons = {}
+
+  for _, stack in ipairs(self.petData.cargo) do
+    local rule = nil
+
+    for _, candidate in ipairs(machine.rules) do
+      if candidate.item == stack.name then
+        rule = candidate
+        break
+      end
+    end
+
+    if rule == nil then
+      table.insert(reasons, string.format("%s: no rule names it", tostring(stack.name)))
+    else
+      local held = (self.census or {})[stack.name] or 0
+
+      --  A TRIP HAS TO BE WORTH TAKING -- THE SAME FLOOR drainWork USES.
+      --
+      --  This test was `room < 1`, and the emergent behaviour was ugly. With
+      --  five full machines, a unit holding 978 dirt orbited all five forever,
+      --  delivering fifteen or twenty at a time and never filing the rest.
+      --  Measured, verbatim:
+      --
+      --    upcycled 21 of 963 ... room for 13, 25 tile(s) away
+      --    upcycled 0 of 978  ... room for 15, 13 tile(s) away
+      --
+      --  Any room above zero counted as "wants", so ordinary storage was never
+      --  reached and the census sat at 6000 while the dirt rode around on a
+      --  unit. The floor was written into drainWork and never applied here,
+      --  which is the whole bug.
+      --
+      --  CAPPED BY THE STACK, so a unit holding thirty blocks can still deliver
+      --  thirty. This is about not walking across a base for a handful, not
+      --  about refusing small loads.
+      local batch = math.min(
+        math.ceil(stackSizeOf(stack.name) * MACHINE_MIN_BATCH),
+        stack.count or 1)
+
+      local room = machineInputRoom(machine.id, stack)
+
+      if held <= rule.max then
+        --  STRICTLY GREATER, so a threshold of N leaves N reachable and stable
+        --  rather than oscillating at N-1.
+        table.insert(reasons, string.format("%s: network holds %s, threshold %s",
+          tostring(stack.name), tostring(held), tostring(rule.max)))
+      elseif room < batch then
+        --  Deliberately part of "wants" rather than a backoff. A machine that
+        --  cannot take a worthwhile amount is passed over so the load falls
+        --  through to ordinary storage -- overshooting a threshold is soft and
+        --  self-correcting, and drainWork pulls it back out later when a machine
+        --  has real room. A unit orbiting full machines is neither.
+        table.insert(reasons, string.format("%s: input has room for %s, want %s",
+          tostring(stack.name), tostring(room), tostring(batch)))
+      else
+        return true
+      end
+    end
+  end
+
+  return false, table.concat(reasons, "; ")
+end
+
+--  How much of the load this machine could take, total.
+--
+--  THE SCORE THAT ORDERS CANDIDATES. An emptier machine takes more, so ranking
+--  by this is the same thing as "feed the starving one first" without needing a
+--  separate notion of hunger.
+local function machineRoomFor(machine)
+  local room = 0
+
+  for _, stack in ipairs((self.petData and self.petData.cargo) or {}) do
+    for _, rule in ipairs(machine.rules) do
+      if rule.item == stack.name then
+        local held = (self.census or {})[stack.name] or 0
+
+        if held > rule.max then
+          room = room + math.min(stack.count or 0,
+            machineInputRoom(machine.id, stack))
+        end
+      end
+    end
+  end
+
+  return room
+end
+
+--  UPCYCLING OUTRANKS IDLE STORAGE, AND SITS BELOW RESTOCK.
+--
+--  Called from the top of depositWork, which is already below
+--  restockDeliverWork in findWork -- so the order is restock, then upcycler,
+--  then ordinary crates. That is the whole "threshold is a cap on idle storage"
+--  idea expressed as ordering: over-threshold cargo goes to the machine while
+--  it can, and falls through to a crate when it cannot.
+--
+--  EMPTIEST FIRST, THEN NEAREST.
+--
+--  Nearest-first alone produced a measured pathology: one unit adopted the
+--  closest machine, kept it perpetually full, and every other machine in the
+--  network starved. Distance is the wrong primary key because it never changes,
+--  so the winner never changes either.
+--
+--  Room does change, and ranking by it is self-balancing without any notion of
+--  fairness or round-robin: a machine that has just been fed drops to the
+--  bottom of the list on its own, and rises again as it burns through what it
+--  was given. Distance stays as the tie-break, so two equally hungry machines
+--  still resolve to the cheaper walk.
+--
+--  "STRICTER THRESHOLD WINS" STILL EMERGES, just for a different reason than
+--  before. The machine with the lower threshold keeps declaring surplus after
+--  the higher one has stopped, so it keeps being a candidate at all -- which
+--  outranks any ordering among candidates.
+local function upcyclerWork()
+  if self.petData == nil then return nil end
+  if self.petData.cargo == nil or #self.petData.cargo == 0 then return nil end
+
+  local candidates = {}
+  local declined = {}
+  local origin = entity.position()
+
+  for _, machine in ipairs(self.machines or {}) do
+    --  HONOUR THE BACKOFF. Every other generator checks workFailures and this
+    --  one did not, so a delivery that arrived to a full slot was recorded and
+    --  then immediately ignored -- the unit re-targeted the same machine on the
+    --  next tick and orbited the set. The record only helps if something reads
+    --  it.
+    local workId = "upcycle:" .. tostring(machine.id) .. "@" .. stationUniqueId()
+    local failure = self.workFailures[workId]
+    local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
+
+    if backedOff then
+      table.insert(declined, string.format("%s@%s,%s (backed off, %s failure(s))",
+        tostring(machine.kind),
+        tostring(math.floor(machine.position[1])),
+        tostring(math.floor(machine.position[2])),
+        tostring(failure.count)))
+
+    elseif world.entityExists(machine.id) then
+      local wants, why = machineWantsAny(machine)
+
+      if wants then
+        table.insert(candidates, {
+          machine = machine,
+          room = machineRoomFor(machine),
+          distance = world.magnitude(origin, machine.position)
+        })
+      else
+        table.insert(declined, string.format("%s@%s,%s (%s)",
+          tostring(machine.kind),
+          tostring(math.floor(machine.position[1])),
+          tostring(math.floor(machine.position[2])),
+          tostring(why)))
+      end
+    end
+  end
+
+  if #candidates == 0 then
+    --  CHANGE-GATED, because a unit holding cargo no machine wants asks this
+    --  question several times a second and the answer is usually the same one.
+    --  Silence here was the whole problem: a unit walking past a machine to a
+    --  crate looks identical whatever the reason.
+    local report = table.concat(declined, " || ")
+
+    if #declined > 0 and report ~= self.upcyclerDeclined then
+      self.upcyclerDeclined = report
+      sb.logInfo("PETPORT %s upcycler declined: %s", stationUniqueId(), report)
+    end
+
+    return nil
+  end
+
+  self.upcyclerDeclined = nil
+
+  table.sort(candidates, function(a, b)
+    if a.room ~= b.room then return a.room > b.room end
+    return a.distance < b.distance
+  end)
+
+  for _, candidate in ipairs(candidates) do
+    local machine = candidate.machine
+
+    --  Stand next to it, not on it -- same reason as a deposit crate, and
+    --  resolved by the unit for the same reason: a point the unit cannot occupy
+    --  fails the last leg of the route and therefore the whole plan.
+    local stand = standingPointNear(machine.position, 4)
+
+    if stand == nil then
+      sb.logInfo("PETPORT %s upcycler %s SKIPPED: no standable spot within 4 tiles of %s",
+        stationUniqueId(), sb.printJson(machine.id), sb.printJson(machine.position))
+    else
+      sb.logInfo("PETPORT %s upcycling to %s at %s: room for %s, %s tile(s) away (%s candidate(s))",
+        stationUniqueId(), tostring(machine.kind), sb.printJson(machine.position),
+        sb.printJson(candidate.room), sb.printJson(math.floor(candidate.distance)),
+        sb.printJson(#candidates))
+
+      return {
+        --  Keyed by machine AND port, for the reason spelled out on the deposit
+        --  task: a claim keyed by container alone is exclusive, and the first
+        --  port to take it locks every other port's unit out of the machine.
+        --  MUST MATCH the workId the backoff check above computes, or a
+        --  recorded failure is filed under a key nothing ever looks up.
+        id = "upcycle:" .. tostring(machine.id) .. "@" .. stationUniqueId(),
+        type = "upcycle",
+        target = machine.id,
+        position = stand,
+        containerPosition = machine.position,
+        port = stationUniqueId(),
+        dwell = 0
+      }
+    end
+  end
+
+  return nil
+end
+
 local function depositWork()
   if self.petData == nil then return nil end
   if self.petData.cargo == nil or #self.petData.cargo == 0 then return nil end
+
+  --  THE MACHINE GETS FIRST REFUSAL ON OVER-THRESHOLD CARGO. See upcyclerWork:
+  --  it returns nothing unless a rule names the item, the census says the
+  --  network is over the threshold, and the input slot has room -- so anything
+  --  else falls straight through to the crates below.
+  local upcycle = upcyclerWork()
+  if upcycle ~= nil then return upcycle end
 
   local targets = petports_beaconsFor("deposit")
   if #targets == 0 then
@@ -2254,6 +2888,11 @@ local function takeFromSlot(containerId, slot, count, expected)
         stationUniqueId(), sb.printJson(slot), sb.printJson(offset),
         sb.printJson(taken.name), sb.printJson(expected.name))
 
+      --  RAW, AND SAFE, unlike every other add in this file: `taken` came out
+      --  of ONE slot a moment ago, so it is stack-sized by construction and
+      --  cannot trip the oversized-descriptor loss placeStack exists to
+      --  prevent. Left direct so the put-back is exactly the inverse of the
+      --  take, with no chunking to reason about on an error path.
       world.containerAddItems(containerId, taken)
       return nil
     end
@@ -2497,6 +3136,63 @@ end
 --  GLOBAL, like receiveCargo above it and for the same reason: the
 --  petports_taskReport handler is registered in init(), which is earlier in the
 --  file than this definition, so a local would not be in scope at the call site.
+--  ADD A DESCRIPTOR TO A CONTAINER, ONE STACK AT A TIME.
+--
+--  THE ONLY SAFE WAY TO CALL world.containerAddItems, because that function
+--  SILENTLY DESTROYS ANYTHING PAST ONE STACK. Handed
+--  { dirtmaterial, count = 8497 } into a crate with ten free slots, it filled
+--  ONE slot to maxStack and returned NO LEFTOVER -- 7,497 dirt ceased to exist
+--  and the call looked like a complete success from Lua.
+--
+--  Measured, verbatim from the log:
+--
+--    compacted 8497 dirtmaterial in 5: 10 slot(s), predicted 9
+--    dirtmaterial in 5 settled at 1 slot(s), not the 9 predicted
+--
+--  and then a census reporting 1000 held where 8497 belonged. Note what the
+--  second line is: the prediction check, written to catch a stackSizeOf that
+--  was too LOW, correctly reporting an impossible packing -- and being read as
+--  a bad prediction rather than as items going missing.
+--
+--  TWO ROUTES REACHED IT, AND ONLY ONE INVOLVED THE UPCYCLER. Compaction hands
+--  the engine a whole bucket at once. And receiveCargo merges cargo stacks with
+--  no maxStack cap by design, so three 1,000-block pickups become one stack of
+--  3,000 and depositCargo hands THAT over -- which is the ordinary collect-and-
+--  file path, and has nothing to do with any of the machine work.
+--
+--  Returns the number of items that could NOT be placed, so every caller can
+--  account for its own load.
+local function placeStack(containerId, stack)
+  if type(stack) ~= "table" or stack.name == nil then return 0 end
+
+  local limit = stackSizeFor(stack.name, stack.parameters)
+  if limit == nil or limit < 1 then limit = 1 end
+
+  local remaining = stack.count or 1
+
+  while remaining > 0 do
+    local chunk = math.min(remaining, limit)
+
+    local leftover = world.containerAddItems(containerId, {
+      name = stack.name,
+      count = chunk,
+      parameters = stack.parameters
+    })
+
+    local unplaced = 0
+    if type(leftover) == "table" then unplaced = leftover.count or 0 end
+
+    local placed = chunk - unplaced
+    remaining = remaining - placed
+
+    --  A chunk that placed NOTHING means the crate is genuinely full. Stop
+    --  rather than spinning: the caller keeps what is left.
+    if placed < 1 then return remaining end
+  end
+
+  return 0
+end
+
 function depositCargo(containerId)
   if self.petData == nil or self.petData.cargo == nil then return end
 
@@ -2510,16 +3206,22 @@ function depositCargo(containerId)
   local remaining = {}
 
   for _, stack in ipairs(self.petData.cargo) do
-    --  containerAddItems returns WHAT IT COULD NOT TAKE, or nil when it took
-    --  everything. A partial take comes back as the same descriptor with a
-    --  smaller count, so this is also how a half-filled stack is accounted.
-    local leftover = world.containerAddItems(containerId, stack)
+    --  THROUGH placeStack, NEVER containerAddItems DIRECTLY. Cargo stacks are
+    --  merged without a maxStack cap -- see receiveCargo -- so this descriptor
+    --  can be several stacks' worth, which is precisely what the raw call
+    --  destroys.
+    local unplaced = placeStack(containerId, stack)
 
-    if leftover ~= nil and (leftover.count or 0) > 0 then
-      table.insert(remaining, leftover)
+    if unplaced > 0 then
+      table.insert(remaining, {
+        name = stack.name,
+        count = unplaced,
+        parameters = stack.parameters
+      })
+
       sb.logInfo("PETPORT %s deposited %s of %s %s into %s",
         stationUniqueId(),
-        sb.printJson((stack.count or 1) - leftover.count),
+        sb.printJson((stack.count or 1) - unplaced),
         sb.printJson(stack.count or 1), tostring(stack.name),
         sb.printJson(containerId))
     else
@@ -2565,6 +3267,117 @@ function depositCargo(containerId)
   flushCargo()
 end
 
+--  Hand over-threshold cargo to a machine's INPUT slot.
+--
+--  SEPARATE FROM depositCargo, AND NOT A VARIANT OF IT. depositCargo empties the
+--  unit outright with containerAddItems, which fills ANY free slot -- into a
+--  three-slot machine that means dirt landing in the output, or in the reagent
+--  slot, and a machine whose output the units then haul away as if it were
+--  fuel. containerPutItemsAt names slot 0 and makes the whole class unreachable
+--  rather than policed.
+--
+--  RE-TESTED AT THE MOMENT OF TRANSFER, not trusted from dispatch. A census is
+--  a snapshot taken up to five seconds ago and the walk takes longer than that;
+--  another unit may have delivered in the meantime, or the player may have
+--  emptied a crate. The dispatch decides where to walk. This decides what
+--  actually goes in, and it is the only check that matters.
+--
+--  NO COMPACTION AFTERWARDS, unlike depositCargo. A machine's slots are not a
+--  shelf, and there is nothing to tidy in a slot that holds one stack.
+function depositCargoToMachine(machineId, workId)
+  if self.petData == nil or self.petData.cargo == nil then return end
+
+  if not world.entityExists(machineId) then
+    sb.logInfo("PETPORT %s upcycle failed: machine %s no longer exists",
+      stationUniqueId(), sb.printJson(machineId))
+    return
+  end
+
+  --  READ FRESH. The machine's own pane writes rules straight to its
+  --  parameters, so the player may have changed or removed the rule while the
+  --  unit was walking. Nothing about a machine that destroys items should run
+  --  off a cached copy.
+  local machine = machineAt(machineId)
+
+  if machine == nil or not machine.enabled then
+    sb.logInfo("PETPORT %s upcycle ABORTED: machine %s is %s",
+      stationUniqueId(), sb.printJson(machineId),
+      machine == nil and "no longer a machine" or "switched off")
+    return
+  end
+
+  local remaining = {}
+  local moved = 0
+
+  for _, stack in ipairs(self.petData.cargo) do
+    local rule = nil
+
+    for _, candidate in ipairs(machine.rules) do
+      if candidate.item == stack.name then rule = candidate break end
+    end
+
+    local held = (self.census or {})[stack.name] or 0
+
+    if rule == nil then
+      --  Not an error and not worth a line every trip: the unit is allowed to
+      --  be carrying other things, and they simply stay aboard for the crates.
+      table.insert(remaining, stack)
+    elseif held <= rule.max then
+      --  THE THRESHOLD WAS MET WHILE THE UNIT WALKED. Keep the stack; the next
+      --  dispatch will file it in ordinary storage. This is the check that
+      --  makes a stale census harmless rather than destructive.
+      sb.logInfo("PETPORT %s upcycle SKIPPED %s: network holds %s, threshold %s -- no longer surplus",
+        stationUniqueId(), tostring(stack.name), sb.printJson(held),
+        sb.printJson(rule.max))
+      table.insert(remaining, stack)
+    else
+      --  SLOT-PRECISE. Returns what it could NOT place, exactly as
+      --  containerAddItems does, so a partial transfer accounts itself.
+      local leftover = world.containerPutItemsAt(machineId, stack,
+        MACHINE_SLOT_INPUT)
+
+      local placed = (stack.count or 1)
+        - ((type(leftover) == "table" and leftover.count or 0))
+
+      if placed > 0 then moved = moved + placed end
+
+      sb.logInfo("PETPORT %s upcycled %s of %s %s into machine %s (network held %s, threshold %s)",
+        stationUniqueId(), sb.printJson(placed), sb.printJson(stack.count or 1),
+        tostring(stack.name), sb.printJson(machineId), sb.printJson(held),
+        sb.printJson(rule.max))
+
+      if type(leftover) == "table" and (leftover.count or 0) > 0 then
+        table.insert(remaining, leftover)
+      end
+    end
+  end
+
+  self.petData.cargo = remaining
+
+  if moved == 0 then
+    --  RECORDED, NOT JUST LOGGED.
+    --
+    --  Without this the unit re-targets the next machine on the very next tick
+    --  and orbits the whole set, because nothing remembers that this one had no
+    --  room when it actually arrived. The backoff is what lets the load fall
+    --  through to ordinary storage instead.
+    --
+    --  Room at dispatch is a prediction; another unit can fill the slot during
+    --  the walk. This is the arrival telling the truth about it.
+    local reason = "machine input was full on arrival"
+
+    sb.logInfo("PETPORT %s upcycle delivered NOTHING to machine %s -- input full, "
+      .. "rule gone, or no longer over threshold", stationUniqueId(),
+      sb.printJson(machineId))
+
+    noteFailure(workId, reason)
+  end
+
+  --  Cargo changed and the world drop for it is long gone. Same reasoning as
+  --  the pickup side: write it through now.
+  flushCargo()
+end
+
 --  Move ONE named item out of cargo into a container.
 --
 --  The restock delivery half. depositCargo above empties the unit outright,
@@ -2605,17 +3418,20 @@ function depositCargoOnly(containerId, name)
     else
       moved = true
 
-      --  containerAddItems returns WHAT IT COULD NOT TAKE, or nil when it took
-      --  everything. A partial take comes back as the same descriptor with a
-      --  smaller count.
-      local leftover = world.containerAddItems(containerId, stack)
+      --  THROUGH placeStack. Same reason as depositCargo: a cargo stack has no
+      --  maxStack cap and the raw call silently discards the overflow.
+      local unplaced = placeStack(containerId, stack)
 
-      if leftover ~= nil and (leftover.count or 0) > 0 then
-        table.insert(remaining, leftover)
+      if unplaced > 0 then
+        table.insert(remaining, {
+          name = stack.name,
+          count = unplaced,
+          parameters = stack.parameters
+        })
 
         sb.logInfo("PETPORT %s restocked %s of %s %s into %s",
           stationUniqueId(),
-          sb.printJson((stack.count or 1) - leftover.count),
+          sb.printJson((stack.count or 1) - unplaced),
           sb.printJson(stack.count or 1), tostring(stack.name),
           sb.printJson(containerId))
       else
@@ -2723,7 +3539,10 @@ end
 --  LOGGED ONCE PER ITEM NAME, unconditionally. Cheap -- once per name per
 --  session, not per tick -- and it is what turned "compaction stopped working"
 --  into a one-line diagnosis.
-local function stackSizeOf(name)
+--  Assigned, not declared -- the name is forward-declared far above so the
+--  upcycler routing can reach it. Changing this back to `local function` would
+--  silently break machineInputRoom.
+stackSizeOf = function(name)
   self.stackSizes = self.stackSizes or {}
 
   if self.stackSizes[name] == nil then
@@ -2762,7 +3581,10 @@ end
 --  This is the last path by which `needed` could come out too low, and it is
 --  closed by reading the right number rather than by guarding against a wrong
 --  one.
-local function stackSizeFor(name, parameters)
+--  Assigned, not declared: the name is forward-declared far above so placeStack
+--  can reach it. Changing this back to `local function` would silently break
+--  every deposit in the mod.
+stackSizeFor = function(name, parameters)
   if type(parameters) == "table" then
     local override = tonumber(parameters.maxStack)
     if override ~= nil and override >= 1 then return override end
@@ -3007,28 +3829,55 @@ function compactContainer(containerId)
         tostring(took))
     else
       local returned = 0
+      local rescued = 0
 
       for _, bucket in ipairs(group.buckets) do
-        local leftover = world.containerAddItems(containerId, {
+        --  THROUGH placeStack, like every other add in this file. A bucket is
+        --  the whole of one descriptor in the crate -- routinely several stacks
+        --  worth -- and handing that to containerAddItems directly is exactly
+        --  what destroyed 7,497 dirt. See placeStack's header for the measured
+        --  numbers.
+        local unplaced = placeStack(containerId, {
           name = group.name,
           count = bucket.count,
           parameters = bucket.parameters
         })
 
-        if leftover ~= nil and (leftover.count or 0) > 0 then
+        returned = returned + (bucket.count - unplaced)
+
+        if unplaced > 0 then
           --  SHOULD BE UNREACHABLE: the slots were freed a moment ago, so what
           --  came out must fit back in. Loud, and the remainder goes onto the
           --  unit rather than being destroyed -- losing a player's items to a
-          --  tidying pass would be the worst possible outcome here.
+          --  tidying pass is the worst outcome available here.
           sb.logError("PETPORT %s compaction of %s in %s could not return %s -- "
             .. "moved to cargo",
             stationUniqueId(), tostring(group.name), sb.printJson(containerId),
-            sb.printJson(leftover.count))
+            sb.printJson(unplaced))
 
-          receiveCargo(leftover)
-        else
-          returned = returned + bucket.count
+          receiveCargo({
+            name = group.name,
+            count = unplaced,
+            parameters = bucket.parameters
+          })
+
+          rescued = rescued + unplaced
         end
+      end
+
+      --  HARD ACCOUNTING, EVERY PASS.
+      --
+      --  The whole class of failure above was silent: a consume that succeeded,
+      --  an add that reported success, and a smaller number of items in the
+      --  world afterwards. Counting what went in against what came out is the
+      --  only check that catches that, and it costs one comparison.
+      if returned + rescued ~= group.total then
+        sb.logError("PETPORT %s COMPACTION LOST ITEMS in %s: took %s %s, "
+          .. "returned %s, moved %s to cargo -- %s UNACCOUNTED FOR",
+          stationUniqueId(), sb.printJson(containerId),
+          sb.printJson(group.total), tostring(group.name),
+          sb.printJson(returned), sb.printJson(rescued),
+          sb.printJson(group.total - returned - rescued))
       end
 
       if returned > 0 then
@@ -5023,6 +5872,377 @@ local function tidyWork()
     misfiled, homeless, full)
 end
 
+--  ---------------------------------------------------------------------------
+--  DRAIN: PULL EXISTING OVER-QUOTA STOCK OUT TO A MACHINE
+--  ---------------------------------------------------------------------------
+--
+--  Routing alone only CAPS GROWTH. It diverts cargo that happens to be in
+--  transit, so a network already holding nine thousand dirt above its threshold
+--  sits at nine thousand forever -- nothing ever picks it back up. This is the
+--  half that actually reduces the pile, and it is the reason the feature exists
+--  at all: entropy that has already accumulated is the problem, not entropy
+--  arriving.
+--
+--  THE VERY BOTTOM OF findWork, BELOW COMPACTION.
+--
+--  This is the only work in the mod that is irreversible. A unit should do
+--  literally anything else first -- collect a despawning drop, water a crop,
+--  fill a request, tidy a shelf, merge two stacks -- and reach for this only
+--  when the network has nothing else to offer. Nothing here is urgent: the
+--  surplus has been sitting there and will keep.
+--
+--  IT MANUFACTURES CARGO, then hands off. The withdraw puts the stack on the
+--  unit and stops; the next findWork sees cargo, depositWork runs, and
+--  upcyclerWork routes it to the machine exactly as it routes a fresh pickup.
+--  One path to the machine, not two.
+--
+--  WHICH IS ALSO THE LIVELOCK RISK, and why the count is capped three ways
+--  below. If a drained stack cannot be delivered it goes back into ordinary
+--  storage, and an ungated drain would pull it straight out again -- the same
+--  fetch-deposit-fetch loop replantWork's header records, where every
+--  individual task succeeds and nothing in the log looks wrong.
+local function drainWork()
+  --  ONLY WITH EMPTY HANDS. A unit already carrying something has a delivery to
+  --  finish, and depositWork above will route that load on its own.
+  if self.petData == nil then return nil end
+  if self.petData.cargo ~= nil and #self.petData.cargo > 0 then return nil end
+
+  local sources = petports_beaconsFor("deposit")
+  if #sources == 0 then return nil, "no deposit beacon to drain from" end
+
+  local overQuota = 0
+  local dribbled = 0
+
+  --  EMPTIEST MACHINE FIRST.
+  --
+  --  Iterating self.machines in scan order meant whichever machine the query
+  --  happened to return first was fed forever while the rest starved --
+  --  measured, and it looks exactly like a unit that has adopted one machine as
+  --  a pet. Sorting by input room makes the choice self-balancing: a machine
+  --  that was just fed sinks to the bottom and rises again as it burns through
+  --  what it was given, with no round-robin state to keep.
+  --  SCORED ONCE, THEN SORTED. A comparator that calls into the engine is both
+  --  wasteful -- table.sort evaluates it O(n log n) times -- and unstable, since
+  --  a machine that consumes mid-sort can make the comparison contradict itself
+  --  and Lua's sort will happily error on an invalid order function.
+  local ranked = {}
+
+  for _, machine in ipairs(self.machines or {}) do
+    if machine.kind == "upcycler" and machine.enabled
+       and world.entityExists(machine.id) then
+      table.insert(ranked, {
+        machine = machine,
+        free = machineInputFree(machine.id)
+      })
+    end
+  end
+
+  table.sort(ranked, function(a, b) return a.free > b.free end)
+
+  for _, entry in ipairs(ranked) do
+    local machine = entry.machine
+
+    do
+
+      for _, rule in ipairs(machine.rules) do
+        local held = (self.census or {})[rule.item] or 0
+        local surplus = held - rule.max
+
+        if surplus > 0 then
+          overQuota = overQuota + 1
+
+          --  CAP ONE: the surplus itself, so a drain can never take the network
+          --  below the threshold the player set. This is what makes "keep at
+          --  most N" mean N rather than "somewhere near N".
+          --
+          --  CAP TWO: the machine's input room, so the unit is never sent to
+          --  fetch something the machine cannot accept when it arrives.
+          local room = machineInputRoom(machine.id, { name = rule.item, count = 1 })
+
+          --  CAP THREE, AND THE ONE THAT STOPS THE DRIBBLE: a trip has to be
+          --  worth taking. Without this the drain sizes itself to whatever the
+          --  machine burned during the last walk -- measured at ~23 items a
+          --  round trip -- and one unit spends its whole life shuttling
+          --  handfuls to a machine that is already nearly full.
+          --
+          --  Capped by the surplus so a nearly-finished job still completes:
+          --  30 items over threshold delivers 30 rather than waiting forever
+          --  for a batch that cannot exist.
+          local batch = math.min(
+            math.ceil(stackSizeOf(rule.item) * MACHINE_MIN_BATCH), surplus)
+
+          if room < batch then
+            dribbled = dribbled + 1
+            room = 0
+          end
+
+          if room > 0 then
+            for _, source in ipairs(sources) do
+              if world.entityExists(source.id) then
+                local ok, items = pcall(world.containerItems, source.id)
+
+                if ok and type(items) == "table" then
+                  for slot, stack in pairs(items) do
+                    --  THE DECIDING BEACON IS NOT STOCK, the same exemption the
+                    --  census and filterMisfits both make.
+                    if slot ~= source.beaconSlot
+                       and type(stack) == "table"
+                       and stack.name == rule.item then
+
+                      --  CAP THREE: what is actually in the slot. Slot-precise
+                      --  from end to end, so parameters survive and a partial
+                      --  take comes off the slot the port actually looked at.
+                      local count = math.min(surplus, stack.count or 0, room)
+
+                      if count > 0 then
+                        --  EXCLUSIVE ACROSS PORTS -- NO PORT SUFFIX.
+                        --
+                        --  A deposit claim carries "@" .. stationUniqueId()
+                        --  because several units CAN share one crate:
+                        --  containerAddItems gives each arrival a truthful
+                        --  answer and there is nothing to serialise. A TAKE is
+                        --  the opposite -- the supply is finite, so the first
+                        --  unit gets it and every other unit walks there for
+                        --  nothing and eats a backoff.
+                        --
+                        --  restockFetchWork and compactWork already key this
+                        --  way; drain and fuel were the two that did not, and
+                        --  it showed immediately on a three-port network.
+                        local workId = "drain:" .. tostring(machine.id)
+                          .. ":" .. tostring(rule.item)
+
+                        local failure = self.workFailures[workId]
+                        local backedOff = failure ~= nil
+                          and (failure["until"] or 0) > world.time()
+
+                        if not backedOff and claimFree(workId) then
+                          local stand = standingPointNear(source.position, 4)
+
+                          if stand == nil then
+                            sb.logInfo("PETPORT %s drain source %s SKIPPED: no standable spot within 4 tiles of %s",
+                              stationUniqueId(), sb.printJson(source.id),
+                              sb.printJson(source.position))
+                          else
+                            sb.logInfo("PETPORT %s draining %s x%s out of %s (slot %s) for %s at %s -- network holds %s, threshold %s, machine input room %s",
+                              stationUniqueId(), tostring(rule.item),
+                              sb.printJson(count), sb.printJson(source.id),
+                              sb.printJson(slot), tostring(machine.kind),
+                              sb.printJson(machine.position), sb.printJson(held),
+                              sb.printJson(rule.max), sb.printJson(room))
+
+                            return {
+                              id = workId,
+
+                              --  A TYPE petportsTaskAction HAS NEVER HEARD OF,
+                              --  which is how tidy and compact already work:
+                              --  dispatch falls through to the generic
+                              --  walk-and-stand path and the port does the
+                              --  container work on arrival.
+                              --
+                              --  Its own type rather than reusing "tidy" so the
+                              --  log can tell housekeeping from feeding a
+                              --  machine, which are very different things to
+                              --  find a unit doing.
+                              type = "drain",
+                              target = source.id,
+                              item = rule.item,
+                              count = count,
+                              slot = slot,
+                              position = stand,
+                              containerPosition = source.position,
+                              port = stationUniqueId(),
+                              dwell = 0
+                            }
+                          end
+                        end
+                      end
+                    end
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  if overQuota == 0 then
+    return nil, "nothing over an upcycler threshold"
+  end
+
+  if dribbled > 0 then
+    return nil, string.format(
+      "%s rule(s) over threshold, %s waiting for a machine to burn through "
+      .. "enough input to be worth a trip", overQuota, dribbled)
+  end
+
+  return nil, string.format(
+    "%s rule(s) over threshold, none actionable: no deposit crate holds the "
+    .. "item, or every machine input is full", overQuota)
+end
+
+--  ---------------------------------------------------------------------------
+--  FUEL: TAKE FINISHED TREATS OUT OF A MACHINE
+--  ---------------------------------------------------------------------------
+--
+--  ONLY IF STORAGE ACTUALLY WANTS THEM. A machine whose output nobody has asked
+--  for keeps its treats, fills its output slot, and stops -- which is a
+--  deliberate throttle rather than a jam. It hands the player control over how
+--  fast upcycling runs: filter fuel into a crate and the machine runs
+--  continuously; do not, and it converts one slot's worth and waits.
+--
+--  SLOT ONE, AND ONLY petports_petfuel.
+--
+--  NOT "whatever is in the output". The player can drag anything into any slot
+--  by hand, and a stack of ore parked there being hauled off to storage by a
+--  machine they thought was idle is exactly the sort of thing that is
+--  impossible to diagnose after the fact.
+--  AN OFFSET, ZERO-BASED, like every other MACHINE_SLOT_ constant and like
+--  every world.container*At call that takes one.
+--
+--  The keys world.containerItems hands back are ONE-based, and withdrawMisfit
+--  takes a KEY. Anything crossing from this constant into that world has to
+--  convert -- see the `slot` field on the fuel task, which is the one place it
+--  happens and the one place it was once wrong.
+local MACHINE_SLOT_OUTPUT = 1
+local MACHINE_FUEL_ITEM = "petports_petfuel"
+
+local function fuelWork()
+  if self.petData == nil then return nil end
+  if self.petData.cargo ~= nil and #self.petData.cargo > 0 then return nil end
+
+  local destinations = petports_beaconsFor("deposit")
+  if #destinations == 0 then return nil, "no deposit beacon to store fuel in" end
+
+  local waiting = 0
+  local trickling = 0
+
+  for _, machine in ipairs(self.machines or {}) do
+    if machine.kind == "upcycler" and world.entityExists(machine.id) then
+      --  DELIBERATELY NOT GATED ON `enabled`. A machine switched off with
+      --  finished treats still in it should be emptied -- the treats are made,
+      --  and stranding them because the player paused conversion would be
+      --  surprising.
+      local ok, held = pcall(world.containerItemAt, machine.id, MACHINE_SLOT_OUTPUT)
+
+      if ok and type(held) == "table" and held.name == MACHINE_FUEL_ITEM
+         and (held.count or 0) > 0 then
+        waiting = waiting + 1
+
+        --  IS IT WORTH THE WALK YET?
+        --
+        --  Measured: three ports each dispatched a unit across the base for
+        --  THREE treats, and two of them arrived at an empty slot and took a
+        --  ten-second backoff. Treats accumulate one per thousand points, so
+        --  without a floor the first one made triggers a full round trip.
+        --
+        --  TWO EXCEPTIONS, both meaning "no more are coming, take what is
+        --  there": a full output slot has stopped the machine outright, and an
+        --  empty input means it has nothing left to convert. Without those a
+        --  small job would leave its last handful stranded forever.
+        --  NO `goto` -- Starbound is Lua 5.1 and it is a 5.2 keyword. A
+        --  positive condition wrapping the loop does the same job.
+        local batch = math.ceil(stackSizeOf(MACHINE_FUEL_ITEM) * MACHINE_MIN_BATCH)
+        local full = (held.count or 0) >= stackSizeOf(MACHINE_FUEL_ITEM)
+
+        local okInput, input = pcall(world.containerItemAt, machine.id,
+          MACHINE_SLOT_INPUT)
+        local idle = not okInput or type(input) ~= "table" or input.name == nil
+
+        local worthTaking = (held.count or 0) >= batch or full or idle
+
+        if not worthTaking then trickling = trickling + 1 end
+
+        for _, destination in ipairs(worthTaking and destinations or {}) do
+          if world.entityExists(destination.id)
+             and petports_filterAccepts(destination.filter, MACHINE_FUEL_ITEM) then
+
+            --  nil means the engine will not answer, treated as NO. Same
+            --  reasoning as tidyWork: this is optional, and guessing wrong
+            --  costs a unit out of the pool for a round trip.
+            local fits = world.containerItemsCanFit ~= nil
+              and world.containerItemsCanFit(destination.id, held) or nil
+
+            if fits ~= nil and fits > 0 then
+              --  EXCLUSIVE ACROSS PORTS. See the drain claim above: a take has
+              --  a finite supply, so a per-port claim sends every port's unit
+              --  after the same three items.
+              local workId = "fuel:" .. tostring(machine.id)
+
+              local failure = self.workFailures[workId]
+              local backedOff = failure ~= nil
+                and (failure["until"] or 0) > world.time()
+
+              if not backedOff and claimFree(workId) then
+                local stand = standingPointNear(machine.position, 4)
+
+                if stand == nil then
+                  sb.logInfo("PETPORT %s fuel source %s SKIPPED: no standable spot within 4 tiles of %s",
+                    stationUniqueId(), sb.printJson(machine.id),
+                    sb.printJson(machine.position))
+                else
+                  sb.logInfo("PETPORT %s collecting %s %s from machine %s",
+                    stationUniqueId(), sb.printJson(held.count),
+                    tostring(MACHINE_FUEL_ITEM), sb.printJson(machine.id))
+
+                  return {
+                    id = workId,
+                    type = "fuel",
+                    target = machine.id,
+                    item = MACHINE_FUEL_ITEM,
+                    count = held.count,
+
+                    --  A KEY, NOT AN OFFSET, AND THE DIFFERENCE IS THE WHOLE
+                    --  BUG THIS LINE ONCE HAD.
+                    --
+                    --  This task is read with an OFFSET-taking call --
+                    --  world.containerItemAt(id, MACHINE_SLOT_OUTPUT) -- and
+                    --  consumed by withdrawMisfit, which takes a one-based KEY
+                    --  and applies SLOT_KEY_TO_OFFSET itself. Handing it the
+                    --  raw offset sent the take to slot 0, the INPUT, which on
+                    --  an idle machine is empty:
+                    --
+                    --    collecting 3 petports_petfuel from machine 1
+                    --    tidy of petports_petfuel from 1 took nothing:
+                    --      slot 1 now holds null, not petports_petfuel
+                    --
+                    --  and the unit walked back and forth forever, dispatched
+                    --  by a correct read and defeated by an incorrect take.
+                    --
+                    --  Subtracting SLOT_KEY_TO_OFFSET rather than adding a
+                    --  literal 1, so this stays correct if the bias is ever
+                    --  found to differ.
+                    slot = MACHINE_SLOT_OUTPUT - SLOT_KEY_TO_OFFSET,
+                    position = stand,
+                    containerPosition = machine.position,
+                    port = stationUniqueId(),
+                    dwell = 0
+                  }
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  if waiting == 0 then
+    return nil, "no machine has fuel waiting"
+  end
+
+  if trickling > 0 then
+    return nil, string.format(
+      "%s machine(s) holding fuel, %s still converting and not yet worth a trip",
+      waiting, trickling)
+  end
+
+  return nil, string.format(
+    "%s machine(s) holding fuel, but no deposit crate accepts %s or has room",
+    waiting, MACHINE_FUEL_ITEM)
+end
+
 --  MERGE SPLIT STACKS IN A CRATE NOTHING ELSE IS VISITING.
 --
 --  Every port-side container mutation already compacts what it touched, so this
@@ -5196,6 +6416,13 @@ local function findWork()
   local stock, noStock = restockFetchWork()
   if stock ~= nil then return stock end
 
+  --  FUEL SITS ABOVE TIDYING because it UNBLOCKS something. A machine whose
+  --  output slot is full stops converting, so collecting from it restarts work
+  --  that is otherwise halted -- where tidying is purely cosmetic and nothing
+  --  waits on it.
+  local fuel, noFuel = fuelWork()
+  if fuel ~= nil then return fuel end
+
   --  BELOW EVERYTHING, INCLUDING FETCHING. Tidying is the only work that is
   --  purely cosmetic from the network's point of view -- nothing is lost, no
   --  timer is running, and every other job represents something that either
@@ -5208,6 +6435,16 @@ local function findWork()
   --  is any other job in the network at all, it outranks this.
   local squash, noSquash = compactWork()
   if squash ~= nil then return squash end
+
+  --  BELOW THE VERY BOTTOM. Draining is the only IRREVERSIBLE work in the mod:
+  --  everything above moves things, and this one feeds them to a machine that
+  --  destroys them. A unit should do literally anything else first, including
+  --  merging two stacks in a crate nobody is looking at.
+  --
+  --  Nothing is waiting on it either. The surplus has been sitting there and
+  --  will keep sitting there.
+  local drain, noDrain = drainWork()
+  if drain ~= nil then return drain end
 
 	--  The old noDrop fallback lived here and is now unreachable: noDrop is only
 	--  ever set when cargo is non-empty, and the guard above returns on that
@@ -5225,8 +6462,10 @@ local function findWork()
       .. "; " .. tostring(noWet or noFetchWater or "no watering work")
       .. "; " .. tostring(noBeast or "no animal work")
       .. "; " .. tostring(noStock or "no restock work")
+      .. "; " .. tostring(noFuel or "no fuel to collect")
       .. "; " .. tostring(noTidy or "no tidying work")
       .. "; " .. tostring(noSquash or "no compaction work")
+      .. "; " .. tostring(noDrain or "no draining work")
   end
 
   return nil, why
@@ -5424,9 +6663,27 @@ local function workUpdate(dt)
   --  Cheap: loadUniqueEntity on an existing stagehand and out.
   ensureResidency()
 
-  sb.logInfo("PETPORT %s tick: unit %s task %s",
-    stationUniqueId(), sb.printJson(self.petId),
+  --  A HEARTBEAT, CHANGE-GATED ON WHAT IT ACTUALLY REPORTS.
+  --
+  --  Unit id and current task are both slow-moving, so at one line per tick
+  --  this was 160 lines saying "task none" in a session where the port was
+  --  idle -- burying the handful of lines that meant something. Gated, it
+  --  marks every task starting and finishing and the unit appearing or going
+  --  away, which is what it was for.
+  --
+  --  NOT log-once: a port that is silent because it is idle and one that is
+  --  silent because it stopped running look identical, and the no-dispatch
+  --  reason line above is what distinguishes them.
+  local tickState = string.format("%s/%s", tostring(self.petId),
     self.task and self.task.id or "none")
+
+  if tickState ~= self.tickState then
+    self.tickState = tickState
+
+    sb.logInfo("PETPORT %s tick: unit %s task %s",
+      stationUniqueId(), sb.printJson(self.petId),
+      self.task and self.task.id or "none")
+  end
 
   if self.task == nil then
     dispatchWork()

@@ -52,10 +52,24 @@
 --  reachable. Data files belong beside the code that reads them.
 local PETPORTS_FILTER_MANIFEST = "/scripts/lofty_petports/petports_filtergroups.config"
 
---  Verbose while this is being built. This one is noisier than the others --
---  it fires per cargo stack per candidate container -- so it is worth turning
---  off first once filters are trusted.
-local PETPORTS_FILTER_DEBUG = true
+--  OFF. THIS WAS 89% OF THE LOG.
+--
+--  The header above predicted it -- "worth turning off first once filters are
+--  trusted" -- and filters have been trusted for several features now. Measured
+--  on one session of a unit ferrying dirt: 3,602 lines out of 4,061 were this
+--  flag, two per call, restating the same verdict about the same item name
+--  hundreds of times a second.
+--
+--  It fires per cargo stack per candidate container, and petports_filterMisfits
+--  calls it per SLOT per scan, so a crate holding forty stacks of one block is
+--  eighty lines every time anything looks at it. That is the shape the logging
+--  discipline calls out: not less information, the SAME information once per
+--  change -- except here there is no change to gate on, because the answer is a
+--  pure function of a name and never varies.
+--
+--  Turn it on to diagnose a filter that is sorting to the wrong crate, and turn
+--  it straight back off. Nothing else in the mod is readable while it is on.
+local PETPORTS_FILTER_DEBUG = false
 
 --  FORMATTED HERE, NOT BY sb.logInfo.
 --
