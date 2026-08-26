@@ -1,0 +1,93 @@
+//  PETPORTS -- CROSSHAIR: WARNING
+//
+//  A MARKER, NOT A WEAPON. It exists so a player can see that a drop is spoken
+//  for -- which matters most when a unit vent-routes, disappears, and surfaces
+//  somewhere else. Without it that reads as the network ignoring the item.
+//
+//  STATIONARY AND HARMLESS, and every field below is load-bearing for one of
+//  those two:
+//
+//    speed 0 + physics "laser"   never moves, never falls. Vanilla's energyzone
+//                                is the same recipe, and it sits where it is
+//                                cast until it times out.
+//    damageTeamType "ghostly"    interacts with no entity at all. Belt and
+//                                braces alongside power 0 and NoDamage: a
+//                                marker that can be hit, blocked or reflected
+//                                by anything is a bug waiting to happen on a
+//                                populated server.
+//    onlyHitTerrain false        it should not interact with terrain either.
+//    orientationLocked           the sprite must not rotate to a flight vector
+//                                it does not have.
+//    fullbright                  legible in an unlit cave, which is exactly
+//                                where a player most wants to know a drop was
+//                                seen.
+//    renderLayer                 ForegroundEntity+1. Above the terrain
+//                                foreground, so a marker on a drop in a trench
+//                                or behind a platform stays visible -- which is
+//                                exactly where a player most wants to know an
+//                                item was seen. Player+1 drew over the player;
+//                                ItemDrop+1 sat behind foreground tiles.
+//
+//                                THE LAYER NAME IS LOOKED UP IN A MAP AND AN
+//                                UNKNOWN ONE IS FATAL TO THE ASSET, not merely
+//                                ignored:
+//
+//                                  Could not read projectile '...', error:
+//                                  (MapException) Key 'Foreground' not found
+//                                  in Map::get()
+//
+//                                So the projectile does not load at all and
+//                                every spawn of it fails. "Foreground" is not
+//                                in the vocabulary; "ForegroundEntity" is.
+//
+//  TIME TO LIVE IS A SAFETY NET, NOT THE LIFECYCLE, and it is LONG on purpose.
+//
+//  The port kills these by message the moment a state changes, and a new marker
+//  culls any predecessor on the same item, so they normally die on command. The
+//  TTL only matters when neither happens -- a port that unloads or crashes
+//  mid-task -- because a stationary projectile with no expiry would be a
+//  permanent artefact in someone's save.
+//
+//  IT WAS 3 SECONDS, WHICH MADE IT THE LIFECYCLE BY ACCIDENT. The port had to
+//  respawn every marker every two seconds just to outrun it, so a marker
+//  sitting quietly on an untouched drop was destroyed and rebuilt roughly
+//  thirty times a minute, each rebuild leaving a predecessor for the cull to
+//  clean up. Thirty seconds makes renewal rare and leaves an orphan visible for
+//  at most half a minute -- and only until the next marker on that item evicts
+//  it anyway.
+//
+//  WHITE SPRITE, BLACK OUTLINE, RECOLOURED PER SPAWN. The caller passes
+//  processing "?multiply=RRGGBBAA": white takes the colour, black stays black.
+//  Same trick the watering droplet uses to arrive blue.
+
+{
+	"projectileName" : "petports_crosshair_warn",
+	"image" : "petports_crosshair_warn.png",
+
+	"physics" : "laser",
+	"speed" : 0,
+	"timeToLive" : 30.0,
+
+	"animationCycle" : 1.0,
+	"frameNumber" : 1,
+
+	"orientationLocked" : true,
+	"fullbright" : true,
+	"renderLayer" : "ForegroundEntity+1",
+
+	"onlyHitTerrain" : false,
+	"piercing" : true,
+	"bounces" : -1,
+
+	"power" : 0.0,
+	"damageType" : "NoDamage",
+	"damageKind" : "default",
+	"damageTeamType" : "ghostly",
+
+	"actionOnReap" : [ ],
+	"periodicActions" : [ ],
+	"emitters" : [ ],
+	"pointLight" : false,
+
+	"scripts" : [ "/projectiles/lofty_petports/petports_crosshair/petports_crosshair.lua" ]
+}

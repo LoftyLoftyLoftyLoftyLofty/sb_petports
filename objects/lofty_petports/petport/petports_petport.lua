@@ -146,6 +146,33 @@ local MACHINE_ENABLED_KEY = "petports_upcyclerEnabled"
 --  this tag has its contents ignored by beacon scanning entirely.
 local IGNORE_BEACONS_TAG = "petports_ignore_inserted_beacons"
 
+--  FORWARD-DECLARED HERE, AND THE POSITION IS THE POINT.
+--
+--  uninit lives near the top of this file; the crosshair manager lives near the
+--  bottom. A `local function` is only in scope after its declaration, so the
+--  tidy-up call from uninit would compile as a global lookup and be nil at
+--  runtime -- an error thrown during world unload, which is the worst possible
+--  place to find one because the log ends immediately afterwards.
+--
+--  Declared with the constants rather than with the other forward declarations
+--  further down, because those sit BELOW uninit and would not have helped.
+local crosshairClear
+
+--  FORWARD-DECLARED FOR THE SAME REASON, AND THEY KEEP MOVING UP THIS FILE.
+--
+--  stackSizeOf and stackSizeFor are defined hundreds of lines below, and the
+--  set of things that need them keeps growing upward: placeStack, which every
+--  deposit now goes through; machineInputRoom, for the upcycler; and now
+--  dropMergesWithCargo, which caps a cargo top-up at one stack.
+--
+--  A `local function` is only in scope AFTER its declaration, so each of those
+--  would otherwise compile as a global lookup and be nil at runtime -- no load
+--  error, no parse error, just a nil call the first time the path is taken.
+--  Declaring them here, with the constants, puts them above every caller
+--  regardless of where the next one turns up.
+local stackSizeOf
+local stackSizeFor
+
 --  THE RESTOCK REQUESTS, written by the restock beacon's pane.
 --
 --  An ARRAY of { item, min, max }. One crate can name as many items as the
@@ -277,7 +304,25 @@ local DIAG_DWELL = 3.0
 --  slot while everything reachable goes uncollected. Escalating so a
 --  briefly-blocked item is retried soon and a genuinely unreachable one stops
 --  costing anything.
-local FAILURE_BACKOFF = { 10.0, 30.0, 120.0, 600.0 }
+--
+--  RETUNED: WAS { 10, 30, 120, 600 }.
+--
+--  The old curve was wrong at both ends. Ten seconds for a FIRST failure is an
+--  age for the commonest cause -- an item that was still falling, or a unit
+--  that was momentarily boxed in by another -- so transient blockages were
+--  punished as if they were permanent. And six hundred seconds is not a
+--  backoff, it is an abandonment: a drop behind a door the player opens a
+--  minute later sits ignored for another nine.
+--
+--  The last entry is what a persistent failure settles on, because the lookup
+--  clamps to the end of the list. Thirty seconds costs almost nothing to retry
+--  and means anything the player fixes is picked up within half a minute
+--  without them having to think about it.
+--
+--  The ramp matters more than the ceiling. One and two seconds cover "try
+--  again in a moment", five and ten cover "something is genuinely in the way",
+--  and only past that does the port conclude it should stop asking often.
+local FAILURE_BACKOFF = { 1.0, 2.0, 5.0, 10.0, 30.0 }
 
 --  How many failed walk-home attempts before the unit is re-homed instead.
 local RECALL_LIMIT = 2
@@ -695,6 +740,15 @@ local function noteFailure(taskId, reason)
 
   local record = self.workFailures[taskId] or { count = 0 }
   record.count = record.count + 1
+
+  --  WAS THIS A ROUTING FAILURE OR SOMETHING ELSE?
+  --
+  --  Recorded here rather than re-derived later, because this is the one place
+  --  the reason string exists. The crosshair markers key off it: a target the
+  --  unit cannot REACH is a different problem from one it can reach and cannot
+  --  service, and they want different symbols -- an X versus a warning.
+  record.unroutable = string.find(reason or "", "no vent route", 1, true) ~= nil
+    or string.find(reason or "", "no route", 1, true) ~= nil
   local backoff = FAILURE_BACKOFF[math.min(record.count, #FAILURE_BACKOFF)]
   record["until"] = world.time() + backoff
   self.workFailures[taskId] = record
@@ -813,6 +867,29 @@ function init()
 
   --  Outcome from the unit. Reported by uniqueId because entity ids do not
   --  survive a reload and the unit may have respawned since dispatch.
+  --  MID-TASK PROGRESS, WHICH IS ONLY EVER A COSMETIC.
+  --
+  --  taskReport says how a task ENDED. This says it is under way -- the unit has
+  --  covered ground, so it found a route rather than still searching for one.
+  --  That is the entire difference between the yellow marker and the green one,
+  --  and there was no signal for it until now: dispatch and outcome were all the
+  --  port ever heard.
+  --
+  --  DELIBERATELY INERT BEYOND THE MARKER. It sets no state the dispatcher
+  --  reads, resets no timer, and cannot fail a task. A lost or duplicated
+  --  progress message costs a colour, never a decision -- which is why it is
+  --  fire-and-forget on the unit's side.
+  message.setHandler("petports_taskProgress", simpleHandler(function(progress)
+    if progress == nil or self.task == nil then return end
+    if progress.id ~= self.task.id then return end
+    if progress.phase ~= "moving" then return end
+
+    if self.taskMoving then return end
+    self.taskMoving = true
+
+    sb.logInfo("PETPORT %s task %s is under way", stationUniqueId(), progress.id)
+  end))
+
   message.setHandler("petports_taskReport", simpleHandler(function(report)
     if report == nil or self.task == nil then return end
     if report.id ~= self.task.id then return end
@@ -992,6 +1069,12 @@ function uninit()
   --  either way: on unload it would be orphaned anyway, and this port clears
   --  its own claims on the next init regardless.
   abandonTask("petport unloading")
+
+  --  A marker outliving the port that owns it would sit over a drop nothing is
+  --  coming for -- worse than no marker, because it asserts something false.
+  --  The projectiles carry a timeToLive as well, so this is the tidy path and
+  --  that is the backstop.
+  crosshairClear()
 
   --  Petport unloading or being broken: put the unit back in its item so
   --  nothing is lost. This is why a unit does not survive the player beaming
@@ -1976,7 +2059,59 @@ local function anotherUnitIsCloser(position, ourDistance)
   return false
 end
 
-local function collectionWork()
+--  Would this drop merge into a stack the unit already holds?
+--
+--  THE TOP-UP RULE, AND THE CEILING IS WHAT MAKES IT SAFE.
+--
+--  A unit carrying anything is a full load -- one stack per trip is the design,
+--  because more throughput is supposed to mean more units. Topping up an
+--  existing stack does not break that: the unit still carries ONE stack, just a
+--  fuller one, and still cannot carry two different things.
+--
+--  CAPACITY IS COUNTED IN SLOTS, so a merge consumes none of it. That is the
+--  whole reason this is free where a general "keep collecting" would have spent
+--  a progression stat before the pets that earn it exist.
+--
+--  CAPPED AT maxStack, without which "matches my cargo" is unlimited
+--  single-flavoured hoarding -- the same sack, one item at a time. The cap has
+--  a second benefit: cargo stacks stay legal descriptors, which is one of the
+--  two routes into the containerAddItems destruction bug that placeStack now
+--  has to defend against.
+--
+--  ALL OR NOTHING. A drop is collected whole, so a stack that would overflow is
+--  passed over rather than split. A unit holding 3 dirt can take a drop of 997
+--  and not one of 998.
+local function dropMergesWithCargo(dropId)
+  if self.petData == nil or self.petData.cargo == nil then return false end
+
+  local ok, descriptor = pcall(world.itemDropItem, dropId)
+
+  if not ok or type(descriptor) ~= "table" or type(descriptor.name) ~= "string" then
+    --  Unreadable means we cannot prove it merges, and this path only ever runs
+    --  when the unit is already stalled. Declining costs nothing.
+    return false
+  end
+
+  for _, stack in ipairs(self.petData.cargo) do
+    if stack.name == descriptor.name then
+      local limit = stackSizeOf(stack.name)
+      local total = (stack.count or 0) + (descriptor.count or 1)
+
+      if total <= limit then return true end
+
+      sb.logInfo("PETPORT %s drop %s would overflow %s: %s held + %s dropped > %s",
+        stationUniqueId(), sb.printJson(dropId), tostring(stack.name),
+        sb.printJson(stack.count or 0), sb.printJson(descriptor.count or 1),
+        sb.printJson(limit))
+
+      return false
+    end
+  end
+
+  return false
+end
+
+local function collectionWork(mergeOnly)
   --  Scan the whole NETWORK's coverage, not just our own rect. Queues stay
   --  port-owned -- see the handoff -- but a union is a view assembled at
   --  dispatch time, and this is that view.
@@ -2027,7 +2162,8 @@ local function collectionWork()
   --  Why each drop was passed over. The old message named only two of the three
   --  possible causes, so deferral -- the one that can deadlock -- was invisible
   --  and presented as a backoff that did not exist.
-  local rejected = { claimed = 0, backedOff = 0, deferred = 0, gone = 0 }
+  local rejected = { claimed = 0, backedOff = 0, deferred = 0, gone = 0,
+    unmergeable = 0 }
 
   self.deferredSince = self.deferredSince or {}
   local stillDeferred = {}
@@ -2059,6 +2195,10 @@ local function collectionWork()
       sb.logInfo("PETPORT %s drop %s SKIPPED: entity gone",
         stationUniqueId(), sb.printJson(dropId))
       rejected.gone = rejected.gone + 1
+    elseif mergeOnly and not dropMergesWithCargo(dropId) then
+      --  Top-up pass: the unit is stalled holding cargo it cannot deposit, and
+      --  may only pick up more of what it is already carrying.
+      rejected.unmergeable = (rejected.unmergeable or 0) + 1
     else
       local position = world.entityPosition(dropId)
       if position == nil then
@@ -2112,9 +2252,16 @@ local function collectionWork()
   if best == nil then
     return nil, string.format(
       "%s drops in rect, none takeable: %s claimed, %s backed off, "
-      .. "%s deferred to a closer unit, %s gone",
+      .. "%s deferred to a closer unit, %s gone%s",
       #drops, rejected.claimed, rejected.backedOff,
-      rejected.deferred, rejected.gone)
+      rejected.deferred, rejected.gone,
+
+      --  Only meaningful on a top-up pass, and silent otherwise. On a normal
+      --  pass it is always zero, and a reason string listing a category that
+      --  cannot apply is noise in the one line a player reads to find out why
+      --  nothing is happening.
+      mergeOnly and string.format(", %s that would not merge with the cargo",
+        rejected.unmergeable) or "")
   end
 
   return {
@@ -2337,12 +2484,6 @@ end
 --
 --  Declaring the name here and ASSIGNING to it at the original site keeps one
 --  definition and makes the whole file see it.
-local stackSizeOf
-
---  Forward-declared for the same reason, and used by placeStack below -- which
---  every deposit path now goes through, and which is defined long before
---  stackSizeFor's original site.
-local stackSizeFor
 
 --  Same again. upcyclerWork screens its candidates with claimFree, and the
 --  claim helpers live with the SOIL section far below -- so without this the
@@ -2350,6 +2491,7 @@ local stackSizeFor
 --  every machine look available and putting the whole fleet back on one
 --  machine. Exactly the failure stackSizeOf already paid for.
 local claimFree
+
 
 --  An upcycler's input slot. Zero-based, like every container OFFSET; the keys
 --  world.containerItems returns are one-based, which is what SLOT_KEY_TO_OFFSET
@@ -2466,7 +2608,19 @@ end
 --  Duplicated rather than shared because the two want different answers: this
 --  asks "is there an alternative", that one asks "which crate".
 local function storageWouldTakeAny()
-  if self.petData == nil or self.petData.cargo == nil then return false end
+  if self.petData == nil then return false end
+
+  --  NOTHING TO PLACE IS NOT AN OBSTRUCTION.
+  --
+  --  This iterated the cargo and returned false when there was none, so an
+  --  empty unit read as "storage will not take it" -- which made every fresh
+  --  drop on the ground triage to the blocked marker instead of the unclaimed
+  --  one. The question is whether storage can accept A LOAD; with no load, the
+  --  honest answer is that nothing is in the way.
+  --
+  --  Safe for the batch-floor waiver too: upcyclerWork returns before it asks
+  --  when the cargo is empty.
+  if self.petData.cargo == nil or #self.petData.cargo == 0 then return true end
 
   for _, beacon in ipairs(petports_beaconsFor("deposit")) do
     if world.entityExists(beacon.id) then
@@ -2511,7 +2665,20 @@ local function machineWantsAny(machine, floorWaived)
     if rule == nil then
       table.insert(reasons, string.format("%s: no rule names it", tostring(stack.name)))
     else
-      local held = (self.census or {})[stack.name] or 0
+      --  THE STACK IN HAND IS PART OF THE NETWORK'S HOLDINGS.
+      --
+      --  The census counts CRATES, so the moment a unit picks a stack up the
+      --  count drops by that much -- 6000 dirt in storage reads as 5000 while a
+      --  unit carries the other 1000 to a machine. Comparing that against a
+      --  threshold of 5000 says "no longer surplus", and the unit walks the
+      --  whole way there and carries it back.
+      --
+      --  MEASURED EXACTLY THAT: 6000 held, threshold 5000, unit collects 1000,
+      --  arrives, finds 5000, returns it to storage. 6000 held. Repeat.
+      --
+      --  Adding what is being carried asks the question that actually matters:
+      --  would the network be over its threshold if this stack were put back?
+      local held = ((self.census or {})[stack.name] or 0) + (stack.count or 0)
 
       --  A TRIP HAS TO BE WORTH TAKING -- THE SAME FLOOR drainWork USES.
       --
@@ -2580,7 +2747,10 @@ local function machineRoomFor(machine)
   for _, stack in ipairs((self.petData and self.petData.cargo) or {}) do
     for _, rule in ipairs(machine.rules) do
       if rule.item == stack.name then
-        local held = (self.census or {})[stack.name] or 0
+        --  Carried stock counts, same as in machineWantsAny -- a score computed
+        --  on a different rule than the decision would rank machines for a
+        --  delivery that never happens.
+        local held = ((self.census or {})[stack.name] or 0) + (stack.count or 0)
 
         if held > rule.max then
           room = room + math.min(stack.count or 0,
@@ -3438,38 +3608,69 @@ function depositCargoToMachine(machineId, workId)
       if candidate.item == stack.name then rule = candidate break end
     end
 
-    local held = (self.census or {})[stack.name] or 0
+    --  THE CARRIED STACK COUNTS. See machineWantsAny: the census counts crates,
+    --  so a unit holding 1000 of something has already removed it from the
+    --  count. Asking "is the network over threshold" without adding it back
+    --  answers about a network with a hole in it exactly the size of the
+    --  delivery.
+    local stored = (self.census or {})[stack.name] or 0
+    local held = stored + (stack.count or 0)
+
+    --  How much of this stack is genuinely surplus, rather than all-or-nothing.
+    --
+    --  A unit carrying 1000 into a network 400 over its threshold should
+    --  deliver 400 and keep 600, not deliver everything and take the network
+    --  under, and not refuse the trip because the whole stack does not fit
+    --  above the line. This is what makes "keep at most N" mean N.
+    local surplus = rule ~= nil and (held - rule.max) or 0
+    if surplus > (stack.count or 0) then surplus = stack.count or 0 end
 
     if rule == nil then
       --  Not an error and not worth a line every trip: the unit is allowed to
       --  be carrying other things, and they simply stay aboard for the crates.
       table.insert(remaining, stack)
-    elseif held <= rule.max then
-      --  THE THRESHOLD WAS MET WHILE THE UNIT WALKED. Keep the stack; the next
-      --  dispatch will file it in ordinary storage. This is the check that
-      --  makes a stale census harmless rather than destructive.
-      sb.logInfo("PETPORT %s upcycle SKIPPED %s: network holds %s, threshold %s -- no longer surplus",
+    elseif surplus < 1 then
+      --  THE THRESHOLD WAS MET WHILE THE UNIT WALKED -- genuinely, now that the
+      --  carried stack is counted. Keep it; the next dispatch files it in
+      --  ordinary storage. This is the check that makes a stale census harmless
+      --  rather than destructive.
+      sb.logInfo("PETPORT %s upcycle SKIPPED %s: network holds %s (%s stored + %s carried), threshold %s -- no longer surplus",
         stationUniqueId(), tostring(stack.name), sb.printJson(held),
+        sb.printJson(stored), sb.printJson(stack.count or 0),
         sb.printJson(rule.max))
       table.insert(remaining, stack)
     else
-      --  SLOT-PRECISE. Returns what it could NOT place, exactly as
-      --  containerAddItems does, so a partial transfer accounts itself.
-      local leftover = world.containerPutItemsAt(machineId, stack,
+      --  SLOT-PRECISE, AND ONLY THE SURPLUS PORTION. Parameters carry across so
+      --  the kept remainder is the same item the unit picked up.
+      local offer = {
+        name = stack.name,
+        count = surplus,
+        parameters = stack.parameters
+      }
+
+      local leftover = world.containerPutItemsAt(machineId, offer,
         MACHINE_SLOT_INPUT)
 
-      local placed = (stack.count or 1)
-        - ((type(leftover) == "table" and leftover.count or 0))
+      local unplaced = (type(leftover) == "table" and leftover.count or 0)
+      local placed = surplus - unplaced
 
       if placed > 0 then moved = moved + placed end
 
-      sb.logInfo("PETPORT %s upcycled %s of %s %s into machine %s (network held %s, threshold %s)",
+      sb.logInfo("PETPORT %s upcycled %s of %s %s into machine %s (network held %s = %s stored + %s carried, threshold %s)",
         stationUniqueId(), sb.printJson(placed), sb.printJson(stack.count or 1),
         tostring(stack.name), sb.printJson(machineId), sb.printJson(held),
+        sb.printJson(stored), sb.printJson(stack.count or 0),
         sb.printJson(rule.max))
 
-      if type(leftover) == "table" and (leftover.count or 0) > 0 then
-        table.insert(remaining, leftover)
+      --  Whatever was not surplus, plus whatever the machine could not take.
+      local keep = (stack.count or 0) - placed
+
+      if keep > 0 then
+        table.insert(remaining, {
+          name = stack.name,
+          count = keep,
+          parameters = stack.parameters
+        })
       end
     end
   end
@@ -6525,6 +6726,34 @@ local function findWork()
 	--  collected either, and withdrawWork manufactures cargo on top of cargo.
 	if self.petData ~= nil and self.petData.cargo ~= nil
 	   and #self.petData.cargo > 0 then
+
+		--  ONE EXCEPTION, AND ONLY HERE: TOP UP WHAT IS ALREADY IN HAND.
+		--
+		--  This is the stalled state -- cargo the unit cannot place anywhere,
+		--  which in practice means storage is full and a spill is decaying on
+		--  the ground. The unit has nothing else to do and a drop despawn timer
+		--  is running, so a unit holding 3 dirt fetching 10 more dirt saves
+		--  items that would otherwise evaporate.
+		--
+		--  NOT A HOLE IN THE GUARD ABOVE. Merging leaves the unit carrying ONE
+		--  stack, capacity is counted in slots so nothing is consumed, and
+		--  dropMergesWithCargo refuses anything that would exceed maxStack. The
+		--  unit still cannot pick up a second KIND of thing, which is what "any
+		--  cargo is a full load" exists to prevent.
+		--
+		--  DELIBERATELY ONLY IN THE STALL. When a deposit target exists the unit
+		--  delivers instead, even if it is carrying three of something and
+		--  standing next to nine hundred more. Topping up on the way to a crate
+		--  is a better feature and a much bigger one -- it needs a detour rule
+		--  and can ping-pong -- so it is not smuggled in here.
+		local topUp = collectionWork(true)
+
+		if topUp ~= nil then
+			sb.logInfo("PETPORT %s stalled with cargo -- topping up %s instead of idling",
+				stationUniqueId(), tostring(topUp.id))
+			return topUp
+		end
+
 		return nil, noDrop
 			or ("carrying " .. sb.printJson(#self.petData.cargo)
 				.. " stack(s) with no dispatchable deposit target")
@@ -6720,6 +6949,11 @@ local function dispatchWork()
   end
 
   self.task = work
+
+  --  A NEW TASK HAS NOT MOVED YET. Without clearing this, the second task in a
+  --  row would render green from its first frame -- the unit would appear to
+  --  have found a route before it had been asked to look for one.
+  self.taskMoving = false
   self.taskAge = 0
   self.lastReject = nil
   --  sb.logInfo takes %s ONLY. Star's formatter has no width or precision
@@ -6770,6 +7004,544 @@ local function trackWork()
     sb.printJson(self.taskAge), sb.printJson(TASK_DEADLINE))
 
   petports_claimRefresh(self.task.id, stationUniqueId(), CLAIM_TTL)
+end
+
+--------------------------------------------------------------------------------
+--  CROSSHAIRS
+--------------------------------------------------------------------------------
+--
+--  A marker floating over every drop the network has an opinion about, so the
+--  player can see the fleet working without reading a log.
+--
+--  THE VENT CASE IS WHY THIS EXISTS. A unit that walks into a vent, vanishes,
+--  and surfaces two rooms away reads as the network ignoring the item. A marker
+--  sitting on the drop the whole time says "seen, spoken for" without having to
+--  explain traversal at all.
+--
+--  DRIVEN ENTIRELY FROM STATE THE PORT ALREADY HAS. Nothing here decides
+--  anything -- it reads the current task and the failure records and renders
+--  them. A marker that could disagree with dispatch would be worse than none.
+--
+--  REFRESHED, NOT TRACKED FOREVER. Each pass computes what SHOULD be showing
+--  and reconciles: spawn what is missing, kill what has changed, leave what
+--  matches. The projectiles also carry a timeToLive as a backstop, so a port
+--  that unloads mid-task cannot leave a permanent artefact in someone's world.
+
+--  Faster than WORK_INTERVAL on purpose. Dispatch changes between work ticks,
+--  and a marker that lags its task by five seconds is describing the past.
+local CROSSHAIR_INTERVAL = 0.5
+
+--  How long a marker may live before it is rebuilt.
+--
+--  THIS IS RENEWAL, NOT THE LIFECYCLE, and at 2.0 it was neither. The
+--  projectile's timeToLive was three seconds, so every marker on the map was
+--  destroyed and rebuilt every two -- roughly thirty times a minute for a drop
+--  nobody had touched, each rebuild leaving a predecessor behind for the cull
+--  to clear. The log made it obvious in hindsight: the same drop, the same
+--  state, the same position, respawning on a metronome.
+--
+--  With the projectile's TTL raised to thirty seconds, this only has to beat
+--  that. Twenty leaves ten seconds of margin and turns a constant churn into
+--  something that happens roughly once per marker per twenty seconds.
+--
+--  MUST STAY BELOW THE PROJECTILE'S timeToLive. If it ever exceeds it, markers
+--  wink out and reappear on their own, which reads as the network losing track
+--  of the item.
+local CROSSHAIR_REFRESH = 20.0
+
+--  DEFAULTS ONLY. Overridden per unit by petData.crosshairColors, so an
+--  accessibility or preference interface can rewrite them per unit without
+--  touching the mod -- colourblind players should not be stuck with red versus
+--  green carrying the load.
+--
+--  RRGGBBAA, fed to "?multiply=" against a white sprite with a black outline:
+--  white takes the colour, black stays black.
+local CROSSHAIR_COLORS = {
+  --  Dispatched. The unit has been given this target.
+  routing = "ffd23fff",
+
+  --  The unit found a route and is walking it. Set by the unit's
+  --  petports_taskProgress message once it has actually covered ground -- see
+  --  TASK_MOVING_DISTANCE in petportsTaskAction.lua for why movement is the
+  --  signal rather than the pather's internal state.
+  enroute = "5fd35fff",
+
+  --  Could not get there from here.
+  unroutable = "e04b4bff",
+
+  --  Could get there, could not do the job -- no room, nothing accepts it.
+  blocked = "ef8b3cff",
+
+  --  In coverage, nobody has claimed it. The network can see it and has not got
+  --  to it yet, which is a different and much commoner statement than any of
+  --  the above -- and the one that answers "does the fleet even know this is
+  --  here" while a unit is busy elsewhere.
+  --
+  --  Deliberately the dullest colour in the set. It is on screen the most, and
+  --  a marker that competes with the ones that mean something would make all of
+  --  them easier to ignore.
+  unclaimed = "9aa0a6ff"
+}
+
+local CROSSHAIR_PROJECTILE = {
+  routing = "petports_crosshair",
+  enroute = "petports_crosshair",
+  unroutable = "petports_crosshair_failed",
+  blocked = "petports_crosshair_warn",
+  unclaimed = "petports_crosshair"
+}
+
+--  WHICH STATE OUTRANKS WHICH, when two ports both have an opinion about one
+--  drop.
+--
+--  MEASURED: three ports covering one unreachable item drew grey, yellow and
+--  red simultaneously, stacked on the same tile. Every port has its own view --
+--  one dispatched it, one backed off from it, one had never touched it -- and
+--  every view was correct from where it stood. The marker is a statement about
+--  the NETWORK, so exactly one of them may speak.
+--
+--  Ordered by how much the player needs to know it. Being worked on beats a
+--  failure, because it supersedes it; a failure beats a blockage, because it is
+--  more specific; anything beats "nobody has got to it".
+local CROSSHAIR_PRIORITY = {
+  routing = 4,
+  enroute = 4,
+  unroutable = 3,
+  blocked = 2,
+  unclaimed = 1
+}
+
+--  Marker ownership rides the ordinary claim registry, which already has
+--  expiry, sweeping and cross-port visibility. A separate mechanism would be a
+--  second thing to keep in sync for no gain.
+local function crosshairClaimId(dropId)
+  return "mark:" .. tostring(dropId)
+end
+
+--  Long enough that renewals are rare, short enough that a port which dies
+--  mid-task frees its markers quickly.
+--
+--  RENEWED LAZILY, NOT EVERY PASS, and the cost is the reason. Every
+--  petports_claimRefresh writes the whole claim registry to a world property --
+--  fine for a handful of long-lived work claims, and not fine for a marker per
+--  drop refreshed twice a second. A spill of twenty drops across three ports
+--  would have been a hundred and twenty registry writes a second to keep
+--  cosmetics alive.
+--
+--  Renewing only in the last stretch before expiry brings that to roughly one
+--  write per marker per two and a half seconds, and nothing observable changes:
+--  the claim's job is to answer "is someone else already drawing this", and it
+--  answers identically either way.
+local CROSSHAIR_CLAIM_TTL = 4.0
+local CROSSHAIR_CLAIM_RENEW = 1.5
+
+--  May this port draw the marker for this drop, in this state?
+--
+--  STEALS FROM A LOWER-PRIORITY HOLDER, which is what makes the priority table
+--  above mean anything. petports_claimTake refuses outright when someone else
+--  holds a live claim, so outranking it means releasing first --
+--  petports_claimRelease with a nil owner releases regardless of who holds it.
+local function crosshairClaim(dropId, state)
+  local claimId = crosshairClaimId(dropId)
+  local existing = petports_claimGet(claimId)
+  local mine = existing ~= nil and existing.owner == stationUniqueId()
+
+  if mine then
+    if (existing.expires or 0) - world.time() < CROSSHAIR_CLAIM_RENEW then
+      petports_claimRefresh(claimId, stationUniqueId(), CROSSHAIR_CLAIM_TTL)
+    end
+
+    return true
+  end
+
+  if existing ~= nil and (existing.expires or 0) > world.time() then
+    local theirs = CROSSHAIR_PRIORITY[existing.type] or 0
+    local ours = CROSSHAIR_PRIORITY[state] or 0
+
+    --  STRICTLY GREATER. Equal priority leaves the incumbent alone, so two
+    --  ports both seeing "unclaimed" do not trade the marker back and forth
+    --  every half second.
+    if ours <= theirs then return false end
+
+    sb.logInfo("PETPORT %s crosshair for drop %s: taking over from %s (%s beats %s)",
+      stationUniqueId(), sb.printJson(dropId), tostring(existing.owner),
+      tostring(state), tostring(existing.type))
+
+    petports_claimRelease(claimId, nil)
+  end
+
+  return petports_claimTake(claimId, stationUniqueId(), nil, state,
+    world.entityPosition(dropId), CROSSHAIR_CLAIM_TTL)
+end
+
+local function crosshairRelease(dropId)
+  petports_claimRelease(crosshairClaimId(dropId), stationUniqueId())
+end
+
+local function crosshairColor(state)
+  local overrides = self.petData ~= nil and self.petData.crosshairColors or nil
+
+  if type(overrides) == "table" and type(overrides[state]) == "string" then
+    return overrides[state]
+  end
+
+  return CROSSHAIR_COLORS[state]
+end
+
+--  What SHOULD be marked right now, as { [dropId] = state }.
+--
+--  ONLY DROPS. Crates and machines are objects a player can already see and
+--  reason about; a drop on the ground is the thing that looks ignored.
+--  Every drop in network coverage.
+--
+--  QUERIED HERE RATHER THAN REUSED FROM collectionWork, which only runs when the
+--  unit is free. Markers have to keep telling the truth while the unit is busy
+--  ferrying something else -- that is precisely when a player wonders whether
+--  the fleet has noticed a pile at all.
+--
+--  Same rects and same includedTypes as collectionWork, so the two cannot
+--  disagree about what is in range.
+local function crosshairDrops()
+  local rects = self.networkRects
+  if rects == nil or #rects == 0 then return {} end
+
+  local drops = {}
+  local seen = {}
+
+  for _, area in ipairs(rects) do
+    local found = world.entityQuery({ area[1], area[2] }, { area[3], area[4] }, {
+      includedTypes = { "itemDrop" }
+    })
+
+    for _, dropId in ipairs(found or {}) do
+      if not seen[dropId] then
+        seen[dropId] = true
+        table.insert(drops, dropId)
+      end
+    end
+  end
+
+  return drops
+end
+
+--  Will any deposit crate take this item, right now?
+--
+--  PER ITEM, NOT PER LOAD, AND THAT DISTINCTION IS THE WHOLE FIX.
+--
+--  The blocked marker used to key off storageWouldTakeAny, which asks whether
+--  storage will accept THE UNIT'S CURRENT CARGO. That made every drop in
+--  coverage change colour together every time a unit picked something up or put
+--  it down -- measured at 143 blocked against 81 unclaimed spawns in one
+--  session, with single drops respawning eighteen times. The field strobed, and
+--  none of it was about the drops.
+--
+--  world.itemDropItem gives the drop's own descriptor, so each marker can now
+--  answer for the item it is actually sitting on. A drop of something no crate
+--  wants stays orange while a drop of something storable stays grey, regardless
+--  of what any unit happens to be carrying.
+--
+--  CACHED PER PASS, BY NAME. A spill is many drops of few names, so this is a
+--  handful of filter checks rather than one per drop -- and the cache lives for
+--  a single pass, because room changes between them.
+local function crosshairStorable(dropId, cache)
+  local ok, descriptor = pcall(world.itemDropItem, dropId)
+
+  if not ok or type(descriptor) ~= "table" or type(descriptor.name) ~= "string" then
+    --  UNREADABLE IS TREATED AS STORABLE, so a drop we cannot identify shows
+    --  the quiet marker rather than the alarming one. Guessing wrong towards
+    --  grey means a missing warning; guessing wrong towards orange means
+    --  crying wolf on every drop in the base.
+    return true
+  end
+
+  if cache[descriptor.name] ~= nil then return cache[descriptor.name] end
+
+  local storable = false
+
+  for _, beacon in ipairs(petports_beaconsFor("deposit")) do
+    if world.entityExists(beacon.id)
+       and petports_filterAccepts(beacon.filter, descriptor.name) then
+
+      --  nil means the engine will not answer, read as YES for the same reason
+      --  as above: the quiet marker is the safer guess.
+      local fits = world.containerItemsCanFit ~= nil
+        and world.containerItemsCanFit(beacon.id, descriptor) or nil
+
+      if fits == nil or fits > 0 then
+        storable = true
+        break
+      end
+    end
+  end
+
+  cache[descriptor.name] = storable
+
+  return storable
+end
+
+local function crosshairWanted()
+  local wanted = {}
+
+  --  The live task, if it is a collection.
+  --
+  --  No "enroute" yet -- see CROSSHAIR_COLORS.enroute. Everything dispatched
+  --  shows as routing, which still answers the question the marker exists for.
+  if self.task ~= nil and self.task.type == "collect" and self.task.target ~= nil then
+    --  ROUTING UNTIL THE UNIT HAS ACTUALLY COVERED GROUND, then ENROUTE.
+    --
+    --  Yellow means "a unit has been given this and is working out how to get
+    --  there"; green means "it found a way and is walking it". The distinction
+    --  matters most exactly where it is hardest to see -- a unit that
+    --  vent-routes vanishes, and a green marker says the disappearance is
+    --  progress rather than the network having lost interest.
+    --
+    --  self.taskMoving is set by the unit's progress message and cleared with
+    --  every new task, so it can only ever describe the task in hand.
+    wanted[self.task.target] = self.taskMoving and "enroute" or "routing"
+  end
+
+  --  Anything currently backed off. These OUTLIVE the task that produced them,
+  --  which is the whole point: a failure the player never sees is a failure
+  --  they cannot fix. They persist until the backoff expires or the drop is
+  --  gone, and are overwritten above if the drop gets dispatched again.
+  for taskId, record in pairs(self.workFailures or {}) do
+    local dropId = string.match(taskId, "^drop:(%d+)$")
+
+    if dropId ~= nil and (record["until"] or 0) > world.time() then
+      dropId = tonumber(dropId)
+
+      if wanted[dropId] == nil then
+        wanted[dropId] = record.unroutable and "unroutable" or "blocked"
+      end
+    end
+  end
+
+  --  EVERYTHING ELSE IN COVERAGE, AT THE BOTTOM OF THE PRIORITY ORDER, so a
+  --  drop that is dispatched or backed off keeps the more specific marker it
+  --  already earned above.
+  --  One pass, one cache. See crosshairStorable.
+  local storable = {}
+
+  for _, dropId in ipairs(crosshairDrops()) do
+    if wanted[dropId] == nil then
+      local claim = petports_claimGet("drop:" .. dropId)
+      local mine = claim == nil
+        or claim.owner == stationUniqueId()
+        or (claim.expires or 0) <= world.time()
+
+      if not mine then
+        --  ANOTHER PORT'S CLAIM DRAWS NOTHING HERE. That port is marking it,
+        --  and two markers on one drop would stack and read as a brighter
+        --  colour rather than as two ports agreeing.
+        wanted[dropId] = nil
+
+      elseif not crosshairStorable(dropId, storable) then
+        --  ORANGE: reachable, and nothing will take it.
+        --
+        --  Answered per item now. It was keyed off failed drop tasks first --
+        --  which almost never happens, since collecting rarely fails once the
+        --  unit can reach the drop -- and then off the unit's cargo, which made
+        --  every drop in coverage flip whenever the unit's hands changed.
+        wanted[dropId] = "blocked"
+
+      else
+        wanted[dropId] = "unclaimed"
+      end
+    end
+  end
+
+  return wanted
+end
+
+local function crosshairKill(marker)
+  if marker == nil or marker.id == nil then return end
+
+  if world.entityExists(marker.id) then
+    world.sendEntityMessage(marker.id, "kill")
+  end
+end
+
+--  How far a drop may drift from its marker before the marker is repositioned.
+--
+--  A PROJECTILE CAN BE MOVED -- see the "move" handler in
+--  petports_crosshair.lua, and vanilla's controlprojectile, which repositions a
+--  whole set of them every tick. An earlier version of this killed and
+--  respawned instead, which costs a spawn per move and blanks the marker for a
+--  frame.
+--
+--  Half a tile is tight enough that a marker never visibly lags the item, and
+--  loose enough that a settling drop is not messaged every pass.
+local CROSSHAIR_DRIFT = 0.5
+
+--  How long a marker must hold a state before it may show a different one.
+--
+--  THE UNDERLYING FLAPPING IS REAL, and not a bug to fix here. An unreachable
+--  drop genuinely cycles: a port dispatches it, the unit fails to route, the
+--  port backs off, the backoff expires, another port tries. Measured at
+--  thirty-four state changes on a single item across one session.
+--
+--  Rendering every one of those faithfully produces a strobe, which conveys
+--  less than either colour would on its own -- and with retire-on-one-pass,
+--  replace-on-the-next, half of them would be gaps. A marker is for a human
+--  reading it at a glance, so it changes at a speed a human can read.
+--
+--  DELIBERATELY NOT A FIX FOR THE CYCLE ITSELF. The dispatch-fail-backoff loop
+--  is correct behaviour and the log records it in full; this only governs how
+--  often the cosmetic redraws.
+local CROSSHAIR_DWELL = 1.5
+
+local function crosshairRefresh(dt)
+  self.crosshairs = self.crosshairs or {}
+
+  self.crosshairTimer = (self.crosshairTimer or 0) - dt
+  if self.crosshairTimer > 0 then return end
+  self.crosshairTimer = CROSSHAIR_INTERVAL
+
+  local wanted = crosshairWanted()
+
+  --  RETIRE FIRST, so a state change never shows two markers at once on one
+  --  drop -- the old colour would sit on top of the new one for a frame.
+  for dropId, marker in pairs(self.crosshairs) do
+    --  FOLLOW, RATHER THAN REPLACE. A drop that is still settling moves; the
+    --  marker follows it with a message and keeps its identity.
+    if marker.position ~= nil and world.entityExists(dropId)
+       and world.entityExists(marker.id) then
+
+      local at = world.entityPosition(dropId)
+
+      if world.magnitude(at, marker.position) > CROSSHAIR_DRIFT then
+        world.sendEntityMessage(marker.id, "move", at)
+
+        sb.logInfo("PETPORT %s crosshair MOVE %s (%s) from %s to %s",
+          stationUniqueId(), sb.printJson(marker.id), tostring(marker.state),
+          sb.printJson(marker.position), sb.printJson(at))
+
+        marker.position = at
+      end
+    end
+
+    --  A state that changed too recently to redraw is held, not retired. The
+    --  marker keeps showing the older state until the dwell elapses.
+    local settling = wanted[dropId] ~= nil
+      and wanted[dropId] ~= marker.state
+      and (world.time() - (marker.since or 0)) < CROSSHAIR_DWELL
+
+    local keep = wanted[dropId] ~= nil
+      and (wanted[dropId] == marker.state or settling)
+      and world.entityExists(dropId)
+      and world.entityExists(marker.id)
+
+    if not keep then
+      crosshairKill(marker)
+      crosshairRelease(dropId)
+      self.crosshairs[dropId] = nil
+    end
+  end
+
+  for dropId, state in pairs(wanted) do
+    local marker = self.crosshairs[dropId]
+
+    --  A drop that has been collected or despawned takes its marker with it.
+    --
+    --  ONE MARKER PER DROP, ACROSS THE WHOLE NETWORK, and this is only half of
+    --  it: the claim settles WHICH PORT SPEAKS for a drop, so the colour is not
+    --  simply whichever port redrew last. The markers themselves enforce that
+    --  only one exists -- see petportsItem below and the cull in
+    --  petports_crosshair.lua.
+    --
+    --  Two mechanisms because they answer different questions. Without the
+    --  claim, three ports produced grey, yellow and red on one tile, each
+    --  correct from where it stood. Without the cull, nothing makes the
+    --  invariant true rather than merely intended.
+    if world.entityExists(dropId) and crosshairClaim(dropId, state) then
+      local due = marker == nil or (marker.refresh or 0) <= world.time()
+
+      if due then
+        crosshairKill(marker)
+
+        local at = world.entityPosition(dropId)
+
+        local ok, id = pcall(world.spawnProjectile,
+          CROSSHAIR_PROJECTILE[state],
+          at,
+
+          --  NO SOURCE ENTITY. Attributing a harmless marker to the port would
+          --  make it the port's projectile for damage-team purposes, and a
+          --  marker should belong to nobody.
+          nil,
+          { 0, 0 },
+          false,
+          {
+            processing = "?multiply=" .. crosshairColor(state),
+
+            --  WHAT THIS MARKER IS FOR, so it can evict any predecessor on the
+            --  same item and identify itself to its own successor. Without it
+            --  a marker cannot cull or be culled -- see petports_crosshair.lua,
+            --  which enforces one-marker-per-item by construction rather than
+            --  relying on this side getting the bookkeeping right.
+            petportsItem = dropId
+          })
+
+        --  KEPT, AND NOT TEMPORARY AFTER ALL. This was added to chase a red
+        --  marker sitting off-centre from the yellow it replaced, and it
+        --  answered a different question instead: two ports spawning markers
+        --  for the SAME drop at the SAME position, microseconds apart. What
+        --  looked like one misplaced marker was two stacked ones.
+        --
+        --  That is worth keeping visible while the claim arbitration above is
+        --  young: a second port spawning for a drop this port already marks
+        --  means the claim is not holding.
+        sb.logInfo("PETPORT %s crosshair SPAWN %s for drop %s at %s (previous %s)",
+          stationUniqueId(), tostring(state), sb.printJson(dropId),
+          sb.printJson(at),
+          marker ~= nil and sb.printJson(marker.position) or "none")
+
+        if ok and id ~= nil then
+          self.crosshairs[dropId] = {
+            id = id,
+            state = state,
+
+            --  Where it was PUT, so drift is measured against the marker rather
+            --  than against the drop's position last pass. A projectile cannot
+            --  be moved, so this is the only record of where the thing actually
+            --  is on screen.
+            position = at,
+
+            --  When this state started showing. The dwell is measured from
+            --  here, so a marker that has just changed cannot change again
+            --  immediately.
+            since = world.time(),
+            refresh = world.time() + CROSSHAIR_REFRESH
+          }
+        else
+          --  Loud once per drop rather than every half second. A cosmetic that
+          --  cannot spawn is not worth spamming over, but it IS worth knowing
+          --  about -- silence here would look like the feature was never wired.
+          if self.crosshairs[dropId] ~= nil or not self.crosshairFailed then
+            self.crosshairFailed = true
+            sb.logError("PETPORT %s could not spawn a %s crosshair at %s: %s",
+              stationUniqueId(), tostring(CROSSHAIR_PROJECTILE[state]),
+              sb.printJson(world.entityPosition(dropId)), tostring(id))
+          end
+
+          self.crosshairs[dropId] = nil
+        end
+      end
+    end
+  end
+end
+
+--  Retire every marker. Called when the port stops caring -- unit gone, port
+--  broken, world unloading -- so the last thing a player sees is not a
+--  crosshair over a drop nothing is coming for.
+--  Assigned, not declared -- the name is forward-declared near the top so uninit
+--  can reach it.
+crosshairClear = function()
+  for dropId, marker in pairs(self.crosshairs or {}) do
+    crosshairKill(marker)
+    crosshairRelease(dropId)
+    self.crosshairs[dropId] = nil
+  end
 end
 
 local function workUpdate(dt)
@@ -6884,6 +7656,14 @@ function update(dt)
     ensureResidency()
     publishRegistry()
   end
+
+  --  MARKERS RUN ON THEIR OWN TIMER, from update rather than workUpdate.
+  --
+  --  workUpdate fires on WORK_INTERVAL, and dispatch changes between those
+  --  ticks -- a marker refreshed on the work timer would spend most of its life
+  --  describing the previous task. It has its own, faster interval and gates
+  --  itself internally.
+  crosshairRefresh(dt)
 
   local item = socketedItem()
 

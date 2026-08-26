@@ -8,6 +8,40 @@
   "shortdescription" : "Utility Unit",
   "itemTags" : [ "petports", "petports_unit", "petports_no_upcycling" ],
 
+  //  CROSSHAIR COLOURS, PER UNIT.
+  //
+  //  The port reads these off the unit's ITEM PARAMETERS -- petData.crosshairColors
+  //  -- and falls back to its own defaults when absent, so this block is both
+  //  the documentation of the shape and the thing a future modification
+  //  interface would rewrite.
+  //
+  //  PER UNIT RATHER THAN GLOBAL, deliberately. Red-versus-green carries real
+  //  meaning here, and a player who cannot distinguish them should be able to
+  //  change it without editing the mod. Per unit also means a fleet can be
+  //  colour-coded by owner if someone wants that.
+  //
+  //  RRGGBBAA, applied as "?multiply=" against a white sprite with a black
+  //  outline: white takes the colour, the outline stays black.
+  //
+  //    routing     dispatched, unit heading for it
+  //    enroute     route found and being walked. The unit reports movement
+  //                once it has genuinely covered ground, so this is the colour
+  //                that says a vanished vent-routing unit is making progress
+  //                rather than having lost interest.
+  //    unroutable  cannot get there from here
+  //    blocked     can get there, cannot do the job -- no room, nothing accepts
+  //    unclaimed   in coverage, nobody has claimed it yet. On screen far more
+  //                than the others, so it is deliberately the dullest: a marker
+  //                that competes with the ones that mean something makes all of
+  //                them easier to ignore.
+  "crosshairColors" : {
+    "routing" : "ffd23fff",
+    "enroute" : "5fd35fff",
+    "unroutable" : "e04b4bff",
+    "blocked" : "ef8b3cff",
+    "unclaimed" : "9aa0a6ff"
+  },
+
   //  Not stackable: each unit carries its own saved state in parameters below.
   "maxStack" : 1,
 

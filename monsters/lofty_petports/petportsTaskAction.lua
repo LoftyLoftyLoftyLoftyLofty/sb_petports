@@ -1651,6 +1651,18 @@ end
 --  issued.
 --  `cargo` is an item descriptor the unit is handing over, or nil. Only a
 --  successful pickup passes one.
+--  How far a unit must travel before it is reported as under way.
+--
+--  NOT ZERO. A unit jostled by another, or settling onto the ground on the
+--  first tick, moves a little without having gone anywhere -- and a marker that
+--  turns green and then sits still for twenty seconds while A* grinds is worse
+--  than one that stayed yellow, because it asserts progress that is not
+--  happening.
+--
+--  Two tiles is far enough to be deliberate and close enough that the colour
+--  changes while the player is still watching.
+local TASK_MOVING_DISTANCE = 2.0
+
 local function report(stateData, outcome, reason, cargo)
   local task = stateData.task
 
@@ -2746,6 +2758,40 @@ function petportsTaskAction.update(dt, stateData)
       local here = mcontroller.position()
       stateData.movedTotal = stateData.movedTotal + world.magnitude(here, stateData.lastPosition)
       stateData.lastPosition = here
+
+      --  TELL THE PORT WE ARE ACTUALLY UNDER WAY.
+      --
+      --  The port knows only two things about a task: that it dispatched one,
+      --  and how it ended. Both crosshair colours it could derive from that --
+      --  yellow on dispatch, red on failure -- so a unit still searching for a
+      --  route and a unit halfway there looked identical from outside. Green
+      --  was declared in the palette and unset because there was nothing to
+      --  key it off.
+      --
+      --  MOVEMENT IS THE SIGNAL, NOT THE PATHER'S INTERNAL STATE. "Has a path"
+      --  is genuinely hard to answer here -- PathFinder does not latch, a plan
+      --  can span several vent legs, and routing flips true and false several
+      --  times over one journey. Distance covered has none of that ambiguity:
+      --  a unit that has moved is a unit that found a way.
+      --
+      --  ONCE PER TASK, on the existing one-second trace timer. This costs one
+      --  message per task, not one per tick, and it is fire-and-forget -- the
+      --  port either updates a cosmetic or it does not.
+      if not stateData.reportedMoving
+         and (stateData.movedTotal or 0) > TASK_MOVING_DISTANCE
+         and stateData.task ~= nil and stateData.task.port ~= nil then
+
+        stateData.reportedMoving = true
+
+        sb.logInfo("UNIT under way for %s after %s tile(s)",
+          tostring(stateData.task.id), sb.printJson(stateData.movedTotal))
+
+        world.sendEntityMessage(stateData.task.port, "petports_taskProgress", {
+          id = stateData.task.id,
+          phase = "moving",
+          unit = entity.uniqueId()
+        })
+      end
 
       if TASK_DEBUG then
         --  self.approachPosition is groundPet.lua's cache. approachPoint only
