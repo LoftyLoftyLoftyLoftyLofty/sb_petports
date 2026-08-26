@@ -146,5 +146,28 @@
 
 	//  How often banked points are mirrored into a parameter so they survive
 	//  the machine being mined. Change-gated, so an idle machine writes nothing.
-	"petports_pointsFlushInterval" : 5.0
+	"petports_pointsFlushInterval" : 5.0,
+
+	//  NOTHING IN THIS MACHINE SPOILS, AND THE ZERO IS DELIBERATE.
+	//
+	//  Prepared dishes are reagents, and they are the ONLY reagents weighted at
+	//  8 without being one of the six augment materials. That is justified by
+	//  them costing player effort and barely stacking, since food decays -- a
+	//  reagent that rots in a crate is self-limiting with no rule saying so.
+	//
+	//  THAT ARGUMENT IS ABOUT THE PLAYER'S STORAGE, NOT THIS SLOT. A dish
+	//  decaying in the reagent slot part way through a batch would end a flavor
+	//  run early, and there is nothing to distinguish that from the batch
+	//  counter being wrong -- a silent, intermittent bug in the one mechanic
+	//  the player cannot see the internals of. Zeroing it here keeps decay
+	//  where it does design work and removes it where it only produces
+	//  confusion.
+	//
+	//  It also covers the input and output slots, which is harmless: a Pet
+	//  Treat does not spoil and anything on its way to becoming one is about
+	//  to stop existing.
+	//
+	//  NOT MENTIONED TO PLAYERS anywhere in the description. It reads as the
+	//  machine simply working, which is the right amount of attention for it.
+	"itemAgeMultiplier" : 0.0
 }
