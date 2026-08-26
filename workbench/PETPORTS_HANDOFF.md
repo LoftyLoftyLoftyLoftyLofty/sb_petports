@@ -10,235 +10,95 @@ the encounter/quest loop that unit items drop from. This mod is the machinery.
 
 ## Current state
 
-**Working, verified in game.** The petport places, opens, and spawns a unit when
-a unit item is socketed. The unit persists, survives world reload, and its state
-round-trips through the item — resource levels continue where they left off and
-known players survive. Unsocketing despawns it. Socket-cycling does not leak
-units. Placement validation is live: a unit that gets sleepy in a doorway walks
-clear of it and sleeps beside it, centred in a single-tile gap.
+Read this section first and trust nothing else in the document about what is
+built. Everything below it is reasoning and traps, which age well; this section
+is the part that rots, and it is rewritten at the end of every session.
 
-**Filters sort, and storage defragments itself.** Deposit beacons route items to
-the right crate by tag and category. Eviction is built on the same predicate:
-anything in a crate that fails that crate's own filter is a misfit and gets
-hauled to one that wants it. Auto-disperse falls out for free — a dropbox is
-just a beacon whose filter accepts nothing, so everything in it is a misfit. A
-misfit is never moved unless somewhere both accepts it AND has room, so full
-storage postpones tidying rather than parking a unit with an unplaceable stack.
+**The core loop works and is verified in game.** A petport places, opens, spawns
+a unit from a socketed item, and the unit's state round-trips through that item
+across despawn, world reload and being carried to another world. Placement
+validation, leashing, recall and re-home are all live. Multi-hop vent routing
+works end to end.
 
-**RESTOCK BEACONS ARE BUILT AND VERIFIED, INCLUDING COMPOUND CRATES.** A restock
-beacon names a LIST of items, each with its own min and max, and units keep that
-crate stocked out of the network's ordinary storage. Verified end to end: fetch
-from a deposit crate, deliver, evict overstock, evict anything unrequested, and
-several requests in one crate all serviced. See "Restock beacons — built".
+**Sorting, tidying and compaction are built.** Deposit beacons route by tag and
+category; eviction runs on the same predicate, so a misfit is anything failing
+its own crate's filter; auto-disperse falls out for free. A misfit only moves
+when somewhere both accepts it and has room. Storage compacts itself, bucketed
+by PARAMETERS so two different music sheets do not merge.
 
-**Storage compacts itself.** One item spread across more slots than it needs is
-merged, both after every port-side container mutation (free — the unit is already
-standing there) and by a dedicated bottom-priority walk for crates nothing else
-visits. Split stacks are bucketed by PARAMETERS, so two copies of one Betabound
-music sheet merge and two different songs do not.
+**Restock beacons are built and verified**, including several requests in one
+crate: fetch, deliver, evict overstock, evict anything unrequested.
 
-**Dropping through platforms works, by placement rather than by holding down.**
-The unit is positioned two pixels below the last platform its plan wants passed
-and falls from there. Six earlier builds tried to time a `controlDown` hold and
-none of them could have worked; see the traps section for why.
+**Farming is built and verified end to end** — discovery, harvest, collection,
+deposit, replant intents, seed withdrawal, replanting at arbitrary footprint,
+and watering of dry tilled soil, all surviving vent traversal both ways, with no
+sprinkler infrastructure. Animal harvesting is built. Animal produce is the only
+part of Task 2 still unspecified.
 
-**Beacons are `maxStack` 1.** They carry a filter, an on/off state and an icon,
-all per-instance. Mixed stacking cannot be expressed: `setInstanceValue(key, nil)`
-writes an explicit null rather than removing a key, and `setInventoryIcon` marks
-the descriptor permanently — so a beacon stops being blank the first time it is
-looked at. Stacking two configured beacons would silently merge two filters.
+**THE UPCYCLER IS BUILT AND VERIFIED END TO END.** This is what "a trash can" in
+older drafts became, and it is not a trash can — it converts surplus into pet
+fuel rather than destroying it. See "The upcycler" for the design and the
+reasoning behind every constraint.
 
-**Sorting is measured against the whole vanilla asset tree.** 29 groups, 193
-subgroups. Every colonyTag and every category on 2879 objects is claimed, and
-4931 of 4974 scanned items route somewhere. The manifest is keyed by id so mods
-patch by name rather than by index, and there is a written guide for them.
+- A machine object, not a beacon, with three slots: input, output, and a
+  reserved reagent slot. Rules are per ITEM NAME with a threshold each, authored
+  by dropping an item on a sample slot.
+- The port keeps a network-wide census of beaconed deposit storage, computed for
+  free inside the existing beacon scan.
+- Over-threshold cargo diverts to a machine ahead of ordinary storage; a drain
+  generator pulls existing over-quota stock out of crates; units haul finished
+  Pet Treats to any crate whose filter accepts them.
+- Nothing without a matching rule can ever reach it, and nothing carrying
+  `petports_no_upcycling` is ever converted.
 
-**The beacon pane is functional and ugly.** Rules add in one click, each rule row
-carries its own accept/deny checkbox and delete button, and selecting a rule
-swaps the lower panel to a grid of its subgroups where each tile is a checkbox.
-Tile art is placeholder. 19 groups and 177 subgroups behind it, all 98 vanilla
-categories covered.
+**Crosshair markers are built.** Every drop the network has an opinion about
+carries a marker: yellow dispatched, green under way, red unroutable, orange
+reachable-but-unstorable, grey seen-and-unclaimed. One marker per item is
+enforced by the markers themselves, and which port speaks for a drop is settled
+through the claim registry. Colours are per-unit configurable.
 
-**Vents link and report it.** One wire links a pair both ways, confirmed by log:
-vent A finds B through its OUTPUT node while B finds A through its INPUT node.
-The `linked` animation state fires. Two bugs were in the way — a stray patch
-hunk header on line 1 of the `.object` breaking JSON parse, and `collectIds`
-guessing wrong twice about the node-call return shape. Both are in the traps
-section.
+**Cargo top-up in the stall case.** A unit holding cargo it cannot deposit may
+collect more of the SAME item, capped at one `maxStack`. Capacity is counted in
+SLOTS, so a merge consumes none of it.
 
-**The diagnostic task runs end to end.** The petport scans its coverage rect,
-generates a standing point, takes a claim in `world.properties`, dispatches to
-its socketed unit, and the unit walks there, dwells, and reports done --
-releasing the claim. Eleven consecutive tasks completed clean across a 20-tile
-span. Interruption is covered: unsocketing mid-task releases the claim within
-the second, and a reload with a task in flight releases on `uninit` and resumes
-after.
+**Failure backoff is 1s, 2s, 5s, 10s, then 30s from there on.** Retuned this
+session; the old 10/30/120/600 punished transient blockages and abandoned items
+for ten minutes.
 
-**TASK 1 -- ITEM DROP COLLECTION WORKS.** The port sweeps its rect with
-`world.entityQuery` for itemDrops, skips anything under another owner's live
-claim, takes the nearest, and dispatches. The unit resolves a standing position
-near the drop, paths to it, calls `world.takeItemDrop`, and reports. The item is
-DESTROYED on pickup -- the testing sink. Verified on flat ground, up a platform
-staircase, and via a chained route across four platform hops at height.
-
-Getting there took untangling five separate pathfinding problems, all recorded
-in the traps section: the inverted `standingBoundBox`, the never-cleared
-`aStar`, `findGroundPosition`'s missing arguments, A* never reporting
-unreachable, and `exploreRate` starving on server-side fidelity.
-
-**Failure handling is real, not stubbed.** Unreachable work fails in seconds
-rather than hanging, and the port backs it off on an escalating schedule (10s,
-30s, 120s, 600s) so one stranded item cannot occupy the dispatch slot. Drops get
-a settle grace so a falling item is not mistaken for an unreachable one. A
-failure while the unit was OUTSIDE its rect does not count against the work --
-the unit's position was the problem, not the item.
-
-**NETWORKS AND UNION DISPATCH WORK.** Ports publish into a registry in
-`world.properties`, derive their own membership from it, and dispatch across the
-whole network's coverage. Verified: a unit from port 1 collected an item 8 tiles
-inside port 2's rect, with neither port ever messaging the other.
-
-**Units are leashed to their network, with recall and re-home behind it.** All
-three layers verified in game: an idle unit turns back at the network boundary
-on its own; a unit outside anyway is dispatched a walk home; a unit that cannot
-walk home -- knocked off a ledge with no route back -- is re-homed after two
-failed recalls, the whole escalation taking under 30 seconds. The re-home is a
-guarantee, not a normal path; a teleporting pet looks lazy and the first two
-layers exist to keep it rare.
-
-Confirmed separately that a unit ON TASK paths freely outside the network and
-returns inside when idle, which is the distinction the leash is built on.
-
-**Sleep is gated off, not fixed.** `strictPortTethering` in the monstertype
-disables wandering for robot units, and `petports_allowSleep` (default false)
-disables napping. The sleep gate is enforced in THREE places, because two of
-them are individually insufficient: `scoreAction` (score 0), `reactToObject` (a
-pethouse queues sleep by REACTION, not by score, so the score gate alone does
-not cover it), and `petportsSleepAction.enterWith`. The underlying cause is
-unchanged -- when the task state exits, `currentActionScore` resets to 0 and
-accumulated `sleepy` wins the gap -- so a biological unit that wants to nap will
-still need the dispatch-from-report-handler fix.
-
-(A second one is fixed: `enteringState` used to `emote("happy")` on every
-pickup, which at one task per five seconds was a permanent affection loop.
-Removed. Any acknowledgement of a new task belongs on a cooldown, or nowhere.)
-
-**MULTI-HOP VENT ROUTING WORKS END TO END.** Verified: a unit with no direct
-route planned a two-hop path, walked to the first vent, travelled, walked to the
-second, travelled again, and collected the item. Also verified taking a single
-hop and then walking the remainder.
-
-Cold-cache cost is the remaining weakness: the first plan from a given port
-spends roughly forty seconds probing, because every UNREACHABLE edge must
-exhaust A* to answer. Warm, plans resolve in milliseconds -- four edges resolved
-in under a second once known.
-
-**Visual debug exists.** `petports_drawRouteDebug` draws vent mouths coloured by
-cached reachability, teleport edges, the active probe, the planned route, and
-the pathfinder's actual computed edges coloured by move type. Gated behind
-`PETPORTS_DRAW_DEBUG`; visible with debug mode on.
-
-**BUILT since: cargo and deposit.** A unit keeps what it picks up and takes it
-to a crate. `world.takeItemDrop` returns a descriptor, the unit passes it back on
-its task report, and the port appends it to `petData.cargo` -- so it persists
-with the unit ITEM through despawn, reload and being carried to another world.
-Stacks merge on matching name AND parameters, which keeps two music sheets with
-different songs apart. Cargo is written through immediately rather than on
-WRITE_INTERVAL, because the world drop is already destroyed by then and the item
-exists only in the port's memory until the write lands.
-
-Crates declare themselves: a container holding an item whose config carries
-`petports_sortingBeaconBehavior` is a deposit target. See the beacons section.
-
-**BUILT since: crates answer for themselves.** `depositWork` asks
-`world.containerItemsCanFit` per carried stack rather than inferring fullness
-from a refusal, and `CONTAINER_FULL_BACKOFF` (60s) survives only as the fallback
-for when the engine will not answer. The bug that produced it is worth carrying
-into the filter work: the old path backed a container off wholesale the moment
-ANY stack bounced, so one steak needing a free slot diverted every stackable
-item in the load to a second crate. The refusal was about one descriptor and was
-applied to all of them.
-
-**BUILT since: the deposit beacon is a real item.**
-`petports_beacon_deposit.activeitem`, stackable, carrying its behaviour in its
-CONFIG rather than its parameters so every copy works. It is an activeitem
-purely so that "use it to configure it" has somewhere to live later; the script
-is a no-op stub, because an activeitem with no script errors on activation.
-
-**Animal harvesting is BUILT**: farm animals are discovered by reading
-`root.monsterParameters` for the TYPE, and harvested with one
-`world.callScriptedEntity` call that spawns the produce and resets the animal's
-own timer. See Task 2.
-
-**Farming is BUILT AND VERIFIED end to end**: discovery, harvest, drop
-collection, deposit, replant intents, seed withdrawal and replanting of crops of
-arbitrary footprint, and watering of dry tilled soil -- all of it surviving vent
-traversal in both directions. **The cycle runs with no sprinkler
-infrastructure.** Animal produce is the only piece of Task 2 still unspecified.
-
-**Still not built.** Docking, per-item routing, a trash can, and any notion
-of cargo capacity -- ANY cargo is treated as a full load, deliberately, and
-`findWork` orders deposit above collect so a loaded unit ferries before it
-gathers anything else. The participate/ID interface does not exist: networks
+**Still not built.** Docking. Cargo capacity as an actual stat (any cargo is
+treated as a full load, deliberately). The participate/ID interface — networks
 derive correctly, but nothing lets a player author a network id or opt a port
-out of auto-merge, so half the network design is unreachable from in game.
-Sorting and harvesting remain unstarted. Filter beacons, the active provider
-beacon and beacon on/off are specified but unbuilt -- see the beacons sections.
+out of auto-merge, so half the network design is unreachable from in game. The
+fuel system itself: Pet Treats exist and accumulate, and nothing consumes them
+yet. The reagent branch. The upcycler UI rebuild toward the mockup.
 
-The placement-time coverage preview IS built -- `petport_range_preview.png`
-stacked through `imageLayers` on both orientations -- and is due to be replaced
-outright rather than extended. See "Coverage visuals belong to the player, not
-the object".
+**ART.** Bespoke: the unit body and the petport, the latter in three
+independently animated components with a ten-frame door cycle aliased in reverse
+for closing. Placeholder: the vent (a flat tan box, deliberately two visually
+distinct frames so a silent linking failure and a working link cannot look
+alike), the upcycler, and Pet Treats (a flat pink square). The crosshair sprites
+are final.
 
-**Debug flags, currently ON.** `TASK_DEBUG` in `petportsTaskAction.lua`,
-`VENT_DEBUG` in `petports_petvent.lua`, `DEBUG` in `petports_petport.lua`. A
-verbose logging pass was added deliberately: per-drop dispatch verdicts with
-reasons, raw vent node reads labelled by direction, probe start/result/timeout
-with tick counts, cache hit vs miss, planRoute expansion, and both vent entry
-sites labelled distinctly. Two per-tick pathing lines (`pre-move` / `post-move`)
-bracket the mover and are the noisiest thing in the mod -- those come out once
-the mover work is finished; the rest should stay.
+The unit has no frames for any state except `run` — `default.frames` names
+`run.1`..`run.8` and nothing else, so every animation state resolves to the same
+eight frames. That is an art gap in one direction only, not placeholder art.
+
+**The monsterpart is still named `drone_placeholder`** — the file and the `name`
+field inside it. Renaming is free while there is exactly one variant and
+expensive once there are several, since which monsterpart a unit wears follows
+from its seed over the matching set. Same argument as the mod split: cheap now,
+not later.
+
+**Debug flags.** `TASK_DEBUG` in `petportsTaskAction.lua`, `VENT_DEBUG` in
+`petports_petvent.lua`, `DEBUG` in `petports_petport.lua` — all ON.
+`PETPORTS_FILTER_DEBUG` in `petports_filters.lua` is OFF and should stay off:
+it fires per cargo stack per candidate container and was measured at 89% of one
+session's entire log. Turn it on only to diagnose something sorting into the
+wrong crate.
 
 What stays on unconditionally regardless: dispatch, task outcome, dispatch
 rejection reasons, claim abandonment, claim expiry, and residency lifecycle.
-Those are the silent-nil guards and must not be flag-gated — see the traps
-section.
-
-Everything logs through `sb.logInfo` with `%s` ONLY. Star's logger implements
-its own formatter; `%.1f` raises "Improper lua log format specifier" at runtime,
-which is a crash in the middle of whatever you were diagnosing. Pre-format with
-`string.format` (ordinary Lua, no such limit) or `sb.printJson` and pass one
-string.
-
-**BESPOKE ART: the unit and the petport. Placeholder: the vent.**
-
-The unit has its own body — `body_0_lit.png` / `body_0_fullbright.png`, a 24x16
-grid of eight `run` frames, split across the world-lit and glow layers the
-monsterpart declares. No more borrowed pteropod sprites. What it does NOT have
-is any OTHER state's frames: `default.frames` names `run.1`..`run.8` and nothing
-else, so every state the animation declares resolves to the same eight frames.
-See "The drone is always running" — that is now an art gap in one direction
-only, not placeholder art.
-
-The petport has its own art in three independently animated components — hull,
-door and interior — each with a lit and a fullbright layer and each driven by
-its own stateType. The door cycle is TEN frames, authored once as `opening.1`
-..`opening.10` and aliased in reverse for `closing`, so one strip serves both
-directions. Plus a dedicated `petports_petporticon.png`. This is what
-`setHullAnimationStateIntent` and `setAnimationStateForAllHullComponents` in the
-object script exist to drive.
-
-The vent is still a flat tan box, turning red when linked — two visually
-distinct frames on a 16x16 grid, deliberately so that a silent linking failure
-and a working link do not look identical. Its `linked` state is one frame, with
-`cycle` and `mode` left in the `.animation` as a marker for where polish-phase
-frames go.
-
-**The monsterpart is still named `drone_placeholder`** — file, and the `name`
-field inside it — which no longer describes what it holds. Renaming is free
-while there is exactly one variant and expensive once there are several, since
-which monsterpart a unit wears follows from its seed over the matching set.
-Same argument as the mod split: cheap now, not later.
+Those are the silent-nil guards and must not be flag-gated.
 
 ## Layout
 
@@ -1013,6 +873,217 @@ every row's path, so with three rules the winner was whichever `pairs()` reached
 first and the X would have deleted an arbitrary rule.
 
 ---
+
+
+---
+
+### Traps found in the upcycler / crosshair session
+
+Everything below was measured, not reasoned. Several of these were latent in
+code that had been shipping for months.
+
+### `world.containerAddItems` SILENTLY DESTROYS ANYTHING PAST ONE STACK
+
+The worst bug found so far, and it was in code that had been shipping for
+months. Handed `{ dirtmaterial, count = 8497 }` into a crate with ten free
+slots, it filled ONE slot to `maxStack` and **returned no leftover**. From Lua
+the call looked like a complete success. 7,497 items ceased to exist.
+
+The guard for exactly this case was already there and never fired, because the
+engine reported nothing to guard against.
+
+Two routes reached it. Compaction handed the engine a whole bucket at once — one
+descriptor per parameter set, routinely several stacks' worth. And
+`receiveCargo` merges cargo stacks with NO maxStack cap by design, so three
+1,000-block pickups become one stack of 3,000 and `depositCargo` handed that
+over — the ordinary collect-and-file path.
+
+**Never call it directly.** Everything goes through `placeStack`, which loops at
+`maxStack` per call and returns what genuinely could not be placed. The one
+remaining raw call is the put-back in `takeFromSlot`, where the descriptor came
+out of one slot moments earlier and is stack-sized by construction.
+
+The tell was in the log and was misread as something else:
+
+```
+compacted 8497 dirtmaterial in 5: 10 slot(s), predicted 9
+dirtmaterial in 5 settled at 1 slot(s), not the 9 predicted
+```
+
+That second line is the prediction check, written to catch a `stackSizeOf` that
+was too LOW. It correctly reported an impossible packing, and its own comment
+invited reading it as a bad prediction. Compaction now counts what went in
+against what came out and logs an error if they disagree.
+
+### A container pane binds exactly TWO itemgrids
+
+`ContainerPane` registers callbacks for `itemGrid` and `itemGrid2` and binds
+those two to the container's item bag. Nothing else, by any spelling.
+
+- A grid named anything else, WITH callbacks supplied, constructs fine and draws
+  ZERO slots — silently, with nothing in the log. Only a screenshot shows it.
+- `itemGrid3`, with no callbacks, throws
+  `(WidgetParserException) Failed to find itemgrid callback named: 'itemGrid3'`
+  out of ContainerPane's constructor and takes the CLIENT down.
+
+Two grids is not two slots: a grid spans `dimensions` worth of slots from
+`slotOffset`, so the real constraint is TWO INDEPENDENTLY POSITIONED GROUPS.
+Vanilla's cropshipper covers 40 slots with two grids. For more than two groups,
+use `itemslot` proxies — `player.swapSlotItem` and `player.setSwapSlotItem` ARE
+available from a container pane script, verified by probe.
+
+### An itemgrid needs BOTH callbacks, and the right-click default is unreachable
+
+An itemgrid's `callback` defaults to its own widget name, and its
+`rightClickCallback` defaults to `<callback>.right`. Both are looked up at
+CONSTRUCTION and a missing one is a client crash.
+
+The dot is the trap: a declared callback must be reachable as a Lua global, and
+`reagentSlot.right` parses as an index into a table. **Any itemgrid a script
+supplies callbacks for must name both explicitly.** That is presumably why every
+vanilla container grid is called `itemGrid` and none of them are named anything
+descriptive.
+
+### A projectile's `renderLayer` is a map lookup, and an unknown key is FATAL
+
+Not ignored, not defaulted:
+
+```
+Could not read projectile '...', error: (MapException) Key 'Foreground' not
+found in Map::get()
+```
+
+The whole asset fails to load and every spawn of it fails, so the symptom is
+"the feature does nothing" several steps removed from the cause. `Foreground` is
+not in the vocabulary; `ForegroundEntity` is. Same shape as the itemgrid
+callback crash — a config string that must be in a vocabulary, with no forgiving
+path when it is not.
+
+### Textbox callbacks do not fire per keystroke — poll instead
+
+A `textbox` widget's `callback` does not fire as the player types. Measured: an
+entire editing session produced no callback line at all, while the field visibly
+accepted a backspace and then appeared stuck.
+
+`restockconfig` already ran the right way and it was not copied at first: poll
+`widget.getText` from `update`, and keep a `shownText` of every script-side
+write so the pane's own render does not read back as an edit and commit itself
+in a loop. The callback still has to EXIST — a textbox whose callback does not
+resolve throws at construction — so it is a stub.
+
+Two related rules for panes generally: repainting a list on every keystroke
+destroys focus, so edit ONE row rather than rebuilding; and an empty field is
+not zero — clearing "500" to type "250" passes through `""`, and committing that
+as 0 on a running machine is destructive.
+
+### `goto` does not exist — Starbound is Lua 5.1
+
+A `goto continue` idiom is a parse error at load. Use a positive condition
+wrapping the block instead. Scan for `goto` and `::label::` before shipping.
+
+### `world.itemDropItem(entityId)` exists and returns the full descriptor
+
+Count and parameters included. This is what makes per-item decisions about a
+drop possible BEFORE picking it up — the blocked/unclaimed marker split, and the
+cargo top-up merge test both depend on it.
+
+There is no way to read a drop's current AGE. Lifetime can be read and set; time
+elapsed cannot. Do not shadow it with a port-side first-seen table — distance is
+a good proxy for rescuable anyway, since a far drop is both likelier to expire
+and more expensive to reach.
+
+### Claims: exclusive for TAKES, per-port for PUTS
+
+A claim keyed `work:<id>` is exclusive across the whole network. One keyed
+`work:<id>@<portId>` is per-port, so several ports can hold it at once.
+
+**Takes must be exclusive.** The supply is finite, so a per-port key sends every
+port's unit after the same items and all but the first arrive to find them gone
+and eat a backoff. Measured: three ports each dispatched a unit across the base
+for the same THREE Pet Treats.
+
+**Puts are per-port.** `containerAddItems` and `containerPutItemsAt` give every
+arrival a truthful leftover, so several units genuinely can share a destination
+and serialising them would only reduce throughput.
+
+The exception that proves it: `upcycle` is a put and is nonetheless exclusive,
+because when a machine's ROOM is the scarce resource the sharing argument
+inverts.
+
+**Ordering decides preference; claims decide availability.** Trying to make
+ordering do both produced a real bug — see "Ranking by distance under scarcity"
+below.
+
+### `petports_claimRelease(workId, nil)` releases regardless of owner
+
+The owner check is `if ownerId ~= nil and claim.owner ~= ownerId`. Passing nil
+skips it. That is what makes priority stealing possible without a new API:
+`petports_claimTake` refuses outright when someone else holds a live claim, so
+outranking it means releasing first.
+
+`petports_claimRefresh` writes the ENTIRE claim registry to a world property on
+every call. Fine for a handful of long-lived work claims; not fine for anything
+per-item refreshed on a fast timer. Renew lazily, only near expiry.
+
+### Ranking by distance under scarcity starves the far machines
+
+A mistake worth recording because the reasoning sounded good. With storage full,
+deliveries to upcyclers become small, so ranking candidate machines by DISTANCE
+instead of room looked like the obvious optimisation — small trips, short walks.
+
+The result was worse than the problem: the two machines nearest the fleet stayed
+topped up with one- and two-item deliveries while the three furthest starved at
+maximum room.
+
+**Room IS delivery size.** A machine with a thousand free is a thousand-item
+trip. Trips were never small because of scarcity; they were small because the
+ranking kept choosing machines that could not accept anything. Sorting by room
+already sorts by trip value, and it is self-balancing for free.
+
+### Two projectiles spawned in the same tick can kill each other
+
+If projectiles cull duplicates by querying neighbours, the cull runs on the
+first UPDATE, not at spawn — so two created in the same tick both scan after
+both exist, each finds the other, and each kills it. Nothing is left.
+
+Spawn order is NOT a tie-break for this reason. Compare entity ids so the
+relation is antisymmetric, and make the comparison fail toward SURVIVAL: a
+duplicate is visible and gets cleaned up by the next spawn, where a mutual kill
+leaves nothing to notice the problem.
+
+Also: a radius query returns every projectile nearby, including other mods'.
+Only cull entities that ANSWER a "what are you marking" message with a matching
+id. Silence must mean leave it alone.
+
+### `timeToLive` becomes the lifecycle by accident if it is short
+
+A 3-second TTL on a marker meant the owner had to rebuild it every 2 seconds
+just to outrun expiry — thirty rebuilds a minute for something nobody had
+touched, each leaving a predecessor to clean up. The tell was the same object,
+same state, same position, respawning on a metronome.
+
+Make the TTL long enough that renewal is rare and treat it as the orphan
+backstop it is meant to be.
+
+### The census must count cargo in transit
+
+A census built from CONTAINER contents drops by exactly the amount a unit picks
+up. A network holding 6,000 of something reads as 5,000 while a unit carries the
+other 1,000 toward a machine — so a 5,000 threshold says "no longer surplus" and
+the unit walks the whole way there and carries it back.
+
+Any threshold test evaluated while a unit holds cargo must add the carried stack
+back. And deliver only the SURPLUS portion rather than all-or-nothing: a unit
+carrying 1,000 into a network 400 over its threshold delivers 400 and keeps 600.
+
+### An empty collection is not the same as a negative answer
+
+`storageWouldTakeAny()` iterated the unit's cargo and returned false when there
+was none — so an empty unit read as "storage will not take it". Every drop in
+coverage triaged to the alarming marker instead of the quiet one.
+
+Generic form: when a predicate loops over a collection to find a positive, decide
+deliberately what the EMPTY collection means. It is rarely the same as "no".
 
 ## Two diagnoses that were wrong, and what gave them away
 
@@ -4779,112 +4850,70 @@ matching when someone rewords a log line.
 
 ## Where this goes next
 
-**Two small open items on the restock beacon.**
+Ordered by what a fresh session could pick up cleanly. Nothing here is blocking
+anything else.
 
-An `itemslot` inside the request list's `listTemplate`, to show each request's
-icon. UNVERIFIED whether one can be constructed there, and the failure shape is
-`addListItem` throwing at construction — the pane does not open at all. Worth
-trying STANDALONE rather than bundled with anything, so a failed experiment costs
-one file revert instead of blocking a feature. It is one widget in the template
-plus one `widget.setItemSlotItem(path .. ".rowIcon", { name = ..., count = 1 })`
-in `refreshRequests`.
+**The upcycler UI rebuild.** There is a mockup: a schematic layout with the
+input feeding a progress bar, the reagent entering from the side, the output off
+to the right, a rule list down the left and an explanation panel below. Roughly
+530x370 against the current 337x274, so it needs a new background splice on
+whole 19px periods.
 
-Making the player SAY the hotbar-only refusal instead of opening a notice pane.
-`entity.say` belongs to monsters and NPCs; an activeitem has no `player` table at
-all, and no channel reachable from a ScriptPane has been verified. The notice
-pane is species-keyed via `player.species()` against `hotbarOnlyMessage` and
-works, so this is polish.
+Two things to know before starting. A container pane binds exactly TWO
+itemgrids, so a schematic layout needs `itemslot` proxies instead — the mech
+assembly station's pattern, and `player.swapSlotItem` is confirmed available
+from a container pane script. And `ContainerPane` overwrites the title and
+subtitle from the object's `shortdescription` and `category`, so the header
+currently reads "Upcycler / Crafting Station" and the `title` widget is ignored.
 
-**A TRASH CAN is the next feature-sized piece of work, and it is designed only.**
-Restock beacons are built; see the section under Cargo, beacons and deposit.
+**The reagent branch.** Slot 2 exists and is unused. The idea is brewing-style:
+a scorched core in the reagent slot turns plain Pet Treats into Spicy ones, with
+unit preferences running on flavour rather than on individual item names.
 
-The shape, and the reasoning that has to survive into the implementation:
+The decision worth making BEFORE anything else here is whether a flavour is a
+distinct item NAME or a parameter on one item. Names cost a file each but let
+the existing filter system route spicy into one crate and sweet into another,
+and the polymorphic display-name table already handles anything awkward. A
+parameter would make the census sum all flavours as one item, which is right for
+rules and wrong for storage. Cheap to decide now, a migration later.
 
-**A beacon, not a self-voiding object.** Nobody drops a beacon into a chest for
-looks, so the aesthetic footgun — someone placing a nice-looking bin and losing
-their arsenal to it — cannot happen. Ship the pretty object as an ordinary
-container if one is wanted; it becomes a void only when a trash beacon is put in
-it. That is the mod's standing rule: a container declares its own purpose by its
-contents.
+Automated delivery INTO the reagent slot is a separate question and probably
+premature. It is quota-shaped rather than threshold-shaped — "keep 200 cores in
+this slot" is a restock request aimed at a machine slot — and if it feels
+necessary, the consumption rate is probably too high. The fuel design already
+says a system running on scorched cores would be rude.
 
-**ABSENCE MUST MEAN DENY, and everything else rests on that.**
-`petports_filterAccepts` returns true for a nil filter, deliberately, because a
-blank DEPOSIT beacon has to behave like the unconditional one that shipped before
-filters. Inherit that and a fresh trash beacon eats anything homeless the moment
-it is dropped in. The trash predicate must be
-`filter ~= nil and petports_filterAccepts(filter, name)` — a blank trash beacon
-is INERT until the player names what may be destroyed.
+**The fuel system.** Designed at length in "Design direction — petports, fuel
+and specialization" and entirely unbuilt. Pet Treats accumulate and nothing eats
+them. The upcycler was built to feed this, and the tuning question it leaves
+open is one number: fuel produced from one harvest cycle's surplus, divided by
+fuel burned by the units that ran that cycle. Everything about whether upkeep
+survives is in that ratio, and it cannot be picked until something consumes
+fuel.
 
-**"Nothing wants it" is not "nowhere has room", and conflating them is the
-catastrophic bug.** Full storage is routine and transient; deleting a load
-because every crate happened to be full is unrecoverable.
-`petports_filterAcceptsNothing` already draws exactly that line for the
-loaded-unit case. Trash may only ever be offered an item no deposit beacon's
-filter ACCEPTS — a permanent condition needing the player, never one that clears
-itself in a minute.
+Tune it against a SHIP, not a planetside base. The whole mod exists so the T6
+Nicemice ship has a working pet system; a hull-sized operation is the case that
+matters and it is a much smaller ratio than the perpetual-motion worry.
 
-**Two hard-no cases regardless of the filter.** Petports beacons themselves:
-`petports_filterMisfits` exempts only the DECIDING beacon's slot, so a spare
-configured beacon is ordinary cargo today and a trash can would delete someone's
-filter setup. And anything under an active restock quota, since a request is a
-claim and destroying what another crate asked for is two systems disagreeing.
+**The network control interface.** Networks derive correctly and no player can
+author one. This is the largest gap between what the design says and what is
+reachable in game, and it gates anything that wants per-network priorities.
 
-**Worth considering: destroy on OVERFLOW, not on arrival.** Let the trash crate
-fill normally and void only what will not fit. The void becomes the overflow
-rather than the box, so a mis-configured trash can presents as a chest full of
-your arsenal before any of it is gone. It does not cover a thousand-item load
-pushing earlier contents out, so it is mitigation rather than a guarantee — but
-it turns a silent unrecoverable mistake into a visible one.
+**Movement leftovers.** Vanilla's `moveLand`. The arc-skip predicate leaving the
+unit grounded at the port for 0.35s. The ~7% jump-height over-estimate. Each
+wants its own session; none of them are blocking.
 
-**Ordering:** below `depositWork`, strictly last resort, and NEVER in
-`petports_beaconsFor("deposit")` or the nearest-first loop could pick the void
-ahead of a real crate.
+**Cold-cache route planning.** The first plan from a given port spends roughly
+forty seconds probing, because every unreachable edge must exhaust A* to answer.
+Warm plans resolve in milliseconds. An "attempt nearest-first" rearchitecting
+was proposed against this and never built.
 
-**Two scan passes are specified and not built.** Hunting weapons are not
-identifiable from any field the manifest can reach — whether a weapon yields
-meat rather than shredding the drop is a property of the DAMAGE TYPE on the
-projectile it fires. Finding them means scanning `.projectile` for that damage
-type, walking back to the weapons that fire them, and listing those by name.
-Separately, natural biome formations do not carry their biome's colonyTag the
-way crafted furniture does — the geode rocks are listed by hand and the same gap
-exists for every other biome. Both want the tag dumper extended rather than new
-machinery.
+**Two scan passes, specified and unbuilt.** Hunting weapons by projectile damage
+type; natural biome formations missing their biome colonyTags. Both want
+`petports_tagdump.py` extended.
 
-**Superseded, ignore below this line if it contradicts the above.** Verify the 126 unverified tenant tags — a tier-2
-workbench settles all ten tiers at once, one Frögg Furnishing purchase settles
-the 21-tick decor group, one biome object settles the 37-tick one. Confirm a
-`checkable` row button fires its member callback; only `ruleRowRemove` has been
-seen firing, and if checkables are inert the subgroup tiles are too. Fold
-`race` into `petports_itemFacts` alongside `colonyTags` once tag matching is
-confirmed.
-
-**The pane wants the collections treatment.** `columns` + `fillDown` +
-`createTooltip` with `widget.inMember` is the whole recipe for an icon grid, and
-`radioGroup` with per-button `data` suits 19 groups better than a scrolling
-list. Note that anything per-row — reorder arrows, per-rule enable — has to live
-outside the list and act on the selection, unless it can be expressed as a
-member callback.
-
-**Still open on movement.** `moveLand` is untouched vanilla and is four lines
-with no `else`. The arc-skip predicate leaves the unit grounded on an Arc edge
-at the port, recovering only when the stall detector fires 0.35s later. The
-planner over-estimates jump height by about 7%. All three want their own
-session and none of them block content work.
-
-
-**Pets get a break.** Farming, animal harvesting and item collection all work,
-and most of the pathing quirks are solved or sidestepped. The unit layer is in
-good enough shape to leave alone for a while.
-
-**The beacons system is next.** It is the natural follow-on for three reasons:
-it is entirely unbuilt where the unit layer is mature, it is what the network
-control section above is blocked on, and it is the piece that turns a working
-fleet into a governable one. Filter beacons, the active provider beacon, beacon
-on/off state and the network-filter family all live there.
-
-The module and slot work above depends on the petport panel, which is a larger
-and separate undertaking -- worth keeping behind beacons rather than starting
-both at once.
+**Nicemice**, separately: guard dialog, peacekeeper reactive dialog, bounty
+files, and MAUS tenant NPCs.
 
 ## Logging discipline, learned the hard way
 
