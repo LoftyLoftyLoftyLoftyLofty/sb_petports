@@ -57,6 +57,20 @@ reachable-but-unstorable, grey seen-and-unclaimed. One marker per item is
 enforced by the markers themselves, and which port speaks for a drop is settled
 through the claim registry. Colours are per-unit configurable.
 
+**THE FLAVOR SYSTEM IS DESIGNED AND HALF BUILT.** Seven flavors, each a class
+of reagents rather than a single item, with the six vanilla augment materials as
+anchors. The items exist, the sorting exists, and nothing produces or eats one
+yet. See "Fuel and flavor" below for the whole design and "Where this goes next"
+for the two halves still missing.
+
+- `items/lofty_petports/fuels/` holds eight treats: the unflavored one and seven
+  flavors, each carrying exactly one `petports_flavor_<id>` tag.
+- `scripts/lofty_petports/petports_flavors.config` maps 91 reagents to flavors
+  with a WEIGHT each, where weight is how many treats one reagent flavors.
+- The filter manifest gained a `petports_fuel` GROUP at order 1201, pinned under
+  Petports at 1200, with eight subgroups matching on the flavor tags. Treats are
+  no longer in the Petports group at all.
+
 **Cargo top-up in the stall case.** A unit holding cargo it cannot deposit may
 collect more of the SAME item, capped at one `maxStack`. Capacity is counted in
 SLOTS, so a merge consumes none of it.
@@ -70,14 +84,26 @@ treated as a full load, deliberately). The participate/ID interface — networks
 derive correctly, but nothing lets a player author a network id or opt a port
 out of auto-merge, so half the network design is unreachable from in game. The
 fuel system itself: Pet Treats exist and accumulate, and nothing consumes them
-yet. The reagent branch. The upcycler UI rebuild toward the mockup.
+yet. The reagent branch -- the slot is there, the flavors and their reagent
+classes are authored, and nothing reads either. The upcycler UI rebuild toward
+the mockup.
 
 **ART.** Bespoke: the unit body and the petport, the latter in three
 independently animated components with a ten-frame door cycle aliased in reverse
 for closing. Placeholder: the vent (a flat tan box, deliberately two visually
 distinct frames so a silent linking failure and a working link cannot look
-alike), the upcycler, and Pet Treats (a flat pink square). The crosshair sprites
-are final.
+alike), the upcycler, and the eight Pet Treats (flat squares). The crosshair
+sprites are final.
+
+**THE TREAT COLORS ARE NOT PLACEHOLDER even though the sprites are.** The obvious
+palette does not survive red-green color blindness: spicy, zesty and savory all
+collapse toward the same olive, and a first pass had spicy and zesty at
+luminance 0.207 and 0.191, which is indistinguishable. The seven are spread
+across LIGHTNESS as well as hue -- four warm flavors in four brightness bands
+(sour 0.67, zesty 0.38, spicy 0.21, savory 0.03) and three cool ones in three
+(sweet 0.78, sharp 0.30, bitter 0.09). Worst pair is 78 units apart under
+simulated deuteranopia and protanopia, up from 44. Keep that spread when real
+art lands.
 
 The unit has no frames for any state except `run` — `default.frames` names
 `run.1`..`run.8` and nothing else, so every animation state resolves to the same
@@ -103,8 +129,13 @@ Those are the silent-nil guards and must not be flag-gated.
 ## Layout
 
     items/categories.config.patch                      -- petports_unit + petports_beacon
+                                                       -- + petports_fuel
     items/lofty_petports/
       petports_unit_test.item, .png
+      fuels/
+        petports_petfuel.item, .png            -- unflavored
+        petports_petfuel_<flavor>.item, .png   -- spicy sweet sour sharp
+                                                  zesty bitter savory
       beacons/
         petports_beacon_deposit.activeitem, .png
         petports_beacon_restock.activeitem, .png
@@ -116,6 +147,13 @@ Those are the silent-nil guards and must not be flag-gated.
                        slot_backing.png, field_backing.png
     scripts/lofty_petports/
       petports_work.lua          -- claims + coverage rects, shared both sides
+      petports_filters.lua       -- the filter resolver
+      petports_filtergroups.config -- 75 groups, 217 subgroups
+      petports_flavors.config    -- reagent -> flavor, with weights
+      petports_polymorphic.config
+    workbench/tools/
+      petports_tagdump.py, .bat  -- what categories and tags exist
+      petports_fooddump.py, .bat -- produce, food and materials, WITH SINKS
     stagehands/lofty_petports/
       petports_residency.stagehand
       petports_residency.lua     -- keepAlive; holds one port's rect resident
@@ -1076,6 +1114,163 @@ Any threshold test evaluated while a unit holds cargo must add the carried stack
 back. And deliver only the SURPLUS portion rather than all-or-nothing: a unit
 carrying 1,000 into a network 400 over its threshold delivers 400 and keeps 600.
 
+### A PROGRESS SIGNAL BELOW A BRANCH THAT RETURNS IS A SIGNAL THAT DOES NOT EXIST
+
+The green "enroute" crosshair lagged by seconds and, on any vent route, never
+appeared until the final leg. Three causes, stacked, and only the first is a bug.
+
+**THE CHECK WAS UNREACHABLE FROM THE VENT PATH.** It lived inside the
+once-a-second trace block near the bottom of `petportsTaskAction.update`, which
+is reached only when the unit is on a direct approach and has not yet arrived.
+Three paths return before it: the routing branch (correct to skip, nothing is
+moving), the settle branch (correct, a drop is still falling) and the VENT-LEG
+branch -- which is real, visible walking to a vent mouth that never counted. So
+the marker stayed yellow through the approach, the hop, and every leg after it,
+which is precisely the case the green marker was built for.
+
+Fixed by pumping it from the TOP of `update`, above every branch.
+
+**IT MEASURED ACCUMULATED PATH LENGTH, WHICH CANNOT BE SAMPLED FASTER.** A
+running total adds every measured wobble, so it creeps upward while a unit
+stands still -- slowly at one sample a second, five times faster at five.
+Speeding the old test up would have traded a late green for a false one. It now
+measures NET DISPLACEMENT from `stateData.startPosition`, which is a single
+magnitude against a fixed point, does not creep, and can be taken as often as
+wanted. `movedTotal` stays as it was: it is path length and still owns the
+"never moved" versus "could not reach" split in the approach-timeout report,
+which net displacement cannot answer.
+
+Side effect, and it reads as correct: a vent hop displaces a unit far past the
+threshold in one tick, so a routed unit goes green the moment it comes out the
+far side.
+
+**THE ANTI-STROBE DWELL WAS CHARGING FULL PRICE ON THE ONE TRANSITION THAT
+CANNOT STROBE.** `CROSSHAIR_DWELL` exists for the dispatch-fail-backoff cycle,
+which genuinely flaps. `routing -> enroute` cannot: `self.taskMoving` goes false
+to true once per task and is cleared only on a new dispatch. And it was the
+WORST case for the dwell rather than an incidental one, because a yellow marker
+is spawned AT DISPATCH so its `since` is always fresh -- every other transition
+happens on a marker that has been up a while. `CROSSHAIR_IMMEDIATE` exempts that
+one pair.
+
+**Generic form: an anti-flap timer must be exempted for transitions that are
+monotonic within their scope.** Otherwise it taxes exactly the change a user is
+watching for.
+
+MEASURED after the fix, across 38 transitions in one session: every one landed
+65-78ms after the unit reported moving, i.e. one tick. Before, the direct case
+cost 1.5-3s and the vent case cost the whole journey.
+
+### Traps found in the flavor / asset-scan session
+
+### THE ONLY itemTag ON FOOD AND CRAFTING MATERIALS IS `reagent`
+
+Measured across every `.item`, `.consumable`, `.matitem`, `.liqitem` and
+`.object` in the food, produce, crafting-material, seed, drink and medicine
+categories -- 421 items. Exactly ONE itemTag exists on any of them, `reagent`,
+on 115. Nothing else. Not one.
+
+So there is no tag axis to discriminate on anywhere in that half of the game,
+and any grouping of materials or produce has to be enumerated BY NAME. The
+filter manifest's five matchers are of no help here; only `items` applies.
+
+This is the same shape as the dead `ore`/`ingot`/`bar`/`gem` tags that were
+already found and removed, arrived at from the other direction: those were tags
+that did not exist, this is a whole vocabulary that does not exist.
+
+### 28 OF 117 CRAFTING MATERIALS ARE UNOBTAINABLE, AND ALMOST NOTHING ELSE IS
+
+Of 3,649 items in the game only 49 are referenced by nothing at all, and 28 of
+those are crafting materials. A quarter of that one drawer is dead and the rest
+of the game is essentially clean.
+
+Dead, confirmed: Molten Core, Ice Crystal, Ancient Bones, Cell Materia,
+Hardened Monster Plate, Alien Wood Sap, Alien Weird Wood, Wild Vines,
+Unidentified Fossil, Endomorphic Jelly, Prisilite Star, Uranium Rod, Fill 'Er
+Up, Glass Coffee Mug, and the entire hardware drawer -- Processor, Laser Diode,
+Lightbulb, Screws, Iron Hinge, Copper Cog -- plus Robot Chest, Head and Legs,
+Artificial Brain, Inferior Brain, Space Age Polymer.
+
+**They still have definition files and read as perfectly normal items.** A
+feature built on one looks correct, loads correctly, and never fires.
+
+### THE DEPRECATION TEST IS A REFERENCE COUNT, AND IT WORKS IN ONE DIRECTION
+
+An item is obtainable if SOMETHING names it -- a treasure pool, a monster's
+drops, a biome, a quest, a shop, a recipe. If the only file in the tree that
+mentions the name is its own definition, nothing hands it to a player.
+`petports_fooddump.py` does this by pulling every quoted token out of every text
+asset and intersecting with the item-name set, which is one pass over the tree
+rather than one per name.
+
+**A ZERO IS TRUSTWORTHY. A NON-ZERO IS NOT.** The scan matches quoted tokens and
+several item names are ordinary English words. Measured: `string` reports 402
+references, `dungeons:331` of them, which is the WORD. `basic` is literally the
+itemName for Pelt. `bolt`, `lead`, `paper`, `crystal`, `metallic`, `thread` and
+`gnome` are all suspect the same way.
+
+**`tiles:1` IS A REAL ACQUISITION PATH**, not a leftover -- that is an item
+mined out of a block, which is how Uranium Ore, Plutonium Ore, Moonstone Ore,
+Trianglium Ore and Metal Coated Wood all still reach a player. `objects:N` is
+ambiguous and needs eyes: it can be a breakable's drop pool or a crafted
+object's ingredient list.
+
+### A FILE MUST BE EXCLUDED FROM ITS OWN COUNT BY NAME, NOT BY PATH
+
+The reference scan first skipped every reported item file wholesale, so an item
+could not reference itself. Harmless under a category filter, because almost no
+`.object` was in the report. Fatal under `--all`, where every `.object` IS --
+and objects are a main way the game hands things over, through breakable drop
+pools and farmable produce.
+
+Measured, same tree, two runs: `bone` went 53 references to 29, losing
+`objects:24`. Ember Coral Fragment and Bug Shell went to ZERO, both being
+object-sourced entirely. Two live items read as deprecated because of the
+REPORT'S OWN FILTER SETTING, which is the exact failure the scan exists to
+prevent.
+
+Fixed by discarding the one self-name from a file's hits rather than the file:
+`bonechair.object` counts as a reference to `bone` and not to `bonechair`.
+
+### PRODUCE HIDES IN `cookingIngredient`
+
+Wheat, Sugar, Mushroom (`shroom`), Rice, Cocoa Pod, Cactus, Kelp and Crystal
+Plant are all `cookingIngredient`, not `food`. Every one of them has a SEED in
+the `seed` category and a COOKED FORM in `preparedFood`, so a scan filtered to
+the obvious categories finds both ends of the chain and not the middle -- and an
+item missing from a report reads as an item that does not exist.
+
+Generic rule: when a filtered scan comes back missing something you know is
+there, print a census of what the filter EXCLUDED. That is now a section in the
+tool's report.
+
+### A TAG SUBGROUP IS SAFE OR FATAL DEPENDING ON HOW MANY ITEMS CARRY IT
+
+Subgroups are ORed. `petports_fuel` is on all eight treats, so a subgroup
+carrying it beside seven per-flavor subgroups matches everything and WINS --
+unticking Spicy would silently do nothing. That is failure mode 1 from the
+`unclassified` header, reached from a new direction.
+
+`petports_flavor_spicy` is on exactly one flavor's items, so the same mechanism
+is not merely safe but is the RIGHT answer: it makes the subgroups mutually
+exclusive, and a rarity tier added later -- a new item NAME carrying an existing
+flavor tag -- sorts into the player's existing crate with no manifest edit.
+
+Same field, same resolver, opposite outcome, entirely because of how many items
+carry the tag. Count before choosing between `tags` and `items`.
+
+### AN "ALL OF THESE" SUBGROUP SHOULD NOT EXIST WHEN A GROUP WOULD DO
+
+Pet Treats began as one subgroup inside Petports and had to become a GROUP.
+Picking a group with nothing excluded already means every member, so a subgroup
+that also means every member is a second way to say the same thing sitting
+beside seven boxes that each mean one thing. Promoting it made the group itself
+the "all" and left the subgroups a clean mutually exclusive set.
+
+The knock-on: a rule stored on a live beacon holds subgroup ids in `except`, and
+an id that no longer exists matches nothing and is SILENTLY IGNORED. Removing or
+renaming a subgroup quietly widens every rule that excluded it.
+
 ### An empty collection is not the same as a negative answer
 
 `storageWouldTakeAny()` iterated the unit's cargo and returned false when there
@@ -1228,8 +1423,15 @@ different questions and a player will eventually need both.
 
 ### Design direction — petports, fuel, and specialization
 
-Design commitments that shape the behavior rewrite. None of this is built yet;
-all of it constrains what gets built.
+Design commitments that shape the behavior rewrite.
+
+**"None of this is built yet" was true when this was written and is not any
+more.** The flavor system below is built as far as its items, tags, reagent
+table and sorting; only the code that produces and consumes a treat is missing.
+Everything else here still constrains what gets built. Where a subsection has
+been overtaken it says so in its own heading rather than being quietly left to
+rot -- see "Fuel and flavor", which SUPERSEDES an earlier design, and "The pet
+feeder", which is marked stale and kept for its arguments.
 
 #### Terminology: petport, not pet station
 
@@ -1245,35 +1447,133 @@ do not match exactly), the `.object` / `.lua` / `.animation` filenames, and the
 object's `scripts` reference. `objectName` is save-game identity, so this is
 free now and expensive after anything is placed in a world.
 
-#### Fuel, not food
+#### Fuel and flavor -- SUPERSEDES "fuel, not food"
 
-Each unit type accepts a **category** of fuel and, within it, has a per-unit
-**preference** that refills more efficiently.
+The design here replaced an earlier one wholesale in Aug 2026, and the earlier
+one is gone rather than marked stale because keeping it would leave two
+incompatible answers to the same question in one document.
 
-A robotic drone might accept batteries, small batteries, copper wire, RAM sticks
-and silicon boards, with a particular unit preferring copper wire. A
-squirrel-themed unit accepts seeds broadly and favours one.
+**WHAT WAS THERE BEFORE, so a fragment of it turning up elsewhere is
+recognisable as dead:** each monstertype accepted a CATEGORY of fuel -- a
+robotic drone eating batteries, copper wire and RAM sticks -- and each unit
+rolled a preference for one particular ITEM inside that category. It required
+replacing `groundPet.lua`'s `itemFoodLiking`, which rejects anything whose
+`root.itemType` is not `"consumable"` before preference is ever consulted.
 
-**Fuel comes from two places, and preference must never be a requirement.**
-Communal feeders carry bulk sustenance; the port's own slots carry that unit's
-preferred item. A hungry unit takes the nearest acceptable source, biased toward
-preferred when the difference is worth the walk. An empty port slot costs
-EFFICIENCY, never function — if a unit ever refuses feeder fuel because its slot
-is empty, the per-port topping-up chore is back and the feeder has no purpose.
+**A PET TREAT IS THE ONLY FUEL.** Units do not eat crafting materials, produce
+or vanilla food. Everything goes through the upcycler, which is what makes the
+machine load bearing rather than a convenience, and it collapses the whole
+fuel-acquisition problem into one item name that every unit accepts.
 
-**This breaks vanilla's food handling and cannot be configured around.**
-`groundPet.lua`'s `itemFoodLiking` returns false immediately for anything whose
-`root.itemType` is not `"consumable"`. Copper wire and batteries are crafting
-materials, so they are rejected before preference is ever consulted. The scoring
-function must be replaced with one that checks category membership first and
-preference second. Contained change — `eatAction` is its only consumer — but it
-is a rewrite, not a parameter.
+**PREFERENCE MOVED UP A LEVEL, FROM INGREDIENT TO FLAVOR.** A unit rolls one
+preferred FLAVOR and refills more of its fuel bar eating that one. There are
+seven, they are separate item names, and a reagent in the upcycler's reagent
+slot is what produces them.
 
-What survives from vanilla: `foodLikings` as a persisted per-unit map is the
-right shape for preference, and the lazy-roll-then-cache pattern gives each unit
-stable tastes for its lifetime without authoring them by hand.
+**A WRONG FLAVOR IS EXACTLY AS GOOD AS NO FLAVOR, NEVER WORSE.** A unit that
+prefers bitter and eats sour gets what it would have got from an unflavored
+treat. That is the rule that keeps the whole system opt-in: a player who ignores
+reagents entirely loses a bonus and is never punished, and one who flavors the
+wrong thing has wasted a reagent rather than ruined a batch. Every other design
+for preference implies a way to feed a unit something bad for it, and there is
+no version of that a player enjoys discovering.
+
+**FLAVORING COSTS ENTROPY, AND THAT IS THE POINT.** The upcycler exists to
+collapse a hundred junk item types into one -- see the entropy framing, which is
+about ITEM TYPES per container rather than item counts. Flavors spend some of
+that back: seven types where there was one. So a player stockpiles only the
+flavors their fleet's rolled preferences justify and leaves the rest as fodder,
+and that self-balances with no rule enforcing it. Seven is the ceiling of the
+cost and it is one restock crate wide.
+
+#### Weight: the batch length IS the value
+
+**WEIGHT IS HOW MANY TREATS ONE REAGENT FLAVORS.** There is no second number,
+no efficiency stat, no per-reagent yield. A reagent worth 8 flavors a full run;
+one worth 1 flavors a single treat, so using it in bulk means feeding the slot
+in bulk.
+
+**IT EXISTS BECAUSE ABUNDANCE AND TASTE ARE DIFFERENT AXES.** Snowflake belongs
+in sweet on flavor and accumulates in quantities that dwarf Cryonic Extract;
+Bone belongs in savory and arrives by the hundred without anyone trying.
+Excluding them for being common loses the flavor; including them at parity
+trivialises it. Weight is the third answer, and it arrived from exactly that
+observation about Snowflake.
+
+**WEIGHTS ARE AUTHORED, NOT DERIVED, AND PRICE IS WHY.** Price is the axis the
+upcycler already values its INPUT on and it fails completely here: Snowflake,
+Glow Fibre, Plant Fibre, Toxic Waste, Ember Coral Fragment and every petal are
+all price 0, and those are precisely the abundant items the weight exists to
+price down. Since the classes are enumerated by name anyway, an integer beside
+each entry costs nothing.
+
+The four tiers, in `petports_flavors.config`:
+
+    8   the augment materials, and only those
+    4   deliberate acquisition -- a monster part, or something cooked
+    2   farmed or gathered on purpose -- most produce
+    1   incidental -- picked up while doing something else, uncounted
+
+#### The six augment materials are one designed set, and that is the anchor
+
+**MEASURED, AND IT IS THE FINDING THE WHOLE MAPPING RESTS ON.** Scorched Core,
+Cryonic Extract, Venom Sample, Static Cell, Living Root and Phase Matter share
+an IDENTICAL acquisition fingerprint -- `recipes:N treasure:3 interface:2`, price
+50, no other sink. They are one authored set with one acquisition path and one
+value.
+
+Using all six as flavor anchors means six of the seven flavors cost the same to
+supply BY CONSTRUCTION rather than by tuning. Nothing has to be balanced against
+anything, because vanilla already did it.
+
+    Spicy   Scorched Core        Sharp   Static Cell
+    Sweet   Cryonic Extract      Zesty   Living Root
+    Sour    Venom Sample         Bitter  Phase Matter
+    Savory  Alien Meat
+
+**Savory is the exception and it is deliberate.** Its anchor is Raw Steak at
+weight 4, not 8, because meat is a trivially common monster drop and an 8 would
+make savory far cheaper than every other flavor. It is also the widest class in
+the set at 32 of the 91 reagents. Those two partly cancel -- wide but cheap per
+unit -- but savory is still the easiest flavor to keep stocked, and a uniform
+preference roll will leave a player long on it and short on spicy.
+
+**Bitter's anchor was the last one placed and Phase Matter is a weak sensory
+fit.** It is spectral rather than bitter. It was taken because it was the
+unclaimed sixth member of the balanced set, which is a mechanical argument
+beating a flavor one. Mushroom is the better word and IS available -- it is
+`shroom`, in `cookingIngredient`, 22 references and live -- and it sits in the
+class as a weight-1 member. Swapping the anchor is cheap until something reads
+the config.
+
+#### Appetites as an inventory sink -- STILL THE POINT, DIFFERENT MECHANISM
+
+The original claim was that species-differentiated appetites would consume
+Starbound's tail of one-recipe-no-consumer crafting materials. The goal survived
+the flavor pass; the mechanism did not.
+
+**IT IS THE UPCYCLER THAT EATS THE TAIL, NOT APPETITES.** Anything the player
+configures a rule for becomes fuel, so the sink is already as wide as the game
+and needs no per-species diet to justify it. Reagent classes are a second,
+narrower sink on top: 91 named items that have a use beyond being melted down.
+
+**MEASURED, AND LARGER THAN THE ESSAY ASSUMED.** Of 3,649 items in the game,
+291 of the 421 in the food and crafting categories have NO recipe consuming
+them, and the biggest single block is cooked food -- 122 of 134 `preparedFood`
+entries are terminal, plus all 74 seeds, 25 of 28 drinks and 15 of 16 medicines.
+For a mod whose core loop is automated farming, cooked food is the customer,
+not crafting materials.
 
 #### The pet feeder
+
+**STALE. WRITTEN BEFORE THE FLAVOR PASS AND NOT REVISITED.** Everything below
+predates the decision that a Pet Treat is the only fuel, and it is kept because
+its ARGUMENTS still hold -- what a feeder is for, why binding one to a port by
+wire was rejected, why feeders must stay out of the adjacency computation. What
+does not hold is anything about a feeder dispensing "batteries, eyeballs,
+scorched cores, liquid lava": a feeder now holds treats, and the only question
+it has left is whether a flavored treat and an unflavored one are the same
+stock. Read this for the reasoning and not for the mechanism.
 
 **Named a feeder, not a bowl.** A bowl implies kibble. These dispense batteries,
 eyeballs, scorched cores, liquid lava — whatever a given monstertype's category
@@ -1319,6 +1619,13 @@ to reserve one for a single network. Same UI, no effect on topology.
 **A feeder is a convenience, never the only way to eat.** If a unit can reach a
 crate on its network holding something it accepts, it eats there. No carrying,
 no capability check, no help request.
+
+**STRONGER AFTER THE FLAVOR PASS, NOT WEAKER.** "Something it accepts" used to
+be a per-monstertype category, so a network could genuinely hold food that a
+given unit could not eat. Every unit now accepts every treat, so the only
+failure left is a network with NO treats in it, and the deadlock this rule was
+written to prevent cannot occur for a reachable crate. Flavor never gates
+eating: a unit that prefers bitter eats a savory treat without hesitating.
 
 This is the rule that keeps the system from deadlocking, and it is worth
 understanding why the obvious alternatives are worse. If eating required a
@@ -1386,20 +1693,6 @@ outside all coverage, and a feeder pinned to an ID that does not exist in its
 containing cluster. Probably a job for the range overlay. Recorded here so it is
 not rediscovered as "my pets are ignoring the feeder".
 
-#### Appetites as an inventory sink
-
-Stated rationale, not a side effect.
-
-Starbound accumulates crafting materials that never leave the inventory —
-scorched cores, cryonic extracts, and the whole tail of ingredients with one
-recipe and no consumer. Species-differentiated appetites consume them at a rate
-proportional to how much automation the player is running, which is a real answer
-to a real vanilla problem.
-
-It also gives unit types a reason to differ that is not cosmetic: a drone that
-eats batteries and a squirrel that eats seeds impose different supply chains, and
-the player builds around that.
-
 #### Fed means productive
 
 Fuel gates the *acquisition* of work, not the *execution* of it. A unit that
@@ -1418,7 +1711,10 @@ opposite feel.
 #### Discovery: the petport panel
 
 Preferences are rolled per unit, so they cannot be looked up externally or
-carried between units. The petport's interact UI is the answer — the same panel
+carried between units. A preference is now ONE OF SEVEN FLAVORS rather than an
+arbitrary item name, which is what makes it displayable at all -- the earlier
+design would have had the panel announce that this unit favours
+`avesmingoegg`. The petport's interact UI is the answer — the same panel
 that holds the unit slot displays known preferences, current fuel level, task
 capabilities and status.
 
@@ -1427,8 +1723,9 @@ This is the strongest argument for a bespoke interface config. The borrowed
 it.
 The panel also holds **dedicated food slots** for that unit's preferred fuel.
 This is where per-unit feeding lives, alongside the communal feeders — see "The
-pet feeder" above. The panel is also where required and preferred foods are
-displayed, since the unit is unambiguous here and nowhere else.
+pet feeder" above, which is stale. There is no longer a "required food" to
+display: every unit accepts every treat, so the panel shows the rolled FLAVOR
+and the current level and nothing else.
 
 #### Locomotion classes
 
@@ -1726,7 +2023,7 @@ is a new entity with a new entity id. Stored on the item alongside `seed` and
 reassigned at spawn, a claim survives the round trip. The bounty and quest
 systems assign uniqueIds to NPCs the same way.
 
-Serial numbers for flavour ("unit #4142") derive from `seed`, NOT from a
+Serial numbers for character ("unit #4142") derive from `seed`, NOT from a
 counter in `world.properties`. A per-world counter renumbers a unit every time
 it is carried to a new planet, which destroys the only thing the number is for.
 
@@ -4866,30 +5163,57 @@ from a container pane script. And `ContainerPane` overwrites the title and
 subtitle from the object's `shortdescription` and `category`, so the header
 currently reads "Upcycler / Crafting Station" and the `title` widget is ignored.
 
-**The reagent branch.** Slot 2 exists and is unused. The idea is brewing-style:
-a scorched core in the reagent slot turns plain Pet Treats into Spicy ones, with
-unit preferences running on flavour rather than on individual item names.
+**The reagent branch -- DESIGNED, HALF BUILT.** The name-versus-parameter
+question this section used to open with is SETTLED: flavors are distinct item
+NAMES, and they exist. So do the eight sprites, the eight `petports_flavor_<id>`
+tags, the eight filter subgroups and the 91-reagent weight table. What does not
+exist is any code that reads the reagent slot.
 
-The decision worth making BEFORE anything else here is whether a flavour is a
-distinct item NAME or a parameter on one item. Names cost a file each but let
-the existing filter system route spicy into one crate and sweet into another,
-and the polymorphic display-name table already handles anything awkward. A
-parameter would make the census sum all flavours as one item, which is right for
-rules and wrong for storage. Cheap to decide now, a migration later.
+What is left is small and well specified:
 
-Automated delivery INTO the reagent slot is a separate question and probably
-premature. It is quota-shaped rather than threshold-shaped — "keep 200 cores in
-this slot" is a restock request aimed at a machine slot — and if it feels
-necessary, the consumption rate is probably too high. The fuel design already
-says a system running on scorched cores would be rude.
+  - read the reagent slot, look the item up in `petports_flavors.config`, and
+    refuse anything not in it. FAIL CLOSED -- an unlisted reagent that silently
+    produced unflavored treats would read as a broken machine.
+  - consume one reagent and set a counter to its WEIGHT. Emit that flavor's
+    item for the next `weight` outputs, then fall back to plain.
+  - the counter has to persist across mine-and-replace the same way `points`
+    does -- see the POINTS_KEY mirror pattern.
 
-**The fuel system.** Designed at length in "Design direction — petports, fuel
-and specialization" and entirely unbuilt. Pet Treats accumulate and nothing eats
+**THE ONE OPEN QUESTION IS WHETHER THE SLOT TAKES A STACK.** If one reagent
+buys its weight in treats and the slot holds a stack, a thousand cores is eight
+thousand spicy treats and the manual-reload decision costs the player almost
+nothing. If a whole stack buys one batch, the reload chore becomes the dominant
+interaction, which is what deferring the multi-ruleset UI was meant to avoid.
+
+**Automated delivery INTO the reagent slot stays out of scope.** It is
+quota-shaped rather than threshold-shaped -- "keep 200 cores in this slot" is a
+restock request aimed at a machine slot -- and the player is deliberately
+responsible for reloading reagents for now, so the upcycler UI does not grow a
+second ruleset list.
+
+**Flavors that need finishing before this ships:** Spicy is the thinnest class
+at six reagents and its only weight-4 member is Ember Coral Fragment, which
+comes off breakable objects. Sweet is fifteen items at weight 2 and almost all
+of them are fruit a farm produces without trying, so some of it probably belongs
+at 1. Neither blocks the build.
+
+**The fuel system.** Designed in "Fuel and flavor" and entirely unbuilt. Pet Treats accumulate and nothing eats
 them. The upcycler was built to feed this, and the tuning question it leaves
 open is one number: fuel produced from one harvest cycle's surplus, divided by
 fuel burned by the units that ran that cycle. Everything about whether upkeep
 survives is in that ratio, and it cannot be picked until something consumes
 fuel.
+
+**AND ONE DESIGN QUESTION BEFORE ANY OF IT.** `hunger` already exists and
+already runs: `petResourceDeltas` has it at 0.5/sec against a max of 100, so a
+loaded unit empties in 200 seconds of real time whether or not it does any work.
+`petBehavior.scoreAction` reads it and `hungerStarvingLevel` keys off it, so
+riding that resource is far cheaper than adding one.
+
+But a time-based drain directly contradicts "upkeep is proportional to the work
+the fleet does", which is the load-bearing claim in "What this mod is actually
+FOR". Whether fuel is a CLOCK or a METER decides whether a parked fleet costs
+anything, and it has to be answered before a burn rate can be picked.
 
 Tune it against a SHIP, not a planetside base. The whole mod exists so the T6
 Nicemice ship has a working pet system; a hull-sized operation is the case that

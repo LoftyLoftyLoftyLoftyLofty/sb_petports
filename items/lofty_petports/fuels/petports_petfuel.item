@@ -13,7 +13,7 @@
 //
 //  ONE ITEM, NOT A FAMILY, YET. The reagent slot on the upcycler is reserved
 //  for a brewing-style second input -- a scorched core making a Spicy Pet
-//  Treat, with unit preferences running on flavour rather than on individual
+//  Treat, with unit preferences running on flavor rather than on individual
 //  item names. That is a V2 branch and this is the stock version it branches
 //  from.
 //
@@ -28,7 +28,13 @@
 	"inventoryIcon" : "petports_petfuel.png",
 	"description" : "Reclaimed surplus, pressed into something a utility unit will eat.",
 	"shortdescription" : "Pet Treat",
-	"itemTags" : [ "petports", "petports_fuel", "petports_no_upcycling" ],
+	//  petports_flavor_plain KEEPS THE SET SYMMETRICAL. Every treat carries
+	//  exactly one flavor tag and the deposit-beacon subgroups match on
+	//  those, so the unflavored one needs its own rather than being the
+	//  odd entry matched by name. It also leaves room for the rarity tiers
+	//  the flavored treats are set up for: an uncommon plain treat sorts
+	//  into the same crate without a manifest edit.
+	"itemTags" : [ "petports", "petports_fuel", "petports_flavor_plain", "petports_no_upcycling" ],
 
 	//  PRICE ZERO, AND THAT IS LOAD-BEARING RATHER THAN LAZY.
 	//

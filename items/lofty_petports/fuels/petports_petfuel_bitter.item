@@ -1,34 +1,45 @@
 //  PETPORTS -- BITTER PET TREAT
 //
-//  A flavoured Pet Treat. The upcycler produces these when a Phase Matter-class
-//  reagent is in its reagent slot; see scripts/lofty_petports/petports_flavours.config
+//  A flavored Pet Treat. The upcycler produces these when a Phase Matter-class
+//  reagent is in its reagent slot; see scripts/lofty_petports/petports_flavors.config
 //  for the reagent list and what each one is worth.
 //
-//  FLAVOUR IS THE WHOLE OF THE PREFERENCE SYSTEM. A unit rolls one preferred
-//  flavour and refills more of its fuel bar eating that one. Every other
-//  flavour, and the unflavoured treat, are worth exactly the same to it -- so
-//  feeding a unit the wrong flavour is never a mistake, only a missed bonus.
+//  FLAVOR IS THE WHOLE OF THE PREFERENCE SYSTEM. A unit rolls one preferred
+//  flavor and refills more of its fuel bar eating that one. Every other
+//  flavor, and the unflavored treat, are worth exactly the same to it -- so
+//  feeding a unit the wrong flavor is never a mistake, only a missed bonus.
 //  That is what keeps reagents optional rather than a chore.
 //
 //  A SEPARATE ITEM NAME, NOT A PARAMETER ON petports_petfuel. The whole sorting
 //  system keys on names, so distinct names mean a player can route spicy into
 //  one crate and sweet into another with the filters that already exist. A
-//  parameter would have made the census sum every flavour as one item, which is
+//  parameter would have made the census sum every flavor as one item, which is
 //  right for thresholds and wrong for storage.
 //
 //  PRICE ZERO, AND IT IS LOAD-BEARING. The upcycler values its input by price
 //  and refuses anything tagged petports_no_upcycling. Both guards are here for
-//  the same reason the unflavoured treat has them: a treat worth anything is a
+//  the same reason the unflavored treat has them: a treat worth anything is a
 //  treat that can be fed back in, and a laundering loop that pays out slowly is
 //  harder to notice than one that pays out fast.
 //
-//  petports_fuel IS WHAT THE FILTER MANIFEST MATCHES ON, by tag rather than by
-//  name, so this sorts into the Pet Treats subgroup without the manifest being
-//  edited. Do not drop that tag: fuelWork only sends a unit to empty an
-//  upcycler's output slot when some deposit beacon accepts what is in it, so an
-//  untagged treat fills a machine and stops it.
+//  petports_fuel IS WHAT PUTS THIS IN THE PET TREATS GROUP AT ALL. Do not drop
+//  it: fuelWork only sends a unit to empty an upcycler's output slot when some
+//  deposit beacon accepts what is in it, so an untagged treat fills a machine
+//  and stops it.
 //
-//  PLACEHOLDER ART: the unflavoured treat's flat square in this flavour's
+//  FLAVOR IS A TAG, NOT THE ITEM NAME, and that is what makes this expandable.
+//  The deposit-beacon subgroup for this flavor matches petports_flavor_bitter
+//  rather than petports_petfuel_bitter, so a rarity tier added later -- an
+//  uncommon or rare Bitter treat, a mod's own variant -- sorts into the
+//  player's Bitter crate on the day it exists, with no manifest edit and no
+//  reconfiguring of a beacon they already set up.
+//
+//  THREE TAGS, THREE JOBS, and none of them is decoration:
+//      petports_fuel            this is fuel at all
+//      petports_flavor_bitter   which flavor it is
+//      petports_no_upcycling    it can never be fed back into the machine
+//
+//  PLACEHOLDER ART: the unflavored treat's flat square in this flavor's
 //  colour. Obviously unfinished on purpose, so it cannot be mistaken for a
 //  design decision. The colours themselves are NOT placeholder -- they are
 //  spread across lightness as well as hue so the seven stay distinguishable
@@ -43,6 +54,6 @@
 	"inventoryIcon" : "petports_petfuel_bitter.png",
 	"description" : "Pressed surplus laced with phase matter. Half here, wholly unpleasant, and apparently an acquired taste.",
 	"shortdescription" : "Bitter Pet Treat",
-	"itemTags" : [ "petports", "petports_fuel", "petports_no_upcycling" ],
+	"itemTags" : [ "petports", "petports_fuel", "petports_flavor_bitter", "petports_no_upcycling" ],
 	"maxStack" : 1000
 }
