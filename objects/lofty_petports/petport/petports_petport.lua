@@ -2344,6 +2344,13 @@ local stackSizeOf
 --  stackSizeFor's original site.
 local stackSizeFor
 
+--  Same again. upcyclerWork screens its candidates with claimFree, and the
+--  claim helpers live with the SOIL section far below -- so without this the
+--  call compiles as a global lookup and is nil at runtime, silently making
+--  every machine look available and putting the whole fleet back on one
+--  machine. Exactly the failure stackSizeOf already paid for.
+local claimFree
+
 --  An upcycler's input slot. Zero-based, like every container OFFSET; the keys
 --  world.containerItems returns are one-based, which is what SLOT_KEY_TO_OFFSET
 --  exists to reconcile. Nothing here goes through those keys.
@@ -2441,7 +2448,47 @@ end
 --  different causes with four different fixes -- switch it on, name the item,
 --  lower the threshold, empty the input -- and from outside they are one
 --  identical silence: a unit walking past a machine to a crate.
-local function machineWantsAny(machine)
+--  WILL ORDINARY STORAGE TAKE ANY OF THIS LOAD RIGHT NOW?
+--
+--  THE QUESTION THAT DECIDES WHETHER THE BATCH FLOOR APPLIES. The floor exists
+--  so a unit does not walk across a base to deliver twenty blocks -- a pure
+--  throughput argument, and a good one WHILE THERE IS SOMEWHERE ELSE TO PUT THE
+--  LOAD. Waiting is free when the cargo is safe in a crate either way.
+--
+--  It is not free when the cargo has nowhere to go. A unit holding an
+--  undeliverable load does not collect -- cargo outranks collection, by design,
+--  so it does not hoard -- which means every drop in coverage sits there
+--  decaying while the network optimises its walking distance. Items ceasing to
+--  exist is the worst outcome available, and it outranks every efficiency
+--  argument in this file.
+--
+--  Deliberately the same shape as the test depositWork runs a moment later.
+--  Duplicated rather than shared because the two want different answers: this
+--  asks "is there an alternative", that one asks "which crate".
+local function storageWouldTakeAny()
+  if self.petData == nil or self.petData.cargo == nil then return false end
+
+  for _, beacon in ipairs(petports_beaconsFor("deposit")) do
+    if world.entityExists(beacon.id) then
+      for _, stack in ipairs(self.petData.cargo) do
+        if petports_filterAccepts(beacon.filter, stack.name) then
+          --  nil means the engine will not answer. Treated as YES here, which
+          --  is the opposite of tidyWork's reading and deliberate: guessing
+          --  wrong costs a slightly inefficient trip, where guessing the other
+          --  way could waive the floor when it should not have been.
+          local fits = world.containerItemsCanFit ~= nil
+            and world.containerItemsCanFit(beacon.id, stack) or nil
+
+          if fits == nil or fits > 0 then return true end
+        end
+      end
+    end
+  end
+
+  return false
+end
+
+local function machineWantsAny(machine, floorWaived)
   if machine.kind ~= "upcycler" then return false, "not an upcycler" end
   if not machine.enabled then return false, "switched off" end
 
@@ -2484,9 +2531,18 @@ local function machineWantsAny(machine)
       --  CAPPED BY THE STACK, so a unit holding thirty blocks can still deliver
       --  thirty. This is about not walking across a base for a handful, not
       --  about refusing small loads.
-      local batch = math.min(
-        math.ceil(stackSizeOf(stack.name) * MACHINE_MIN_BATCH),
-        stack.count or 1)
+      --  WAIVED WHEN NOTHING ELSE WILL TAKE THE LOAD. See storageWouldTakeAny:
+      --  with storage full and drops decaying on the ground, an inefficient
+      --  drip-feed into whatever room a machine has is strictly better than a
+      --  parked unit and a pile of items timing out. Trips get ugly; nothing is
+      --  destroyed.
+      local batch = 1
+
+      if not floorWaived then
+        batch = math.min(
+          math.ceil(stackSizeOf(stack.name) * MACHINE_MIN_BATCH),
+          stack.count or 1)
+      end
 
       local room = machineInputRoom(machine.id, stack)
 
@@ -2501,8 +2557,9 @@ local function machineWantsAny(machine)
         --  through to ordinary storage -- overshooting a threshold is soft and
         --  self-correcting, and drainWork pulls it back out later when a machine
         --  has real room. A unit orbiting full machines is neither.
-        table.insert(reasons, string.format("%s: input has room for %s, want %s",
-          tostring(stack.name), tostring(room), tostring(batch)))
+        table.insert(reasons, string.format("%s: input has room for %s, want %s%s",
+          tostring(stack.name), tostring(room), tostring(batch),
+          floorWaived and " (floor waived, storage full)" or ""))
       else
         return true
       end
@@ -2569,13 +2626,46 @@ local function upcyclerWork()
   local declined = {}
   local origin = entity.position()
 
+  --  COMPUTED ONCE PER DISPATCH, not per machine. It is the same answer for
+  --  every candidate, and it walks every deposit beacon against every cargo
+  --  stack -- not something to repeat five times.
+  local floorWaived = not storageWouldTakeAny()
+
+  --  CHANGE-GATED. This is a genuinely unusual state and the player almost
+  --  certainly wants to know they are in it: storage is full, so the network has
+  --  stopped optimising and is drip-feeding machines to keep drops from timing
+  --  out. Silent, it just looks like the inefficiency that was fixed two builds
+  --  ago coming back.
+  if floorWaived ~= self.floorWaived then
+    self.floorWaived = floorWaived
+
+    if floorWaived then
+      sb.logInfo("PETPORT %s storage will not take the load -- WAIVING the "
+        .. "upcycler batch floor to keep drops from decaying", stationUniqueId())
+    else
+      sb.logInfo("PETPORT %s storage has room again -- upcycler batch floor "
+        .. "back in force", stationUniqueId())
+    end
+  end
+
   for _, machine in ipairs(self.machines or {}) do
     --  HONOUR THE BACKOFF. Every other generator checks workFailures and this
     --  one did not, so a delivery that arrived to a full slot was recorded and
     --  then immediately ignored -- the unit re-targeted the same machine on the
     --  next tick and orbited the set. The record only helps if something reads
     --  it.
-    local workId = "upcycle:" .. tostring(machine.id) .. "@" .. stationUniqueId()
+    --  EXCLUSIVE ACROSS PORTS -- NO PORT SUFFIX.
+    --
+    --  This carried the port id on the reasoning that several units CAN share a
+    --  destination, because containerPutItemsAt gives every arrival a truthful
+    --  leftover. That holds while room is plentiful and inverts exactly when it
+    --  is not -- which is the state the batch floor waiver exists for.
+    --
+    --  Measured: with storage full, every port ranked the same machine highest,
+    --  three units walked there as a pack, the leader took the twenty items
+    --  available and the rest arrived at zero. One unit per machine at a time
+    --  is the honest model when a machine's room is the scarce resource.
+    local workId = "upcycle:" .. tostring(machine.id)
     local failure = self.workFailures[workId]
     local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
 
@@ -2586,8 +2676,25 @@ local function upcyclerWork()
         tostring(math.floor(machine.position[2])),
         tostring(failure.count)))
 
+    --  ALREADY SPOKEN FOR -- AND THIS WAS THE MISSING FILTER.
+    --
+    --  Every other generator screens its candidates with claimFree before
+    --  offering one. This did not, so making the claim exclusive stopped three
+    --  units from SUCCEEDING at the same machine without stopping them from
+    --  WALKING there: the loser found out on arrival, having spent the trip.
+    --
+    --  With this, a port whose first choice is taken simply moves to the next
+    --  emptiest, which is what spreads the fleet across machines. Ordering
+    --  decides preference; claims decide availability. Trying to make ordering
+    --  do both is what produced the nearest-first mistake above.
+    elseif not claimFree(workId) then
+      table.insert(declined, string.format("%s@%s,%s (claimed by another unit)",
+        tostring(machine.kind),
+        tostring(math.floor(machine.position[1])),
+        tostring(math.floor(machine.position[2]))))
+
     elseif world.entityExists(machine.id) then
-      local wants, why = machineWantsAny(machine)
+      local wants, why = machineWantsAny(machine, floorWaived)
 
       if wants then
         table.insert(candidates, {
@@ -2622,6 +2729,20 @@ local function upcyclerWork()
 
   self.upcyclerDeclined = nil
 
+  --  EMPTIEST FIRST, ALWAYS. DISTANCE ONLY BREAKS TIES.
+  --
+  --  This briefly inverted to nearest-first while the batch floor was waived,
+  --  on the reasoning that scarcity makes trips tiny and the walk dominates.
+  --  THAT REASONING WAS WRONG, and the result was worse than the problem: the
+  --  two machines closest to the fleet stayed topped up with one- and two-item
+  --  deliveries while the three furthest starved at maximum room.
+  --
+  --  ROOM IS DELIVERY SIZE. A machine with a thousand free is a thousand-item
+  --  trip; a machine with twenty free is a twenty-item trip. Trips were never
+  --  small because of scarcity -- they were small because the ranking kept
+  --  choosing machines that could not accept anything. Sorting by room IS
+  --  sorting by trip value, and it is self-balancing for free: a machine that
+  --  was just fed sinks to the bottom and rises as it burns through what it got.
   table.sort(candidates, function(a, b)
     if a.room ~= b.room then return a.room > b.room end
     return a.distance < b.distance
@@ -2639,10 +2760,11 @@ local function upcyclerWork()
       sb.logInfo("PETPORT %s upcycler %s SKIPPED: no standable spot within 4 tiles of %s",
         stationUniqueId(), sb.printJson(machine.id), sb.printJson(machine.position))
     else
-      sb.logInfo("PETPORT %s upcycling to %s at %s: room for %s, %s tile(s) away (%s candidate(s))",
+      sb.logInfo("PETPORT %s upcycling to %s at %s: room for %s, %s tile(s) away (%s candidate(s), %s)",
         stationUniqueId(), tostring(machine.kind), sb.printJson(machine.position),
         sb.printJson(candidate.room), sb.printJson(math.floor(candidate.distance)),
-        sb.printJson(#candidates))
+        sb.printJson(#candidates),
+        floorWaived and "batch floor waived, storage full" or "normal")
 
       return {
         --  Keyed by machine AND port, for the reason spelled out on the deposit
@@ -2650,7 +2772,7 @@ local function upcyclerWork()
         --  port to take it locks every other port's unit out of the machine.
         --  MUST MATCH the workId the backoff check above computes, or a
         --  recorded failure is filed under a key nothing ever looks up.
-        id = "upcycle:" .. tostring(machine.id) .. "@" .. stationUniqueId(),
+        id = "upcycle:" .. tostring(machine.id),
         type = "upcycle",
         target = machine.id,
         position = stand,
@@ -3960,7 +4082,9 @@ end
 --
 --  It matters twice over in withdrawWork, which needs it for its own leg AND
 --  for the replant that follows; getting that wrong livelocks the queue.
-local function claimFree(workId)
+--  Assigned, not declared -- the name is forward-declared far above so
+--  upcyclerWork can screen candidates with it.
+claimFree = function(workId)
 	local claim = petports_claimGet(workId)
 
 	return (claim == nil)
@@ -5791,8 +5915,33 @@ local function tidyWork()
         for _, misfit in ipairs(misfits) do
           misfiled = misfiled + 1
 
+          --  EXCLUSIVE ACROSS PORTS -- NO PORT SUFFIX.
+          --
+          --  This carried "@" .. stationUniqueId() and was the last take-shaped
+          --  generator that did. A deposit claim is keyed per port on purpose,
+          --  because several units genuinely CAN share one crate:
+          --  containerAddItems gives every arrival a truthful answer and there
+          --  is nothing to serialise. A TAKE is the opposite -- one misfiled
+          --  stack, one unit -- so a per-port key sent every port after the same
+          --  stack and all but the first arrived to find it gone, took a
+          --  ten-second backoff, and had burned a trip for nothing.
+          --
+          --  MEASURED ON THE SAME SHAPE ELSEWHERE: three ports each dispatched a
+          --  unit across the base for the same three Pet Treats, and two of them
+          --  logged "took nothing: slot 1 now holds null". restock, compact,
+          --  drain and fuel already key this way; tidy was the outlier.
+          --
+          --  ONCE UNITS RUN ON FUEL THIS STOPS BEING MERELY WASTEFUL. A
+          --  redundant dispatch will cost treats to accomplish nothing, so the
+          --  network would be paying to idle.
+          --
+          --  WHAT TO WATCH: tidy is by far the busiest take-shaped generator, so
+          --  this is where the deposit comment's warning could plausibly bite --
+          --  refused ports falling back to station-keeping and sliding back and
+          --  forth. They should fall through to compactWork and drainWork
+          --  instead. That is reasoning, not measurement.
           local workId = "tidy:" .. tostring(source.id)
-            .. ":" .. tostring(misfit.name) .. "@" .. stationUniqueId()
+            .. ":" .. tostring(misfit.name)
 
           local failure = self.workFailures[workId]
           local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
