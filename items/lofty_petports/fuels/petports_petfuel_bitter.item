@@ -1,0 +1,48 @@
+//  PETPORTS -- BITTER PET TREAT
+//
+//  A flavoured Pet Treat. The upcycler produces these when a Phase Matter-class
+//  reagent is in its reagent slot; see scripts/lofty_petports/petports_flavours.config
+//  for the reagent list and what each one is worth.
+//
+//  FLAVOUR IS THE WHOLE OF THE PREFERENCE SYSTEM. A unit rolls one preferred
+//  flavour and refills more of its fuel bar eating that one. Every other
+//  flavour, and the unflavoured treat, are worth exactly the same to it -- so
+//  feeding a unit the wrong flavour is never a mistake, only a missed bonus.
+//  That is what keeps reagents optional rather than a chore.
+//
+//  A SEPARATE ITEM NAME, NOT A PARAMETER ON petports_petfuel. The whole sorting
+//  system keys on names, so distinct names mean a player can route spicy into
+//  one crate and sweet into another with the filters that already exist. A
+//  parameter would have made the census sum every flavour as one item, which is
+//  right for thresholds and wrong for storage.
+//
+//  PRICE ZERO, AND IT IS LOAD-BEARING. The upcycler values its input by price
+//  and refuses anything tagged petports_no_upcycling. Both guards are here for
+//  the same reason the unflavoured treat has them: a treat worth anything is a
+//  treat that can be fed back in, and a laundering loop that pays out slowly is
+//  harder to notice than one that pays out fast.
+//
+//  petports_fuel IS WHAT THE FILTER MANIFEST MATCHES ON, by tag rather than by
+//  name, so this sorts into the Pet Treats subgroup without the manifest being
+//  edited. Do not drop that tag: fuelWork only sends a unit to empty an
+//  upcycler's output slot when some deposit beacon accepts what is in it, so an
+//  untagged treat fills a machine and stops it.
+//
+//  PLACEHOLDER ART: the unflavoured treat's flat square in this flavour's
+//  colour. Obviously unfinished on purpose, so it cannot be mistaken for a
+//  design decision. The colours themselves are NOT placeholder -- they are
+//  spread across lightness as well as hue so the seven stay distinguishable
+//  under red-green colour blindness, where a naive palette collapses spicy into
+//  zesty and savory. Keep that spread when the real art lands.
+
+{
+	"itemName" : "petports_petfuel_bitter",
+	"price" : 0,
+	"rarity" : "Common",
+	"category" : "petports_fuel",
+	"inventoryIcon" : "petports_petfuel_bitter.png",
+	"description" : "Pressed surplus laced with phase matter. Half here, wholly unpleasant, and apparently an acquired taste.",
+	"shortdescription" : "Bitter Pet Treat",
+	"itemTags" : [ "petports", "petports_fuel", "petports_no_upcycling" ],
+	"maxStack" : 1000
+}

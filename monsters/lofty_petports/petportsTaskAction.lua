@@ -1651,7 +1651,8 @@ end
 --  issued.
 --  `cargo` is an item descriptor the unit is handing over, or nil. Only a
 --  successful pickup passes one.
---  How far a unit must travel before it is reported as under way.
+--  How far a unit must get from where it started before it is reported as
+--  under way.
 --
 --  NOT ZERO. A unit jostled by another, or settling onto the ground on the
 --  first tick, moves a little without having gone anywhere -- and a marker that
@@ -1661,7 +1662,37 @@ end
 --
 --  Two tiles is far enough to be deliberate and close enough that the colour
 --  changes while the player is still watching.
+--
+--  NET DISPLACEMENT FROM startPosition, NOT ACCUMULATED PATH LENGTH, and the
+--  change matters for two separate reasons.
+--
+--  Accumulated length only exists at the trace timer's granularity, so it could
+--  not be sampled faster than once a second without also multiplying the
+--  TASK_DEBUG block that shares that timer. Net displacement is a single
+--  magnitude against a fixed point and can be taken as often as we like.
+--
+--  It is also immune to the sample rate in a way a running total is not. A
+--  total that adds every measured wobble creeps upward while a unit stands
+--  still -- slowly at one sample a second, five times faster at five -- so
+--  speeding the old test up would have traded a late green for a false one.
+--  Distance from a fixed point does not creep.
+--
+--  A VENT HOP COUNTS, deliberately. It displaces the unit well past two tiles
+--  in one tick, so a unit that routes through a vent goes green the moment it
+--  comes out the far side -- which is exactly what the marker is FOR. Nothing
+--  else moves a unit that far without walking: moveJump's snap to its source is
+--  capped at one tile and the platform drop placement is a quarter of one.
 local TASK_MOVING_DISTANCE = 2.0
+
+--  How often that test runs. Its own timer, NOT the trace timer.
+--
+--  THE TRACE TIMER WAS THE LAG. The old check rode inside the once-a-second
+--  trace block, which itself sits below `if not stateData.arrived` and below
+--  the vent branch's own `return false` -- so a unit walking to a vent mouth
+--  never ran it at all, and every other unit waited out up to a full second of
+--  trace phase on top of the port's half-second marker pass. See the pump in
+--  update(), which is where this now runs from.
+local TASK_MOVING_INTERVAL = 0.2
 
 local function report(stateData, outcome, reason, cargo)
   local task = stateData.task
@@ -1904,6 +1935,69 @@ function petportsTaskAction.update(dt, stateData)
   --  happens inside one. Pings raised later in this same call are consumed on
   --  the NEXT tick; the grace window absorbs that.
   petports_thinkPump(dt)
+
+  --  TELL THE PORT WE ARE ACTUALLY UNDER WAY.
+  --
+  --  The port knows only two things about a task: that it dispatched one, and
+  --  how it ended. Both crosshair colours it could derive from that -- yellow on
+  --  dispatch, red on failure -- so a unit still searching for a route and a
+  --  unit halfway there looked identical from outside. This is what green keys
+  --  off.
+  --
+  --  MOVEMENT IS THE SIGNAL, NOT THE PATHER'S INTERNAL STATE. "Has a path" is
+  --  genuinely hard to answer here -- PathFinder does not latch, a plan can span
+  --  several vent legs, and routing flips true and false several times over one
+  --  journey. Distance covered has none of that ambiguity: a unit that has moved
+  --  is a unit that found a way.
+  --
+  --  UP HERE, ABOVE EVERY BRANCH, AND THAT IS THE WHOLE FIX. This used to live
+  --  inside the trace block near the bottom of this function, which is reached
+  --  only when the unit is on a direct approach and has not yet arrived. Three
+  --  paths return before it:
+  --
+  --    the routing branch      probing exits -- correct to skip, nothing moves
+  --    the vent-leg branch     WALKING TO A VENT MOUTH -- real, visible motion
+  --                            that never counted, so the marker stayed yellow
+  --                            through the approach, the hop, and every leg
+  --                            after it
+  --    the settle branch       a drop still falling -- correct to skip
+  --
+  --  The middle one is the bug Lofty saw. It is also the case the green marker
+  --  exists for, since a unit that vanishes into a vent is precisely when a
+  --  player wants to be told the network is still on it.
+  --
+  --  ONCE PER TASK. reportedMoving latches, so this costs one message per task
+  --  and stops testing afterwards. Fire-and-forget on this side: the port either
+  --  updates a cosmetic or it does not, and a lost message costs a colour rather
+  --  than a decision.
+  --
+  --  NOT FOR A LEASH. A station-keeping task has no port to tell -- and nothing
+  --  is owed a report for one either way.
+  if not stateData.reportedMoving and task.port ~= nil then
+    stateData.movingTimer = (stateData.movingTimer or 0) - dt
+
+    if stateData.movingTimer <= 0 then
+      stateData.movingTimer = TASK_MOVING_INTERVAL
+
+      local from = stateData.startPosition
+      local gone = from ~= nil
+        and world.magnitude(mcontroller.position(), from) or 0
+
+      if gone > TASK_MOVING_DISTANCE then
+        stateData.reportedMoving = true
+
+        sb.logInfo("UNIT under way for %s: %s tile(s) from %s, now at %s",
+          tostring(task.id), sb.printJson(gone), sb.printJson(from),
+          sb.printJson(mcontroller.position()))
+
+        world.sendEntityMessage(task.port, "petports_taskProgress", {
+          id = task.id,
+          phase = "moving",
+          unit = entity.uniqueId()
+        })
+      end
+    end
+  end
 
   --  VANILLA DISCARDS THE PATH ON EVERY JUMP. THIS IS THE FIX.
   --
@@ -2759,39 +2853,13 @@ function petportsTaskAction.update(dt, stateData)
       stateData.movedTotal = stateData.movedTotal + world.magnitude(here, stateData.lastPosition)
       stateData.lastPosition = here
 
-      --  TELL THE PORT WE ARE ACTUALLY UNDER WAY.
-      --
-      --  The port knows only two things about a task: that it dispatched one,
-      --  and how it ended. Both crosshair colours it could derive from that --
-      --  yellow on dispatch, red on failure -- so a unit still searching for a
-      --  route and a unit halfway there looked identical from outside. Green
-      --  was declared in the palette and unset because there was nothing to
-      --  key it off.
-      --
-      --  MOVEMENT IS THE SIGNAL, NOT THE PATHER'S INTERNAL STATE. "Has a path"
-      --  is genuinely hard to answer here -- PathFinder does not latch, a plan
-      --  can span several vent legs, and routing flips true and false several
-      --  times over one journey. Distance covered has none of that ambiguity:
-      --  a unit that has moved is a unit that found a way.
-      --
-      --  ONCE PER TASK, on the existing one-second trace timer. This costs one
-      --  message per task, not one per tick, and it is fire-and-forget -- the
-      --  port either updates a cosmetic or it does not.
-      if not stateData.reportedMoving
-         and (stateData.movedTotal or 0) > TASK_MOVING_DISTANCE
-         and stateData.task ~= nil and stateData.task.port ~= nil then
-
-        stateData.reportedMoving = true
-
-        sb.logInfo("UNIT under way for %s after %s tile(s)",
-          tostring(stateData.task.id), sb.printJson(stateData.movedTotal))
-
-        world.sendEntityMessage(stateData.task.port, "petports_taskProgress", {
-          id = stateData.task.id,
-          phase = "moving",
-          unit = entity.uniqueId()
-        })
-      end
+      --  The under-way report used to live here and does not any more -- it is
+      --  pumped from the top of update() instead, above every branch that
+      --  returns before this line. movedTotal stays: it is accumulated PATH
+      --  LENGTH and it still owns the "never moved" versus "could not reach"
+      --  split in the approach-timeout report below, which net displacement
+      --  cannot answer -- a unit that walked out and back has covered ground
+      --  and is a different failure from one that never started.
 
       if TASK_DEBUG then
         --  self.approachPosition is groundPet.lua's cache. approachPoint only

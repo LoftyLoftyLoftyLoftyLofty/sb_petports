@@ -887,6 +887,20 @@ function init()
     if self.taskMoving then return end
     self.taskMoving = true
 
+    --  REDRAW ON THE NEXT TICK, not on the next scheduled pass.
+    --
+    --  crosshairRefresh gates itself on CROSSHAIR_INTERVAL, so a message
+    --  arriving just after a pass waited out most of half a second before the
+    --  colour it caused was drawn. That is a fixed cost on the ONE transition
+    --  a player is watching for, and the pass is cheap, so it is worth
+    --  spending one early.
+    --
+    --  Zeroing the timer rather than calling crosshairRefresh directly: this
+    --  runs inside a message handler, and the refresh spawns projectiles,
+    --  writes claims and reads self.task. Letting update() own when that
+    --  happens keeps it on one thread of control.
+    self.crosshairTimer = 0
+
     sb.logInfo("PETPORT %s task %s is under way", stationUniqueId(), progress.id)
   end))
 
@@ -7390,6 +7404,23 @@ local CROSSHAIR_DRIFT = 0.5
 --  often the cosmetic redraws.
 local CROSSHAIR_DWELL = 1.5
 
+--  TRANSITIONS THE DWELL DOES NOT GOVERN.
+--
+--  The dwell is anti-strobe, and it only earns that by costing latency on
+--  changes that could come back. routing -> enroute cannot: self.taskMoving
+--  goes false to true exactly once per task and is cleared only when a NEW task
+--  is dispatched, so the pair can never trade back and forth the way an
+--  unreachable drop's dispatch-fail-backoff cycle does.
+--
+--  IT WAS THE WORST CASE FOR THE DWELL, NOT AN INCIDENTAL ONE. A yellow marker
+--  is spawned AT DISPATCH, so its `since` is always fresh -- which means the
+--  yellow-to-green change was the one transition in the set that reliably
+--  landed inside the dwell window and paid the full 1.5s. Everything else here
+--  changes state on a marker that has usually been up for a while.
+local CROSSHAIR_IMMEDIATE = {
+  routing = { enroute = true }
+}
+
 local function crosshairRefresh(dt)
   self.crosshairs = self.crosshairs or {}
 
@@ -7421,9 +7452,14 @@ local function crosshairRefresh(dt)
     end
 
     --  A state that changed too recently to redraw is held, not retired. The
-    --  marker keeps showing the older state until the dwell elapses.
+    --  marker keeps showing the older state until the dwell elapses -- unless
+    --  this particular transition is one the dwell has no business delaying.
+    local exempt = CROSSHAIR_IMMEDIATE[marker.state] ~= nil
+      and CROSSHAIR_IMMEDIATE[marker.state][wanted[dropId]] == true
+
     local settling = wanted[dropId] ~= nil
       and wanted[dropId] ~= marker.state
+      and not exempt
       and (world.time() - (marker.since or 0)) < CROSSHAIR_DWELL
 
     local keep = wanted[dropId] ~= nil

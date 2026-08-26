@@ -35,11 +35,11 @@
   //                that competes with the ones that mean something makes all of
   //                them easier to ignore.
   "crosshairColors" : {
-    "routing" : "ffd23fff",
-    "enroute" : "5fd35fff",
-    "unroutable" : "e04b4bff",
-    "blocked" : "ef8b3cff",
-    "unclaimed" : "9aa0a6ff"
+    "routing" : "ffff20ff",
+    "enroute" : "20ff20ff",
+    "unroutable" : "ff2020ff",
+    "blocked" : "ff8020ff",
+    "unclaimed" : "606060ff"
   },
 
   //  Not stackable: each unit carries its own saved state in parameters below.
