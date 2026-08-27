@@ -344,10 +344,28 @@ end
 --  Spend one reagent from the slot if the whole of it fits.
 --
 --  Returns true if something was consumed, so the caller can flush.
+--  Say why nothing was consumed, ONCE per distinct reason.
+--
+--  consumeReagent runs every tick and had four silent exits, so "the reagent is
+--  not being taken" and "the reagent slot is empty" produced identical logs:
+--  none at all. Change-gated on the message, so a machine sitting in one state
+--  says so once rather than sixty times a second.
+local function reagentState(fmt, ...)
+	local text = string.format(fmt, ...)
+	if self.lastReagentState == text then return end
+	self.lastReagentState = text
+	sb.logInfo("PETPORTS upcycler reagent: %s", text)
+end
+
 local function consumeReagent()
 	local queue = blipQueue()
 	local room = BLIP_CAPACITY - #queue
-	if room <= 0 then return false end
+
+	if room <= 0 then
+		reagentState("charge full at %s, nothing can be spent",
+			sb.printJson(#queue))
+		return false
+	end
 
 	--  containerItemAt, NOT containerItems INDEXED BY OFFSET + 1.
 	--
@@ -364,32 +382,62 @@ local function consumeReagent()
 	--  either reading, which is why every slot lookup in this file now uses it.
 	--  Do not put the offset + 1 form back to save a call.
 	local held = world.containerItemAt(entity.id(), SLOT_REAGENT)
-	if type(held) ~= "table" or type(held.name) ~= "string" then return false end
+
+	if type(held) ~= "table" or type(held.name) ~= "string" then
+		--  Names the OFFSET it looked at. If a reagent is visibly sitting in the
+		--  pane and this says the slot is empty, the pane and the machine
+		--  disagree about which container slot that grid is bound to.
+		reagentState("slot %s is empty (%s room in the charge)",
+			sb.printJson(SLOT_REAGENT), sb.printJson(room))
+		return false
+	end
 
 	local entry = petports_reagentFor(held.name)
 
 	--  FAIL CLOSED. An item that is not a reagent sits in the slot doing
 	--  nothing, rather than being eaten for no effect. The pane is what tells
 	--  the player why; the machine's job is to not destroy it.
-	if entry == nil then return false end
+	if entry == nil then
+		reagentState("%s in slot %s is not a reagent", tostring(held.name),
+			sb.printJson(SLOT_REAGENT))
+		return false
+	end
 
 	local weight = tonumber(entry.weight) or 0
-	if weight <= 0 then return false end
+
+	if weight <= 0 then
+		reagentState("%s has no usable weight (%s)", tostring(held.name),
+			tostring(entry.weight))
+		return false
+	end
 
 	--  ALL OR NOTHING. Part-filling would let a player queue a flavor they can
 	--  never finish paying for and could not clear without emptying the bar
 	--  anyway.
-	if weight > room then return false end
+	if weight > room then
+		reagentState("%s needs %s blip(s), only %s free",
+			tostring(held.name), sb.printJson(weight), sb.printJson(room))
+		return false
+	end
 
 	local taken = world.containerTakeNumItemsAt(entity.id(), SLOT_REAGENT, 1)
 
 	--  Nothing came back: something else took it between the read and the take.
 	--  Not an error, just a wasted tick.
-	if type(taken) ~= "table" or (taken.count or 0) < 1 then return false end
+	if type(taken) ~= "table" or (taken.count or 0) < 1 then
+		--  The read found it and the take did not. That is the slot indexing
+		--  disagreeing with itself, which should be impossible now that both
+		--  use the same offset.
+		reagentState("take FAILED on slot %s holding %s",
+			sb.printJson(SLOT_REAGENT), tostring(held.name))
+		return false
+	end
 
 	for _ = 1, weight do
 		table.insert(queue, entry.flavor)
 	end
+
+	self.lastReagentState = nil
 
 	sb.logInfo("PETPORTS upcycler: spent 1 %s -> %s x%s blip(s), charge now %s of %s",
 		held.name, tostring(entry.flavor), sb.printJson(weight),
@@ -490,16 +538,27 @@ function update(dt)
 	storage.points = storage.points or 0
 	flushPoints(dt)
 
+	--  THE CHARGE LOADS WHETHER THE MACHINE IS RUNNING OR NOT, and it has to be
+	--  above the switched-off return to do that.
+	--
+	--  It used to sit below, so an off machine ignored its reagent slot
+	--  entirely. That is the DEFAULT experience rather than an edge case:
+	--  adding a rule switches the machine off, so the natural order -- add a
+	--  rule, drop a reagent in, set a threshold, switch on -- put the reagent in
+	--  during the one window where it was ignored, with no log line and no
+	--  warning.
+	--
+	--  LOADING A CHARGE IS NOT CONVERSION. The off switch exists so a machine
+	--  cannot destroy input it was not configured for; spending a reagent
+	--  destroys nothing the player did not explicitly ask for by putting it in
+	--  that slot, and the blips persist across off and on. So there is nothing
+	--  for the gate to protect here.
+	consumeReagent()
+
 	if not storedEnabled() then
 		state("idle: machine is switched off")
 		return
 	end
-
-	--  TOP UP THE CHARGE BEFORE PAYING OUT, so a treat produced this tick can
-	--  be flavored by a reagent inserted since the last one. The other order
-	--  costs the player one plain treat every time they load the slot, which
-	--  looks like the reagent being ignored.
-	consumeReagent()
 
 	--  Pay out first. Points banked from a previous tick should become fuel
 	--  before anything else is eaten, so a machine that was blocked and has
@@ -698,6 +757,25 @@ function init()
 			--  on it. Publishing it means the pane's warning and the machine's
 			--  refusal cannot disagree, which is the same reason the pane reads
 			--  petports_reagentFor rather than keeping its own list.
+			--  WHAT IS IN THE OUTPUT SLOT, so the pane can say why a machine
+			--  with points banked is doing nothing.
+			--
+			--  A player can drag anything into any slot. An ore stack parked
+			--  here refuses every treat the machine tries to place, and the port
+			--  will not clear it -- its fuel scan only recognises treats, on
+			--  purpose, because hauling off something the player put somewhere
+			--  is worse than leaving it. So nothing in the world resolves this
+			--  and the only way out is telling them.
+			output = (function()
+				local held = world.containerItemAt(entity.id(), SLOT_OUTPUT)
+
+				if type(held) ~= "table" or type(held.name) ~= "string" then
+					return nil
+				end
+
+				return held.name
+			end)(),
+
 			--  A NAME, NOT A DESCRIPTOR. The pane only needs it to look up
 			--  whether the item is a reagent and to label a warning, and a bare
 			--  string cannot be oversized.

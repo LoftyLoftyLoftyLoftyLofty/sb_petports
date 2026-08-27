@@ -57,6 +57,17 @@ reachable-but-unstorable, grey seen-and-unclaimed. One marker per item is
 enforced by the markers themselves, and which port speaks for a drop is settled
 through the claim registry. Colours are per-unit configurable.
 
+**REPLANT ORPHANS ARE SWEPT, AND AN EMPTY PORT NOW SWEEPS AT ALL.** An intent
+whose tile no port covers is pruned by `petports_anyPortCovers`, which asks the
+REGISTRY rather than the caller's network -- so a tile another network covers is
+left for that network. Verified in game: mining the only covering port cleared
+the intent within five seconds, and beaming away did not.
+
+The sweep also moved ABOVE the petport's no-item return. It was called from
+`workUpdate`, the last line of `update`, so an EMPTY port never swept anything.
+Measured: a port with no unit socketed logged five lines when placed and nothing
+for the rest of a four-minute session.
+
 **THE FLAVOR SYSTEM IS DESIGNED AND HALF BUILT.** Seven flavors, each a class
 of reagents rather than a single item, with the six vanilla augment materials as
 anchors. The items exist, the sorting exists, and nothing produces or eats one
@@ -107,6 +118,16 @@ adding also stops the machine. The old defence -- that the machine ships off and
 every rule is visible before it runs -- covers the first rule and nothing after
 it.
 
+**THE REAGENT SLOT WORKS AND THE UPCYCLER IS FUNCTIONALLY DONE.** Reagents fill
+a queue of coloured blips beside the slot, treats come out flavored in the order
+the reagents went in, and the whole thing survives mine-and-replace. See "The
+reagent branch" under where this goes next.
+
+**The pane is three real itemgrids**, input / reagent / output at slotOffsets 0,
+1 and 2, each placed independently. The long-standing "two itemgrids" limit in
+the traps section WAS WRONG -- there are three, and correcting it retired a
+session's worth of proxy workarounds.
+
 **Cargo top-up in the stall case.** A unit holding cargo it cannot deposit may
 collect more of the SAME item, capped at one `maxStack`. Capacity is counted in
 SLOTS, so a merge consumes none of it.
@@ -119,11 +140,9 @@ for ten minutes.
 treated as a full load, deliberately). The participate/ID interface — networks
 derive correctly, but nothing lets a player author a network id or opt a port
 out of auto-merge, so half the network design is unreachable from in game. The
-fuel system itself: Pet Treats exist and accumulate, and nothing consumes them
-yet. THE REAGENT BRANCH is the nearest thing to the surface -- the slot is
-there, the seven flavored treats exist, 251 reagents are mapped with weights,
-the pane shows the whole table, and NOTHING READS THE SLOT. Until it does, none
-of the flavor work is reachable in game.
+fuel system itself: Pet Treats exist and accumulate, IN SEVEN FLAVORS NOW, and
+nothing consumes them yet. That is the last gap between the flavor work and it
+mattering -- everything upstream of a unit eating one is built.
 
 **ART.** Bespoke: the unit body and the petport, the latter in three
 independently animated components with a ten-frame door cycle aliased in reverse
@@ -1002,22 +1021,60 @@ was too LOW. It correctly reported an impossible packing, and its own comment
 invited reading it as a bad prediction. Compaction now counts what went in
 against what came out and logs an error if they disagree.
 
-### A container pane binds exactly TWO itemgrids
+### A container pane binds THREE itemgrids -- itemGrid, itemGrid2, outputItemGrid
 
-`ContainerPane` registers callbacks for `itemGrid` and `itemGrid2` and binds
-those two to the container's item bag. Nothing else, by any spelling.
+**THIS ENTRY SAID TWO FOR MONTHS AND IT WAS WRONG.** It shaped every layout
+decision in this mod and cost an entire session to a workaround that was never
+needed. `ContainerPane`'s widget reader registers THREE names, each with its own
+`.right`, and all three route through the same `swapSlot` path:
 
-- A grid named anything else, WITH callbacks supplied, constructs fine and draws
-  ZERO slots — silently, with nothing in the log. Only a screenshot shows it.
+    itemGrid          itemGrid.right
+    itemGrid2         itemGrid2.right
+    outputItemGrid    outputItemGrid.right
+
+So all three are REAL stacking grids with native drag, right-click and
+shift-click. `slotOffset` is honoured on all three -- measured with three
+single-cell grids at offsets 0, 1 and 2, each holding stacks correctly.
+
+**IT LOOKED LIKE TWO BECAUSE VANILLA BARELY USES THE THIRD.** The campfire is
+the only user in the entire asset tree. Grepping for it finds one hit, which
+reads like a dead registration until you try it.
+
+- A grid named anything OUTSIDE those three, with callbacks supplied, constructs
+  fine and draws ZERO slots -- silently, nothing in the log.
 - `itemGrid3`, with no callbacks, throws
   `(WidgetParserException) Failed to find itemgrid callback named: 'itemGrid3'`
   out of ContainerPane's constructor and takes the CLIENT down.
 
-Two grids is not two slots: a grid spans `dimensions` worth of slots from
-`slotOffset`, so the real constraint is TWO INDEPENDENTLY POSITIONED GROUPS.
-Vanilla's cropshipper covers 40 slots with two grids. For more than two groups,
-use `itemslot` proxies — `player.swapSlotItem` and `player.setSwapSlotItem` ARE
-available from a container pane script, verified by probe.
+Three grids is not three slots: a grid spans `dimensions` worth of slots from
+`slotOffset`, so the constraint is THREE INDEPENDENTLY POSITIONED GROUPS.
+Vanilla's cropshipper covers 40 slots with two of them.
+
+### DO NOT USE itemslot PROXIES FOR CONTAINER SLOTS. Two reasons, either fatal.
+
+Reaching for proxies is the obvious move when three groups is not enough. It was
+tried twice in one session and rolled back twice.
+
+**AN itemslot ONLY HANDLES ONE ITEM.** Putting in or taking out works with a
+single item and nothing more. Vanilla never exposes this because the only place
+it uses itemslots for real inventory is the mech assembly station, where every
+part is NON-STACKABLE -- so the widget looks general and is not. Every slot on
+the upcycler takes stacks, which rules proxies out on its own.
+
+**AND SPLITTING THE GRID BINDING BREAKS THE MACHINE.** Removing a grid to free
+its slots for proxies changed how the container was bound and the upcycler
+misbehaved underneath -- not visibly at the pane, but in what the slots actually
+contained. If proxies are ever attempted again the grid must STAY and the proxy
+sit over it.
+
+`player.swapSlotItem` and `player.setSwapSlotItem` ARE available from a
+container pane script, verified by probe -- that was never the obstacle.
+
+**A PROXY MUST DO ITS CONTAINER WRITE THROUGH THE OBJECT**, by message, and must
+not take from the cursor until the object answers. It also must not return a raw
+descriptor: clamp the count to one stack, because a container slot can hold more
+than `maxStack` and an oversized descriptor crossing the wire surfaces as a
+`bad_alloc` on the far side naming neither the pane nor the item.
 
 ### An itemgrid needs BOTH callbacks, and the right-click default is unreachable
 
@@ -1209,6 +1266,60 @@ watching for.
 MEASURED after the fix, across 38 transitions in one session: every one landed
 65-78ms after the unit reported moving, i.e. one tick. Before, the direct case
 cost 1.5-3s and the vent case cost the whole journey.
+
+### Traps found in the reagent session
+
+### IMAGE DIRECTIVES COMPOUND -- setImage DOES NOT REPLACE A DECLARED ONE
+
+A widget's declared `file` can carry a directive, and `widget.setImage` supplies
+a path of its own. BOTH APPLY. The declared one is not replaced.
+
+The blips declared `blip.png?multiply=2a2a2aff` to stop them flashing white
+between the pane opening and the first state poll. Every tint set from Lua was
+then multiplied by that grey, and sweet at `cfe9f2` came out indistinguishable
+from an empty cell.
+
+**IT DOES NOT ERROR AND IT IS NOT OBVIOUS.** Six of seven colours still looked
+plausible; only the palest one was destroyed enough to notice. Keep the declared
+file BARE on anything Lua re-tints.
+
+The flash is solved by declaring the widgets `"visible" : false` and making them
+visible in the same branch that first sets a tint -- absent for a frame rather
+than briefly wrong. All of a set must be painted in one pass or the row changes
+length as it fills.
+
+### AN EARLY RETURN IN update() KEEPS COSTING THE SAME BUG
+
+Third instance now, and the second this session.
+
+`consumeReagent` sat below `if not storedEnabled() then return end`, so an off
+machine ignored its reagent slot entirely. That is not an edge case -- ADDING A
+RULE SWITCHES THE MACHINE OFF, so the natural order (add rule, drop reagent in,
+set threshold, switch on) put the reagent in during the one window where it was
+ignored, with no log line and no warning.
+
+Same shape as the replant sweep sitting below the petport's no-item return, and
+as the crosshair progress signal sitting below the vent branch's return.
+
+**THE TEST: for anything in update(), ask which returns are above it and whether
+every one of them means "this genuinely should not run".** Housekeeping, state
+publication and anything the player can trigger from a UI almost never belong
+below a gate.
+
+### `world.containerItemAt(id, offset)` FOR ONE SLOT, ALWAYS
+
+Never `world.containerItems(id)[offset + 1]`. Observed: with dirt in the input
+and a block in the output, pulling the dirt out made the OUTPUT appear to empty
+in the pane.
+
+CAUSE NOT ESTABLISHED. That is what indexing a compacted list would do, but
+`petports_filterMisfits` treats the same table's keys as slot indices and has
+worked for a long time, including comparing them against a beacon's own slot.
+Both cannot be true.
+
+What IS certain is that `containerItemAt` takes an offset and answers about that
+slot whatever else the container holds, so it cannot be wrong under either
+reading. Every slot lookup in the upcycler uses it.
 
 ### Traps found in the pane-rebuild session
 
@@ -4963,6 +5074,40 @@ made the fix correct -- which is exactly what an inherited handoff is for. A
 future session reading "over-dropping" should find out immediately that it is
 not a hold-time problem, rather than rediscovering that over two sessions.
 
+### The upcycler's slot order is duplicated in two files with nothing linking them
+
+    petports_upcycler.lua   SLOT_INPUT 0   SLOT_REAGENT 1   SLOT_OUTPUT 2
+    petports_petport.lua    MACHINE_SLOT_INPUT 0            MACHINE_SLOT_OUTPUT 2
+
+Reordered from input/output/reagent so the pane could draw them in pipeline
+order. The port carries its own copies because it reads machine slots directly
+when deciding fuel trips, and there is no shared header. **If a SLOT_ constant
+moves, the MACHINE_SLOT_ copy has to move with it**, and the failure is a unit
+hauling off whatever is in the reagent slot.
+
+**CHANGING THE ORDER RENAMES WHAT IS ALREADY IN A PLACED MACHINE.** Contents do
+not move; the meanings of the slots do. Nothing is destroyed and nothing is
+wrongly consumed -- a treat is not a reagent, so it is refused -- but a machine
+placed under the old numbering looks shuffled and behaves oddly until it is
+emptied and re-placed. Seen in game.
+
+### A non-treat parked in the upcycler's output stalls it, by design
+
+`containerPutItemsAt` refuses, the machine banks points and sets
+`storage.blocked`, and the port's fuel scan gates on `isFuelItem(held.name)`
+BEFORE it reads that flag -- so the machine is not "blocked and worth a trip",
+it is invisible to the scan entirely.
+
+**THE PORT DELIBERATELY WILL NOT CLEAR IT.** Hauling off an ore stack a player
+parked in a machine they thought was idle is impossible to diagnose after the
+fact, and that reasoning is written into `MACHINE_SLOT_OUTPUT`.
+
+So the resolution is a pane warning rather than automation: the machine
+publishes the output slot's item name and the pane says what is blocking it,
+second in severity behind the beacon check. The blocked flag still does its
+original job for the case the output holds TREATS that will not stack with the
+next one.
+
 ### moveLand is still vanilla's, and it is four lines
 
     function PathMover:moveLand()
@@ -5425,39 +5570,29 @@ and one behaviour, none of it blocking:
     the mech assembly station's pattern, and `player.swapSlotItem` is confirmed
     available from a container pane script.
 
-**The reagent branch -- DESIGNED, HALF BUILT.** The name-versus-parameter
-question this section used to open with is SETTLED: flavors are distinct item
-NAMES, and they exist. So do the eight sprites, the eight `petports_flavor_<id>`
-tags, the eight filter subgroups and the 91-reagent weight table. What does not
-exist is any code that reads the reagent slot.
+**The reagent branch -- BUILT AND WORKING.** The upcycler reads its reagent
+slot, refuses anything that is not a reagent, spends one at a time and pays out
+flavored treats. Verified in game end to end.
 
-What is left is small and well specified:
+  - `storage.blips` is a QUEUE of flavor ids, at most 8. One entry is one treat
+    that comes out flavored. FIFO: two spicy then six sweet pays out in that
+    order, which is the order the player put them in and the only one they can
+    predict.
+  - ONE REAGENT AT A TIME AND ONLY IF ALL OF IT FITS. A weight-8 reagent waits
+    for an empty bar rather than part-filling, so the worst case for a player
+    who changed their mind is riding out one bar rather than a backlog they
+    cannot recall. The rest of the stack stays in the slot and can be pulled
+    back out.
+  - `emitFuel` PEEKS the head, places the item, and only then pops. A blip spent
+    on a treat the output refused would be a reagent paid for and not received.
+  - Mirrored to `petports_upcyclerBlips` beside points, so a machine mined
+    mid-charge comes back owing what the player already spent. Verified.
+  - A discard button throws the charge away. Destructive with no confirm,
+    deliberately -- the worst case is eight unflavored treats and the tooltip
+    says the reagents are not returned.
 
-  - read the reagent slot, look the item up in `petports_flavors.config`, and
-    refuse anything not in it. FAIL CLOSED -- an unlisted reagent that silently
-    produced unflavored treats would read as a broken machine.
-  - consume one reagent and set a counter to its WEIGHT. Emit that flavor's
-    item for the next `weight` outputs, then fall back to plain.
-  - the counter has to persist across mine-and-replace the same way `points`
-    does -- see the POINTS_KEY mirror pattern.
-
-**THE ONE OPEN QUESTION IS WHETHER THE SLOT TAKES A STACK.** If one reagent
-buys its weight in treats and the slot holds a stack, a thousand cores is eight
-thousand spicy treats and the manual-reload decision costs the player almost
-nothing. If a whole stack buys one batch, the reload chore becomes the dominant
-interaction, which is what deferring the multi-ruleset UI was meant to avoid.
-
-**Automated delivery INTO the reagent slot stays out of scope.** It is
-quota-shaped rather than threshold-shaped -- "keep 200 cores in this slot" is a
-restock request aimed at a machine slot -- and the player is deliberately
-responsible for reloading reagents for now, so the upcycler UI does not grow a
-second ruleset list.
-
-**Flavors that need finishing before this ships:** Spicy is the thinnest class
-at six reagents and its only weight-4 member is Ember Coral Fragment, which
-comes off breakable objects. Sweet is fifteen items at weight 2 and almost all
-of them are fruit a farm produces without trying, so some of it probably belongs
-at 1. Neither blocks the build.
+**What is left on it:** the blip sprite is a placeholder square, and the charge
+display is not yet the same widget as the reference list's per-reagent blips.
 
 **The fuel system.** Designed in "Fuel and flavor" and entirely unbuilt. Pet Treats accumulate and nothing eats
 them. The upcycler was built to feed this, and the tuning question it leaves

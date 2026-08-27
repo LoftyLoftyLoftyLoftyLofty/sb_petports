@@ -76,9 +76,14 @@ local BLIP_ART = "/interface/lofty_petports/upcyclerconfig/blip.png"
 local BLIP_COUNT = 8
 
 --  An EMPTY cell is the same sprite multiplied down to near-black rather than a
---  second asset or a hidden widget. Hiding it would make the bar change length
---  as it drains, and a bar that shrinks reads as capacity being lost rather
---  than spent.
+--  second asset. Hiding individual cells would make the bar change length as it
+--  drains, and a bar that shrinks reads as capacity being lost rather than
+--  spent.
+--
+--  THIS IS THE ONLY PLACE A BLIP DIRECTIVE IS APPLIED. The widget's declared
+--  file must stay bare: directives COMPOUND, so a "?multiply=" in the config is
+--  not replaced by this one, it multiplies with it -- which turned sweet's
+--  cfe9f2 into something indistinguishable from an empty cell.
 local BLIP_EMPTY = "2a2a2aff"
 
 --  Last drawn tint per cell, so an unchanged bar costs nothing. This runs on
@@ -99,6 +104,11 @@ local POLYMORPHIC_CONFIG = "/scripts/lofty_petports/petports_polymorphic.config"
 --  new one appears, including from another mod.
 local TAG_NO_UPCYCLING = "petports_no_upcycling"
 local TAG_BEACON = "petports_beacon"
+
+--  Every Pet Treat carries this, flavored or not, and it is the same tag the
+--  deposit filter's Pet Treats group matches on -- so "the pane thinks this is
+--  a treat" and "a crate will take it as fuel" cannot drift apart.
+local TAG_FUEL = "petports_fuel"
 
 --  ---------------------------------------------------------------------------
 --  READING THE OBJECT
@@ -687,22 +697,25 @@ end
 --  beacon into the reagent slot has made the same mistake.
 --  Everything in the machine's slots, for the beacon check.
 --
---  ONE GRID IS ENOUGH AND BOTH ARE ASKED ANYWAY. widget.itemGridItems ignores
---  slotOffset and returns the WHOLE container regardless of which grid is
---  named, so asking both lists every slot twice.
+--  ONE GRID IS ENOUGH AND ALL THREE ARE ASKED ANYWAY. widget.itemGridItems
+--  ignores slotOffset and returns the WHOLE container regardless of which grid
+--  is named, so asking three lists every slot three times.
 --
 --  Harmless here -- the caller only asks "is any of these a beacon", and asking
---  twice about the same item gives the same answer. Left as-is rather than
---  narrowed to one grid, because the day that behaviour is fixed the one-grid
---  version would quietly stop seeing the reagent slot, and a beacon parked
---  there would go unreported. Redundant now, correct either way.
+--  three times about the same item gives the same answer. Left as-is rather
+--  than narrowed, because the day that behaviour is fixed the one-grid version
+--  would quietly stop seeing the other slots, and a beacon parked in one would
+--  go unreported. Redundant now, correct either way.
 --
---  This is also what broke the reagent warning: reading itemGrid2's first item
---  returned the INPUT. See self.reagentName, which comes from the machine.
+--  This is also why the reagent warning cannot be read off a grid: asking
+--  itemGrid2 for its first item returns the INPUT. See self.reagentName, which
+--  comes from the machine.
 local function allSlotItems()
 	local items = {}
 
-	for _, grid in ipairs({ "itemGrid", "itemGrid2" }) do
+	--  ALL THREE GRIDS. ContainerPane binds itemGrid, itemGrid2 AND
+	--  outputItemGrid, and this machine now uses one cell of each.
+	for _, grid in ipairs({ "itemGrid", "itemGrid2", "outputItemGrid" }) do
 		local ok, contents = pcall(widget.itemGridItems, grid)
 
 		if ok and type(contents) == "table" then
@@ -777,6 +790,26 @@ function refreshStatus()
 				.. "storage, so the network ignores it. Take it back out.")
 			return
 		end
+	end
+
+	--  SOMETHING IN THE OUTPUT THAT IS NOT A TREAT.
+	--
+	--  It refuses every treat the machine tries to place, so the machine banks
+	--  points and stops. NOTHING IN THE WORLD FIXES THIS: the port's fuel scan
+	--  only recognises treats, deliberately, because hauling off an item a
+	--  player parked somewhere is worse than leaving it there. This warning is
+	--  the only way they find out.
+	--
+	--  ABOVE THE INPUT CHECKS. Both stop the machine, but an input it was never
+	--  told to convert is a machine doing what it was configured to do. A
+	--  blocked output is a correctly configured machine doing nothing, which is
+	--  the more surprising of the two.
+	if type(self.outputName) == "string"
+	   and not hasTag(self.outputName, TAG_FUEL) then
+
+		showWarning(string.format("%s is blocking the output. Nothing will be "
+			.. "made until it is taken out.", labelFor(self.outputName)))
+		return
 	end
 
 	local input = inputItem()
@@ -871,6 +904,15 @@ local function refreshBlips(queue)
 		if blipShown[index] ~= tint then
 			blipShown[index] = tint
 			pcall(widget.setImage, "blip" .. index, BLIP_ART .. "?multiply=" .. tint)
+
+			--  THE BLIPS ARE DECLARED INVISIBLE and first become visible here,
+			--  once they have a colour. That is what stops eight white cells
+			--  flashing between the pane opening and the first poll returning.
+			--
+			--  All eight are painted in the same pass, so they appear together
+			--  and the bar never changes length -- absent for a frame, never
+			--  briefly wrong.
+			pcall(widget.setVisible, "blip" .. index, true)
 		end
 	end
 end
@@ -921,6 +963,7 @@ local function refreshProgress(dt)
 			--  cannot be more than one poll out of step with the charge it is
 			--  explaining.
 			self.reagentName = result.reagent
+			self.outputName = result.output
 		end
 	end
 
