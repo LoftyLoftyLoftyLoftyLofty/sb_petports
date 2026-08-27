@@ -131,7 +131,7 @@ local TASK_DEBUG = true
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-08-25d leash arrival resolves the ground"
+local BUILD_STAMP = "2026-08-27h drop settles under low ceilings"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -221,6 +221,47 @@ local WALK_EDGE_STALL = 1.25
 --  reaching it would mean the whole descending half of an arc was above the
 --  unit, which cannot happen. It exists so a malformed path cannot spin here.
 local MAX_ARC_SKIP = 16
+
+--  (superseded header, see PLAN_SURFACE_TOLERANCE above)
+--  and the rest of its arc has been discarded.
+--
+--  The plan past an arc was computed for the position the arc was supposed to
+--  end at. Land somewhere else and every edge after it is describing a walk the
+--  unit is not standing at the start of. Vanilla cannot notice: moveLand's
+--  acceptance test is
+--
+--      (onGround or ...) and math.abs(self.delta[1]) < 1
+--
+--  which is HORIZONTAL ONLY -- so a unit four tiles above its landing, with x
+--  within a tile, advances straight off the end of the path. moveWalk is blind
+--  the same way: it steers on edgeDelta[1] alone and will happily walk a plan
+--  belonging to another surface.
+--
+--  HOW FAR OFF IN Y THE UNIT IS ALLOWED TO BE FROM THE SURFACE ITS PLAN WAS
+--  COMPUTED FOR.
+--
+--  THIS WAS 1.0 AND 1.0 WAS WRONG. It was picked to match the tolerance
+--  moveLand already applies to x, and that reasoning does not transfer: x is a
+--  position along a surface and genuinely needs slack, y IS the surface. Feet
+--  snap to tile tops, so a landing that went to plan reads EXACTLY 0 -- every
+--  on-plan landing measured so far has.
+--
+--  So the number was never absorbing measurement error. It was absorbing whole
+--  platforms, and on ONE-TILE platform spacing it absorbed exactly one:
+--
+--      ARC landed on-plan at [3758,1027.8]: next edge Land targets
+--        [3758,1026.8], 1 tiles off in y (tolerance 1) -- keeping the plan
+--
+--  `1 > 1` is false, so a plan that was a full rung wrong was kept. The next
+--  four lines are Walk edges targeting y 1026.8 executed by a unit standing at
+--  1027.8, and it wedged at x 3756.7 with velocity [0,-1.537] for six tenths of
+--  a second -- the top of a 1.6-tall box in the dirt, walking a corridor sized
+--  for a body one tile lower.
+--
+--  0.5 is below the tightest platform spacing the game permits and far above
+--  any float noise in a snapped landing, so it cannot swallow a surface and
+--  cannot fire on a good one.
+local PLAN_SURFACE_TOLERANCE = 0.5
 
 --  Vanilla's own takeoff radius, copied rather than changed. See the header on
 --  petportsJumpMover for why this is not widened.
@@ -1223,6 +1264,24 @@ end
 --  on top of it, small enough that the placement is not visible as a jump.
 local DROP_SCOOT = 0.25
 
+--  HOW FAR THE UNIT'S FEET MAY BE FROM THE PLATFORM IT IS DROPPING THROUGH.
+--
+--  A drop placement is only safe while the unit is resting on the surface it
+--  passes, because nothing sweeps the space between origin and destination.
+--  Feet on a platform read EXACTLY its surface, so this only has to be big
+--  enough for float noise and small enough that it cannot span a platform --
+--  which on the tightest legal spacing means well under 1.0.
+local DROP_ORIGIN_TOLERANCE = 0.35
+
+--  HOW FAR BELOW THE PASSED SURFACE A PLACEMENT MAY SETTLE.
+--
+--  DROP_SCOOT is the nudge; this is the floor of the search when the nudge pose
+--  does not fit under a low ceiling. Exactly 1.0, and that number is doing real
+--  work: platform surfaces are integers, so one tile reaches the next standing
+--  height and cannot reach the one past it. Raise this and a placement starts
+--  crossing platforms unchecked, which is the teleport all over again.
+local DROP_SETTLE_MAX = 1.0
+
 --  THE LOWEST PLATFORM THIS DROP IS MEANT TO GET THROUGH.
 --
 --  platformToPass answers "is there one left"; this answers "where does the
@@ -1293,18 +1352,93 @@ local function scootThroughPlatform(pather, floorFeet)
     return false, "no platform above the floor to pass"
   end
 
-  local feet = surface - DROP_SCOOT
+  --  YOU MAY ONLY SCOOT THROUGH THE SURFACE YOU ARE STANDING ON.
+  --
+  --  This placement bypasses the collision sweep between origin and
+  --  destination -- bodyFitsWithFeetAt checks where the unit lands, never the
+  --  path it takes to get there. That is safe at DROP_SCOOT, 0.25 tiles, only
+  --  because of an invariant nothing was checking: the unit is resting on the
+  --  platform it is about to pass, so origin and destination are a quarter tile
+  --  apart and there is nothing in between.
+  --
+  --  DROP_SCOOT never changed. THE ORIGIN DRIFTED. A unit executing a plan
+  --  three tiles above the surface that plan was drawn on reaches the Drop edge
+  --  with a descent measured from where it actually is, and the lowest platform
+  --  above the edge's floor is then nowhere near its feet. MEASURED, on four
+  --  platforms stacked a tile apart:
+  --
+  --      pre-move at [3751.8,1029.8]: action Drop edge 24 of 68
+  --        src [3752,1026.8] dst [3752,1025.8] dstDist 4.00499
+  --      UNIT drop SCOOTED 1029.8 -> 1026.55 (through surface 1026)
+  --        for a 4 tile descent
+  --
+  --  A 3.25-tile placement straight through three solid-from-above platform
+  --  surfaces, into a tunnel the unit had no route into. It reads in game as
+  --  the unit falling through the floor, and it is the only line in the log
+  --  that says so.
+  --
+  --  The invariant is now asserted rather than assumed. Refusing here falls
+  --  back to controlDown, which is physics and cannot pass through anything it
+  --  should not -- and the refusal is logged, so a drop attempted from the
+  --  wrong storey names itself instead of teleporting.
+  local feetNow = position[2] + mcontroller.boundBox()[2]
+  local standingGap = math.abs(feetNow - surface)
 
-  if not bodyFitsWithFeetAt(position, feet) then
-    return false, "solid tiles at feet " .. sb.printJson(feet)
+  if standingGap > DROP_ORIGIN_TOLERANCE then
+    return false, string.format(
+      "feet at %s are %s from the surface %s we would pass -- not standing on it, "
+      .. "a placement here would cross %s tiles of geometry unchecked",
+      sb.printJson(feetNow), sb.printJson(standingGap),
+      sb.printJson(surface), sb.printJson(standingGap))
+  end
+
+  --  SETTLE DOWNWARD WHEN THE NUDGE POSE DOES NOT FIT.
+  --
+  --  DROP_SCOOT is a nudge: put the feet a hair under the platform and let
+  --  gravity finish. That assumes headroom below, and a two-high tunnel does
+  --  not have any. MEASURED:
+  --
+  --      PLAN DROP refused at [3752.29,1024.8]: Walk edge 28 targets
+  --        [3753,1023.8], 1.00006 below us: solid tiles at feet 1023.75
+  --
+  --  Feet at 1023.75 puts a 1.6-tall body from 1023.75 to 1025.35, and the
+  --  top tile is the tunnel ceiling. Feet at 1023.0 -- where the unit actually
+  --  comes to rest, and where the plan's own edge sits -- spans 1023.0 to
+  --  1024.6 and fits the tunnel exactly. The pose being rejected was one the
+  --  unit passes through, not one it stops in.
+  --
+  --  So when the nudge does not fit, step the feet down and take the first
+  --  height that does. CAPPED AT ONE TILE BELOW THE SURFACE, which is the
+  --  whole safety argument: platform surfaces land on integers, so a full tile
+  --  reaches the next standing height and cannot reach the one after it. This
+  --  still passes exactly one platform, and the origin assertion above still
+  --  requires the unit to be standing on it.
+  local feet = nil
+  local offset = DROP_SCOOT
+
+  while offset <= DROP_SETTLE_MAX + PROBE_EPSILON do
+    local candidate = surface - offset
+
+    if bodyFitsWithFeetAt(position, candidate) then
+      feet = candidate
+      break
+    end
+
+    offset = offset + DROP_SCOOT
+  end
+
+  if feet == nil then
+    return false, string.format(
+      "no feet height between %s and %s clears solid tiles",
+      sb.printJson(surface - DROP_SCOOT), sb.printJson(surface - DROP_SETTLE_MAX))
   end
 
   local was = position[2]
   mcontroller.setPosition({ position[1], feet - mcontroller.boundBox()[2] })
 
-  return true, string.format("%s -> %s (through surface %s)",
+  return true, string.format("%s -> %s (through surface %s, settled %s below it)",
     sb.printJson(was), sb.printJson(mcontroller.position()[2]),
-    sb.printJson(surface))
+    sb.printJson(surface), sb.printJson(surface - feet))
 end
 
 function petportsTimedDrop(pather, time)
@@ -1548,6 +1682,80 @@ function petportsJumpMover(pather)
 
     sb.logInfo("UNIT takeoff from %s, jumpVel %s (approached to %s)",
       sb.printJson(source), sb.printJson(edge.jumpVelocity), sb.printJson(gap))
+
+    --  WHAT THE PLANNER ACTUALLY DREW, dumped once per takeoff.
+    --
+    --  This exists to settle one open question: the planner emits a Jump edge
+    --  carrying a jumpVelocity, and then draws an arc that does not match it.
+    --  Measured on a four-tile rung climb -- jumpVelocity [8,45], which at
+    --  g 120 is 8.4375 tiles of rise, against an arc that turned over 5.85
+    --  tiles up. The unit flew the 8.4375 and sailed clean over the rung it was
+    --  aiming for. smallJumpMultiplier is already 1.0, so the catalogued
+    --  explanation does not cover it.
+    --
+    --  The per-edge VELOCITIES are the discriminator and are the reason this
+    --  dump exists rather than a apex number. If the first arc edge's source
+    --  velocity reads [8,45], the planner is drawing a trajectory that
+    --  contradicts its own launch and the disagreement is in the arc sampling.
+    --  If it reads something smaller, the planner is deliberately planning a
+    --  partial jump the actor cannot perform, and the Jump edge's jumpVelocity
+    --  is a ceiling rather than an instruction.
+    --
+    --  Delete this block once that is answered.
+    local planFinder = pather.finder
+    local planEdges = (planFinder and planFinder.edges) or {}
+    local planIndex = (planFinder and planFinder.currentEdgeIndex) or 0
+    local planParams = mcontroller.baseParameters()
+    local planGravity = world.gravity(source) * (planParams.gravityMultiplier or 1.0)
+    local nominalRise = nil
+    if planGravity > 0 then
+      nominalRise = (edge.jumpVelocity[2] * edge.jumpVelocity[2]) / (2 * planGravity)
+    end
+
+    sb.logInfo("UNIT ARCPLAN takeoff %s jumpVel %s: g %s, nominal rise %s, physics apex %s, planner apex %s",
+      sb.printJson(source), sb.printJson(edge.jumpVelocity),
+      sb.printJson(planGravity), sb.printJson(nominalRise),
+      sb.printJson(nominalRise and (source[2] + nominalRise)),
+      sb.printJson(plannedApex(pather)))
+
+    --  THE ONE NUMBER THAT MATTERS, stated rather than left to subtraction.
+    --
+    --  launchVelocity only ever RAISES, so a planner apex ABOVE physics is
+    --  corrected and harmless. A planner apex BELOW physics is not correctable
+    --  at all: the actor cannot jump softer, so it flies past its own plan by
+    --  the difference and lands somewhere the plan never described. Measured at
+    --  2.6 tiles in a shaft and 7.5 tiles in a platform cage, both times with
+    --  the arc's velocity dying on contact with a side wall.
+    local plannedTop = plannedApex(pather)
+    if plannedTop ~= nil and nominalRise ~= nil then
+      local physicsTop = source[2] + nominalRise
+      local overshoot = physicsTop - plannedTop
+
+      if overshoot > PLAN_SURFACE_TOLERANCE then
+        sb.logInfo("UNIT ARCPLAN VERDICT: planner apex %s is %s tiles BELOW what a %s jump delivers (%s). "
+          .. "This jump is UNEXECUTABLE as planned and will overshoot -- launchVelocity cannot lower it.",
+          sb.printJson(plannedTop), sb.printJson(overshoot),
+          sb.printJson(edge.jumpVelocity[2]), sb.printJson(physicsTop))
+      else
+        sb.logInfo("UNIT ARCPLAN VERDICT: planner apex %s vs physics %s, difference %s -- within reach, "
+          .. "launchVelocity will raise if needed",
+          sb.printJson(plannedTop), sb.printJson(physicsTop), sb.printJson(overshoot))
+      end
+    end
+
+    for i = planIndex + 1, math.min(planIndex + MAX_JUMP_LOOKAHEAD, #planEdges) do
+      local planEdge = planEdges[i]
+      if planEdge == nil then break end
+
+      sb.logInfo("UNIT ARCPLAN   edge %s %s src %s vel %s -> dst %s vel %s",
+        tostring(i), tostring(planEdge.action),
+        sb.printJson(planEdge.source and planEdge.source.position),
+        sb.printJson(planEdge.source and planEdge.source.velocity),
+        sb.printJson(planEdge.target and planEdge.target.position),
+        sb.printJson(planEdge.target and planEdge.target.velocity))
+
+      if planEdge.action ~= "Arc" then break end
+    end
   end
 
   pather.deltaX = edge.jumpVelocity[1]
@@ -1573,6 +1781,168 @@ function petportsJumpMover(pather)
     pather:advancePath()
   else
     pather.jumpTimer = pather.jumpTimer - script.updateDt()
+  end
+
+  return "running"
+end
+
+--  REPLACEMENT moveArc.
+--
+--  Vanilla's grounded branch is a RUN-UP, and it has three problems that only
+--  show up together. From /scripts/pathing.lua:
+--
+--      if mcontroller.onGround() and not mcontroller.liquidMovement() then
+--        local nextEdge = self.finder:lookAhead(1) or {}
+--        if nextEdge.action and nextEdge.action ~= "Arc" then
+--          self.arcDelta = nil
+--          self:advancePath()
+--        else
+--          self.arcDelta = self.arcDelta or self.delta[1]
+--          moveX(self.arcDelta, run)
+--          self.deltaX = self.arcDelta
+--        end
+--        return "running"
+--
+--  ONE: `self.arcDelta = self.arcDelta or self.delta[1]` LATCHES. It is taken
+--  once, on the first grounded tick, and never recomputed. So it is a direction
+--  held forever rather than an approach.
+--
+--  TWO: `run` IS AN UNDECLARED GLOBAL. moveWalk declares `local run = self.run`
+--  at the top; moveArc never does, so this is a nil global reaching
+--  mcontroller.controlMove(direction, run), where the run flag DEFAULTS TO
+--  TRUE. The run-up therefore happens at runSpeed, not walkSpeed. Same shape as
+--  the `holdTime` typo in timedDrop -- an undeclared global standing in for a
+--  parameter, silently.
+--
+--  THREE: there is no terminating condition. Nothing checks arrival, nothing
+--  re-reads the delta, and passedTarget cannot advance a vertical arc edge --
+--  edgeDistance[1] is 0, which its own `~= 0` guard rejects, and the unit is
+--  ABOVE a target it is meant to fall to, so axis 2 never changes sign either.
+--
+--  MEASURED, on a four-tile platform stack, from the pre-move dx field:
+--
+--      [3768.2,1026.8]   dx -0.04   velocity   0      grounded, arcDelta latched
+--      [3767.82,1026.8]  dx +0.34   velocity  -7.59
+--      [3766.88,1026.8]  dx +1.28   velocity -11.8    runSpeed, wrong direction
+--      [3765.88,1026.8]  dx +2.28   velocity -11.8
+--      [3763.88,1026.78] dx +4.28   velocity -11.8
+--      [3762.88,1026.21] dx +5.28   velocity -12      off the end of the rung
+--
+--  dx is the distance to the edge target. It crosses zero on the second tick
+--  and the unit keeps accelerating away from it, because the latched value is
+--  the only thing steering. Six tiles later it left the platform and fell
+--  sixteen.
+--
+--  AND IT DEFEATED EVERY GUARD, because all of them read motion as health --
+--  vanilla's stuckTimer, our airborneEdgeStall, and the stuckAnchor reset that
+--  zeroes both. That is the failure petportsJumpMover's header already warned
+--  about from the other direction: a recovery that produces motion is worse
+--  than no recovery.
+--
+--  THE RUN-UP IS DELETED RATHER THAN REPAIRED, because the state it fires in is
+--  never a state a run-up helps. canPathfind() requires onGround, so a path is
+--  always planned from the ground and a jump sequence always opens with a Jump
+--  edge -- moveJump owns the approach to the takeoff point and only advances
+--  once the launch velocity is set. Grounded on an Arc therefore means one of
+--  exactly two things:
+--
+--    the tick immediately after takeoff, still touching the floor while rising
+--    -- one tick, velocity[2] well positive, and the launch is already applied
+--    so there is nothing for a run-up to contribute
+--
+--    the arc is over and the unit landed somewhere the plan did not predict
+--
+--  Neither wants horizontal control. Issuing none leaves the unit standing
+--  still, which is the honest signal: the skip in update() consumes the dead
+--  arc on the same tick, and if it somehow does not, the grounded-stall check
+--  replans within AIRBORNE_EDGE_STALL. Standing still is also exactly what
+--  petportsJumpMover's wrong-level branch settled on, for the same reason.
+--
+--  Everything else here is vanilla's, unmodified.
+function petportsArcMover(pather)
+  pather.jumped = false
+  pather.jumpCooldown = 0.3
+
+  --  Vanilla's advance loop, unchanged.
+  while pather.edge and pather.edge.action == "Arc" do
+    if passedTarget(pather.edge) then
+      pather:advancePath()
+    else
+      break
+    end
+  end
+
+  if not pather.edge or pather.edge.action ~= "Arc" then
+    return "running"
+  end
+
+  local here = mcontroller.position()
+  local vel = mcontroller.velocity()
+
+  if mcontroller.onGround() and not mcontroller.liquidMovement() then
+    local nextEdge = pather.finder:lookAhead(1) or {}
+
+    --  Vanilla's escape, kept as-is: on the LAST arc edge, hand over to
+    --  whatever follows. Worth knowing this is why the bug needs two or more
+    --  arc edges left at touchdown -- land holding the last one and vanilla
+    --  gets out of its own way.
+    if nextEdge.action and nextEdge.action ~= "Arc" then
+      sb.logInfo("UNIT ARCMOVER grounded at %s holding the last arc edge, next is %s -- advancing",
+        sb.printJson(here), tostring(nextEdge.action))
+
+      pather.arcDelta = nil
+      pather:advancePath()
+      return "running"
+    end
+
+    --  Change-gated so a unit parked here does not fill the log, but it
+    --  fires again the moment the situation changes.
+    --
+    --  RISING IS THE ORDINARY CASE AND IS EXPECTED ONCE PER JUMP. There is
+    --  one tick after takeoff where the launch velocity is applied and
+    --  onGround has not gone false yet -- measured at [3768,1010.8] with
+    --  velocity [0,48.314]. It is called out separately so a normal jump
+    --  does not read as a fault in the log.
+    if not pather.petportsArcGrounded then
+      pather.petportsArcGrounded = true
+
+      sb.logInfo("UNIT ARCMOVER grounded on an arc at %s vel %s (%s): edge src %s dst %s, next edge %s, "
+        .. "vanilla would have latched arcDelta %s and driven it at runSpeed -- issuing NO control",
+        sb.printJson(here), sb.printJson(vel),
+        vel[2] > 0 and "RISING, expected once per takeoff" or "NOT RISING, this arc is over",
+        sb.printJson(pather.edge.source and pather.edge.source.position),
+        sb.printJson(pather.edge.target and pather.edge.target.position),
+        tostring(nextEdge.action),
+        sb.printJson(pather.delta and pather.delta[1]))
+    end
+
+    return "running"
+  end
+
+  if pather.petportsArcGrounded then
+    sb.logInfo("UNIT ARCMOVER airborne again at %s vel %s -- clearing grounded latch",
+      sb.printJson(here), sb.printJson(vel))
+  end
+
+  pather.petportsArcGrounded = nil
+  pather.arcDelta = nil
+
+  --  Airborne: vanilla's branch, unmodified.
+  pather.controlParameters.airFriction = 0
+  pather.controlParameters.liquidFriction = 0
+  pather.controlParameters.liquidImpedance = 0
+  pather.controlParameters.groundFriction = 0
+
+  local velocity = pather.edge.source.velocity or pather.edge.target.velocity or {0, 0}
+  mcontroller.controlApproachXVelocity(velocity[1], mcontroller.baseParameters().groundForce)
+
+  if mcontroller.liquidMovement() then
+    if velocity[2] ~= 0 then
+      mcontroller.controlApproachYVelocity(velocity[2],
+        mcontroller.baseParameters().airJumpProfile.jumpControlForce)
+    else
+      pather:advancePath()
+    end
   end
 
   return "running"
@@ -1615,6 +1985,7 @@ freshPather = function(why)
   --  globally. Same technique as the exploreRate override above.
   self.pather.moveJump = petportsJumpMover
   self.pather.moveWalk = petportsWalkMover
+  self.pather.moveArc = petportsArcMover
 
   --  Vanilla's moveDrop itself is fine and is left alone -- the x snap to
   --  nextPathPosition, setXVelocity(0) and advancePath all do the right thing.
@@ -1895,6 +2266,195 @@ local function approachTargetFor(stateData, rawPosition)
   return stateData.groundTarget
 end
 
+--  CAN THE PLAN BE WALKED FROM WHERE THE UNIT IS ACTUALLY STANDING?
+--
+--  THIS REPLACES A HEIGHT COMPARISON, AND THE HEIGHT COMPARISON WAS THE WRONG
+--  QUESTION. Asking "am I on the surface the plan used" assumes there is only
+--  one surface worth being on, and in player builds there routinely is not: a
+--  chute lined with platforms above a dirt floor offers two valid standing
+--  heights a tile apart in the same column, and a route along either is a route.
+--  Rejecting a plan because the unit ended up on the other one is churn, and if
+--  A* keeps answering with the same surface it is a loop of exactly the shape
+--  this file already spends two hundred lines fighting.
+--
+--  What actually matters is not height, it is CLEARANCE. The unit wedges when
+--  its box cannot fit through the space the next Walk edge crosses -- which is
+--  a fact about the body and the terrain, not about which tile the planner
+--  happened to stand on. So test that directly.
+--
+--  Both observed cases fall out correctly:
+--
+--    unit at 1027.8, plan walking left to 3756 -- box spans y 1027.0..1028.6,
+--    dirt at row 1028, the sweep collides, the plan is refused. That is the
+--    wedge that produced the cage loop.
+--
+--    unit on a dirt floor, plan drawn along the platform a tile above it --
+--    the sweep at the unit's own height is clear, the plan is kept, and it
+--    walks the planner's x route on the surface it is standing on.
+--
+--  Platforms are excluded from the collision set on purpose. They do not
+--  obstruct horizontal travel, and including them would refuse every walk
+--  underneath one -- which in a platform-lined chute is all of them.
+--
+--  Returns nil when there is no Walk edge near enough to test, which is a
+--  different answer from "clear" and the caller must treat it as such.
+local PLAN_WALK_LOOKAHEAD = 6
+
+--  THE PLAN WANTS US A STOREY DOWN. DROP, DO NOT REPLAN.
+--
+--  When a plan's next ground edge sits below the unit, replanning is the wrong
+--  answer even though it is the safe-looking one. A* re-runs from
+--  mcontroller.position(), so it plans from the same tile, and in a platform
+--  chute it hands back the same route it just handed back -- which is a loop
+--  built out of nothing but caution.
+--
+--  The unit is standing on a platform. Going down one is a solved problem: it
+--  is the same placement the Drop edge itself uses, and it is exact. So take
+--  it, keep the plan, and let the next tick judge the result.
+--
+--  ONE PLATFORM PER CALL, and the floor passed in is what enforces it.
+--  lastPlatformToPass returns the LOWEST platform surface above the floor it is
+--  given, so handing it the plan's own floor would pick a surface several rungs
+--  down and place the unit through everything between -- exactly the teleport
+--  the origin assertion in scootThroughPlatform now refuses. Half a tile under
+--  the unit's own feet leaves only the surface it is standing on in range.
+--
+--  A gap of several tiles therefore descends one rung per tick rather than in
+--  one jump, each step asserting its own origin. Slower, and it cannot pass
+--  through anything.
+--
+--  Fails closed. Standing on dirt rather than a platform returns no surface to
+--  pass, the drop refuses, and the caller falls through to whatever it would
+--  have done anyway.
+local function tryPlanDrop(pather, finder)
+  if pather == nil or finder == nil then return false, "no pather", false end
+  if not mcontroller.onGround() then return false, "airborne", false end
+
+  local edges = finder.edges
+  local index = finder.currentEdgeIndex
+  if edges == nil or index == nil then return false, "no path", false end
+
+  local here = mcontroller.position()
+
+  --  SCAN THE WHOLE GROUND RUN, NOT JUST THE EDGE UNDER THE CURSOR.
+  --
+  --  Checking only the current edge misses the shape that actually occurs: a
+  --  Land at the unit's own height, reading a perfectly innocent gap of 0,
+  --  followed by Walk edges a storey down. The check passes, moveLand advances
+  --  on horizontal distance alone, and the unit walks the lower plan at the
+  --  upper height -- which is the wedge, one edge later than anything was
+  --  looking.
+  --
+  --  WALK AND LAND ONLY, AND THE EXCLUSIONS ARE THE WHOLE DESIGN:
+  --
+  --    Drop is excluded because a Drop edge targets below the unit BY
+  --    DEFINITION -- that is what the action is. Treating it as evidence of a
+  --    wrong storey would fire on every plan containing one and pre-empt a
+  --    descent the plan already performs correctly, one rung early, every time.
+  --
+  --    Jump and Arc end the scan outright. Past them the plan is deliberately
+  --    at a different height, and an edge below us on the far side of a jump
+  --    says nothing about where we are standing now.
+  --
+  --  So the scan covers exactly the run of ground work the unit is expected to
+  --  perform from the surface it is on, and a Walk or Land inside that run
+  --  sitting below us can only mean the surface is wrong.
+  local worstEdge = nil
+  local worstIndex = nil
+  local worstBelow = nil
+
+  for i = index, math.min(index + PLAN_WALK_LOOKAHEAD, #edges) do
+    local edge = edges[i]
+    if edge == nil then break end
+
+    if edge.action ~= "Walk" and edge.action ~= "Land" then break end
+
+    if edge.target ~= nil and edge.target.position ~= nil then
+      local below = here[2] - edge.target.position[2]
+
+      if below >= PLAN_SURFACE_TOLERANCE
+         and (worstBelow == nil or below > worstBelow) then
+        worstEdge = edge
+        worstIndex = i
+        worstBelow = below
+      end
+    end
+  end
+
+  if worstEdge == nil then
+    return false, "no ground edge below us", false
+  end
+
+  local feetNow = here[2] + mcontroller.boundBox()[2]
+  local ok, why = scootThroughPlatform(pather, feetNow - 0.5)
+
+  local detail = string.format("%s edge %s targets %s, %s below us: %s",
+    tostring(worstEdge.action), tostring(worstIndex),
+    sb.printJson(worstEdge.target.position), sb.printJson(worstBelow), why)
+
+  if ok then
+    return true, detail, true
+  end
+
+  return false, detail, true
+end
+
+local function planWalkBlocked(finder)
+  local edges = finder and finder.edges
+  local index = finder and finder.currentEdgeIndex
+  if edges == nil or index == nil then return nil end
+
+  local walkEdge = nil
+  local walkIndex = nil
+
+  --  STOP AT THE FIRST EDGE THAT LEAVES THE GROUND.
+  --
+  --  The sweep is taken at the unit's CURRENT height, so it only means anything
+  --  for edges the unit could reach without changing surface. Land and Walk
+  --  qualify; a Jump, Arc or Drop in between means the plan moves to a
+  --  different height before that Walk happens, and testing it here answers a
+  --  question nobody asked.
+  --
+  --  MEASURED, and this is why the bound exists: a unit landed at
+  --  [3753.02,1026.8] holding a Land edge targeting [3752,1023.8] -- three
+  --  tiles below it -- and the scan ran past that Land to a Walk edge six
+  --  ahead, found it clear, and kept a plan whose very next step was
+  --  unreachable. moveLand then sat at srcDist 3.33 doing nothing until the
+  --  stall check replanned 0.65s later, every lap.
+  for i = index, math.min(index + PLAN_WALK_LOOKAHEAD, #edges) do
+    local candidate = edges[i]
+    if candidate == nil then break end
+
+    if candidate.action ~= "Walk" and candidate.action ~= "Land" then break end
+
+    if candidate.action == "Walk" and candidate.target ~= nil
+       and candidate.target.position ~= nil then
+      walkEdge = candidate
+      walkIndex = i
+      break
+    end
+  end
+
+  if walkEdge == nil then return nil end
+
+  local here = mcontroller.position()
+  local bounds = mcontroller.boundBox()
+  local targetX = walkEdge.target.position[1]
+
+  --  The swept box from where the unit stands to where the edge ends, at the
+  --  unit's OWN height rather than the plan's.
+  local sweep = {
+    math.min(here[1], targetX) + bounds[1],
+    here[2] + bounds[2],
+    math.max(here[1], targetX) + bounds[3],
+    here[2] + bounds[4]
+  }
+
+  local blocked = world.rectTileCollision(sweep, { "Null", "Block", "Dynamic" })
+
+  return blocked, walkIndex, walkEdge, sweep
+end
+
 function petportsTaskAction.update(dt, stateData)
   local task = stateData.task
 
@@ -2162,46 +2722,351 @@ function petportsTaskAction.update(dt, stateData)
   --
   --  Still excluded: rising. A unit on its way up has not reached its apex and
   --  its waypoints are legitimately ahead of it.
-  local arcFinder = self.pather and self.pather.finder
+  --  APEX AND TOUCHDOWN, logged every flight.
+  --
+  --  Pairs with the ARCPLAN dump at takeoff: that says where the planner
+  --  intended to go, this says where the unit actually went. One line each and
+  --  the plan-versus-physics gap is a subtraction rather than an inference.
+  --  Delete alongside ARCPLAN.
+  local groundedNow = mcontroller.onGround()
 
-  local arcSkippable = false
-  if arcFinder ~= nil and arcFinder.hasPath then
-    if mcontroller.onGround() then
-      --  Landed. Whatever is left of the arc is over, whether the plan agrees
-      --  or not.
-      arcSkippable = true
-    elseif mcontroller.velocity()[2] < 0 then
-      --  Airborne and descending: the original case.
-      arcSkippable = true
+  if not groundedNow then
+    local flightY = mcontroller.position()[2]
+    if stateData.flightApex == nil or flightY > stateData.flightApex then
+      stateData.flightApex = flightY
     end
   end
 
-  if arcSkippable then
-    local skipped = 0
+  if stateData.wasGrounded == nil then
+    stateData.wasGrounded = groundedNow
+  end
 
-    while skipped < MAX_ARC_SKIP do
-      local index = arcFinder.currentEdgeIndex
-      local edges = arcFinder.edges
-      if index == nil or edges == nil or index > #edges then break end
-
-      local edge = edges[index]
-      if edge == nil or edge.action ~= "Arc" then break end
-      if edge.target == nil or edge.target.position == nil then break end
-
-      --  Still below us: this is the ordinary descending half of the arc.
-      if edge.target.position[2] <= mcontroller.position()[2] then break end
-
-      arcFinder:advance()
-      skipped = skipped + 1
+  if groundedNow ~= stateData.wasGrounded then
+    local edgeNow = nil
+    if self.pather and self.pather.finder and self.pather.finder.edges
+       and self.pather.finder.currentEdgeIndex then
+      edgeNow = self.pather.finder.edges[self.pather.finder.currentEdgeIndex]
     end
 
-    if skipped > 0 then
-      sb.logInfo("UNIT skipped %s unreachable arc waypoint(s) while %s from %s -- now on edge %s of %s",
-        sb.printJson(skipped),
-        mcontroller.onGround() and "GROUNDED" or "falling",
+    if groundedNow then
+      sb.logInfo("UNIT FLIGHT touchdown at %s: apex was %s, holding edge %s %s src %s dst %s",
         sb.printJson(mcontroller.position()),
+        sb.printJson(stateData.flightApex),
+        tostring(self.pather and self.pather.finder and self.pather.finder.currentEdgeIndex),
+        tostring(edgeNow and edgeNow.action),
+        sb.printJson(edgeNow and edgeNow.source and edgeNow.source.position),
+        sb.printJson(edgeNow and edgeNow.target and edgeNow.target.position))
+
+      stateData.flightApex = nil
+    else
+      sb.logInfo("UNIT FLIGHT left the ground at %s vel %s, holding edge %s %s",
+        sb.printJson(mcontroller.position()),
+        sb.printJson(mcontroller.velocity()),
+        tostring(self.pather and self.pather.finder and self.pather.finder.currentEdgeIndex),
+        tostring(edgeNow and edgeNow.action))
+
+      stateData.flightApex = mcontroller.position()[2]
+    end
+
+    stateData.wasGrounded = groundedNow
+  end
+
+  --  THE ABOVE-ONLY TEST WAS THE HOLE, AND THE COMMENT ABOVE IT WAS ALREADY
+  --  RIGHT: "Landed. Whatever is left of the arc is over, whether the plan
+  --  agrees or not." The loop then did not do that -- it broke on the first
+  --  waypoint at or below the unit, which is EVERY waypoint when the unit
+  --  overshot and came down on top of something.
+  --
+  --  A waypoint below a grounded unit is not reachable by waiting. The unit is
+  --  standing on the thing that is in the way. Falling and grounded are
+  --  therefore different questions:
+  --
+  --    FALLING   only waypoints ABOVE are unreachable; the descending half is
+  --              still ahead and must be kept
+  --    GROUNDED  the flight is over; ALL of it is unreachable, in both
+  --              directions
+  --
+  --  RISING IS EXCLUDED IN BOTH, AND THAT NOW INCLUDES RISING WHILE GROUNDED.
+  --  There is one tick after takeoff where onGround is still true and the
+  --  launch velocity is already applied -- measured at [3768,1010.8] with
+  --  velocity [0,48.314] holding the first arc edge. Under the old predicate
+  --  that tick qualified as GROUNDED and every waypoint of the ascending arc
+  --  was above it, so the whole jump was one ordering accident away from being
+  --  skipped at the moment it began. It survived only because the skip runs
+  --  before moveJump advances onto the arc within the same tick. That is luck,
+  --  not a design, and it is now an explicit test.
+  local arcFinder = self.pather and self.pather.finder
+
+  --  ONE PLACEMENT PER TICK, SHARED BY BOTH CALL SITES.
+  --
+  --  The arc-landing decision and the per-tick ground guard both call
+  --  tryPlanDrop, and after an arc landing they run in the SAME tick -- the arc
+  --  site drops, then the guard immediately re-reads a position that is already
+  --  mid-placement and considers dropping again. Observed as a paired
+  --  "dropped one platform" / "refused ... no platform above the floor to pass"
+  --  on one timestamp, which only stayed harmless because the second call found
+  --  nothing to pass. Two placements in one tick is exactly the multi-rung
+  --  descent the one-per-call rule exists to prevent.
+  local droppedThisTick = false
+  local arcEdge = nil
+
+  if arcFinder ~= nil and arcFinder.hasPath and arcFinder.edges ~= nil
+     and arcFinder.currentEdgeIndex ~= nil then
+    arcEdge = arcFinder.edges[arcFinder.currentEdgeIndex]
+  end
+
+  if arcEdge ~= nil and arcEdge.action == "Arc" then
+    local arcHere = mcontroller.position()
+    local arcVel = mcontroller.velocity()
+    local arcGrounded = mcontroller.onGround()
+    local arcRising = arcVel[2] > 0
+
+    sb.logInfo("UNIT ARC tick: edge %s of %s at %s vel %s onGround %s rising %s src %s dst %s",
+      tostring(arcFinder.currentEdgeIndex),
+      tostring(#arcFinder.edges),
+      sb.printJson(arcHere), sb.printJson(arcVel),
+      tostring(arcGrounded), tostring(arcRising),
+      sb.printJson(arcEdge.source and arcEdge.source.position),
+      sb.printJson(arcEdge.target and arcEdge.target.position))
+
+    local arcMode = nil
+    if arcGrounded and not arcRising then
+      arcMode = "GROUNDED"
+    elseif not arcGrounded and arcVel[2] < 0 then
+      arcMode = "FALLING"
+    end
+
+    if arcMode == nil then
+      sb.logInfo("UNIT ARC no skip: grounded %s rising %s vy %s -- still flying this arc",
+        tostring(arcGrounded), tostring(arcRising), sb.printJson(arcVel[2]))
+    else
+      local skipped = 0
+      local stopReason = "hit MAX_ARC_SKIP"
+
+      while skipped < MAX_ARC_SKIP do
+        local index = arcFinder.currentEdgeIndex
+        local edges = arcFinder.edges
+
+        if index == nil or edges == nil or index > #edges then
+          stopReason = "ran off the end of the path"
+          break
+        end
+
+        local edge = edges[index]
+
+        if edge == nil then
+          stopReason = "edge " .. tostring(index) .. " is nil"
+          break
+        end
+
+        if edge.action ~= "Arc" then
+          stopReason = "edge " .. tostring(index) .. " is a " .. tostring(edge.action)
+          break
+        end
+
+        if edge.target == nil or edge.target.position == nil then
+          stopReason = "edge " .. tostring(index) .. " has no target position"
+          break
+        end
+
+        local above = edge.target.position[2] > mcontroller.position()[2]
+
+        --  FALLING keeps the descending half. GROUNDED keeps nothing.
+        if arcMode == "FALLING" and not above then
+          stopReason = "descending half reached -- target is below us and still flyable"
+          break
+        end
+
+        sb.logInfo("UNIT ARC consuming edge %s of %s in %s mode: target %s is %s the unit at %s",
+          tostring(index), tostring(#edges), arcMode,
+          sb.printJson(edge.target.position),
+          above and "ABOVE" or "BELOW",
+          sb.printJson(mcontroller.position()))
+
+        arcFinder:advance()
+        skipped = skipped + 1
+      end
+
+      sb.logInfo("UNIT ARC skip done: mode %s, skipped %s, stopped because %s -- now on edge %s of %s at %s",
+        arcMode, sb.printJson(skipped), stopReason,
         tostring(arcFinder.currentEdgeIndex),
-        tostring(arcFinder.edges and #arcFinder.edges))
+        tostring(arcFinder.edges and #arcFinder.edges),
+        sb.printJson(mcontroller.position()))
+
+      --  WHAT IS LEFT OF THE PLAN WAS COMPUTED FOR A POSITION THE UNIT IS NOT
+      --  IN, and only the grounded case can tell.
+      --
+      --  Skipping the dead arc is not on its own enough. The next edge is
+      --  normally the Land that the arc was supposed to deliver the unit to,
+      --  and moveLand accepts on HORIZONTAL distance alone -- so a unit four
+      --  tiles above its landing, with x within a tile, advances straight past
+      --  it and off the end of the path. PathFinder:update then returns false
+      --  from currentEdgeIndex > #edges, which reads as a lost path rather than
+      --  as the plan having been wrong.
+      --
+      --  Note this cannot produce a false arrival: arrival is decided by
+      --  PathMover:move's own onGround/targetDistance test before edgeMove ever
+      --  runs, not by the path running out. But a replan is both cheaper and
+      --  truthful, and it is the only thing that can actually get the unit
+      --  somewhere -- A* from where it is standing knows about the platform
+      --  under its feet, which the dead plan does not.
+      if arcMode == "GROUNDED" and skipped > 0 then
+        local nextEdge = arcFinder.edges[arcFinder.currentEdgeIndex]
+        local nextTarget = nextEdge and nextEdge.target and nextEdge.target.position
+        local yGap = nextTarget and math.abs(nextTarget[2] - mcontroller.position()[2])
+        local blocked, walkIndex, walkEdge, sweep = planWalkBlocked(arcFinder)
+        local dropped, dropWhy, dropWanted = false, "already dropped this tick", false
+      if not droppedThisTick then
+        dropped, dropWhy, dropWanted = tryPlanDrop(self.pather, arcFinder)
+        if dropped then droppedThisTick = true end
+      end
+        if dropped then droppedThisTick = true end
+
+        if nextTarget == nil then
+          sb.logInfo("UNIT ARC landed off-plan at %s: nothing left after the arc -- replanning",
+            sb.printJson(mcontroller.position()))
+
+          arcFinder:reset()
+          stateData.stuckAnchor = nil
+          stateData.airborneEdgeStall = 0
+        elseif dropped then
+          sb.logInfo("UNIT PLAN DROP after landing at %s: %s -- dropped one platform, keeping "
+            .. "the plan (next edge %s targets %s, gap %s)",
+            sb.printJson(mcontroller.position()), dropWhy,
+            tostring(nextEdge.action), sb.printJson(nextTarget), sb.printJson(yGap))
+        elseif dropWanted then
+          sb.logInfo("UNIT ARC landed off-plan at %s: %s -- the drop refused, replanning "
+            .. "(next edge %s targets %s, gap %s)",
+            sb.printJson(mcontroller.position()), dropWhy,
+            tostring(nextEdge.action), sb.printJson(nextTarget), sb.printJson(yGap))
+
+          arcFinder:reset()
+          stateData.stuckAnchor = nil
+          stateData.airborneEdgeStall = 0
+        elseif yGap > PLAN_SURFACE_TOLERANCE then
+          --  THE IMMEDIATE NEXT EDGE COMES FIRST, AND CLEARANCE CANNOT OVERRULE
+          --  IT. A clear walk six edges away is worth nothing if the step in
+          --  front of the unit is three tiles down.
+          --
+          --  This is also the answer to the churn worry that produced the
+          --  clearance test: a replan is not a loop, because PathFinder:find
+          --  starts every search from mcontroller.position(). A* cannot keep
+          --  handing back a route for a surface the unit is not on -- the route
+          --  always begins where the unit is. So refusing a plan costs one
+          --  search and never repeats for the same reason.
+          sb.logInfo("UNIT ARC landed off-plan at %s: next edge %s targets %s, %s tiles off in y "
+            .. "(tolerance %s) -- the plan's next step is not reachable from here, replanning "
+            .. "(first walk %s, blocked %s)",
+            sb.printJson(mcontroller.position()),
+            tostring(nextEdge.action), sb.printJson(nextTarget),
+            sb.printJson(yGap), sb.printJson(PLAN_SURFACE_TOLERANCE),
+            tostring(walkIndex), tostring(blocked))
+
+          arcFinder:reset()
+          stateData.stuckAnchor = nil
+          stateData.airborneEdgeStall = 0
+        elseif blocked == true then
+          sb.logInfo("UNIT ARC landed off-plan at %s: y gap to next edge %s is %s, and the plan's "
+            .. "Walk edge %s to %s is BLOCKED for this body at this height (sweep %s) -- replanning",
+            sb.printJson(mcontroller.position()), sb.printJson(nextTarget),
+            sb.printJson(yGap), tostring(walkIndex),
+            sb.printJson(walkEdge.target.position), sb.printJson(sweep))
+
+          arcFinder:reset()
+          stateData.stuckAnchor = nil
+          stateData.airborneEdgeStall = 0
+        elseif blocked == false then
+          sb.logInfo("UNIT ARC landed at %s: y gap to next edge %s is %s, but the plan's Walk edge "
+            .. "%s to %s is CLEAR for this body at this height -- keeping the plan",
+            sb.printJson(mcontroller.position()), sb.printJson(nextTarget),
+            sb.printJson(yGap), tostring(walkIndex),
+            sb.printJson(walkEdge.target.position))
+        else
+          --  NO WALK EDGE NEAR ENOUGH TO TEST, and the next edge is reachable.
+          --  Nothing to sweep and nothing to object to, so the plan stands.
+          sb.logInfo("UNIT ARC landed on-plan at %s: next edge %s targets %s, %s tiles off in y, "
+            .. "no Walk edge within %s ground-level edges to sweep -- keeping the plan",
+            sb.printJson(mcontroller.position()),
+            tostring(nextEdge.action), sb.printJson(nextTarget),
+            sb.printJson(yGap), sb.printJson(PLAN_WALK_LOOKAHEAD))
+        end
+      end
+    end
+  end
+
+  --  A GROUNDED WALK BELONGING TO A DIFFERENT SURFACE.
+  --
+  --  The arc check above only looks at the moment of touchdown. This is the
+  --  same question asked every tick, and it exists because a wrong surface can
+  --  also be inherited -- a plan kept by a tolerance that was too loose, or one
+  --  whose descent stopped a platform early because the planner drew an Arc
+  --  through a platform that the unit simply lands on.
+  --
+  --  Starbound has no slopes, so a Walk edge's target y IS the surface it was
+  --  planned on, and for a unit standing on that surface it should read exactly
+  --  the unit's own y. Anything else means the plan is describing somewhere the
+  --  unit is not.
+  --
+  --  moveWalk cannot notice. It steers on `edgeDelta[1]` -- the edge's own x
+  --  extent -- and never looks at y at all, so it walks the plan out at full
+  --  speed on whatever surface the unit happens to be on. MEASURED, on one-tile
+  --  platform spacing:
+  --
+  --      pre-move at [3758,1027.8]:   Walk edge 4 of 74  dst [3757,1026.8]
+  --      pre-move at [3757.62,1027.8] Walk edge 4        dst [3757,1026.8]
+  --      pre-move at [3756.7,1027.8]  Walk edge 5        dst [3756,1026.8]
+  --      pre-move at [3756.7,1027.8]  Walk edge 5        velocity [0,-1.537]
+  --      ... frozen, eight ticks
+  --
+  --  One tile of y error, and the top of a 1.6-tall box went into dirt that the
+  --  corridor cleared for a body one tile lower. Nothing named it: vanilla's
+  --  stuckTimer reset the path after half a second of no edge change, silently,
+  --  and A* returned the identical plan.
+  if arcFinder ~= nil and arcFinder.hasPath and mcontroller.onGround()
+     and not stateData.routing then
+    local edgeNow = arcFinder.edges and arcFinder.currentEdgeIndex
+      and arcFinder.edges[arcFinder.currentEdgeIndex]
+
+    if edgeNow ~= nil and (edgeNow.action == "Walk" or edgeNow.action == "Land") then
+      --  THE SAME RULE, ASKED EVERY TICK RATHER THAN ONLY AT TOUCHDOWN.
+      --
+      --  A plan whose current ground edge sits below the unit is a plan for a
+      --  storey the unit is not on, however it got that way -- landed off it,
+      --  inherited it, or walked onto it. One platform down is the answer in
+      --  all three cases, and it is cheaper and more certain than a search.
+      local dropped, dropWhy, dropWanted = tryPlanDrop(self.pather, arcFinder)
+
+      if dropped then
+        sb.logInfo("UNIT PLAN DROP at %s: %s -- dropped one platform, keeping the plan "
+          .. "(cursor is %s edge %s)",
+          sb.printJson(mcontroller.position()), dropWhy,
+          tostring(edgeNow.action), tostring(arcFinder.currentEdgeIndex))
+
+      elseif dropWanted then
+        sb.logInfo("UNIT PLAN DROP refused at %s: %s -- leaving the plan to the clearance test "
+          .. "(cursor is %s edge %s)",
+          sb.printJson(mcontroller.position()), dropWhy,
+          tostring(edgeNow.action), tostring(arcFinder.currentEdgeIndex))
+      end
+
+      --  Clearance is still the backstop: right height and still will not fit
+      --  is a different failure, and only a replan answers it.
+      if not dropped and edgeNow.action == "Walk" then
+        local blocked, walkIndex, walkEdge, sweep = planWalkBlocked(arcFinder)
+
+        if blocked == true then
+          sb.logInfo("UNIT SURFACE blocked: standing at %s, Walk edge %s of %s to %s does not "
+            .. "clear this body at this height (sweep %s, box %s) -- replanning",
+            sb.printJson(mcontroller.position()),
+            tostring(walkIndex), tostring(#arcFinder.edges),
+            sb.printJson(walkEdge.target.position),
+            sb.printJson(sweep), sb.printJson(mcontroller.boundBox()))
+
+          arcFinder:reset()
+          stateData.stuckAnchor = nil
+          stateData.airborneEdgeStall = 0
+        end
+      end
     end
   end
 

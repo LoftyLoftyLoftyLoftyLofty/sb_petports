@@ -171,6 +171,35 @@ expensive once there are several, since which monsterpart a unit wears follows
 from its seed over the matching set. Same argument as the mod split: cheap now,
 not later.
 
+**THE UNIT SURVIVES ADVERSARIAL TERRAIN NOW, AND THAT WAS THE POINT.** Verified
+against a deliberately hostile gauntlet: a two-wide shaft with four-tile platform
+rungs, and a mirrored dirt cage with four rungs a SINGLE tile apart feeding a
+two-high escape tunnel. Both clear. Players build for their own navigation and
+easy pet routes are incidental, so this is the bar rather than a stretch goal.
+
+Only two of the seven builds in that session changed real behaviour, and the
+rest were backing out over-reach. What landed:
+
+- **A grounded unit on an Arc edge has finished its arc**, whichever way the
+  remaining waypoints lie. The skip used to consume only waypoints ABOVE the
+  unit, which is right while falling and wrong once landed -- a waypoint below a
+  grounded unit is unreachable because the unit is standing on what is in the
+  way.
+- **A plan that sits below the unit is a DROP, not a replan.** `tryPlanDrop`
+  scans the run of Walk and Land edges ahead, and if any of them wants a storey
+  below, it performs one platform descent with the existing placement and KEEPS
+  the plan. This is the load-bearing change and it is the one that made the
+  cages survivable, because it stops the unit needing A* to be right.
+
+Everything else that session was correcting mistakes made earlier in it, and
+those are recorded as traps rather than as features.
+
+**THE JUMP MODEL IS STILL WRONG AND IS NOW MERELY SURVIVABLE.** See "The planner
+cancels jumps the movement controller does not" under known problems. The unit
+recovers from every overshoot instead of looping, which is the better property,
+but it pays a replan and a wasted arc each time. `collisionCancelled` is the
+outstanding experiment and has never been run.
+
 **Debug flags.** `TASK_DEBUG` in `petportsTaskAction.lua`, `VENT_DEBUG` in
 `petports_petvent.lua`, `DEBUG` in `petports_petport.lua` — all ON.
 `PETPORTS_FILTER_DEBUG` in `petports_filters.lua` is OFF and should stay off:
@@ -181,6 +210,24 @@ wrong crate.
 What stays on unconditionally regardless: dispatch, task outcome, dispatch
 rejection reasons, claim abandonment, claim expiry, and residency lifecycle.
 Those are the silent-nil guards and must not be flag-gated.
+
+**PATHING LOG LINES, AND WHICH ONES EARN THEIR VOLUME.** Keep permanently:
+`ARC landed off-plan`, `PLAN DROP` (both outcomes) and `SURFACE blocked`. An
+off-plan landing and a refused placement are exactly the class of thing worth
+cataloguing rather than rediscovering, and each carries the numbers that decided
+it.
+
+Trim when the noise budget matters: `ARC tick` fires per tick per arc, and the
+`ARCPLAN` per-edge dump plus the `FLIGHT` apex lines were built to answer the
+jump-model question and did so on their first run. They are marked for deletion
+in the file. `ARCPLAN VERDICT` is the one line of that set worth keeping while
+`collisionCancelled` is still untried.
+
+Two traces were added and removed inside one session -- a `GUARD tick` gate dump
+and a `GUARD verdict` line -- built to answer why a guard appeared not to fire.
+It was firing. Recorded because the diagnostic was right and the hypothesis was
+wrong: static reading had cleared scope, nesting and early returns, and the
+correct next step was instrumentation rather than reading harder.
 
 ## Layout
 
@@ -1578,6 +1625,96 @@ coverage triaged to the alarming marker instead of the quiet one.
 
 Generic form: when a predicate loops over a collection to find a positive, decide
 deliberately what the EMPTY collection means. It is rarely the same as "no".
+
+### `moveArc`'S GROUNDED BRANCH HAS TWO DEFECTS AND THEY COMPOUND
+
+From `/scripts/pathing.lua`:
+
+    self.arcDelta = self.arcDelta or self.delta[1]
+    moveX(self.arcDelta, run)
+
+**`arcDelta` LATCHES.** Taken once on the first grounded tick, never recomputed.
+It is a direction held forever rather than an approach.
+
+**`run` IS AN UNDECLARED GLOBAL.** `moveWalk` opens with `local run = self.run`;
+`moveArc` never declares it. So a nil global reaches
+`mcontroller.controlMove(direction, run)`, where the run flag DEFAULTS TO TRUE.
+The run-up therefore happens at runSpeed, not walkSpeed. Same shape as the
+`holdTime` typo in `timedDrop` -- an undeclared global standing in for a
+parameter, silently, in the same file.
+
+And nothing terminates it: `passedTarget` cannot advance a vertical arc edge,
+because `edgeDistance[1]` is 0 and its own `~= 0` guard rejects that, while the
+unit is ABOVE a target it was meant to fall to so axis 2 never changes sign.
+
+MEASURED, from the `dx` field which is the distance to the edge target:
+
+    [3768.2,1026.8]   dx -0.04   velocity   0      arcDelta latched
+    [3767.82,1026.8]  dx +0.34   velocity  -7.59
+    [3766.88,1026.8]  dx +1.28   velocity -11.8    runSpeed, wrong direction
+    [3762.88,1026.21] dx +5.28   velocity -12      off the end of the rung
+
+dx crosses zero on the second tick and the unit keeps accelerating away from it.
+Six tiles later it left the platform and fell sixteen.
+
+**IT DEFEATED EVERY GUARD, BECAUSE ALL OF THEM READ MOTION AS HEALTH** --
+vanilla's `stuckTimer`, our `airborneEdgeStall`, and the `stuckAnchor` reset that
+zeroes both. The generic lesson is already in `petportsJumpMover`'s header from
+the other direction and is worth stating once more: **a recovery that produces
+motion is worse than no recovery.**
+
+`petportsArcMover` deletes the run-up rather than repairing it. `canPathfind()`
+requires onGround, so a jump sequence always opens with a Jump edge and
+`moveJump` owns the approach; grounded on an Arc therefore means either the one
+tick after takeoff while still touching the floor, or the arc is over. Neither
+wants horizontal control.
+
+### `PathFinder:find` SEARCHES FROM `mcontroller.position()`, SO REFUSING A PLAN CANNOT LOOP
+
+`find()` calls `start(mcontroller.position(), targetPosition)`. Every search
+begins where the unit actually is, so A* cannot keep handing back a route for a
+surface the unit is not standing on. Refusing a plan costs one search and never
+repeats for the same reason.
+
+This matters because the opposite fear -- refuse, replan, get the same plan,
+refuse again -- is the intuition that produced a whole build of over-engineering
+here. It is only true when A* genuinely returns the same plan from the same
+tile, which is the unexecutable-jump case and nothing else.
+
+Related, and safe: `reset()` does not clear `aStar`, but `explore()` sets
+`aStar` to nil on BOTH success and failure. So after a completed path there is
+no live search, and calling `reset()` to force a replan is safe. That is why the
+stall detector has always been able to do it.
+
+### `debugPath` PLOTS BODY-CENTRE POSITIONS, NOT SURFACES
+
+Vanilla's overlay draws `edge.target.position` raw. Those are the unit's CENTRE,
+so for a 1.6-tall body a node meaning "standing on this dirt" renders 0.8 tiles
+above the dirt -- and with a platform a tile up, flush with its top. It reads as
+a route drawn on the wrong surface and is not one.
+
+The measurement that settles it: on-plan landings report a y gap of `0` or
+`6.10352e-05`. A systematic one-tile offset would make every one of those read
+`1.0`.
+
+### THE ACTOR CAN PERFORM A PARTIAL JUMP. THE OLD CLAIM WAS ABOUT THE WRONG PATH
+
+Recorded several places as physics: "the actor CANNOT perform a partial jump --
+`jumpInitialPercentage` 1.0 and `jumpHoldTime` 0.0". Those govern the jump
+CONTROL, and `petportsJumpMover` does not use it:
+
+    mcontroller.setVelocity({edge.jumpVelocity[1], vy})
+
+Launch velocity is set directly and always has been -- that is how
+`launchVelocity` raises it. It can lower it just as easily. **Only ever raising
+is a POLICY, not a constraint**, and the policy is still right (launching weaker
+than planned is what produced ceiling collisions), but do not reason as though
+the engine forbids the other direction.
+
+Checked against the cage anyway and it does not help there: matching the
+planner's apex would launch at ~15.3, rise a tile, and land back on the rung it
+left, because the plan's DESCENT through a platform is unexecutable too. The
+plan was wrong at both ends.
 
 ## Two diagnoses that were wrong, and what gave them away
 
@@ -4918,6 +5055,65 @@ Scaling `jumpSpeed` does NOT fix this: planner and movement controller both read
 `airJumpProfile.jumpSpeed`, so lowering it shrinks both and the percentage error
 survives.
 
+### petportsArcMover
+
+Vanilla's grounded run-up, deleted rather than repaired -- see the trap entry for
+the two defects and the six-tile runaway they produce. The airborne branch is
+vanilla's, unmodified. The grounded branch keeps vanilla's one useful escape
+(on the LAST arc edge, hand over to whatever follows -- which is why the bug
+needs two or more arc edges left at touchdown) and otherwise issues NO
+horizontal control at all.
+
+Issuing nothing is the point. The unit stands still, the arc skip consumes the
+dead arc on the same tick, and if it somehow does not, the grounded-stall check
+replans within `AIRBORNE_EDGE_STALL`. Same conclusion `petportsJumpMover`'s
+wrong-level branch reached, for the same reason.
+
+### The drop placement, and the two things that make it safe
+
+`scootThroughPlatform` is `setPosition`, so it bypasses the collision sweep
+between origin and destination -- `bodyFitsWithFeetAt` checks where the unit
+lands, never the path. Two assertions now carry that.
+
+**YOU MAY ONLY SCOOT THROUGH THE SURFACE YOU ARE STANDING ON**
+(`DROP_ORIGIN_TOLERANCE`, 0.35). The placement is safe at `DROP_SCOOT` only
+because of an invariant nothing was checking: the unit rests on the platform it
+passes, so there is nothing in between. `DROP_SCOOT` never changed -- THE ORIGIN
+DRIFTED. A unit executing a plan three tiles above the surface it was drawn on
+reached a Drop edge and produced:
+
+    pre-move at [3751.8,1029.8]: action Drop edge 24 of 68
+      src [3752,1026.8] dst [3752,1025.8] dstDist 4.00499
+    UNIT drop SCOOTED 1029.8 -> 1026.55 (through surface 1026)
+
+A 3.25-tile placement through three solid-from-above platform surfaces, into a
+tunnel with no route into it. In game it reads as falling through the floor, and
+that log line is the only thing that says otherwise. **Feet on a platform read
+EXACTLY its surface, so this assertion is free.**
+
+**THE NUDGE POSE IS NOT THE RESTING POSE** (`DROP_SETTLE_MAX`, 1.0). Feet at
+`surface - 0.25` puts a 1.6-tall body 1.6 tiles up from there, and under a
+two-high ceiling that pose collides even though the resting pose fits:
+
+    refused: Walk edge 28 targets [3753,1023.8], 1.00006 below us:
+      solid tiles at feet 1023.75
+
+Feet 1023.75 spans 1023.75..1025.35 and the top tile is the ceiling. Feet 1023.0
+spans 1023.0..1024.6 and fits exactly. The placement now steps down in
+`DROP_SCOOT` increments and takes the first height that clears -- 1023.25 here,
+with gravity finishing the last quarter tile.
+
+**1.0 IS THE CAP AND IT IS DOING REAL WORK.** Platform surfaces land on
+integers, so one tile reaches the next standing height and cannot reach the one
+past it. Raise it and placements start crossing platforms unchecked, which is
+the teleport again -- at which point the destination check has to become a
+sweep.
+
+**ONE PLACEMENT PER TICK.** The arc-landing decision and the per-tick ground
+guard both call `tryPlanDrop`, and after a landing they run in the same tick.
+Observed as a paired "dropped one platform" / "refused" on one timestamp, which
+stayed harmless only because the second call found nothing to pass.
+
 ### petportsWalkMover
 
 One thing: slow to `JUMP_APPROACH_SPEED` (3.0) within `JUMP_APPROACH_SLOWDOWN`
@@ -5124,14 +5320,62 @@ cannot execute; dead stops with no branch to walk toward the landing when x is
 beyond 1; and never notices it has sailed past the landing in flight, because it
 only checks once grounded.
 
-**Confirm it still reproduces before rewriting it.** Every one of those triggered
-downstream of a jump that missed its arc, and the takeoff gate, launch-velocity
-and walk-slowdown fixes have removed that cause. Grep a fresh log for a Land edge
-where the unit is grounded and `srcDist` stays above 1; if absent, leave it.
+**IT REPRODUCES. THE INSTRUCTION ABOVE HAS BEEN CARRIED OUT AND THE ANSWER IS
+YES.** Measured repeatedly on platform terrain:
+
+    stalled on Land edge 5 of 45: grounded and motionless at [3753.45,1026.8],
+      edge source [3752,1023.8] srcDist 3.3342 -- replanning
+
+**It is STILL not rewritten, and that is now a deliberate choice.** The
+horizontal-only advance is worked around rather than fixed: the arc-landing
+check refuses a plan whose next edge is unreachable, and `tryPlanDrop` descends
+to the surface the plan wants, so `moveLand` is rarely reached in a state where
+its blindness matters. Rewriting it is still the honest fix and is still
+available; the shape is in the next paragraph. It was left alone because the
+workarounds were verified and a mover rewrite on top of them would have been an
+unmeasured change stacked on a working one.
 
 Shape of the fix if needed: accept on distance in BOTH axes; walk toward the
 target when grounded but short; and when landed far off in y, do NOT advance --
 that is a broken path and should surface as one.
+
+### The planner cancels jumps the movement controller does not
+
+**THE LAST STRUCTURAL PATHING PROBLEM, AND IT IS UPSTREAM OF ANYTHING THIS FILE
+CAN FIX.** A* draws an arc whose velocity DIES on contact with a side wall,
+while the movement controller only kills the horizontal component and carries
+the vertical through. Measured twice, in two geometries:
+
+    ARCPLAN edge 31 src [3768.03,1023.69] vel [8,29.5809]
+                 -> dst [3768.16,1024.65] vel [0,-2.08638]
+
+Both components gone in one edge. At that same point the real unit measured
+`[0.0166, 25]` -- x killed, y intact -- and carried on 2.6 tiles past its own
+plan. In a platform cage the same signature produced a 7.45-tile error:
+
+    ARCPLAN VERDICT: planner apex 1025.78 is 7.45337 tiles BELOW what a 45
+    jump delivers (1033.24). This jump is UNEXECUTABLE as planned and will
+    overshoot -- launchVelocity cannot lower it.
+
+`launchVelocity` only ever raises, so an over-optimistic planner apex is
+corrected and a cancelled one is not. Every normal jump in a clean log reads
+-0.5 to -0.9 (the familiar over-estimate); only wall-clipped arcs go positive.
+
+**SURVIVABLE, NOT SOLVED.** The overshoot recovery lands the unit somewhere
+real and replans, so this no longer loops -- it costs a wasted arc and a search
+each time it happens. It only occurs where an arc touches a wall, which means
+narrow shafts and chutes, which is exactly what players build.
+
+**THE UNTRIED EXPERIMENT is `airJumpProfile.collisionCancelled : false`** in the
+drone's `movementSettings`, which merge. The argument that it is free on the
+controller side: `jumpHoldTime` is 0.0 and `jumpInitialPercentage` is 1.0, so
+the jump is a single impulse with no hold phase and there is nothing for a
+cancel to cancel -- which is presumably why the controller ignores it and the
+planner does not. UNVERIFIED: the drone declares no `airJumpProfile` at all and
+the inherited value in `default_actor_movement.config` has not been read.
+
+Read the result off the `ARCPLAN VERDICT` line -- planner apex should rise to
+meet physics apex. **Run it alone**, not stacked on a behavioural change.
 
 ### Recalls vent-route now, and the refusal that stopped them
 
