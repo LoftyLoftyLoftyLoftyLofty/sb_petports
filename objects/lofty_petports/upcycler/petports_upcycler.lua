@@ -71,7 +71,46 @@ local ENABLED_KEY = "petports_upcyclerEnabled"
 --  slow timer and again on die(), so the worst case is losing a few seconds of
 --  progress rather than all of it -- and the timer means it does not depend on
 --  die()'s write reaching the drop, which is still unverified.
+--  The flavor table: which items are reagents, what each is worth, and which
+--  treat a flavor produces. Same module the pane uses, so the two cannot
+--  disagree about what a reagent is.
+require "/scripts/lofty_petports/petports_flavors.lua"
+
 local POINTS_KEY = "petports_upcyclerPoints"
+
+--  THE BLIP QUEUE, MIRRORED THE SAME WAY POINTS ARE. A machine mined with four
+--  spicy blips left should come back with four spicy blips left: the player
+--  already spent the reagent.
+local BLIPS_KEY = "petports_upcyclerBlips"
+
+--  PUBLISHED SO A PORT CAN SEE A STALLED MACHINE.
+--
+--  A port decides a fuel trip is worth making from how much is in the output
+--  slot, with two exceptions meaning "no more are coming": the slot is full, or
+--  the input is empty. Flavored treats add a third that neither covers -- the
+--  machine has points banked and the next treat WILL NOT STACK with what is
+--  already sitting there.
+--
+--  Measured: eight plain treats in the output, a spicy one queued, dirt still
+--  in the input. Under the batch floor, not full, not idle -- so the port kept
+--  reporting "still converting and not yet worth a trip" while the machine sat
+--  at 1000/1000 indefinitely. It only resumed when the treats were pulled out
+--  by hand.
+--
+--  A PARAMETER RATHER THAN AN INFERENCE, because the port cannot work this out:
+--  it would have to know which flavor is queued next, which means teaching it
+--  the whole charge. The machine already knows, so it says so.
+local BLOCKED_KEY = "petports_upcyclerBlocked"
+
+--  How many treats a charge can hold. The reagent slot's display has this many
+--  cells and a reagent only spends if ALL of its weight fits.
+--
+--  EIGHT BECAUSE THE HEAVIEST REAGENT IS EIGHT. That makes "wait for the bar to
+--  empty" the worst case a player ever faces, which is a bar's length rather
+--  than an unbounded backlog of reagents they committed to and cannot recall.
+--  A deeper queue would let them bank flavours they have changed their mind
+--  about; a shallower one would make augment materials unusable.
+local BLIP_CAPACITY = 8
 
 --  Container offsets are ZERO-based. The keys world.containerItems hands back
 --  are ONE-based -- documented engine behaviour, and the same fact
@@ -250,6 +289,95 @@ local function state(text)
 	dbg("%s", text)
 end
 
+--  ---------------------------------------------------------------------------
+--  THE REAGENT CHARGE
+--  ---------------------------------------------------------------------------
+--
+--  storage.blips is a QUEUE of flavor ids, at most BLIP_CAPACITY long. One
+--  entry is one treat that will come out flavored. The head is the oldest, so a
+--  charge of two spicy then six sweet pays out spicy, spicy, then six sweet --
+--  which is the order the player put them in and the only order they can
+--  predict.
+--
+--  ONE REAGENT AT A TIME, AND ONLY IF ALL OF IT FITS. A weight-8 reagent waits
+--  for an empty bar rather than part-filling. That is what makes "ride out the
+--  rest" a reasonable thing to ask of a player who changed their mind: the
+--  worst case is one bar's length, never a backlog of reagents they have
+--  already committed and cannot recall.
+--
+--  THE REST OF THE STACK STAYS IN THE SLOT, which is the whole reason to take
+--  one at a time rather than swallowing the stack. Forty meat in the slot is
+--  thirty-nine meat the player can still pull back out.
+
+local function blipQueue()
+	if type(storage.blips) ~= "table" then storage.blips = {} end
+	return storage.blips
+end
+
+--  Take the next flavor off the charge, or nil if it is empty.
+local function blipTake()
+	local queue = blipQueue()
+	if #queue == 0 then return nil end
+	return table.remove(queue, 1)
+end
+
+--  Spend one reagent from the slot if the whole of it fits.
+--
+--  Returns true if something was consumed, so the caller can flush.
+local function consumeReagent()
+	local queue = blipQueue()
+	local room = BLIP_CAPACITY - #queue
+	if room <= 0 then return false end
+
+	--  containerItemAt, NOT containerItems INDEXED BY OFFSET + 1.
+	--
+	--  OBSERVED, CAUSE NOT ESTABLISHED: with dirt in the input and a block in
+	--  the output, pulling the dirt out made the OUTPUT appear to empty in the
+	--  pane. That is what indexing a compacted list would do -- every entry
+	--  shifts down one -- but petports_filterMisfits treats the same table's
+	--  keys as slot indices and has worked for a long time, including comparing
+	--  them against a beacon's own slot. Those two cannot both be true, so the
+	--  reason for the symptom is still open.
+	--
+	--  What IS certain is that containerItemAt takes an OFFSET and answers about
+	--  that slot whatever else the container holds. It cannot be wrong under
+	--  either reading, which is why every slot lookup in this file now uses it.
+	--  Do not put the offset + 1 form back to save a call.
+	local held = world.containerItemAt(entity.id(), SLOT_REAGENT)
+	if type(held) ~= "table" or type(held.name) ~= "string" then return false end
+
+	local entry = petports_reagentFor(held.name)
+
+	--  FAIL CLOSED. An item that is not a reagent sits in the slot doing
+	--  nothing, rather than being eaten for no effect. The pane is what tells
+	--  the player why; the machine's job is to not destroy it.
+	if entry == nil then return false end
+
+	local weight = tonumber(entry.weight) or 0
+	if weight <= 0 then return false end
+
+	--  ALL OR NOTHING. Part-filling would let a player queue a flavor they can
+	--  never finish paying for and could not clear without emptying the bar
+	--  anyway.
+	if weight > room then return false end
+
+	local taken = world.containerTakeNumItemsAt(entity.id(), SLOT_REAGENT, 1)
+
+	--  Nothing came back: something else took it between the read and the take.
+	--  Not an error, just a wasted tick.
+	if type(taken) ~= "table" or (taken.count or 0) < 1 then return false end
+
+	for _ = 1, weight do
+		table.insert(queue, entry.flavor)
+	end
+
+	sb.logInfo("PETPORTS upcycler: spent 1 %s -> %s x%s blip(s), charge now %s of %s",
+		held.name, tostring(entry.flavor), sb.printJson(weight),
+		sb.printJson(#queue), sb.printJson(BLIP_CAPACITY))
+
+	return true
+end
+
 --  Move banked points into the output slot, one Treat at a time.
 --
 --  Returns true if the output can still take more. The caller uses that to
@@ -258,22 +386,48 @@ end
 --  the failure mode this whole design exists to avoid.
 local function emitFuel()
 	while (storage.points or 0) >= self.pointsPerFuel do
+		--  PEEKED, NOT TAKEN. The output slot can refuse -- full, or holding
+		--  something the player parked there -- and a blip spent on a treat that
+		--  never appeared is a reagent the player paid for and did not get.
+		--  It only comes off the queue once the item is placed.
+		local queue = blipQueue()
+		local flavor = queue[1]
+		local item = FUEL_ITEM
+
+		if flavor ~= nil then
+			--  A flavor whose treat does not resolve falls back to a plain
+			--  treat rather than stalling the machine. petports_flavorItem logs
+			--  it; the player gets something either way.
+			item = petports_flavorItem(flavor) or FUEL_ITEM
+		end
+
 		local leftover = world.containerPutItemsAt(entity.id(),
-			{ name = FUEL_ITEM, count = 1 }, SLOT_OUTPUT)
+			{ name = item, count = 1 }, SLOT_OUTPUT)
 
 		--  A DESCRIPTOR COMES BACK, NOT A COUNT. Anything with a positive count
 		--  means the slot would not take it -- full, or holding something else
 		--  the player parked there.
 		if type(leftover) == "table" and (leftover.count or 0) > 0 then
 			state(string.format("output blocked: %s point(s) banked, cannot place a %s",
-				tostring(storage.points), FUEL_ITEM))
+				tostring(storage.points), item))
+			storage.blocked = true
 			return false
 		end
 
+		--  Placed, so now the blip is spent.
+		if flavor ~= nil then blipTake() end
+
 		storage.points = storage.points - self.pointsPerFuel
-		dbg("emitted 1 %s, %s point(s) left banked", FUEL_ITEM, tostring(storage.points))
+		storage.blocked = false
+		dbg("emitted 1 %s%s, %s point(s) left banked, %s blip(s) left",
+			item, flavor ~= nil and " (flavored)" or "",
+			tostring(storage.points), tostring(#blipQueue()))
 	end
 
+	--  Fell out of the loop, so there is nothing banked worth emitting and
+	--  nothing is stuck. Clearing it here as well as on a successful place
+	--  covers the machine draining below a full treat's worth.
+	storage.blocked = false
 	return true
 end
 
@@ -286,10 +440,30 @@ local function flushPoints(dt)
 
 	--  Change-gated: an idle machine should not rewrite the same number every
 	--  five seconds forever.
-	if self.flushedPoints == storage.points then return end
+	local queue = blipQueue()
+
+	--  Compared as a string because the queue is a table: two tables with the
+	--  same contents are never equal, so an identity test would rewrite the
+	--  parameter every five seconds forever.
+	local signature = table.concat(queue, ",")
+
+	local blocked = storage.blocked == true
+
+	if self.flushedPoints == storage.points
+	   and self.flushedBlips == signature
+	   and self.flushedBlocked == blocked then return end
 
 	self.flushedPoints = storage.points
+	self.flushedBlips = signature
+	self.flushedBlocked = blocked
+
 	object.setConfigParameter(POINTS_KEY, storage.points)
+	object.setConfigParameter(BLOCKED_KEY, blocked)
+
+	--  AN EMPTY QUEUE IS WRITTEN AS AN EMPTY TABLE, not removed.
+	--  setInstanceValue(key, nil) writes JSON null rather than deleting the key,
+	--  and a null read back as a table is a crash rather than an empty charge.
+	object.setConfigParameter(BLIPS_KEY, queue)
 end
 
 function update(dt)
@@ -301,10 +475,22 @@ function update(dt)
 		return
 	end
 
+	--  TOP UP THE CHARGE BEFORE PAYING OUT, so a treat produced this tick can
+	--  be flavored by a reagent inserted since the last one. The other order
+	--  costs the player one plain treat every time they load the slot, which
+	--  looks like the reagent being ignored.
+	consumeReagent()
+
 	--  Pay out first. Points banked from a previous tick should become fuel
 	--  before anything else is eaten, so a machine that was blocked and has
 	--  since been emptied recovers on its own.
 	local canEmit = emitFuel()
+
+	--  AGAIN AFTER PAYING OUT. Emitting frees blips, and a reagent that did not
+	--  fit a moment ago may fit now -- without this a weight-8 reagent would
+	--  wait a whole extra tick after the bar emptied, which reads as the
+	--  machine hesitating.
+	consumeReagent()
 
 	local input = world.containerItemAt(entity.id(), SLOT_INPUT)
 
@@ -388,6 +574,27 @@ function init()
 		end
 	end
 
+	--  Same rule for the charge: storage wins where it exists, the parameter
+	--  fills in where it does not. A machine mined mid-charge comes back owing
+	--  the player the flavors they already paid for.
+	if storage.blips == nil then
+		local adopted = config.getParameter(BLIPS_KEY)
+		storage.blips = type(adopted) == "table" and adopted or {}
+
+		--  TRIMMED ON ADOPTION. A parameter written by an older build, or a
+		--  hand-edited one, could be longer than the bar can draw -- and a
+		--  charge the display cannot show is a charge the player cannot reason
+		--  about.
+		while #storage.blips > BLIP_CAPACITY do
+			table.remove(storage.blips)
+		end
+
+		if #storage.blips > 0 then
+			sb.logInfo("PETPORTS upcycler: adopted a charge of %s blip(s) from a placed item",
+				sb.printJson(#storage.blips))
+		end
+	end
+
 	self.carry = 0
 	self.flushTimer = 0
 	self.valueCache = {}
@@ -453,8 +660,70 @@ function init()
 			--  So the pane can draw a bar without hardcoding the divisor. It is
 			--  a config parameter precisely because it will be retuned.
 			pointsPerFuel = self.pointsPerFuel,
+
+			--  The charge, oldest first, so the pane can draw it left to right
+			--  in the order it will pay out.
+			blips = blipQueue(),
+			blipCapacity = BLIP_CAPACITY,
+			blocked = storage.blocked == true,
+
+			--  WHAT IS IN THE REAGENT SLOT, so the pane does not have to work it
+			--  out. It tried reading the grid and could not: widget.itemGridItems
+			--  IGNORES slotOffset and hands back the whole container keyed from
+			--  slot 0, so asking itemGrid2 for its first item returned the INPUT
+			--  and the pane warned that dirt was not a reagent while the reagent
+			--  slot sat empty.
+			--
+			--  The machine reads this slot every tick anyway and is the authority
+			--  on it. Publishing it means the pane's warning and the machine's
+			--  refusal cannot disagree, which is the same reason the pane reads
+			--  petports_reagentFor rather than keeping its own list.
+			--  A NAME, NOT A DESCRIPTOR. The pane only needs it to look up
+			--  whether the item is a reagent and to label a warning, and a bare
+			--  string cannot be oversized.
+			reagent = (function()
+				local held = world.containerItemAt(entity.id(), SLOT_REAGENT)
+
+				if type(held) ~= "table" or type(held.name) ~= "string" then
+					return nil
+				end
+
+				return held.name
+			end)(),
+
 			slots = { input = SLOT_INPUT, output = SLOT_OUTPUT, reagent = SLOT_REAGENT }
 		}
+	end)
+
+	--  DISCARD THE CHARGE. The pane's only way to undo a reagent.
+	--
+	--  DESTRUCTIVE AND DELIBERATELY NOT REFUNDABLE. The reagent was consumed
+	--  when the blips were filled, and handing it back would mean deciding what
+	--  a half-spent charge is worth -- four spicy blips is not four-eighths of a
+	--  Scorched Core, it is a Scorched Core that has already done half its job.
+	--  Clearing throws away what is left, which is the honest reading and the
+	--  one the button's tooltip states.
+	--
+	--  A MESSAGE RATHER THAN A PARAMETER WRITE FROM THE PANE. The machine owns
+	--  the queue; a pane reaching in to rewrite it would be a second author of
+	--  the same state, and the two would disagree the moment a treat is emitted
+	--  between the read and the write.
+	message.setHandler("petports_upcyclerClearCharge", function()
+		local queue = blipQueue()
+		local had = #queue
+
+		if had == 0 then return false end
+
+		storage.blips = {}
+
+		--  Flushed on the next timer tick like any other change. Not forced
+		--  here: the parameter mirror exists for mine-and-replace, and a
+		--  five-second window where a mined machine remembers a charge the
+		--  player just discarded is a smaller wrong than an extra write path.
+		sb.logInfo("PETPORTS upcycler: charge of %s blip(s) DISCARDED by the player",
+			sb.printJson(had))
+
+		return true
 	end)
 
 	object.setInteractive(true)

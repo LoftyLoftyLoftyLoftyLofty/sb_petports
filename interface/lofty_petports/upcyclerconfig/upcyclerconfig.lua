@@ -33,6 +33,21 @@ local DEBUG = true
 
 --  sb.logInfo accepts %s and nothing else. Pre-format through string.format,
 --  which has no such limit, and hand the logger one string.
+--  "1 rule" and "2 rules", never "1 rule(s)".
+--
+--  The parenthesised form exists because a string with no logic in it cannot
+--  agree with a number. This one has the number in hand, so there is no reason
+--  to make the player read the seam.
+--
+--  ENGLISH ONLY, AND KNOWINGLY. Appending an s is wrong in most languages and
+--  wrong for a fair number of English words too. It is right for every word
+--  this pane pluralises -- rule, reagent, treat, flavor, cell -- and a real
+--  plural table is not worth building until something needs translating.
+local function plural(count, word)
+	if count == 1 then return string.format("%d %s", count, word) end
+	return string.format("%d %ss", count, word)
+end
+
 local function dbg(fmt, ...)
 	if not DEBUG then return end
 	local ok, text = pcall(string.format, fmt, ...)
@@ -53,6 +68,23 @@ local RULES_LIST = "rulesScroll.rulesList"
 --  declared beside the flavors code at first, four hundred lines below the rules
 --  list that also needs them -- and a local referenced above its own definition
 --  is a nil GLOBAL that only throws when that path first runs.
+--  ---- the reagent charge ----------------------------------------------------
+--
+--  One sprite, tinted per flavor. White inside a black outline, so "?multiply="
+--  leaves the outline alone and turns the fill into the tint exactly.
+local BLIP_ART = "/interface/lofty_petports/upcyclerconfig/blip.png"
+local BLIP_COUNT = 8
+
+--  An EMPTY cell is the same sprite multiplied down to near-black rather than a
+--  second asset or a hidden widget. Hiding it would make the bar change length
+--  as it drains, and a bar that shrinks reads as capacity being lost rather
+--  than spent.
+local BLIP_EMPTY = "2a2a2aff"
+
+--  Last drawn tint per cell, so an unchanged bar costs nothing. This runs on
+--  the progress poll, which is every tick the pane is open.
+local blipShown = {}
+
 local ROW_ART = "/interface/lofty_petports/shared/row_144.png"
 local ROW_ART_ALT = "/interface/lofty_petports/shared/row_144_alt.png"
 local ROW_ART_SELECTED = "/interface/lofty_petports/shared/row_144_selected.png"
@@ -653,6 +685,20 @@ end
 --  A BEACON IN ANY SLOT IS A PROBLEM, not just one in the input, which is why
 --  this looks at everything rather than reusing inputItem. A player who drops a
 --  beacon into the reagent slot has made the same mistake.
+--  Everything in the machine's slots, for the beacon check.
+--
+--  ONE GRID IS ENOUGH AND BOTH ARE ASKED ANYWAY. widget.itemGridItems ignores
+--  slotOffset and returns the WHOLE container regardless of which grid is
+--  named, so asking both lists every slot twice.
+--
+--  Harmless here -- the caller only asks "is any of these a beacon", and asking
+--  twice about the same item gives the same answer. Left as-is rather than
+--  narrowed to one grid, because the day that behaviour is fixed the one-grid
+--  version would quietly stop seeing the reagent slot, and a beacon parked
+--  there would go unreported. Redundant now, correct either way.
+--
+--  This is also what broke the reagent warning: reading itemGrid2's first item
+--  returned the INPUT. See self.reagentName, which comes from the machine.
 local function allSlotItems()
 	local items = {}
 
@@ -748,22 +794,43 @@ function refreshStatus()
 		return
 	end
 
+	--  AN ITEM IN THE REAGENT SLOT THAT IS NOT A REAGENT.
+	--
+	--  The machine fails closed and leaves it alone, which is right and also
+	--  completely silent -- from outside, "this is not a reagent" and "the bar
+	--  is full so I am waiting" look identical. This is the only place that can
+	--  tell the player which.
+	--
+	--  LOWEST SEVERITY of the three, and deliberately last: it costs the player
+	--  nothing, where an unrecognised INPUT means the machine is doing no work
+	--  at all.
+	--
+	--  Reads the same table the machine does, so the two cannot disagree about
+	--  what counts as a reagent.
+	local reagent = self.reagentName
+
+	if type(reagent) == "string" and petports_reagentFor(reagent) == nil then
+		showWarning(string.format("%s is not a reagent, so it will not flavor "
+			.. "anything. See the Flavors tab.", labelFor(reagent)))
+		return
+	end
+
 	hideWarning()
 
 	if not self.enabled then
 		widget.setText("lblStatus", string.format(
-			"%s rule(s). Machine is off.", tostring(#self.rules)))
+			"%s. Machine is off.", plural(#self.rules, "rule")))
 		return
 	end
 
 	if input == nil then
 		widget.setText("lblStatus", string.format(
-			"%s rule(s). Running, input empty.", tostring(#self.rules)))
+			"%s. Running, input empty.", plural(#self.rules, "rule")))
 		return
 	end
 
 	widget.setText("lblStatus", string.format(
-		"%s rule(s). Converting %s.", tostring(#self.rules), labelFor(input.name)))
+		"%s. Converting %s.", plural(#self.rules, "rule"), labelFor(input.name)))
 end
 
 --  ---------------------------------------------------------------------------
@@ -785,6 +852,28 @@ local PROGRESS_STEPS = 20
 --  nobody can see. Only ever while the pane is open -- the machine converts
 --  whether or not anyone is looking, and nothing here drives it.
 local PROGRESS_INTERVAL = 0.25
+
+--  Paint the charge. `queue` is a list of flavor ids, oldest first.
+--
+--  CHANGE-GATED PER CELL. Eight setImage calls a tick would be harmless and
+--  pointless; comparing the tint we last wrote costs one string compare.
+local function refreshBlips(queue)
+	if type(queue) ~= "table" then queue = {} end
+
+	for index = 1, BLIP_COUNT do
+		local flavor = queue[index]
+
+		--  petports_flavorColor falls back to white for a flavor with no usable
+		--  colour, which multiplies to no change -- a plain white blip rather
+		--  than an invisible one.
+		local tint = flavor ~= nil and petports_flavorColor(flavor) or BLIP_EMPTY
+
+		if blipShown[index] ~= tint then
+			blipShown[index] = tint
+			pcall(widget.setImage, "blip" .. index, BLIP_ART .. "?multiply=" .. tint)
+		end
+	end
+end
 
 local function refreshProgress(dt)
 	self.progressTimer = (self.progressTimer or 0) - dt
@@ -817,6 +906,21 @@ local function refreshProgress(dt)
 
 			widget.setText("progressLabel", string.format("%s / %s to next treat",
 				tostring(self.points), tostring(self.pointsPerFuel)))
+
+			refreshBlips(result.blips)
+
+			--  PUBLISHED BY THE MACHINE, not read off the grid.
+			--
+			--  widget.itemGridItems IGNORES slotOffset and returns the whole
+			--  container keyed from slot 0, so asking itemGrid2 for its first
+			--  item handed back the INPUT -- the pane warned that dirt was not a
+			--  reagent while the reagent slot was empty.
+			--
+			--  Arriving on the poll rather than instantly is the cost. It is the
+			--  same channel the progress bar and the blips use, so the warning
+			--  cannot be more than one poll out of step with the charge it is
+			--  explaining.
+			self.reagentName = result.reagent
 		end
 	end
 
@@ -1020,7 +1124,8 @@ local function refreshReagents(flavor)
 	end
 
 	widget.setText("reagentsLabel",
-		string.format("%s -- %d reagent(s)", flavor.label or flavor.id, #reagents))
+		string.format("%s -- %s", flavor.label or flavor.id,
+			plural(#reagents, "reagent")))
 
 	dbg("refreshReagents: %s, %d cell(s)", tostring(flavor.id), #reagents)
 end
@@ -1140,6 +1245,24 @@ local function showTab(which)
 	dbg("showTab: %s", tostring(which))
 end
 
+--  Throw away whatever flavors are still queued.
+--
+--  ASKS THE MACHINE RATHER THAN REWRITING THE QUEUE. The machine owns it; a
+--  pane writing the parameter would be a second author of the same state, and
+--  the two would disagree the moment a treat is emitted between the read and
+--  the write.
+--
+--  The blips do not clear here. They clear on the next poll, from the machine's
+--  own answer -- so what the player sees is what the machine actually did,
+--  rather than what the pane assumed it would do.
+function clearChargeClicked()
+	local id = pane.containerEntityId()
+	if id == nil then return end
+
+	dbg("clearChargeClicked: asking %s to discard its charge", tostring(id))
+	world.sendEntityMessage(id, "petports_upcyclerClearCharge")
+end
+
 function tabInstructionsClicked()
 	showTab("instructions")
 end
@@ -1187,6 +1310,21 @@ end
 --  at-a-glance read; this is where somebody who has not worked out what they
 --  mean finds out in words.
 function createTooltip(screenPosition)
+	--  The discard button. Says what it costs BEFORE it is pressed, which is the
+	--  whole reason it has no confirm step.
+	local okClear, onClear = pcall(widget.inMember, "btnClearCharge", screenPosition)
+
+	if okClear and onClear then
+		local tooltip = config.getParameter("tooltipLayout")
+
+		if type(tooltip) == "table" then
+			tooltip.title.value = "Discard charge"
+			tooltip.description.value =
+				"Throws away the flavors still queued. The reagents are not returned."
+			return tooltip
+		end
+	end
+
 	--  Flavor rows first -- a smaller table, and the two can never overlap.
 	for path, flavor in pairs(flavorRowTip) do
 		local ok, inside = pcall(widget.inMember, path, screenPosition)
@@ -1196,8 +1334,8 @@ function createTooltip(screenPosition)
 			if type(tooltip) ~= "table" then return nil end
 
 			tooltip.title.value = flavor.label or flavor.id
-			tooltip.description.value = string.format("%d reagent(s) make this.",
-				#petports_flavorReagents(flavor.id))
+			tooltip.description.value = string.format("%s make this.",
+				plural(#petports_flavorReagents(flavor.id), "reagent"))
 
 			return tooltip
 		end
@@ -1219,7 +1357,7 @@ function createTooltip(screenPosition)
 
 			tooltip.title.value = name
 			tooltip.description.value =
-				string.format("Flavors %d treat(s).", entry.weight)
+				string.format("Flavors %s.", plural(entry.weight, "treat"))
 
 			return tooltip
 		end

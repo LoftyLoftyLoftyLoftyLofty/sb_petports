@@ -6508,6 +6508,41 @@ end
 local MACHINE_SLOT_OUTPUT = 1
 local MACHINE_FUEL_ITEM = "petports_petfuel"
 
+--  ANY TREAT, NOT JUST THE PLAIN ONE.
+--
+--  The output slot used to be tested with `held.name == MACHINE_FUEL_ITEM`,
+--  which stopped being true the moment flavored treats existed. A machine whose
+--  output held spicy treats was not counted as holding fuel AT ALL, so it was
+--  never collected and never even reported -- not a deadlock, just invisible.
+--
+--  The tag is the right test because it is the same one the deposit filter's
+--  Pet Treats group matches on, so "the port thinks this is fuel" and "a crate
+--  will accept it as fuel" cannot drift apart. It also picks up a modded
+--  flavor's treat with no further work.
+local MACHINE_FUEL_TAG = "petports_fuel"
+
+--  Cached because root.itemConfig re-runs an item's build script, and this is
+--  asked once per machine per work tick. An item's tags cannot change at
+--  runtime, so one answer per name lasts the session.
+local fuelItemCache = {}
+
+local function isFuelItem(name)
+  if type(name) ~= "string" then return false end
+  if fuelItemCache[name] ~= nil then return fuelItemCache[name] end
+
+  local verdict = false
+  local ok, resolved = pcall(root.itemConfig, { name = name, count = 1 })
+
+  if ok and type(resolved) == "table" and type(resolved.config) == "table" then
+    for _, tag in ipairs(resolved.config.itemTags or {}) do
+      if tag == MACHINE_FUEL_TAG then verdict = true break end
+    end
+  end
+
+  fuelItemCache[name] = verdict
+  return verdict
+end
+
 local function fuelWork()
   if self.petData == nil then return nil end
   if self.petData.cargo ~= nil and #self.petData.cargo > 0 then return nil end
@@ -6518,6 +6553,12 @@ local function fuelWork()
   local waiting = 0
   local trickling = 0
 
+  --  What was in the output slots nobody would take, for the message at the
+  --  bottom. Deduplicated because two machines making spicy treats is one
+  --  filter problem, not two.
+  local refusedNames = {}
+  local refusedSeen = {}
+
   for _, machine in ipairs(self.machines or {}) do
     if machine.kind == "upcycler" and world.entityExists(machine.id) then
       --  DELIBERATELY NOT GATED ON `enabled`. A machine switched off with
@@ -6526,7 +6567,7 @@ local function fuelWork()
       --  surprising.
       local ok, held = pcall(world.containerItemAt, machine.id, MACHINE_SLOT_OUTPUT)
 
-      if ok and type(held) == "table" and held.name == MACHINE_FUEL_ITEM
+      if ok and type(held) == "table" and isFuelItem(held.name)
          and (held.count or 0) > 0 then
         waiting = waiting + 1
 
@@ -6543,20 +6584,44 @@ local function fuelWork()
         --  small job would leave its last handful stranded forever.
         --  NO `goto` -- Starbound is Lua 5.1 and it is a 5.2 keyword. A
         --  positive condition wrapping the loop does the same job.
-        local batch = math.ceil(stackSizeOf(MACHINE_FUEL_ITEM) * MACHINE_MIN_BATCH)
-        local full = (held.count or 0) >= stackSizeOf(MACHINE_FUEL_ITEM)
+        --  Sized against the item ACTUALLY held, not the plain treat. They share
+        --  a maxStack today and there is no reason a modded flavor must.
+        local batch = math.ceil(stackSizeOf(held.name) * MACHINE_MIN_BATCH)
+        local full = (held.count or 0) >= stackSizeOf(held.name)
 
         local okInput, input = pcall(world.containerItemAt, machine.id,
           MACHINE_SLOT_INPUT)
         local idle = not okInput or type(input) ~= "table" or input.name == nil
 
-        local worthTaking = (held.count or 0) >= batch or full or idle
+        --  THE THIRD "NO MORE ARE COMING" CASE, and the one flavored treats
+        --  introduced: the machine has a treat banked that WILL NOT STACK with
+        --  what is in the slot. Not full, not idle, under the batch floor, and
+        --  stuck forever -- see BLOCKED_KEY in petports_upcycler.lua.
+        --
+        --  Read from a parameter rather than inferred, because working it out
+        --  here would mean knowing which flavor is queued next. Absent reads as
+        --  false, which is the pre-flavor behaviour.
+        local okBlocked, blocked = pcall(world.getObjectParameter, machine.id,
+          "petports_upcyclerBlocked")
+
+        local stalled = okBlocked and blocked == true
+
+        local worthTaking = (held.count or 0) >= batch or full or idle or stalled
+
+        if worthTaking and not refusedSeen[held.name] then
+          refusedSeen[held.name] = true
+          table.insert(refusedNames, held.name)
+        end
 
         if not worthTaking then trickling = trickling + 1 end
 
         for _, destination in ipairs(worthTaking and destinations or {}) do
           if world.entityExists(destination.id)
-             and petports_filterAccepts(destination.filter, MACHINE_FUEL_ITEM) then
+             --  THE ITEM ACTUALLY HELD. Flavors sort into separate subgroups,
+             --  so a crate that accepts plain treats may refuse spicy ones --
+             --  testing the plain name would send a unit to a crate that will
+             --  not take what it is carrying.
+             and petports_filterAccepts(destination.filter, held.name) then
 
             --  nil means the engine will not answer, treated as NO. Same
             --  reasoning as tidyWork: this is optional, and guessing wrong
@@ -6584,13 +6649,13 @@ local function fuelWork()
                 else
                   sb.logInfo("PETPORT %s collecting %s %s from machine %s",
                     stationUniqueId(), sb.printJson(held.count),
-                    tostring(MACHINE_FUEL_ITEM), sb.printJson(machine.id))
+                    tostring(held.name), sb.printJson(machine.id))
 
                   return {
                     id = workId,
                     type = "fuel",
                     target = machine.id,
-                    item = MACHINE_FUEL_ITEM,
+                    item = held.name,
                     count = held.count,
 
                     --  A KEY, NOT AN OFFSET, AND THE DIFFERENCE IS THE WHOLE
@@ -6638,9 +6703,12 @@ local function fuelWork()
       waiting, trickling)
   end
 
+  --  Names what was actually refused rather than the plain treat. With flavors
+  --  the two differ, and "no crate accepts petports_petfuel" while the machine
+  --  holds spicy ones sends a reader looking at the wrong filter.
   return nil, string.format(
     "%s machine(s) holding fuel, but no deposit crate accepts %s or has room",
-    waiting, MACHINE_FUEL_ITEM)
+    waiting, table.concat(refusedNames, ", "))
 end
 
 --  MERGE SPLIT STACKS IN A CRATE NOTHING ELSE IS VISITING.

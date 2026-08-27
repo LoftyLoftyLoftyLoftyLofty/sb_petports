@@ -186,6 +186,32 @@ function petports_reagentCount()
 	return n
 end
 
+--  The blip colour for a flavor, as RRGGBBAA ready for "?multiply=".
+--
+--  EIGHT DIGITS OUT, SIX DIGITS IN. The config stores RRGGBB because that is
+--  what anyone editing it will type; the directive wants alpha too, and a
+--  flavour is never drawn translucent.
+--
+--  A flavour with no colour falls back to white, which multiplies to no change
+--  at all -- so a mod that forgets the field gets a visible plain blip rather
+--  than an invisible one or an error.
+function petports_flavorColor(flavorId)
+	local flavor = petports_flavor(flavorId)
+	if flavor == nil then return "ffffffff" end
+
+	local color = flavor.color
+
+	if type(color) ~= "string" or #color ~= 6 then
+		if flavor.color ~= nil then
+			sb.logError("petports: flavor %s has an unusable color %s; wanted RRGGBB",
+				tostring(flavorId), tostring(flavor.color))
+		end
+		return "ffffffff"
+	end
+
+	return color .. "ff"
+end
+
 --  The treat item a flavor produces. nil is a MANIFEST ERROR rather than an
 --  ordinary absence -- a flavor that names no item cannot be made, so the
 --  reagent for it would be accepted and then produce nothing.
