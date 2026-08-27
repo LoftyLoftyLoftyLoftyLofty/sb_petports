@@ -1,0 +1,41 @@
+//  M.A.U.S. UTILITY UNIT -- FLYER PLACEHOLDER BODY VARIANT
+//
+//  Sibling of drone/body/drone_placeholder.monsterpart. Read that file's header
+//  for how category + type binding works; only what DIFFERS is recorded here.
+//
+//  WHY THIS IS A SEPARATE FILE AND A SEPARATE FOLDER
+//
+//  "category" is the binding key for a monstertype's part pool. The engine
+//  gathers every monsterpart whose category matches an entry in the
+//  monstertype's "categories" and picks one at random. A flyer sharing
+//  "petports_drone" would randomly wear the ground unit's body -- and the
+//  ground unit would randomly wear this one. So the flyer carries its own
+//  category, which means its own monsterpart, which means its own pngs.
+//
+//  THE ART
+//
+//  body_0_lit.png is byte-identical to the drone's. Only the glow layer differs:
+//  the flyer's fullbright is the drone's pink rotated to hue 223 with saturation
+//  and value held, which keeps each of the three colours within ~0.02 luminance
+//  of its pink original so the sprite's internal contrast survives the recolor.
+//
+//  Pink versus blue also survives red-green colour blindness, which matters for
+//  the same reason the treat palette does: blue is the one channel deuteranopia
+//  and protanopia both preserve. A red/green pair for two unit classes would
+//  have been the wrong choice here.
+//
+//  NAME. Still "placeholder" for the same reason the drone's is: renaming is
+//  free while there is exactly one variant per category and expensive once
+//  there are several, since which monsterpart a unit wears follows from its
+//  seed over the matching set.
+
+{
+  "name" : "flyer_placeholder",
+  "category" : "petports_flyer",
+  "type" : "body",
+
+  "frames" : {
+    "body" : "body_0_lit.png",
+    "bodyfullbright" : "body_0_fullbright.png"
+  }
+}

@@ -266,9 +266,79 @@ end
 --  Searches columns outward from the centre so the nearest usable spot wins,
 --  and checks both directions at each step because a container against a wall
 --  may only be approachable from one side.
+--  A POSITION A FLYING UNIT CAN HOLD, near `position`. nil for a ground unit.
+--
+--  THE FLYER'S ANSWER TO THE SAME QUESTION petports_standingPointNear ASKS, and
+--  it is a different question with a different answer: a ground unit wants the
+--  floor beneath the target, a flyer wants the TARGET'S OWN TILE. Resolving a
+--  flyer's targets to ground would make it a walking unit that happens to
+--  ignore terrain -- and would skip every target with no floor under it, which
+--  is a ceiling-mounted crate, a drop over a chasm, or a floating platform.
+--
+--  RETURNS nil FOR A GROUND UNIT, DELIBERATELY, so both call sites can be
+--  written as "try the flyer answer, fall through to the ground one" without
+--  either of them testing gravity themselves.
+--
+--  THE FIT TEST IS WHAT MAKES THE FALLBACK CORRECT. A target embedded in solid
+--  rock -- or a petport mounted flush against a wall, which is the leash target
+--  every idle tick -- has a tile centre the body cannot occupy. Without the
+--  test the unit would approach forever and never close inside its arrival
+--  radius, and because a tethered leash task never completes, that is a
+--  permanent soft-lock on the idle path rather than one failed task.
+--
+--  COLLISION SET MATCHES VANILLA'S BODY TEST. validStandingPosition checks the
+--  bound region against {"Null", "Block"} and nothing else -- not Dynamic, not
+--  Platform. Matching it means a flyer will hold station inside a crate's own
+--  footprint or under a platform, exactly as a ground unit is allowed to stand
+--  in those places. Refusing Dynamic here would be stricter than the engine and
+--  would skip the ceiling-crate case this was built for.
+--
+--  Searched as Chebyshev rings so the nearest ring wins; order WITHIN a ring is
+--  arbitrary and not distance-sorted. Fine at radius 4 (81 candidates worst
+--  case, and offset 0 answers almost every real call).
+function petports_flyPointNear(position, radius)
+  if position == nil then return nil end
+  if mcontroller.baseParameters().gravityEnabled then return nil end
+
+  radius = radius or 4
+
+  local bounds = mcontroller.boundBox()
+  local originX = math.floor(position[1]) + 0.5
+  local originY = math.floor(position[2]) + 0.5
+
+  for offset = 0, radius do
+    for dx = -offset, offset do
+      for dy = -offset, offset do
+        --  Ring perimeter only; the interior was covered by a smaller offset.
+        if math.max(math.abs(dx), math.abs(dy)) == offset then
+          local candidate = { originX + dx, originY + dy }
+
+          --  Built inline rather than through rect.translate so this carries no
+          --  dependency on load order between the contract and rect.lua.
+          local region = {
+            candidate[1] + bounds[1], candidate[2] + bounds[2],
+            candidate[1] + bounds[3], candidate[2] + bounds[4]
+          }
+
+          if not world.rectTileCollision(region, { "Null", "Block" }) then
+            return candidate
+          end
+        end
+      end
+    end
+  end
+
+  return nil
+end
+
 function petports_standingPointNear(position, radius)
   if position == nil then return nil end
   radius = radius or 4
+
+  --  FLYER FIRST. Returns nil for a ground unit, so this costs one baseParameters
+  --  read and nothing else on the path that has always worked.
+  local flyPoint = petports_flyPointNear(position, radius)
+  if flyPoint ~= nil then return flyPoint end
 
   for offset = 0, radius do
     for _, dx in ipairs(offset == 0 and { 0 } or { -offset, offset }) do
@@ -485,9 +555,27 @@ function petports_pathOptions()
   --  the result, not by shrinking the body.
   local pad = 0
 
+  --  MUST NOT BE HARDCODED. Vanilla's PathMover:new defaults this to
+  --  mcontroller.baseParameters().gravityEnabled, and we were overriding that
+  --  default with a literal `true`.
+  --
+  --  PathFinder:find gates on it:
+  --
+  --      if self.options.mustEndOnGround
+  --         and not validStandingPosition(targetPosition, false) then return false end
+  --
+  --  so for a flyer, `true` means every target that is not somewhere the unit
+  --  could STAND is refused before any search runs -- which is most of the
+  --  places a flyer exists to reach. It deletes the entire locomotion class.
+  --
+  --  Shared with the probe, so this fixes reachability caching in the same
+  --  stroke: a probe that answers "unreachable" for a hover target and pushes
+  --  that to the port would poison routing for every future unit.
+  local flying = not mcontroller.baseParameters().gravityEnabled
+
   return {
     returnBest = false,
-    mustEndOnGround = true,
+    mustEndOnGround = not flying,
     maxDistance = 200,
     boundBox = bounds,
     standingBoundBox = { bounds[1] + pad, bounds[2], bounds[3] - pad, bounds[4] },

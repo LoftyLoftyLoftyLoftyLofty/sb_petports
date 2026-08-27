@@ -1,0 +1,272 @@
+//  M.A.U.S. UTILITY UNIT -- FLYER
+//
+//  A COPY of drone/petports_drone.monstertype with a different locomotion
+//  class. Read that file for the modelled-on-petbunny reasoning, how parts and
+//  monsterparts bind, and why anchorName and metaBoundBox are what they are --
+//  all of that is identical and none of it is repeated here.
+//
+//  WHAT ACTUALLY DIFFERS FROM THE DRONE
+//
+//    type / categories        unique, or the two types wear each other's bodies
+//    animation                its own file, same content today
+//    movementSettings         gravityEnabled false, and the consequences below
+//    scripts                  one extra: petports_flyapproach.lua
+//
+//  Everything else -- the behavior fork, the contract, placement, thinking,
+//  sleep, the task action, resources, action params, status settings -- is the
+//  drone's, unchanged, on purpose. The whole point of the locomotion split is
+//  that it is a MOVEMENT change and not a behaviour one.
+//
+//  WHY THE GROUND MACHINERY DOES NOT NEED REMOVING
+//
+//  petportsTaskAction carries four recovery ladders built for a jumping unit:
+//  tryPlanDrop, the SURFACE clearance replan, the airborne-edge stall detector
+//  and the grounded-walk stall detector. Every one of them is gated on
+//  mcontroller.onGround(), which is permanently false here, so they are dead
+//  code for a flyer rather than hazards. The same is true of the replaced
+//  movers -- petportsJumpMover, petportsWalkMover, petportsArcMover,
+//  petportsTimedDrop, petportsKeepDropping -- which are only reachable from
+//  Walk, Jump, Arc, Drop and Land edges. A Fly plan has none, so they stay
+//  assigned in freshPather and are simply never called.
+//
+//  The cost of that is stated plainly: A FLYER HAS NO STALL DETECTION. What is
+//  left watching is vanilla's stuckTimer, the displacement reset in
+//  petportsTaskAction.update, and one change-gated line in
+//  petports_flyapproach.lua. See that file's header.
+
+{
+  "type" : "petports_flyer",
+  "shortdescription" : "Utility Unit",
+  "description" : "A M.A.U.S. utility unit fitted for flight. Small, tireless, and untroubled by floors.",
+
+  //  Binding key for this type's monsterpart pool. MUST DIFFER FROM THE DRONE'S
+  //  -- the engine picks at random from every monsterpart matching the category,
+  //  so a shared one means each type randomly wears the other's body.
+  "categories" : [ "petports_flyer" ],
+  "parts" : [ "body" ],
+
+  "animation" : "petports_flyer.animation",
+
+  "dropPools" : [ ],
+
+  "capturable" : false,
+
+  "baseParameters" : {
+    "persistent" : true,
+    "damageTeamType" : "ghostly",
+
+    "scripts" : [
+      "/monsters/pets/groundPet.lua",
+      "/scripts/pathing.lua",
+      "/scripts/stateMachine.lua",
+      "/scripts/util.lua",
+      "/scripts/vec2.lua",
+
+      "/monsters/pets/idleState.lua",
+      "/monsters/pets/wanderState.lua",
+
+      "/monsters/pets/actions/followAction.lua",
+      "/monsters/pets/actions/inspectAction.lua",
+      "/monsters/pets/actions/eatAction.lua",
+      "/monsters/pets/actions/begAction.lua",
+      "/monsters/pets/actions/pounceAction.lua",
+
+      "/scripts/lofty_petports/petports_work.lua",
+      "/monsters/lofty_petports/petports_petBehavior.lua",
+      "/monsters/lofty_petports/petports_contract.lua",
+      "/monsters/lofty_petports/petports_placement.lua",
+      "/monsters/lofty_petports/petports_think.lua",
+      "/monsters/lofty_petports/petportsSleepAction.lua",
+      "/monsters/lofty_petports/petportsTaskAction.lua",
+
+      //  FLYER ONLY, AND IT MUST COME AFTER groundPet.lua.
+      //
+      //  It shadows groundPet.lua's global approachPoint by capturing the
+      //  original at chunk-load time and delegating back to it whenever gravity
+      //  is on. Listed before groundPet.lua the capture binds nil and every
+      //  call raises. Deliberately not nil-guarded -- see the file header.
+      //
+      //  The drone's monstertype does NOT list this file, so the working ground
+      //  unit cannot be reached by anything in it.
+      "/monsters/lofty_petports/petports_flyapproach.lua"
+    ],
+
+    "petBehavior" : "petBehavior",
+
+    "anchorName" : "petports_petport",
+
+    "petports_allowSleep" : false,
+
+    "petResources" : {
+      "sleepy" : 10,
+      "hunger" : 60,
+      "playful" : 10,
+      "curiosity" : 60
+    },
+    "petResourceDeltas" : {
+      "sleepy" : 1,
+      "hunger" : 0.5,
+      "playful" : 1,
+      "curiosity" : 1
+    },
+
+    //  Identical to the drone's. Note that with strictPortTethering on, none of
+    //  the appetite actions can ever be picked: petports_leashTask never returns
+    //  nil for a tethered unit, it queues at LEASH_SCORE 120, and every appetite
+    //  caps at 100. Kept in step with the drone so the two do not silently
+    //  diverge before that changes.
+    "actionParams" : {
+      "hungerStarvingLevel" : 80,
+      "beg" : { "minScore" : 50, "cooldown" : 5, "distance" : 3, "emoteCooldown" : 2 },
+
+      "follow" : {
+        "minScore" : 70,
+        "cooldown" : 30,
+        "curiosityDelta" : -25,
+        "boredTime" : 1.5,
+        "startDistance" : 10,
+        "stopDistance" : 5,
+        "runDistance" : 20
+      },
+
+      "inspect" : { "minScore" : 20, "cooldown" : 8 },
+      "eat" : { "minScore" : 0, "minHunger" : 40, "cooldown" : 0, "distance" : 2 },
+      "play" : { "minScore" : 20, "cooldown" : 2 },
+      "sleep" : { "minScore" : 50, "minSleepy" : 75, "cooldown" : 10 },
+      "starving" : { "minScore" : 60, "cooldown" : 3 }
+    },
+
+    "pathing" : { "canOpenDoors" : false },
+
+    "metaBoundBox" : [-0.5, -0.75, 0.5, 0.6],
+    "scale" : 1.0,
+
+    "querySurroundingsCooldown" : 1,
+
+    "wander" : {
+      "wanderTime" : [5, 10],
+      "changeDirectionTime" : [5, 10],
+      "changeDirectionWait" : [1, 3]
+    },
+    "idle" : { "idleTime" : [4, 8], "standTime" : 2 },
+    "pounce" : { "maxRange" : 10, "minRange" : 5 },
+
+	//	go to the port and stay there when idle. do not wander
+	"strictPortTethering" : true,
+
+    "movementSettings" : {
+
+      //  THE ONE LINE THAT MAKES THIS A DIFFERENT LOCOMOTION CLASS.
+      //
+      //  It reaches further than it looks. PathFinder:start hands
+      //  mcontroller.baseParameters() straight to world.platformerPathStart, so
+      //  this is what makes the engine's search emit Fly edges instead of
+      //  Walk/Jump/Arc/Drop/Land. PathFinder:canPathfind is
+      //  `onGround() or not gravityEnabled`, so a flyer may also start a search
+      //  at any time rather than only while standing. And PathMover:new defaults
+      //  mustEndOnGround to this value -- which petports_pathOptions was
+      //  overriding with a hardcoded true, and no longer is.
+      "gravityEnabled" : false,
+
+      //  OURS, NOT THE REFERENCE FLYER'S 2x2 BOX. The 1.6 x 1.6 octagon is
+      //  tuned so the pathfinder rejects 1-tile-high tunnels while still
+      //  threading 2-tile gaps, and that reasoning survives the switch to Fly
+      //  edges unchanged -- a Fly edge needs clearance for the same body.
+      //
+      //  It also supplies the arrival radius. Every vertex here has magnitude
+      //  sqrt(0.64 + 0.36) = exactly 1.0, so the poly is inscribed in a unit
+      //  circle and FLY_ARRIVAL in petports_flyapproach.lua is measured rather
+      //  than guessed. CHANGE THIS POLY AND THAT CONSTANT MUST MOVE WITH IT.
+      "collisionPoly" :  [ [-0.8, -0.6], [-0.6, -0.8], [0.6, -0.8], [0.8, -0.6],
+                    [0.8, 0.6], [0.6, 0.8], [-0.6, 0.8], [-0.8, 0.6] ],
+      "mass" : 1.0,
+
+      //  Inert for a flyer -- nothing on a Fly edge reads either, and
+      //  PathMover:approachTargetPosition and moveX are both unreachable here.
+      //  Kept because groundPet.lua's init caches runSpeed, and there is no gain
+      //  in finding out the hard way what reads a nil.
+      "walkSpeed" : 8,
+      "runSpeed" : 12,
+
+      //  Known-good flyer values, not the drone's. The drone's flySpeed 15 and
+      //  airForce 50 were never tuned for flight, and its gravityMultiplier 1.5
+      //  is deliberately absent here rather than set to 1.0 -- a gravity knob on
+      //  a gravity-disabled actor implies something it does not do.
+      //
+      //  airFriction 2.0, AND THE NUMBER IS A CHARACTER DECISION, NOT A FIX.
+      //
+      //  Tuned in game across three values, and the third was not chosen because
+      //  the second was broken:
+      //
+      //    0.25  the reference flyer's. Coasted well past its stopping point,
+      //          and the overshoot produced visibly wrong behaviour rather than
+      //          a merely sloppy-looking one.
+      //    1.0   correct, and ACCEPTABLE FOR A BIOLOGICAL FLYER. Some carried
+      //          momentum reads as a living thing with mass. Use this, or near
+      //          it, for anything Nicemice adds that is supposed to be alive.
+      //    2.0   this unit. A robotic utility unit that stops where it meant to
+      //          stop, because that is what it is.
+      //
+      //  SO THE VALUE FOLLOWS FROM WHAT THE UNIT IS, and this is the first knob
+      //  in the mod where locomotion class and unit identity are the same
+      //  question. Do not "correct" a future biological flyer up to 2.0 on the
+      //  strength of this file; it would be the same mistake as taking 0.25 from
+      //  a wandering monster and expecting it to suit a unit that flies to a
+      //  specific tile and holds there.
+      //
+      //  WATCH airForce IF THIS FEELS SLUGGISH. Friction fights the force that
+      //  controlFly applies, so raising it lowers the speed actually reached
+      //  against flySpeed. If the unit now looks slow, the honest fix is to
+      //  raise airForce rather than to walk friction back down -- those two
+      //  control different things and trading one for the other reintroduces
+      //  the drift this was raised to remove.
+      //
+      //  This does NOT replace the explicit stop in petports_flyapproach.lua.
+      //  Friction governs the approach; the stop governs the latch. See the
+      //  comment there for why the arrived case cannot rely on friction at all.
+      "flySpeed" : 12,
+      "airFriction" : 24.0,
+      "airForce" : 9999.0
+    },
+
+    "bodyMaterialKind" : "robotic",
+
+    "knockoutTime" : 0,
+    "knockoutEffect" : "blink",
+    "deathParticles" : "deathPoof",
+
+    "touchDamage" : { "poly" : [], "damage" : 0, "teamType" : "ghostly", "damageSourceKind" : "default" },
+
+    "statusSettings" : {
+      "statusProperties" : { "targetMaterialKind" : "robotic" },
+
+      "appliesEnvironmentStatusEffects" : false,
+      "appliesWeatherStatusEffects" : false,
+      "minimumLiquidStatusEffectPercentage" : 0.1,
+
+      "primaryScriptSources" : [ "/stats/monster_primary.lua" ],
+      "primaryScriptDelta" : 5,
+
+      "stats" : {
+        "knockbackStunTime" : { "baseValue" : 0.25 },
+        "knockbackThreshold" : { "baseValue" : 9 },
+        "maxHealth" : { "baseValue" : 72 },
+        "protection" : { "baseValue" : 1.0 },
+        "healthRegen" : { "baseValue" : 0.0 },
+        "powerMultiplier" : { "baseValue" : 1.0 }
+      },
+
+      "resources" : {
+        "stunned"   : { "deltaValue" : -1.0, "initialValue" : 0.0 },
+        "health"    : { "maxStat" : "maxHealth", "deltaStat" : "healthRegen", "defaultPercentage" : 100 },
+        "sleepy"    : { "maxValue" : 100, "defaultPercentage" : 10 },
+        "hunger"    : { "maxValue" : 100, "defaultPercentage" : 10 },
+        "playful"   : { "maxValue" : 100, "defaultPercentage" : 10 },
+        "curiosity" : { "maxValue" : 100, "defaultPercentage" : 10 }
+      }
+    },
+
+    "mouthOffset" : [0, 0],
+    "feetOffset" : [0, -8]
+  }
+}

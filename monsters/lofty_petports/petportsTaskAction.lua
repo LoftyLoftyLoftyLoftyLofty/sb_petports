@@ -131,7 +131,7 @@ local TASK_DEBUG = true
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-08-27h drop settles under low ceilings"
+local BUILD_STAMP = "2026-08-27i flyer locomotion class"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -2154,7 +2154,21 @@ local COLUMN_SEARCH = { 0, 1, -1, 2, -2, 3, -3 }
 --  `searchUp` overrides how far above `position` a standing spot may be taken
 --  from. Pass 0 to forbid climbing -- see the homeward bias in
 --  approachTargetFor for why that is sometimes required.
+--
+--  FLYER BRANCH FIRST, and it ignores searchUp entirely. searchUp exists for
+--  the homeward bias -- "do not resolve the port to its own roof" -- which is a
+--  statement about which SURFACE to stand on, and a flyer is not standing on
+--  one. petports_flyPointNear returns nil for a ground unit, so the whole
+--  existing path below is untouched.
 local function standableNear(position, searchUp)
+  local flyPoint = petports_flyPointNear(position)
+  if flyPoint ~= nil then
+    if TASK_DEBUG then
+      sb.logInfo("UNIT fly point for %s -> %s", sb.printJson(position), sb.printJson(flyPoint))
+    end
+    return flyPoint
+  end
+
   if searchUp == nil then searchUp = GROUND_SEARCH_UP end
 
   for _, offset in ipairs(COLUMN_SEARCH) do
