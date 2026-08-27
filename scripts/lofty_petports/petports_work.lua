@@ -497,6 +497,64 @@ function petports_replantSet(position, seedName, ownerId)
 	return key
 end
 
+--  Drop several intents at once, for one property write.
+--
+--  ONE WRITE, NOT ONE PER KEY. petports_replantClear rewrites the whole property
+--  every call, so pruning a hundred orphans through it is a hundred writes in a
+--  single tick. This exists because the orphan prune can genuinely find that
+--  many at once on a world that has been farmed and rebuilt.
+--
+--  Returns how many went, so a caller can log a count instead of a line each.
+function petports_replantClearMany(keys, why)
+	if type(keys) ~= "table" or #keys == 0 then return 0 end
+
+	local intents = petports_replantsAll()
+	local cleared = 0
+
+	for _, key in ipairs(keys) do
+		if intents[key] ~= nil then
+			intents[key] = nil
+			cleared = cleared + 1
+		end
+	end
+
+	if cleared == 0 then return 0 end
+
+	sb.logInfo("PETPORTS replant intents CLEARED x%s: %s",
+		sb.printJson(cleared), tostring(why or "no reason given"))
+
+	world.setProperty(REPLANT_KEY, intents)
+	return cleared
+end
+
+--  Does ANY port in the registry cover this tile, on any network?
+--
+--  THE QUESTION THE SWEEP CANNOT ASK ITSELF. A port only evaluates intents
+--  inside its own network's coverage, and that gate is correct: outside it the
+--  chunk is not loaded, so a footprint or tile test would answer from nothing
+--  and clear a farm the moment the player walked away.
+--
+--  The consequence is that an intent nobody covers is never evaluated by
+--  anybody, and can never be cleared. This is how to tell that case apart from
+--  "somebody else's problem": if no port ANYWHERE has a rect over the tile, no
+--  port will ever sweep it, so it is unreachable rather than merely elsewhere.
+--
+--  Reads the registry rather than the caller's network on purpose. A port must
+--  not prune an intent that a DIFFERENT network's port is still looking after.
+function petports_anyPortCovers(position)
+	if type(position) ~= "table" then return false end
+
+	for _, entry in pairs(petports_registry().ports or {}) do
+		if type(entry) == "table" and type(entry.rect) == "table"
+		   and #entry.rect == 4
+		   and petports_rectContains(entry.rect, position) then
+			return true
+		end
+	end
+
+	return false
+end
+
 function petports_replantClear(tileKey, why)
 	local intents = petports_replantsAll()
 	if intents[tileKey] == nil then return false end

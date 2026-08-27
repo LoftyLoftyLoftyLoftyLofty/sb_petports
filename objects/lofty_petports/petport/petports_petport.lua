@@ -5429,9 +5429,35 @@ local function sweepReplants(dt)
 			stationUniqueId(), signature == "" and "none" or signature)
 	end
 
+	--  ORPHANS: intents no port anywhere can reach.
+	--
+	--  The coverage gate below is CORRECT and must stay. Outside coverage the
+	--  chunk is not loaded, so a footprint or tile test answers from nothing --
+	--  and clearing on that would delete a working farm the moment the player
+	--  walked away.
+	--
+	--  The consequence is that an intent nobody covers is evaluated by nobody
+	--  and can never be cleared. Move a port, mine one, or rebuild a farm
+	--  somewhere else and those tiles freeze in world.properties permanently,
+	--  with no way to remove them from in game. It was the only unbounded
+	--  structure this mod writes: claims expire and sweep, and the registry is
+	--  one entry per port removed in die().
+	--
+	--  petports_anyPortCovers asks the REGISTRY rather than this port's network,
+	--  which is what separates "nobody's problem" from "somebody else's". A tile
+	--  another network covers is left alone for that network to handle.
+	--
+	--  BATCHED INTO ONE WRITE. petports_replantClear rewrites the whole property
+	--  per call, and a world that has been farmed and rebuilt can produce a lot
+	--  of these at once.
+	local orphans = {}
+
 	for key, intent in pairs(intents) do
-		if intent.position ~= nil
-		   and inNetworkCoverage(intent.position) then
+		if type(intent) ~= "table" or type(intent.position) ~= "table" then
+			--  Malformed, and previously immortal: the old loop skipped anything
+			--  with no position, which meant it was never looked at again.
+			table.insert(orphans, key)
+		elseif inNetworkCoverage(intent.position) then
 			--  A SUCCESSFUL REPLANT CLEARS ITS OWN INTENT BY EXISTING, because
 			--  a farmable is an object and lands in this same test. One check
 			--  covers "we did it" and "the player put a crate there".
@@ -5440,7 +5466,17 @@ local function sweepReplants(dt)
 			elseif not replantGroundTilled(intent.position) then
 				petports_replantClear(key, "ground no longer tilled")
 			end
+		elseif not petports_anyPortCovers(intent.position) then
+			table.insert(orphans, key)
 		end
+	end
+
+	--  EVERY PORT RUNS THIS, and that is harmless: the first one to reach it
+	--  wins and the rest find nothing to clear. Making one port responsible
+	--  would mean electing one, and an election is more machinery than the
+	--  duplicate work costs.
+	if #orphans > 0 then
+		petports_replantClearMany(orphans, "no port covers the tile")
 	end
 end
 
@@ -7614,7 +7650,6 @@ local function workUpdate(dt)
   refreshBeacons(WORK_INTERVAL)
   refreshFarmables(WORK_INTERVAL)
   refreshAnimals(WORK_INTERVAL)
-  sweepReplants(WORK_INTERVAL)
   publishUnitPosition()
 
   --  Cheap: loadUniqueEntity on an existing stagehand and out.
@@ -7700,6 +7735,29 @@ function update(dt)
   --  describing the previous task. It has its own, faster interval and gates
   --  itself internally.
   crosshairRefresh(dt)
+
+  --  ABOVE THE NO-ITEM RETURN, AND THAT IS THE POINT.
+  --
+  --  This was called from workUpdate, which is the LAST line of this function,
+  --  so an EMPTY petport never swept anything. Measured: a second port with no
+  --  unit socketed logged five lines when it was placed and then nothing at all
+  --  for the rest of a four-minute session, while the port beside it logged
+  --  every second.
+  --
+  --  Same shape as the trap already recorded for claims and unit position -- an
+  --  early return silently disabling everything below it. Both of those were
+  --  fixed before this sweep existed, so it inherited the problem rather than
+  --  reintroducing it.
+  --
+  --  AN EMPTY PORT MUST STILL SWEEP. It holds its coverage rect and its
+  --  residency whether or not it has a unit -- that is the design -- and
+  --  housekeeping needs no unit to do. The case that makes it matter: the only
+  --  port covering a farm can be empty, and then its own IN-COVERAGE intents
+  --  stop being state-checked too, not just the orphans elsewhere.
+  --
+  --  Takes dt now rather than WORK_INTERVAL, because it is no longer riding a
+  --  timer that has already fired. It gates itself on REPLANT_SWEEP_INTERVAL.
+  sweepReplants(dt)
 
   local item = socketedItem()
 
