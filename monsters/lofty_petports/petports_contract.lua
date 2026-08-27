@@ -296,6 +296,220 @@ end
 --  Searched as Chebyshev rings so the nearest ring wins; order WITHIN a ring is
 --  arbitrary and not distance-sorted. Fine at radius 4 (81 candidates worst
 --  case, and offset 0 answers almost every real call).
+--  WHERE A FLYING UNIT SHOULD SIT TO WORK ON SOMETHING AT `position`.
+--
+--  Three defects were measured in game on 2026-08-27 and all three are fixed
+--  here. The measurements are kept because each one killed a plausible theory:
+--
+--  1. TILE-CENTRE GRANULARITY CANNOT PLACE THIS BODY IN A 2-HIGH CORRIDOR.
+--     The body is 1.6 tall, so an open run of rows [1023,1025) admits centres
+--     in 1023.8..1024.2 -- a window 0.4 wide -- and the only positions ever
+--     offered were floor(y) + 0.5, which is 1023.5 or 1024.5. Both miss.
+--     Measured: "open 1023..1024 (2 tiles), centre window 1023.8..1024.2 --
+--     tile centres inside it: NONE". The unit fits the corridor; the resolver
+--     could not express a position inside it.
+--
+--  2. NO LINE OF SIGHT WAS REQUIRED, so having failed near the item the search
+--     kept going until it found open air on the FAR SIDE OF THE FLOOR and
+--     accepted that. Measured: item at [3763.38,1023.62] resolved to
+--     [3759.5,1019.5], 5.66 tiles away, sight blocked by terrain. The unit flew
+--     under the floor and took the item through it, because world.takeItemDrop
+--     has no occlusion test of its own.
+--
+--  3. THE RING WAS SEARCHED DOWN-AND-LEFT FIRST, and within a ring the order
+--     was arbitrary rather than by distance. The disaster candidate above was
+--     d(-4,-4), the FIRST of its ring -- the bias did not merely exist, it
+--     landed on the one direction a flyer cannot recover from. A second pickup
+--     took a point 3.53 tiles out when a legal one sat at 0.45.
+--
+--  RETURNS nil FOR A GROUND UNIT, DELIBERATELY, so both call sites read as "try
+--  the flyer answer, fall through to the ground one" without testing gravity.
+--
+--  FAILS CLOSED, AND THAT IS A DELIBERATE BEHAVIOUR CHANGE. nil now means the
+--  port SKIPS that target and a task-side resolve FAILS the task after
+--  SETTLE_GRACE. Previously a point behind a wall was always found and the work
+--  went ahead through terrain. Declining work the unit cannot legitimately
+--  reach is the correct answer, but it is a new way for a target to go
+--  unserviced -- if something stops being dispatched, this is the first
+--  suspect, and the debug block below names the reason per candidate.
+
+--  Sub-tile search. RANGE is half a tile because beyond that the next tile
+--  centre is nearer and already its own candidate. STEP is 0.1 because the
+--  window it hunts is 0.4 wide vertically -- and measured horizontally at
+--  -0.3 on one pickup, which 0.2 steps would have stepped over.
+local FLY_NUDGE_STEP = 0.1
+local FLY_NUDGE_RANGE = 0.5
+
+--  Nudge only near the target. A sub-tile correction three tiles away is not a
+--  fix for anything; if nothing close works, declining is the answer.
+local FLY_NUDGE_MAX_RING = 2
+
+--  Ceiling on sub-tile tests across one whole resolve. Measured cost of a full
+--  50-candidate resolve WITH nudging was 10ms, once per task, so this only
+--  bounds the pathological case. Beyond it, tiles are tested at their centres.
+local FLY_NUDGE_BUDGET = 1500
+
+--  Platform and Dynamic are excluded from BOTH tests on purpose. A flyer passes
+--  through platforms, and A* routes through doors, so treating either as
+--  occlusion would refuse work the unit can genuinely do.
+local FLY_TILE_SET = { "Null", "Block" }
+
+--  Set false once the flyer is trusted. Verified twice in game with it on, and
+--  it is the only thing that explains a target going unserviced.
+local FLY_POINT_DEBUG = true
+
+--  How far to walk the open run when reporting spans. Diagnostic only.
+local FLY_SPAN_PROBE = 6
+
+--  Does the body fit centred exactly here? Everything is built out of this one
+--  test so the search and the diagnostics cannot disagree -- an earlier probe
+--  used its own narrower rect and reported positions as free that the very next
+--  line rejected.
+local function flyBodyFits(x, y, bounds)
+  return not world.rectTileCollision({
+    x + bounds[1], y + bounds[2],
+    x + bounds[3], y + bounds[4]
+  }, FLY_TILE_SET)
+end
+
+--  Is `target` visible from `point`, i.e. are they on the same side of the
+--  terrain? A ray, not a sweep: this asks whether the unit is in the right
+--  PLACE, while getting there is the pather's problem and has its own body
+--  sweep in petports_flyapproach.lua.
+local function flySighted(point, target)
+  return not world.lineTileCollision(point, target, FLY_TILE_SET)
+end
+
+--  Sub-tile offsets ordered nearest-first, built once. (0,0) sorts first, so
+--  the plain tile-centre test is the first thing tried and open ground still
+--  answers on one collision test.
+local flyNudgeOffsets = nil
+
+local function nudgeOffsets()
+  if flyNudgeOffsets ~= nil then return flyNudgeOffsets end
+
+  local list = {}
+  local steps = math.floor(FLY_NUDGE_RANGE / FLY_NUDGE_STEP)
+
+  for ix = -steps, steps do
+    for iy = -steps, steps do
+      local ox = ix * FLY_NUDGE_STEP
+      local oy = iy * FLY_NUDGE_STEP
+      table.insert(list, { ox, oy, math.sqrt(ox * ox + oy * oy) })
+    end
+  end
+
+  table.sort(list, function(a, b) return a[3] < b[3] end)
+  flyNudgeOffsets = list
+  return list
+end
+
+--  Nearest sub-tile position around a tile centre where the body BOTH fits and
+--  can see the target. Both conditions together, because the first fitting
+--  offset is not necessarily a sighted one and settling for it would reopen
+--  defect 2 at sub-tile scale.
+local function nudgeProbe(cx, cy, bounds, target, budget)
+  local offsets = nudgeOffsets()
+  local spent = 0
+
+  for _, offset in ipairs(offsets) do
+    if spent >= budget then return nil, spent end
+    spent = spent + 1
+
+    local x = cx + offset[1]
+    local y = cy + offset[2]
+
+    if flyBodyFits(x, y, bounds) then
+      local point = { x, y }
+      if flySighted(point, target) then return point, spent, offset[3] end
+    end
+  end
+
+  return nil, spent
+end
+
+--  Open run at the target column and row, measured with the REAL body box.
+--
+--  Each axis is measured with the other held at the tile centre, so these are
+--  slices and not a free-space map. Stated because the first version of this
+--  probe used a fixed 0.8-wide column against a 1.6-wide body, reported centres
+--  as available that the body test rejected one line later, and was one line
+--  away from sending a whole session after the wrong axis.
+local function logFlySpan(position, bounds)
+  local width = bounds[3] - bounds[1]
+  local height = bounds[4] - bounds[2]
+
+  local x = math.floor(position[1]) + 0.5
+  local y = math.floor(position[2]) + 0.5
+  local row = math.floor(position[2])
+  local col = math.floor(position[1])
+
+  local function rowOpen(r)
+    return not world.rectTileCollision(
+      { x + bounds[1], r + 0.05, x + bounds[3], r + 0.95 }, FLY_TILE_SET)
+  end
+
+  local function colOpen(c)
+    return not world.rectTileCollision(
+      { c + 0.05, y + bounds[2], c + 0.95, y + bounds[4] }, FLY_TILE_SET)
+  end
+
+  local function report(axis, here, openHere, lowIndex, highIndex, size)
+    if not openHere then
+      sb.logInfo("UNIT flypoint span %s at %s: the target's own %s %s is already blocked "
+        .. "for this body at the tile centre -- only a nudge can help on this axis",
+        axis, sb.printJson(position), axis, sb.printJson(here))
+      return
+    end
+
+    local low = lowIndex + size / 2
+    local high = (highIndex + 1) - size / 2
+
+    local hits = {}
+    for i = lowIndex, highIndex do
+      if (i + 0.5) >= low and (i + 0.5) <= high then table.insert(hits, i + 0.5) end
+    end
+
+    sb.logInfo("UNIT flypoint span %s at %s: open %s..%s (%s tiles), body %s %s, "
+      .. "centre window %s..%s%s -- tile centres inside it: %s",
+      axis, sb.printJson(position),
+      sb.printJson(lowIndex), sb.printJson(highIndex),
+      sb.printJson((highIndex + 1) - lowIndex),
+      sb.printJson(size), (axis == "Y") and "tall" or "wide",
+      sb.printJson(low), sb.printJson(high),
+      (high < low) and " (EMPTY -- body does not fit this run at all)" or "",
+      (#hits == 0) and "NONE, so no tile centre can ever be chosen here" or sb.printJson(hits))
+  end
+
+  local openRow = rowOpen(row)
+  local bottom, top = row, row
+  if openRow then
+    for _ = 1, FLY_SPAN_PROBE do
+      if not rowOpen(bottom - 1) then break end
+      bottom = bottom - 1
+    end
+    for _ = 1, FLY_SPAN_PROBE do
+      if not rowOpen(top + 1) then break end
+      top = top + 1
+    end
+  end
+  report("Y", row, openRow, bottom, top, height)
+
+  local openCol = colOpen(col)
+  local left, right = col, col
+  if openCol then
+    for _ = 1, FLY_SPAN_PROBE do
+      if not colOpen(left - 1) then break end
+      left = left - 1
+    end
+    for _ = 1, FLY_SPAN_PROBE do
+      if not colOpen(right + 1) then break end
+      right = right + 1
+    end
+  end
+  report("X", col, openCol, left, right, width)
+end
+
 function petports_flyPointNear(position, radius)
   if position == nil then return nil end
   if mcontroller.baseParameters().gravityEnabled then return nil end
@@ -306,26 +520,85 @@ function petports_flyPointNear(position, radius)
   local originX = math.floor(position[1]) + 0.5
   local originY = math.floor(position[2]) + 0.5
 
-  for offset = 0, radius do
-    for dx = -offset, offset do
-      for dy = -offset, offset do
-        --  Ring perimeter only; the interior was covered by a smaller offset.
-        if math.max(math.abs(dx), math.abs(dy)) == offset then
-          local candidate = { originX + dx, originY + dy }
+  if FLY_POINT_DEBUG then
+    sb.logInfo("UNIT flypoint SEARCH for %s: origin tile centre %s, radius %s, boundBox %s",
+      sb.printJson(position), sb.printJson({ originX, originY }),
+      sb.printJson(radius), sb.printJson(bounds))
+    logFlySpan(position, bounds)
+  end
 
-          --  Built inline rather than through rect.translate so this carries no
-          --  dependency on load order between the contract and rect.lua.
-          local region = {
-            candidate[1] + bounds[1], candidate[2] + bounds[2],
-            candidate[1] + bounds[3], candidate[2] + bounds[4]
-          }
-
-          if not world.rectTileCollision(region, { "Null", "Block" }) then
-            return candidate
-          end
-        end
-      end
+  --  ORDERED BY TRUE DISTANCE, NOT BY RING THEN dx THEN dy.
+  --
+  --  The old order walked Chebyshev rings and, within a ring, dx outer and dy
+  --  inner from -offset -- so the first candidate of every ring was
+  --  down-and-left, and everything else in that ring lost to it regardless of
+  --  how much further away it was. Same candidate SET as before; only the order
+  --  changes, and the order is what decides the answer in a first-fit search.
+  local tiles = {}
+  for dx = -radius, radius do
+    for dy = -radius, radius do
+      local x = originX + dx
+      local y = originY + dy
+      table.insert(tiles, {
+        x, y,
+        world.magnitude({ x, y }, position),
+        math.max(math.abs(dx), math.abs(dy))
+      })
     end
+  end
+  table.sort(tiles, function(a, b) return a[3] < b[3] end)
+
+  local budget = FLY_NUDGE_BUDGET
+  local examined = 0
+
+  for _, tile in ipairs(tiles) do
+    local cx, cy, ring = tile[1], tile[2], tile[4]
+    local point, offset, reason = nil, nil, nil
+
+    if ring <= FLY_NUDGE_MAX_RING and budget > 0 then
+      local spent
+      point, spent, offset = nudgeProbe(cx, cy, bounds, position, budget)
+      budget = budget - (spent or 0)
+      if point == nil then reason = "no fitting, sighted offset within " .. tostring(FLY_NUDGE_RANGE) end
+
+    --  Beyond the nudge rings, or out of budget: the tile centre only, and it
+    --  still has to see the target.
+    elseif flyBodyFits(cx, cy, bounds) then
+      if flySighted({ cx, cy }, position) then
+        point, offset = { cx, cy }, 0
+      else
+        reason = "fits but cannot see the target"
+      end
+    else
+      reason = "body does not fit"
+    end
+
+    examined = examined + 1
+
+    if point ~= nil then
+      if FLY_POINT_DEBUG then
+        sb.logInfo("UNIT flypoint ACCEPTED %s for %s after %s tile(s): dist %s, "
+          .. "sub-tile offset %s, ring %s, %s nudge test(s) left",
+          sb.printJson(point), sb.printJson(position), sb.printJson(examined),
+          sb.printJson(world.magnitude(point, position)),
+          sb.printJson(offset), sb.printJson(ring), sb.printJson(budget))
+      end
+
+      return point
+    end
+
+    if FLY_POINT_DEBUG then
+      sb.logInfo("UNIT flypoint  #%s tile %s ring %s dist %s: %s",
+        sb.printJson(examined), sb.printJson({ cx, cy }), sb.printJson(ring),
+        sb.printJson(tile[3]), tostring(reason))
+    end
+  end
+
+  if FLY_POINT_DEBUG then
+    sb.logInfo("UNIT flypoint NO POINT for %s after %s tile(s) out to radius %s -- "
+      .. "nothing within reach both fits this body and can see the target, so this "
+      .. "target will be DECLINED rather than worked through terrain",
+      sb.printJson(position), sb.printJson(examined), sb.printJson(radius))
   end
 
   return nil
