@@ -6505,7 +6505,14 @@ end
 --  takes a KEY. Anything crossing from this constant into that world has to
 --  convert -- see the `slot` field on the fuel task, which is the one place it
 --  happens and the one place it was once wrong.
-local MACHINE_SLOT_OUTPUT = 1
+--
+--  2, NOT 1. The upcycler's slots are input 0, reagent 1, output 2 -- reordered
+--  so its pane can put input and reagent in one two-cell grid and place the
+--  output freely. This constant is a second copy of that layout with nothing
+--  linking it to the first; if SLOT_OUTPUT moves in petports_upcycler.lua this
+--  has to move with it, and the failure is a unit hauling off whatever is in
+--  the reagent slot.
+local MACHINE_SLOT_OUTPUT = 2
 local MACHINE_FUEL_ITEM = "petports_petfuel"
 
 --  ANY TREAT, NOT JUST THE PLAIN ONE.

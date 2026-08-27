@@ -116,9 +116,29 @@ local BLIP_CAPACITY = 8
 --  are ONE-based -- documented engine behaviour, and the same fact
 --  SLOT_KEY_TO_OFFSET pays for in petports_petport.lua. Everything here uses
 --  the offset-taking calls, so no conversion is needed.
+--  REAGENT IN THE MIDDLE, OUTPUT LAST, AND THE ORDER IS A LAYOUT DECISION.
+--
+--  ContainerPane binds exactly two itemgrids, so three slots means one grid
+--  holds two adjacent cells and the other holds one placed freely. The pane
+--  draws input -> reagent -> output left to right, so the PAIR has to be input
+--  and reagent; the loose one is the output.
+--
+--  This was input 0, output 1, reagent 2, which put the output in the middle of
+--  the pair and the reagent off on its own -- the wrong two joined together.
+--  Proxy itemslots were tried to escape it and rolled back.
+--
+--  CHANGING THESE RENAMES WHAT IS ALREADY IN A PLACED MACHINE. A machine
+--  holding treats in the old slot 1 now has them in its reagent slot, and a
+--  reagent in the old slot 2 is now in its output. Nothing is destroyed and
+--  nothing is consumed wrongly -- a treat is not a reagent, so it is refused --
+--  but the contents look shuffled. Empty machines before updating, or move the
+--  items back by hand afterwards.
+--
+--  petports_petport.lua carries its own copies as MACHINE_SLOT_*. They must
+--  agree with these; there is no shared header.
 local SLOT_INPUT = 0
-local SLOT_OUTPUT = 1
-local SLOT_REAGENT = 2
+local SLOT_REAGENT = 1
+local SLOT_OUTPUT = 2
 
 local FUEL_ITEM = "petports_petfuel"
 
