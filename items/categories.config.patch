@@ -13,5 +13,23 @@
 		"op" : "add",
 		"path" : "/labels/petports_fuel",
 		"value" : "Petport Fuel"
+	},
+	{
+		//  NOTHING USES THIS LABEL RIGHT NOW, AND IT IS KEPT ANYWAY.
+		//
+		//  It was added so the upcycler could carry a petports_machine
+		//  category instead of "crafting". That object now declares no
+		//  category at all, because ContainerPane only overwrites a pane's
+		//  title and subtitle when the object HAS one -- see the comment in
+		//  petports_upcycler.object for the measurements.
+		//
+		//  Kept because the petport and the vent still carry vanilla
+		//  categories ("storage" and "wire"), so they double-sort into
+		//  Furniture, and this is the label they would move to. An unused
+		//  label costs nothing; a category referencing a missing label is
+		//  the failure worth avoiding.
+		"op" : "add",
+		"path" : "/labels/petports_machine",
+		"value" : "Petport Machine"
 	}
 ]

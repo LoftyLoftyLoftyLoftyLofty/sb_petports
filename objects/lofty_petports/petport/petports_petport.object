@@ -5,10 +5,41 @@
 
 {
   "objectName" : "petports_petport",
+  //  itemTags, NOT colonyTags, FOR SORTING. colonyTags are what a tenant asks
+  //  for when it wants furniture in its house; itemTags are what the deposit
+  //  filter reads. This object had only the former, so it did not appear in the
+  //  Petports group at all -- a crate set to "Petports" collected beacons, pets
+  //  and machines and not the ports themselves, which reads as a bug rather than
+  //  as a gap.
+  //
+  //  petports_petport IS THE TAG A RESKINNED PORT NEEDS. A Steampunk or Floran
+  //  petport carries it and sorts beside this one with no manifest edit.
+  "itemTags" : [ "petports", "petports_petport" ],
+
   "colonyTags" : ["petports"],
   "rarity" : "Rare",
   "objectType" : "container",
-  "category" : "storage",
+  //  NO `category`, MATCHING THE UPCYCLER. Two separate reasons, both real.
+  //
+  //  SORTING. "storage" put this in Furniture > Storage alongside every chest
+  //  in the game, so it double-sorted: a player filling a crate of storage got
+  //  petports, and a player filling a crate of petports got them too. It is a
+  //  container, so Storage was not WRONG -- it was just not what anyone wants
+  //  in a crate. The petports_petport tag above is what places it now.
+  //
+  //  THE PANE SUBTITLE. ContainerPane overwrites a pane's title and subtitle
+  //  from `shortdescription` and `category`, but ONLY when the object has a
+  //  category -- vanilla's FTL fuel hatch declares none and its pane keeps its
+  //  own strings. This pane currently read "Storage" underneath the name.
+  //
+  //  The borrowed pettether.config declares no title widget of its own, so
+  //  nothing replaces that yet; the subtitle simply goes away until the
+  //  ScriptPane lands. A ScriptPane does not have this problem at all, which is
+  //  why this is a tidy-up rather than a fix.
+  //
+  //  IF A CATEGORY EVER GOES BACK ON, it silently reverts the pane subtitle to
+  //  a category label. That coupling is invisible from either file alone.
+
   "price" : 550,
   "printable" : false,
   "description" : "A Petport for M.A.U.S. utility units. Socket a dormant unit to bring it online.",

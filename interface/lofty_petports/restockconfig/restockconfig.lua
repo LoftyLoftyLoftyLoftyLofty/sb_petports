@@ -388,6 +388,34 @@ local function selected()
 	return self.state.requests[self.selectedIndex]
 end
 
+--  SELECTION IS NEVER NIL WHILE ROWS EXIST.
+--
+--  An empty selection means the min and max fields edit nothing and the slot
+--  shows nothing, so the pane silently swallows what the player types. There is
+--  no state where that is the useful answer.
+--
+--  Three rules, and they are one rule from three directions:
+--    opening   -> the first
+--    adding    -> the one just added
+--    deleting  -> the one below, or the one above if it was the last
+--
+--  Matched to the upcycler pane, which carries the same helper for the same
+--  reason. Two panes with the same list behaving differently is worse than
+--  either behaviour on its own.
+local function ensureSelection()
+	if #self.state.requests == 0 then
+		self.selectedIndex = nil
+		return
+	end
+
+	--  Clamped as well as filled. A request removed from above the selection
+	--  shifts every index down, so a stale one can point past the end.
+	if self.selectedIndex == nil
+	   or self.state.requests[self.selectedIndex] == nil then
+		self.selectedIndex = math.min(self.selectedIndex or 1, #self.state.requests)
+	end
+end
+
 --  Is this item already requested? Returns its index.
 local function indexOf(name)
 	for index, request in ipairs(self.state.requests) do
@@ -489,13 +517,31 @@ local function renderFields()
 	end
 end
 
+--  THE SLOT SHOWS THE SELECTED REQUEST, and the note that used to sit here --
+--  "it stays empty on purpose, showing the last-added item would read as this
+--  is the request" -- was answering a different question.
+--
+--  Showing whatever was added LAST would indeed be meaningless. Showing what
+--  is SELECTED is not: it names the request the min and max fields underneath
+--  are about, and those fields are otherwise two numbers with no subject.
+--
+--  Matched to the upcycler, where the same slot does the same double duty.
+--  Two panes with the same widget behaving differently is worse than either
+--  behaviour on its own.
+--
+--  THE SLOT STILL TAKES A CLICK. The hint says so whether or not something is
+--  rendered, because a slot that shows an item and says nothing about clicking
+--  reads as somewhere an item is stored.
 local function renderSlot()
 	local count = #self.state.requests
+	local request = selected()
 
-	--  THE SLOT IS AN ADD BUTTON, NOT A DISPLAY. It stays empty on purpose:
-	--  showing the last-added item would read as "this is the request", which
-	--  is what the list beside it is for.
-	widget.setItemSlotItem("itemSlot_request", nil)
+	if request ~= nil and type(request.item) == "string" then
+		pcall(widget.setItemSlotItem, "itemSlot_request",
+			{ name = request.item, count = 1 })
+	else
+		pcall(widget.setItemSlotItem, "itemSlot_request", nil)
+	end
 
 	if count == 0 then
 		widget.setText("requestName", "Nothing requested")
@@ -624,7 +670,9 @@ local function refreshRequests()
 			end
 		end
 	else
-		self.selectedIndex = nil
+		--  The row this selection named is gone. Fall back rather than clear --
+		--  see ensureSelection.
+		ensureSelection()
 	end
 
 	paintRows()
@@ -703,10 +751,19 @@ local function removeRequest(index)
 
 	table.remove(self.state.requests, index)
 
-	--  The selection cannot outlive the row it named. Dropping it entirely is
-	--  safer than guessing at a neighbour: the fields blank, and the player
-	--  picks what they meant.
-	self.selectedIndex = nil
+	--  THE ONE BELOW, OR THE ONE ABOVE IF THAT WAS THE LAST.
+	--
+	--  Everything below the removed row shifts up, so the same INDEX now names
+	--  the row that was underneath -- which is where a player expects to land,
+	--  and it makes deleting several in a row work without moving the mouse.
+	--  Past the end means it was the last row, so ensureSelection clamps back.
+	--
+	--  This used to clear the selection on the reasoning that guessing at a
+	--  neighbour is unsafe. It is not a guess for a DELETE: the row below is the
+	--  only sensible answer, and an empty selection blanks the slot and both
+	--  fields for no reason.
+	self.selectedIndex = index
+	ensureSelection()
 
 	return true
 end
@@ -1037,6 +1094,11 @@ function init()
 	--  row buttons. Registering afterwards is one frame too late.
 	registerRowCallbacks()
 
+	--  Opening onto a beacon with requests and nothing selected leaves both
+	--  fields editing nothing, which reads as the fields being broken rather
+	--  than as no selection.
+	ensureSelection()
+
 	renderAll()
 
 	--  The migrated shape is only real once it is stored, and this also carries
@@ -1228,6 +1290,11 @@ function requestSelected()
 	--  does not write back to the widget.
 	if changed then
 		renderFields()
+
+		--  The slot names which request the fields below are about, so it has
+		--  to follow the selection. renderAll would work and is far too big a
+		--  hammer -- it rebuilds the request list, which fires this callback.
+		renderSlot()
 
 		--  The tint is the only visible selection indicator, so it has to
 		--  follow the click. Repaints in place rather than rebuilding: a

@@ -23,6 +23,12 @@
 --  will ever exercise or maintain. The object still answers
 --  petports_upcyclerRead, because a petport will want it later for the census.
 
+--  The flavor table. Reads petports_flavors.config through root.assetJson and
+--  hands it back in display order, with a reagent -> flavor index built at load.
+--  Same shape as petports_filters.lua, which beaconconfig.lua requires the same
+--  way -- so a pane script reaching a /scripts/ config is proven, not assumed.
+require "/scripts/lofty_petports/petports_flavors.lua"
+
 local DEBUG = true
 
 --  sb.logInfo accepts %s and nothing else. Pre-format through string.format,
@@ -42,6 +48,14 @@ local RULES_KEY = "petports_upcyclerRules"
 local ENABLED_KEY = "petports_upcyclerEnabled"
 
 local RULES_LIST = "rulesScroll.rulesList"
+
+--  SHARED BY BOTH LISTS, and hoisted here for exactly that reason. They were
+--  declared beside the flavors code at first, four hundred lines below the rules
+--  list that also needs them -- and a local referenced above its own definition
+--  is a nil GLOBAL that only throws when that path first runs.
+local ROW_ART = "/interface/lofty_petports/shared/row_144.png"
+local ROW_ART_ALT = "/interface/lofty_petports/shared/row_144_alt.png"
+local ROW_ART_SELECTED = "/interface/lofty_petports/shared/row_144_selected.png"
 
 --  Where the polymorphic display-name overrides live. Shared with the restock
 --  pane on purpose: an item that needs a family name in one list needs the same
@@ -177,8 +191,65 @@ end
 --  THE RULE LIST
 --  ---------------------------------------------------------------------------
 
+--  SELECTION IS NEVER NIL WHILE ROWS EXIST.
+--
+--  An empty selection means the threshold field edits nothing, the slot shows
+--  nothing, and the pane silently swallows what the player types. There is no
+--  state where that is the useful answer, so there is no state where it happens.
+--
+--  Three rules, and they are the same rule from three directions:
+--    opening   -> the first
+--    adding    -> the one just added
+--    deleting  -> the one below, or the one above if it was the last
+--
+--  Called BEFORE refreshRules, because that is what paints the selection.
+local function ensureSelection()
+	if #self.rules == 0 then
+		self.selectedIndex = nil
+		return
+	end
+
+	--  Clamped as well as filled. A rule removed from above the selection
+	--  shifts every index down, so a stale one can point past the end.
+	if self.selectedIndex == nil or self.rules[self.selectedIndex] == nil then
+		self.selectedIndex = math.min(self.selectedIndex or 1, #self.rules)
+	end
+end
+
+--  REPAINTS IN PLACE, NEVER REBUILDS. Rebuilding to show a selection change
+--  would call clearListItems, which fires the list's own callback -- the repaint
+--  would trigger the thing that asked for it.
+--
+--  The schema's selectedBG and unselectedBG are set on this list and do nothing;
+--  they are vestigial in vanilla's UI. Row art lives in the listTemplate and is
+--  driven from here, the same way the flavors list does it.
+local function paintRuleRows()
+	for index, path in pairs(self.rowPaths or {}) do
+		local art = ROW_ART_ALT
+
+		if index == self.selectedIndex then
+			art = ROW_ART_SELECTED
+		elseif index % 2 == 1 then
+			art = ROW_ART
+		end
+
+		pcall(widget.setImage, path .. ".rowBG", art)
+	end
+end
+
 local function refreshRules()
+	--  THE REBUILD FIRES THE SELECTION CALLBACK, and without this guard that
+	--  callback wins. clearListItems invokes ruleSelected, which finds nothing
+	--  selected and sets selectedIndex to nil -- so the restore at the bottom of
+	--  this function read a selection its own first line had just destroyed.
+	--
+	--  Symptom, and it is not obviously a selection bug: adding a rule appeared
+	--  to work, and then typing in the threshold box updated nothing until the
+	--  player clicked a row. The restock pane has carried this guard from the
+	--  start; this one never got it.
+	self.rebuilding = true
 	widget.clearListItems(RULES_LIST)
+	self.rebuilding = false
 
 	--  ROW NAMES ARE KEPT so a selection can be restored after a rebuild.
 	--  widget.setListSelected(list, nil) throws LuaConversionException -- the
@@ -187,11 +258,16 @@ local function refreshRules()
 	--  means having the row's generated name to hand.
 	self.rowNames = {}
 
+	--  Paths as well as names: the names restore the engine's own selection,
+	--  the paths are what paintRuleRows writes art to.
+	self.rowPaths = {}
+
 	for index, rule in ipairs(self.rules) do
 		local row = widget.addListItem(RULES_LIST)
 		local path = RULES_LIST .. "." .. row
 
 		self.rowNames[index] = row
+		self.rowPaths[index] = path
 
 		--  THE ROW INDEX GOES ON THE ROW WIDGETS, not just the row.
 		--
@@ -209,6 +285,8 @@ local function refreshRules()
 	if self.selectedIndex ~= nil and self.rowNames[self.selectedIndex] ~= nil then
 		pcall(widget.setListSelected, RULES_LIST, self.rowNames[self.selectedIndex])
 	end
+
+	paintRuleRows()
 
 	dbg("refreshRules: %s row(s), selected %s",
 		tostring(#self.rules), tostring(self.selectedIndex))
@@ -244,6 +322,34 @@ end
 
 --  The threshold field follows the selection: editing it edits the selected
 --  rule, and with nothing selected it is the value the NEXT rule will take.
+--  THE SLOT SHOWS THE SELECTED RULE'S ITEM, and the old comment saying it must
+--  always be empty was about a different question.
+--
+--  That reasoning was: the sampler reads a NAME off the cursor and hands the
+--  item straight back, so an item rendered in it would be a lie about where that
+--  item actually is. True while the slot means "what is in here". It does not
+--  apply to "which rule are you editing" -- nothing is claiming the item is
+--  stored, any more than a recipe icon claims to hold the recipe.
+--
+--  IT MAKES THE THRESHOLD FIELD LEGIBLE. "Keep at most 500" is meaningless
+--  without saying 500 of WHAT, and the rule list is a separate glance away.
+--
+--  THE SLOT STILL TAKES A CLICK, which is why the hint changes with it: a slot
+--  that shows something and says "click holding an item" reads as two
+--  contradictory instructions.
+local function refreshSampleSlot()
+	local rule = self.selectedIndex ~= nil and self.rules[self.selectedIndex] or nil
+
+	if rule ~= nil and type(rule.item) == "string" then
+		pcall(widget.setItemSlotItem, "itemSlot_sample",
+			{ name = rule.item, count = 1 })
+		widget.setText("sampleHint", "Click holding an item")
+	else
+		pcall(widget.setItemSlotItem, "itemSlot_sample", nil)
+		widget.setText("sampleHint", "Click holding an item")
+	end
+end
+
 local function refreshThreshold()
 	local rule = self.selectedIndex ~= nil and self.rules[self.selectedIndex] or nil
 
@@ -253,6 +359,11 @@ local function refreshThreshold()
 	else
 		widget.setText("thresholdLabel", "New rule keeps")
 	end
+
+	--  Driven from here rather than from every caller, because every path that
+	--  changes the selection already calls this one. A second thing to remember
+	--  is a second thing to forget.
+	refreshSampleSlot()
 end
 
 --  POLLED, NOT DRIVEN BY THE CALLBACK.
@@ -325,6 +436,9 @@ end
 
 --  Selecting a rule loads its threshold into the field.
 function ruleSelected()
+	--  A REBUILD IS NOT A CLICK. See refreshRules.
+	if self.rebuilding then return end
+
 	local selected = widget.getListSelected(RULES_LIST)
 
 	self.selectedIndex = nil
@@ -339,6 +453,9 @@ function ruleSelected()
 	dbg("ruleSelected: row %s -> index %s",
 		tostring(selected), tostring(self.selectedIndex))
 
+	--  The tint has to follow the click, and repainting is the only way to move
+	--  it without a rebuild.
+	paintRuleRows()
 	refreshThreshold()
 end
 
@@ -379,6 +496,8 @@ function sampleSlotClicked()
 			dbg("sampleSlotClicked: %s already has a rule at %s",
 				swap.name, tostring(index))
 
+			--  A SELECT, NOT AN ADD, so the machine is left alone -- nothing
+			--  became more destructive than it already was.
 			refreshRules()
 			refreshThreshold()
 			return
@@ -386,11 +505,52 @@ function sampleSlotClicked()
 	end
 
 	--  A MISSING OR MALFORMED THRESHOLD IS ZERO, and zero means "keep none of
-	--  these" -- the most destructive reading available. It is safe as a default
-	--  only because the machine ships off and every rule is visible in the list
-	--  before it can run.
-	table.insert(self.rules, { item = swap.name, max = thresholdValue() or 0 })
+	--  these" -- the most destructive reading available.
+	--  ZERO, NOT WHATEVER IS IN THE BOX.
+	--
+	--  This read thresholdValue(), which was coherent while nothing was selected
+	--  by default: the field was a staging value, the label read "New rule
+	--  keeps", and it became "Keep at most" once a row was picked.
+	--  ensureSelection deleted that state -- something is always selected now, so
+	--  the field always shows a rule's cap and adding silently borrowed an
+	--  unrelated rule's number.
+	--
+	--  So the field means exactly one thing: the selected rule's cap. A new rule
+	--  starts at zero, which is safe only because adding also switches the
+	--  machine off -- those two changes are a pair, not independent.
+	--
+	--  DELIBERATELY NOT DERIVED FROM THE ITEM the way restock derives a quota
+	--  from maxStack. A quota has an honest default -- fill a stack, refetch at
+	--  half. A threshold does not: "upcycle above one stack" is a guess about
+	--  intent, and guessing wrong destroys things.
+	table.insert(self.rules, { item = swap.name, max = 0 })
+
+	--  The new one. Survives the rebuild now that refreshRules is guarded --
+	--  before that, this line was correct and then immediately undone.
 	self.selectedIndex = #self.rules
+
+	--  ADDING A RULE SWITCHES THE MACHINE OFF, ALWAYS.
+	--
+	--  The old defence was that a zero threshold is safe because the machine
+	--  ships off and every rule is visible before it can run. That covers the
+	--  FIRST rule and nothing after it: a player adding a second rule to a
+	--  RUNNING machine has just told it to destroy every one of that item, and
+	--  the gap between dropping the item and typing a number is however long it
+	--  takes them to look at the keyboard.
+	--
+	--  So the destructive default stays -- zero is the honest reading of "no
+	--  rule yet" -- and the machine stops instead. A player who has to switch it
+	--  back on has lost two seconds; one who did not has lost a stack.
+	--
+	--  DELIBERATELY UNCONDITIONAL. Only switching off when the machine happens
+	--  to be running would mean the behaviour depends on state the player is not
+	--  looking at, and "sometimes it stops" is harder to learn than "it stops".
+	if self.enabled then
+		dbg("sampleSlotClicked: machine was running, switching it off")
+	end
+
+	self.enabled = false
+	pcall(widget.setChecked, "enabledCheckbox", false)
 
 	dbg("sampleSlotClicked: added %s keeping %s",
 		swap.name, tostring(self.rules[#self.rules].max))
@@ -428,10 +588,20 @@ local function ruleRowRemove(_, rowIndex)
 
 	table.remove(self.rules, index)
 
-	--  The selection is an INDEX, so removing a row above it silently retargets
-	--  it at a different rule. Dropping it is the honest answer; re-deriving
-	--  which rule the player "meant" is guesswork.
-	self.selectedIndex = nil
+	--  THE ONE BELOW, OR THE ONE ABOVE IF THAT WAS THE LAST.
+	--
+	--  Everything below the removed row shifts up by one, so the same INDEX now
+	--  names the row that was underneath -- which is what a player expects to
+	--  land on, and it makes deleting several in a row work without moving the
+	--  mouse. Past the end means it was the last row, so fall back to the new
+	--  last. ensureSelection does the clamp.
+	--
+	--  This used to clear the selection outright, on the reasoning that
+	--  re-deriving which rule the player "meant" is guesswork. It is not
+	--  guesswork for a DELETE: the row below is the only sensible answer, and an
+	--  empty selection blanks the slot and the threshold field for no reason.
+	self.selectedIndex = index
+	ensureSelection()
 
 	refreshRules()
 	refreshThreshold()
@@ -680,6 +850,11 @@ local function applyState(state)
 	self.loaded = true
 
 	widget.setChecked("enabledCheckbox", self.enabled)
+
+	--  Opening onto a machine with rules and nothing selected leaves the
+	--  threshold field editing nothing, which reads as the field being broken.
+	ensureSelection()
+
 	refreshRules()
 	refreshThreshold()
 
@@ -687,6 +862,368 @@ local function applyState(state)
 	--  rules AND the input slot. Setting it here as well would flash the
 	--  rules-only version for one frame on every edit.
 	refreshStatus()
+end
+
+--------------------------------------------------------------------------------
+--  TABS AND THE FLAVOR REFERENCE
+--------------------------------------------------------------------------------
+--
+--  WHY THIS IS IN THE PANE AT ALL. The reagent table is 251 entries and nothing
+--  in game says which item makes which flavor. Chilli making Spicy is
+--  guessable; Bio Sample making Zesty, Metal Coated Wood making Sharp and Phase
+--  Matter making Bitter are not. Without this the flavors are discoverable only
+--  by feeding the machine one item at a time and watching the output slot.
+
+local FLAVORS_LIST = "flavorsScroll.flavorsList"
+local REAGENTS_LIST = "reagentsScroll.reagentsList"
+
+--  Which tab is showing. Not read back from the buttons: a checkable button's
+--  state is the RESULT of a click, and asking it is how a tab ends up
+--  disagreeing with what is on screen after a rebuild.
+local activeTab = "instructions"
+
+local shownFlavors = {}
+
+--  Row id -> flavor, and row id -> widget path. getListSelected hands back a row
+--  ID, which is neither an index nor something to do arithmetic on, so the only
+--  safe route from a click to a flavor is a map built when the rows were.
+local flavorByRow = {}
+local flavorRowPath = {}
+local flavorRowIndex = {}
+local selectedRow = nil
+
+--  Cell widget path -> { name = , weight = }, for the reagent tooltips.
+--
+--  DECLARED HERE, and it was an implicit GLOBAL until now. A rewrite of this
+--  block dropped the `local` and nothing complained, because a global works --
+--  right up until another script in the same environment picks the same name.
+local reagentCell = {}
+
+--  Row button path -> flavor, for the flavor-row tooltips. Same mechanism:
+--  createTooltip is handed a SCREEN POSITION and has to work out what is under
+--  it, so anything with hover text has to be findable by path.
+local flavorRowTip = {}
+
+--  Which flavor the grid currently holds, so re-clicking the selected row does
+--  not rebuild 78 cells to arrive at the same 78 cells.
+local shownReagentFlavor = nil
+
+--  ITS OWN GUARD, NOT SHARED WITH THE RULES LIST.
+--
+--  widget.clearListItems INVOKES THE LIST'S OWN CALLBACK, so tearing a list down
+--  looks exactly like the player clicking away from the selected row. Sharing
+--  one flag across both lists would mean a rules rebuild suppresses a legitimate
+--  flavor selection -- a bug that only shows up when a player edits a rule and
+--  then opens the flavors tab. One flag per list.
+--
+--  DECLARED HERE, and it was an implicit global until now for the same reason
+--  reagentCell was: a rewrite of this block dropped the `local` and nothing
+--  complained, because a global works right up until it does not.
+local rebuildingFlavors = false
+
+local FLAVOR_WIDGETS = { "flavorsScroll", "reagentsLabel", "reagentsScroll" }
+local INSTRUCTION_WIDGETS = { "instructionsText" }
+
+--  Named setWidgetsVisible, NOT setVisible. A local called setVisible sits one
+--  character from widget.setVisible in every line that uses either, and the two
+--  take different arguments -- a LIST of names versus one name.
+local function setWidgetsVisible(names, shown)
+	for _, name in ipairs(names) do
+		--  pcall because a missing widget here should cost a tab, not the pane.
+		local ok, err = pcall(widget.setVisible, name, shown)
+		if not ok then
+			dbg("setVisible %s -> %s FAILED: %s", name, tostring(shown), tostring(err))
+		end
+	end
+end
+
+--  REPAINTS IN PLACE, NEVER REBUILDS. Rebuilding to show a selection change
+--  would call clearListItems, which invokes the list's own callback -- so the
+--  repaint would fire the thing that asked for it. Same reasoning, and the same
+--  shape, as the beacon pane's rule rows.
+local function paintFlavorRows()
+	for rowId, path in pairs(flavorRowPath) do
+		local art = ROW_ART_ALT
+
+		if rowId == selectedRow then
+			art = ROW_ART_SELECTED
+		elseif (flavorRowIndex[rowId] or 0) % 2 == 1 then
+			art = ROW_ART
+		end
+
+		pcall(widget.setImage, path .. ".rowBG", art)
+	end
+end
+
+--  Fill the grid with one flavor's reagents.
+--
+--  ALREADY SORTED BY THE ACCESSOR, heaviest first. Deliberately not re-sorted
+--  here: a pane that asks for a different order than the object uses would
+--  eventually get one, and then the list would be showing something no other
+--  part of the mod agrees with.
+--  INCREMENTAL BUILDING WAS TRIED HERE AND BACKED OUT. Do not re-add it.
+--
+--  Savory is 78 reagents and building them in one frame is a visible hitch, so
+--  a queue drained a few cells per update() looked like the obvious fix. It is
+--  not: widget.addListItem REPAINTS THE WHOLE CONTAINER, so every batch strobed
+--  the entire grid. Measured in game -- the flicker was far worse than the
+--  hitch it replaced.
+--
+--  That rules out spreading ANY list build across frames, not just this one.
+--  The engine gives no way to append to a live list quietly.
+--
+--  What is left, if the hitch ever needs solving: fewer widgets per cell, or
+--  fewer cells. Not fewer per frame.
+local function refreshReagents(flavor)
+	--  ALREADY SHOWING IT. Clicking the selected row again is a no-op rather
+	--  than a rebuild. Free, and it covers the commonest repeat -- which is most
+	--  of what the incremental version was reaching for anyway.
+	local wantId = flavor ~= nil and flavor.id or nil
+	if wantId == shownReagentFlavor then return end
+	shownReagentFlavor = wantId
+
+	rebuildingFlavors = true
+	widget.clearListItems(REAGENTS_LIST)
+	rebuildingFlavors = false
+
+	reagentCell = {}
+
+	if flavor == nil then
+		widget.setText("reagentsLabel", "Select a flavor")
+		return
+	end
+
+	--  ALREADY SORTED BY THE ACCESSOR, heaviest first. Deliberately not re-sorted
+	--  here: a pane asking for a different order than the object uses would
+	--  eventually get one, and then the list would show something no other part
+	--  of the mod agrees with.
+	local reagents = petports_flavorReagents(flavor.id)
+
+	for _, entry in ipairs(reagents) do
+		local rowId = widget.addListItem(REAGENTS_LIST)
+		local path = string.format("%s.%s", REAGENTS_LIST, rowId)
+
+		reagentCell[path .. ".icon"] = entry
+
+		--  COUNT 1, ALWAYS, AND NEVER THE WEIGHT. An itemslot draws a stack
+		--  number for anything above one, and a number beside an item reads as
+		--  "you need this many of it" -- the exact inverse of what a weight
+		--  means. The weight goes in its own label until the blip art exists.
+		local ok, err = pcall(function()
+			widget.setItemSlotItem(path .. ".icon", { name = entry.name, count = 1 })
+			widget.setText(path .. ".weight", tostring(entry.weight))
+		end)
+
+		if not ok then
+			dbg("reagent cell %s FAILED: %s", entry.name, tostring(err))
+		end
+	end
+
+	widget.setText("reagentsLabel",
+		string.format("%s -- %d reagent(s)", flavor.label or flavor.id, #reagents))
+
+	dbg("refreshReagents: %s, %d cell(s)", tostring(flavor.id), #reagents)
+end
+
+--  Build the flavor picker. Runs once; the table cannot change without an asset
+--  reload, so there is nothing to poll and nothing to invalidate.
+local function refreshFlavors()
+	rebuildingFlavors = true
+	widget.clearListItems(FLAVORS_LIST)
+	rebuildingFlavors = false
+
+	--  Cleared with the rows they describe. A stale entry would resolve a fresh
+	--  row id to a flavor from the previous build.
+	flavorByRow = {}
+	flavorRowPath = {}
+	flavorRowIndex = {}
+	flavorRowTip = {}
+	selectedRow = nil
+
+	--  The grid belongs to a row that is about to stop existing.
+	shownReagentFlavor = nil
+
+	shownFlavors = petports_flavors()
+
+	for index, flavor in ipairs(shownFlavors) do
+		local rowId = widget.addListItem(FLAVORS_LIST)
+		local path = string.format("%s.%s", FLAVORS_LIST, rowId)
+
+		flavorByRow[rowId] = flavor
+		flavorRowPath[rowId] = path
+		flavorRowIndex[rowId] = index
+
+		--  setData is the ONLY thing that identifies a row to a member callback:
+		--  arg 1 is the leaf name "rowButton", identical on every row.
+		local ok, err = pcall(function()
+			widget.setData(path .. ".rowButton", rowId)
+
+
+			widget.setText(path .. ".rowLabel",
+				string.format("%s  (%d)", flavor.label or flavor.id,
+					#petports_flavorReagents(flavor.id)))
+
+			--  THE FLAVOR'S OWN TREAT AS ITS ICON. It is the flavor's identity,
+			--  it is already named by `item` in the config, and the treat colours
+			--  were spread across lightness as well as hue precisely so seven of
+			--  them stay legible side by side.
+			--
+			--  NOT THE ANCHOR REAGENT, and that is not a preference -- the anchor
+			--  CANNOT be derived. Savory's anchor is Alien Meat at weight 4 while
+			--  its heaviest entries are cooked dishes at 8, so "first in the
+			--  sorted list" would show a random casserole. An anchor icon would
+			--  need an explicit field in petports_flavors.config.
+			--  AN IMAGE PATH, NOT A DESCRIPTOR, because the icon is an image
+			--  widget now -- see the config for why a slot could not work.
+			--
+			--  root.itemConfig returns the item's own DIRECTORY alongside its
+			--  config, and inventoryIcon is relative to it. Resolving it that
+			--  way rather than hardcoding our fuels folder is what lets a
+			--  modded flavor's treat show its own icon.
+			local item = petports_flavorItem(flavor.id)
+
+			if item ~= nil then
+				local okCfg, resolved = pcall(root.itemConfig, { name = item, count = 1 })
+
+				if okCfg and type(resolved) == "table"
+				   and type(resolved.config) == "table"
+				   and type(resolved.config.inventoryIcon) == "string" then
+
+					local icon = resolved.config.inventoryIcon
+
+					--  An absolute path is already complete; a relative one is
+					--  relative to the item's own directory.
+					if icon:sub(1, 1) ~= "/" then
+						icon = tostring(resolved.directory or "") .. icon
+					end
+
+					widget.setImage(path .. ".icon", icon)
+				else
+					--  A flavor whose treat has no readable icon still gets a
+					--  usable row; the label carries the name. Logged because it
+					--  means the manifest names an item that does not resolve.
+					dbg("flavor %s: no icon for %s",
+						tostring(flavor.id), tostring(item))
+				end
+			end
+
+			--  THE WHOLE ROW IS THE TOOLTIP TARGET, tested against rowButton
+			--  rather than the icon: the icon is mouseTransparent, and the
+			--  button spans the row so hovering anywhere on it answers.
+			flavorRowTip[path .. ".rowButton"] = flavor
+		end)
+
+		if not ok then
+			dbg("flavor row %d FAILED: %s", index, tostring(err))
+		end
+	end
+
+	paintFlavorRows()
+	dbg("refreshFlavors: %d flavor(s)", #shownFlavors)
+end
+
+--  ONE ENTRY POINT FOR BOTH TABS, and it is what a radioGroup callback would
+--  call too when the tab art lands. Nothing else in this file knows how tabs
+--  are drawn.
+local function showTab(which)
+	activeTab = which
+
+	setWidgetsVisible(INSTRUCTION_WIDGETS, which == "instructions")
+	setWidgetsVisible(FLAVOR_WIDGETS, which == "flavors")
+
+	--  Set from HERE rather than left wherever the click put them, so the pair
+	--  cannot end up both checked or both clear. That is the one thing a
+	--  radioGroup would do for free.
+	pcall(widget.setChecked, "tabInstructions", which == "instructions")
+	pcall(widget.setChecked, "tabFlavors", which == "flavors")
+
+	dbg("showTab: %s", tostring(which))
+end
+
+function tabInstructionsClicked()
+	showTab("instructions")
+end
+
+function tabFlavorsClicked()
+	showTab("flavors")
+
+	--  BUILT ON FIRST OPEN, not in init. 251 cells is real work and most players
+	--  will never open this tab, so it does not belong in the path every player
+	--  pays for when they click on the machine.
+	if #shownFlavors == 0 then refreshFlavors() end
+end
+
+--  Registered on the LIST with widget.registerMemberCallback, NOT named in
+--  scriptWidgetCallbacks. A row widget naming a scriptWidgetCallbacks entry
+--  throws at CONSTRUCTION and takes the pane down with it.
+--  TWO WIDGETS, ONE SELECTION. The row button and the icon both land here so a
+--  click anywhere on the row does the same thing.
+local function selectFlavorRow(rowId, from)
+	--  See rebuildingFlavors.
+	if rebuildingFlavors then return end
+
+	local flavor = rowId ~= nil and flavorByRow[rowId] or nil
+	selectedRow = rowId
+
+	dbg("selectFlavorRow (%s): row %s -> %s", tostring(from),
+		tostring(rowId), flavor ~= nil and tostring(flavor.id) or "none")
+
+	paintFlavorRows()
+	refreshReagents(flavor)
+end
+
+local function flavorRowClicked(_, rowId)
+	selectFlavorRow(rowId, "row")
+end
+
+
+--  Hover text for the reagent cells.
+--
+--  Handed a SCREEN POSITION, so every cell has to be tested with
+--  widget.inMember -- there is no "what is under the cursor" call. Same
+--  mechanism the beacon pane uses for its subgroup tiles.
+--
+--  THE TOOLTIP IS WHERE THE BLIP CONVENTION GETS TAUGHT. Blips are the
+--  at-a-glance read; this is where somebody who has not worked out what they
+--  mean finds out in words.
+function createTooltip(screenPosition)
+	--  Flavor rows first -- a smaller table, and the two can never overlap.
+	for path, flavor in pairs(flavorRowTip) do
+		local ok, inside = pcall(widget.inMember, path, screenPosition)
+
+		if ok and inside then
+			local tooltip = config.getParameter("tooltipLayout")
+			if type(tooltip) ~= "table" then return nil end
+
+			tooltip.title.value = flavor.label or flavor.id
+			tooltip.description.value = string.format("%d reagent(s) make this.",
+				#petports_flavorReagents(flavor.id))
+
+			return tooltip
+		end
+	end
+
+	for path, entry in pairs(reagentCell) do
+		local ok, inside = pcall(widget.inMember, path, screenPosition)
+
+		if ok and inside then
+			local tooltip = config.getParameter("tooltipLayout")
+			if type(tooltip) ~= "table" then return nil end
+
+			local name = entry.name
+			local okCfg, resolved = pcall(root.itemConfig, { name = entry.name, count = 1 })
+
+			if okCfg and type(resolved) == "table" and type(resolved.config) == "table" then
+				name = resolved.config.shortdescription or name
+			end
+
+			tooltip.title.value = name
+			tooltip.description.value =
+				string.format("Flavors %d treat(s).", entry.weight)
+
+			return tooltip
+		end
+	end
 end
 
 function init()
@@ -734,11 +1271,17 @@ function init()
 	--  names at construction time, so a row built before this line throws and
 	--  takes the pane down with it.
 	widget.registerMemberCallback(RULES_LIST, "ruleRowRemove", ruleRowRemove)
+	widget.registerMemberCallback(FLAVORS_LIST, "flavorRowClicked", flavorRowClicked)
 
-	--  The sampler is always empty. It reads a name off the cursor and hands the
-	--  item straight back, so anything left rendered in it would be a lie about
-	--  where that item actually is.
+	--  Cleared here and then owned by refreshSampleSlot, which applyState reaches
+	--  through refreshThreshold below. Explicitly cleared first so a pane opened
+	--  on a machine with no rules starts blank rather than showing whatever the
+	--  widget was constructed with.
 	pcall(widget.setItemSlotItem, "itemSlot_sample", nil)
+
+	--  Establishes the initial visibility rather than trusting the "visible"
+	--  flags in the config, so the two cannot disagree after an edit to either.
+	showTab("instructions")
 
 	local direct = readDirect()
 

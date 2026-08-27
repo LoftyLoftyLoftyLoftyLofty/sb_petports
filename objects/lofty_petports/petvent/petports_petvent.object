@@ -5,6 +5,15 @@
 
 {
   "objectName" : "petports_petvent",
+  //  itemTags, NOT colonyTags, FOR SORTING -- this object had only the latter and
+  //  so never appeared in the Petports group.
+  //
+  //  FILED UNDER MACHINES rather than getting a subgroup of its own. A vent is
+  //  infrastructure rather than a machine in the strict sense, but it is wired,
+  //  placed and wall-mounted like one, and a subgroup holding exactly one object
+  //  type is a row in the picker that never earns its place.
+  "itemTags" : [ "petports", "petports_machine" ],
+
   "colonyTags" : ["petports"],
   "rarity" : "Common",
   "category" : "wire",

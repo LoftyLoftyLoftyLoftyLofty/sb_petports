@@ -35,10 +35,74 @@
 	"objectName" : "petports_upcycler",
 	"rarity" : "Rare",
 	"objectType" : "container",
-	"category" : "crafting",
+	//  NO `category` FIELD, AND ITS ABSENCE IS THE FEATURE.
+	//
+	//  ContainerPane assembles the pane header from the object and overwrites
+	//  whatever the title widget declares -- but ONLY when the object has a
+	//  category. Measured, in this order:
+	//
+	//    category "crafting"          pane read "Upcycler / Crafting Station"
+	//    widget renamed windowtitle   no change, so it is found by TYPE
+	//    "titleFromEntity" : false    no change; that key is CraftingPane's
+	//    category "petports_machine"  subtitle followed to "Petport Machine"
+	//    no category at all           NOTHING stamped -- see below
+	//
+	//  The last one is vanilla's FTL fuel hatch. It declares no category, its
+	//  pane declares "FTL Drive Fuel Hatch" / "Erchius fuel repository", and
+	//  that is exactly what renders -- a title that DIFFERS from the object's
+	//  own shortdescription, which is what makes it conclusive rather than
+	//  coincidence. Seven species variants, none with a category.
+	//
+	//  SO THE SUBTITLE IS OURS AGAIN, and it can be a tagline instead of a
+	//  category label. See upcyclerconfig.config.
+	//
+	//  SORTING IS UNAFFECTED, and that was not luck. The Petports > Machines
+	//  subgroup matches the `petports_machine` TAG below, not a category,
+	//  precisely because a category doing double duty as the pane subtitle
+	//  would eventually be changed for one job and silently break the other.
+	//  It got changed for one job. Nothing broke.
+	//
+	//  WHAT IS ACTUALLY LOST: the item's tooltip shows no category line, and it
+	//  falls out of vanilla's category grouping. Cheap here -- `printable` is
+	//  false and no recipe produces this, so nothing groups it but us. 78
+	//  vanilla items ship with no category, this being seven of them.
+	//
+	//  IF A RECIPE IS EVER ADDED, note that crafting tabs group on
+	//  `recipeGroup`, not on category -- the fuel hatch carries
+	//  "recipeGroup" : "fuel" and no category at all.
+
+	//  THE HEADER ICON IS THE WIDGET'S, NOT THE OBJECT'S.
+	//
+	//  ContainerPane draws its own header icon from `inventoryIcon` unless this
+	//  is false -- which is why an icon appeared in the top left the moment the
+	//  title widget was touched, whether or not the widget's own icon did
+	//  anything. Both point at the same file here, so they were
+	//  indistinguishable.
+	//
+	//  Vanilla's fuel hatch sets this false and supplies a DIFFERENT image in
+	//  its title widget, so a bespoke header icon is the intended pattern
+	//  rather than a workaround.
+	"hasWindowIcon" : false,
 	"price" : 1200,
 	"printable" : false,
 	"description" : "Converts surplus items into fuel for utility units. Configure it before switching it on -- it destroys what it processes.",
+
+	//  A PLACEHOLDER, AND THE PETPORTS TOOLTIP REPLACES IT.
+	//
+	//  The default object tooltip clips its description at the box edge with no
+	//  ellipsis, so an overrun reads as a MISSING sentence rather than a
+	//  truncated one -- and this description overruns it. "container" is the
+	//  nearest vanilla fit rather than the right answer.
+	//
+	//  It also still shows a category line, and this object deliberately has no
+	//  category, so that line reads "Other". Both are cosmetic and both go away
+	//  with a tooltip of our own.
+	//
+	//  DO NOT FIX THIS BY SHORTENING THE DESCRIPTION. That was tried and backed
+	//  out: it makes the sentence fit a box we are about to replace, and the
+	//  half it cuts is the half that says what the machine is for.
+	"tooltipKind" : "container",
+
 	"shortdescription" : "Upcycler",
 	"race" : "generic",
 
@@ -150,24 +214,23 @@
 
 	//  NOTHING IN THIS MACHINE SPOILS, AND THE ZERO IS DELIBERATE.
 	//
-	//  Prepared dishes are reagents, and they are the ONLY reagents weighted at
-	//  8 without being one of the six augment materials. That is justified by
-	//  them costing player effort and barely stacking, since food decays -- a
-	//  reagent that rots in a crate is self-limiting with no rule saying so.
+	//  Prepared dishes are reagents, and they are the only ones weighted at 8
+	//  without being one of the six augment materials. That is justified by them
+	//  costing player effort and barely stacking, since food decays -- a reagent
+	//  that rots in a crate is self-limiting with no rule saying so.
 	//
 	//  THAT ARGUMENT IS ABOUT THE PLAYER'S STORAGE, NOT THIS SLOT. A dish
 	//  decaying in the reagent slot part way through a batch would end a flavor
-	//  run early, and there is nothing to distinguish that from the batch
-	//  counter being wrong -- a silent, intermittent bug in the one mechanic
-	//  the player cannot see the internals of. Zeroing it here keeps decay
-	//  where it does design work and removes it where it only produces
-	//  confusion.
+	//  run early, and nothing distinguishes that from the batch counter being
+	//  wrong -- a silent, intermittent fault in the one mechanic a player cannot
+	//  see the internals of. Zeroing it here keeps decay where it does design
+	//  work and removes it where it only produces confusion.
 	//
-	//  It also covers the input and output slots, which is harmless: a Pet
-	//  Treat does not spoil and anything on its way to becoming one is about
-	//  to stop existing.
+	//  It covers the input and output slots too, which is harmless: a Pet Treat
+	//  does not spoil and anything on its way to becoming one is about to stop
+	//  existing.
 	//
-	//  NOT MENTIONED TO PLAYERS anywhere in the description. It reads as the
-	//  machine simply working, which is the right amount of attention for it.
+	//  NOT MENTIONED TO PLAYERS in the description. It reads as the machine
+	//  simply working, which is the right amount of attention for it.
 	"itemAgeMultiplier" : 0.0
 }

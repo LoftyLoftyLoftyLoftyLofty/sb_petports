@@ -71,6 +71,42 @@ for the two halves still missing.
   Petports at 1200, with eight subgroups matching on the flavor tags. Treats are
   no longer in the Petports group at all.
 
+**THE UPCYCLER PANE IS REBUILT AND WORKING.** 527x369, up from 337x274. Rules
+on the left, schematic and progress top right, two tabs owning the lower right:
+"How it works" and "Flavors".
+
+The Flavors tab is a picker beside a grid, cloned from the beacon pane's
+picker-and-tile-grid rather than invented. It exists because the reagent table
+is 251 entries and NOTHING IN GAME otherwise says which item makes which flavor
+-- Chilli making Spicy is guessable, Bio Sample making Zesty and Metal Coated
+Wood making Sharp are not.
+
+- `scripts/lofty_petports/petports_flavors.lua` is the accessor, mirroring
+  `petports_filters.lua`: parse once, normalise the keyed table into ordered
+  arrays, fail loud and empty. It also builds a reagent -> flavor index, which
+  is the whole reagent-slot contract in one call.
+- Each flavor's reagents come out sorted WEIGHT DESCENDING, built in the
+  accessor so the object and the pane cannot disagree about order.
+- Pane background art is spliced from the beacon pane's and is placeholder.
+
+**Two pane behaviours now shared by the upcycler and the restock beacon**, and
+they should stay shared:
+
+- SELECTION IS NEVER NIL WHILE ROWS EXIST. Opening selects the first, adding
+  selects the added one, deleting selects the one below or the one above if it
+  was the last. An empty selection means the fields edit nothing and the pane
+  silently swallows what the player types.
+- THE ITEM SLOT SHOWS THE SELECTED ROW'S ITEM. Both panes had a comment saying
+  the slot must stay empty; both were answering "what is stored here" rather
+  than "which rule are you editing".
+
+**Adding a rule switches the upcycler off, and a new rule's threshold is zero.**
+Those two are a PAIR, not independent changes. Zero means "keep none of these",
+which is the most destructive reading available, and it is only safe because
+adding also stops the machine. The old defence -- that the machine ships off and
+every rule is visible before it runs -- covers the first rule and nothing after
+it.
+
 **Cargo top-up in the stall case.** A unit holding cargo it cannot deposit may
 collect more of the SAME item, capped at one `maxStack`. Capacity is counted in
 SLOTS, so a merge consumes none of it.
@@ -84,9 +120,10 @@ treated as a full load, deliberately). The participate/ID interface — networks
 derive correctly, but nothing lets a player author a network id or opt a port
 out of auto-merge, so half the network design is unreachable from in game. The
 fuel system itself: Pet Treats exist and accumulate, and nothing consumes them
-yet. The reagent branch -- the slot is there, the flavors and their reagent
-classes are authored, and nothing reads either. The upcycler UI rebuild toward
-the mockup.
+yet. THE REAGENT BRANCH is the nearest thing to the surface -- the slot is
+there, the seven flavored treats exist, 251 reagents are mapped with weights,
+the pane shows the whole table, and NOTHING READS THE SLOT. Until it does, none
+of the flavor work is reachable in game.
 
 **ART.** Bespoke: the unit body and the petport, the latter in three
 independently animated components with a ten-frame door cycle aliased in reverse
@@ -145,8 +182,20 @@ Those are the silent-nil guards and must not be flag-gated.
       beaconconfig/    beaconconfig.config, .lua, panewide_* + tile art
       restockconfig/   restockconfig.config, .lua, panesmall_*,
                        slot_backing.png, field_backing.png
+      upcyclerconfig/  upcyclerconfig.config, .lua, panewider_*,
+                       progressbar.png/.frames, warning.png
+      shared/          row_144/155/180 in base/alt/hover/selected/clear
     scripts/lofty_petports/
       petports_work.lua          -- claims + coverage rects, shared both sides
+      petports_filters.lua       -- the filter resolver
+      petports_filtergroups.config -- 75 groups, 219 subgroups
+      petports_flavors.lua       -- flavor table access + reagent index
+      petports_flavors.config    -- 251 reagents -> 7 flavors, with weights
+      petports_polymorphic.config
+    workbench/tools/
+      petports_tagdump.py, .bat    -- what categories and tags exist
+      petports_fooddump.py, .bat   -- produce and materials, WITH SINKS
+      petports_panetitles.py       -- container panes vs their own titles
       petports_filters.lua       -- the filter resolver
       petports_filtergroups.config -- 75 groups, 217 subgroups
       petports_flavors.config    -- reagent -> flavor, with weights
@@ -1160,6 +1209,145 @@ watching for.
 MEASURED after the fix, across 38 transitions in one session: every one landed
 65-78ms after the unit reported moving, i.e. one tick. Before, the direct case
 cost 1.5-3s and the vent case cost the whole journey.
+
+### Traps found in the pane-rebuild session
+
+### ContainerPane STAMPS THE TITLE AND SUBTITLE, AND THE ONLY LEVER IS THE CATEGORY
+
+A pane's title widget declares a title and a subtitle. ContainerPane overwrites
+both from the object's `shortdescription` and `category`. Four measurements, in
+order, each ruling out the obvious fix:
+
+    widget named "title", both strings declared   stamped
+    widget renamed to "windowtitle"               stamped -- found BY TYPE
+    "titleFromEntity" : false at the top level    stamped
+    object declares NO `category` at all          NOTHING stamped
+
+The third is the informative one. `titleFromEntity` comes from
+`/interface/crafting/fossilstation.config`, which is a CRAFTING pane -- a
+different C++ class with a different schema. ContainerPane does not read it.
+**A vanilla crafting pane is not evidence about a container pane** and reading
+one as though it were cost two test cycles here.
+
+The fourth is the answer, and vanilla proves it: the FTL fuel hatch declares no
+category, its pane declares "FTL Drive Fuel Hatch" / "Erchius fuel repository",
+and that is exactly what renders -- a title DIFFERING from the object's own
+shortdescription, which is what makes it conclusive rather than coincidence.
+Seven species variants, none with a category.
+
+**THE TWO FILES ARE COUPLED WITH NOTHING LINKING THEM.** Putting a category back
+on the object silently reverts the pane's subtitle to a category label, and
+neither file can express that on its own. Both carry a comment saying so.
+
+**COST: THE TOOLTIP SHOWS "Other".** A missing category is not blank, it renders
+as Other. 78 vanilla items ship with no category, so this is well-trodden
+ground, but it is a visible cost rather than a free win.
+
+**SORTING SURVIVES ONLY BECAUSE THE SUBGROUP MATCHES A TAG.** The Petports >
+Machines subgroup reads `petports_machine` from `itemTags`, deliberately not the
+category, on the reasoning that a field doing two jobs will eventually be
+changed for one of them and silently break the other. It got changed for one of
+them. Nothing broke.
+
+### `hasWindowIcon` -- ContainerPane draws its own header icon
+
+Undocumented anywhere we had looked, and found on the fuel hatch. ContainerPane
+draws a header icon from the object's `inventoryIcon` UNLESS the object sets
+`hasWindowIcon : false`.
+
+That explains a result that looked like a partial success: an icon appeared in
+the upcycler's header the moment the title widget was touched, and it was
+ContainerPane's, not the widget's. Both pointed at the same file, so they were
+indistinguishable.
+
+**The bespoke-icon pattern is the fuel hatch's:** set `hasWindowIcon : false` on
+the object and supply a DIFFERENT image in the title widget's `icon` child.
+Confirmed working on the upcycler.
+
+### `addListItem` REPAINTS THE WHOLE CONTAINER
+
+So a list cannot be built across frames. This rules out an entire technique
+rather than one implementation.
+
+Selecting Savory builds 78 cells in one frame and hitches visibly, so a queue
+drained a few cells per `update()` looked like the obvious fix -- and it is the
+first thing anyone will think of. Measured in game: every batch STROBED the
+entire grid, and the flicker was far worse than the hitch it replaced. Backed
+out; the file carries a do-not-re-add block.
+
+What is left, if the hitch ever needs solving: fewer widgets per cell, or fewer
+cells. Not fewer per frame.
+
+### AN ITEMSLOT IS NOT A BUTTON, AND CANNOT BE MADE TO ACT LIKE ONE
+
+It has no hover art, no depressed state and no click sound. Clicking a slot
+inside a list row selected the row while giving none of the feedback that
+clicking two pixels to the right did. Three fixes each solved a third:
+
+    "callback" : "null"        tooltip, no click
+    "mouseTransparent" : true  NO tooltip AND no click
+    a real member callback     click, but still silent and flat
+
+**`mouseTransparent` ON A SLOT IS THE WORST OF BOTH.** It removes the automatic
+item tooltip and does NOT pass the click through -- a slot swallows input rather
+than being transparent to it. Do not reach for it expecting either half.
+
+**THE FIX IS TO STOP USING A SLOT.** An `image` widget with `mouseTransparent`
+is genuinely transparent, so the row button underneath owns hover art, the
+depress, the sound and the click, with no per-widget wiring at all. The icon
+path comes from `root.itemConfig`'s `directory` plus `config.inventoryIcon`,
+which also means a modded item resolves its own icon rather than us hardcoding a
+folder.
+
+The cost is the slot's automatic tooltip, which is recoverable: `createTooltip`
+can cover the whole row and say more than an item name.
+
+### `rightClickCallback` DEFAULTS TO `<callback>.right` ON ITEMSLOTS TOO
+
+Already recorded for itemgrids and it applies to slots. Naming only the left
+callback threw
+
+    Failed to find itemslot rightClickCallback named: 'flavorIconClicked.right'
+
+out of `ListWidget::addItem`, taking the whole tab down. The dot is the trap:
+`x.right` parses as an index into a table, so the default is not reachable as a
+name even if something were there.
+
+**`"null"` IS SPECIAL-CASED AND NEVER LOOKS FOR `null.right`.** That is why a
+display-only slot survives naming one callback, and why this looked like a
+registration problem rather than a construction one. The rule is narrower than
+"always name both": **a slot naming a REAL callback must name the right-click
+one too.**
+
+### A WRAPPED LABEL GROWS UPWARD FROM ITS POSITION
+
+The position is the BOTTOM of the text block. A four-line paragraph placed at
+y 206 occupied 206..253 and drew straight through the tab buttons at 226 --
+visible as the tabs sitting between line two and line three.
+
+**Adding a sentence pushes the TOP up, not the bottom down**, so a block that
+fits today collides the moment the copy grows, with nothing to warn about it.
+Position multi-line labels from their last line and leave headroom.
+
+### `"callback" : "null"` ON A ROW BUTTON IS HOVER ART FOR FREE
+
+A list has no hover callback, so hover states have to come from a button. A row
+button with `"callback" : "null"` constructs, does nothing, and the LIST's own
+callback still fires -- because a row button and a list callback both fire on
+one click, which is normally the trap and is exactly what is wanted here.
+
+That gives an existing list hover art and sound without touching its working
+selection path. Use the button's own callback only when something else in the
+row needs one too.
+
+### THE PANE BACKGROUND HAS A 19px TILING GRID IN BOTH AXES
+
+Not a flat fill. Widening `panewide_body.png` by stretching one column produced
+a smooth band where the grid should be; it has to be extended by copying WHOLE
+19px tiles. Hence 527 wide rather than 530: 337 + 10 x 19.
+
+Header and footer ARE flat between their three-pixel borders and can be widened
+any amount.
 
 ### Traps found in the flavor / asset-scan session
 
@@ -4373,6 +4561,63 @@ is what the tile grid exists to fix.
 
 ---
 
+## The upcycler pane -- BUILT, and the decisions inside it
+
+### The flavors tab exists because 251 reagents are otherwise invisible
+
+Nothing in game says which item makes which flavor. Chilli making Spicy is
+guessable from the name; Bio Sample making Zesty, Metal Coated Wood making
+Sharp and Phase Matter making Bitter are not. Without a reference the flavor
+system is discoverable only by feeding the machine one item at a time and
+watching the output slot.
+
+**TWO TABS, FIXED, AND THE EXTENSIBLE AXIS IS THE LIST INSIDE.** A tab strip has
+a hard ceiling -- nine tabs is most of the panel width, so the third mod-added
+flavor breaks the layout. A picker list does not care how many rows it has. A
+mod adds a row, never a tab.
+
+**"How it works" IS THE DEFAULT TAB**, so a player opening the machine cold
+lands on the explanation rather than on a wall of icons.
+
+### Weight is shown as BLIPS, never as a stack count
+
+Rendering the weight as an itemslot's count is an ANTI-FEATURE and was rejected
+on sight: a number beside an item reads as "you need this many of it", which is
+the exact inverse of what a weight means. It does not merely read ambiguously,
+it reads backwards.
+
+**The convention is the reagent slot's own 8-cell charge display, reused.** The
+same bar shape beside Scorched Core showing eight filled cells teaches itself,
+because the player has already watched that bar drain on the machine. Reference
+and live state share one vocabulary instead of merely looking alike, and one
+9-frame sheet (0..8) serves both.
+
+Currently a plain number, explicitly as a stopgap, and the file says so.
+
+### Sorted weight-descending, and the pane must not re-sort
+
+The question a player brings to that panel is "what is the best thing I have for
+this flavor", which weight-descending answers reading top-down. Savory is 78
+reagents and will always scroll; the heaviest being first means the scroll is
+optional for most people.
+
+The order is built in `petports_flavors.lua`, not in the pane. A pane that asked
+for a different order than the object uses would eventually get one, and then
+the list would be showing something no other part of the mod agrees with.
+
+**Lofty's instinct is that the order is still not right** and could not yet say
+how. Left as-is deliberately rather than changed twice.
+
+### The row icon is the flavor's TREAT, and the anchor cannot be derived
+
+`item` in the config names the treat, and the treat colours were spread across
+lightness as well as hue precisely so seven of them stay legible side by side.
+
+An ANCHOR icon -- Scorched Core for Spicy -- would be more informative and is
+not available: Savory's anchor is Alien Meat at weight 4 while its heaviest
+entries are cooked dishes at 8, so "first in the sorted list" shows a random
+casserole. That would need an explicit `anchor` field in the config.
+
 ## Presentation and readout -- specified, unbuilt
 
 None of this is machinery. All of it is how a player finds out what the
@@ -5150,18 +5395,35 @@ matching when someone rewords a log line.
 Ordered by what a fresh session could pick up cleanly. Nothing here is blocking
 anything else.
 
-**The upcycler UI rebuild.** There is a mockup: a schematic layout with the
-input feeding a progress bar, the reagent entering from the side, the output off
-to the right, a rule list down the left and an explanation panel below. Roughly
-530x370 against the current 337x274, so it needs a new background splice on
-whole 19px periods.
+**The upcycler UI rebuild -- DONE, with a polish backlog.** The pane is 527x369
+with the mockup's layout and a working flavors reference. What is left is art
+and one behaviour, none of it blocking:
 
-Two things to know before starting. A container pane binds exactly TWO
-itemgrids, so a schematic layout needs `itemslot` proxies instead — the mech
-assembly station's pattern, and `player.swapSlotItem` is confirmed available
-from a container pane script. And `ContainerPane` overwrites the title and
-subtitle from the object's `shortdescription` and `category`, so the header
-currently reads "Upcycler / Crafting Station" and the `title` widget is ignored.
+  - THE BLIP SHEET. 9 frames, 0..8, shared between the reagent cells and the
+    live charge display. The weight numbers in the grid are a stopgap and a bad
+    convention to ship -- see "Weight is shown as BLIPS".
+  - `radioGroup` TABS once tab art exists. vanilla's convention is a radioGroup
+    with `toggleMode : false` and unselectedTab/selectedTab images; the pane
+    uses captioned buttons because a radioGroup button takes an IMAGE.
+    `showTab()` is already the single entry point a radioGroup callback would
+    call, so the swap is the button config and nothing else.
+  - SHINE LAYERS on both beacon panes and the upcycler. `bgShine` at
+    `zlevel : -10` is the convention, and `/interface/fuel/fuelshine.png` proves
+    it works on a CONTAINER pane rather than only on a crafting one.
+  - TOP-LEFT ICONS on the two beacon panes. Those are ScriptPanes rather than
+    ContainerPanes, so `hasWindowIcon` and the title-stamping rules may not
+    apply and want retesting rather than assuming.
+  - A PETPORTS TOOLTIP CONFIG. `tooltipKind` is honoured for objects; the
+    upcycler borrows `"container"`, whose description box clips with no ellipsis
+    and which shows a category line reading "Other". One file would serve the
+    upcycler, the petport, the vent and both beacons.
+  - BESPOKE PANE ART. The current background is spliced from the beacon pane's,
+    extended by copying whole 19px tiles.
+  - The instructions copy is placeholder.
+  - The itemgrid limit still stands: a container pane binds exactly TWO
+    itemgrids, so the schematic's third slot group needs an `itemslot` proxy --
+    the mech assembly station's pattern, and `player.swapSlotItem` is confirmed
+    available from a container pane script.
 
 **The reagent branch -- DESIGNED, HALF BUILT.** The name-versus-parameter
 question this section used to open with is SETTLED: flavors are distinct item
