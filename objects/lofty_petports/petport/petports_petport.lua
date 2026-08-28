@@ -1998,12 +1998,22 @@ end
 --  object declares, and hardcoding its current size would go quietly wrong the
 --  first time the art changes. Spaces are relative to the object, so they are
 --  offset by its position before being read.
+--  Returns wet, dry, liquids -- where `liquids` is the set of liquid ids found
+--  anywhere in the footprint, at any depth.
+--
+--  THE PORT COLLECTS IDS AND DOES NOT JUDGE THEM. Which liquids a chassis
+--  refuses is a monstertype parameter, so only the unit can classify them, and
+--  duplicating a deny-list here would be a second source of truth for the one
+--  question this whole system exists to answer consistently. Any depth, not
+--  just swimmable depth: a shallow lava film in the footprint is a reason to
+--  retire a unit even though it is not deep enough to count as wet.
 local function portMedia()
   local spaces = world.objectSpaces(entity.id())
-  if spaces == nil or #spaces == 0 then return false, true end
+  if spaces == nil or #spaces == 0 then return false, true, {} end
 
   local origin = entity.position()
   local wet, dry = false, false
+  local liquids = {}
 
   for _, space in ipairs(spaces) do
     local level = world.liquidAt({
@@ -2011,16 +2021,23 @@ local function portMedia()
       math.floor(origin[2]) + space[2] + 0.5
     })
 
-    if level ~= nil and (level[2] or 0) >= ENVIRONMENT_SUBMERGED_FILL then
+    local fill = (level ~= nil) and (level[2] or 0) or 0
+
+    if level ~= nil and level[1] ~= nil and fill > 0 then
+      liquids[level[1]] = true
+    end
+
+    if fill >= ENVIRONMENT_SUBMERGED_FILL then
       wet = true
     else
       dry = true
     end
-
-    if wet and dry then break end
   end
 
-  return wet, dry
+  local ids = {}
+  for id in pairs(liquids) do table.insert(ids, id) end
+
+  return wet, dry, ids
 end
 
 --  RETIRE A UNIT THE PORT'S ENVIRONMENT NO LONGER SUITS, AND REFUSE TO SPAWN
@@ -2051,10 +2068,10 @@ end
 local function environmentCheck()
   if self.petId == nil or not world.entityExists(self.petId) then return end
 
-  local wet, dry = portMedia()
+  local wet, dry, liquids = portMedia()
 
   local called, verdict = pcall(world.callScriptedEntity, self.petId,
-    "petports_canInhabit", wet, dry)
+    "petports_canInhabit", wet, dry, liquids)
 
   --  A UNIT THAT CANNOT ANSWER IS LEFT ALONE. callScriptedEntity returns nil
   --  silently for a function the target does not define, so a nil here is

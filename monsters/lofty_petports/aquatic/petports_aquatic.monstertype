@@ -165,6 +165,31 @@
     "petports_canFly" : false,
     "petports_canSwim" : true,
 
+    //  LIQUIDS THIS CHASSIS WILL NOT ENTER.
+    //
+    //  A DENY-LIST, MATCHED BY NAME. Starbound has 255 liquid slots and almost
+    //  all of the occupied ones are benign, so listing what is safe would mean
+    //  breaking every liquid mod on contact and patching one entry per mod. The
+    //  dangerous set is small, nameable and mostly vanilla, so it is the set
+    //  worth writing down.
+    //
+    //  NAMES RATHER THAN IDS because the numbering is not something to hardcode
+    //  from memory -- the only liquid id this mod has ever measured is 12 for
+    //  swampwater, which matches no ordering anyone would guess.
+    //  petports_liquidDenied resolves an id through root.liquidConfig and
+    //  compares against the liquid's name AND its itemDrop, so either spelling
+    //  works; a bare number is accepted too for anyone working from the wiki
+    //  table. Whatever it resolved to is logged once per liquid encountered, so
+    //  an entry that matches nothing shows up in one test cycle.
+    //
+    //  A DENIED LIQUID IS REFUSED AT 0.1 FILL, NOT 0.9 -- deep enough to swim in
+    //  is a much higher bar than deep enough to kill, and
+    //  minimumLiquidStatusEffectPercentage is 0.1. See PETPORTS_HARMFUL_FILL.
+    //
+    //  The flyer and the drone need no list: canSwim is false on both, so ALL
+    //  liquid is already refused and a deny-list would be redundant.
+    "petports_avoidLiquids" : [ "lava", "corelava", "poison" ],
+
     "movementSettings" : {
 
       //  THE ONE LINE THAT MAKES THIS A DIFFERENT LOCOMOTION CLASS.

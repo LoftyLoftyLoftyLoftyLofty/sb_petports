@@ -351,34 +351,15 @@ end
 --  window and is the comfortable number.
 local PETPORTS_SUBMERGED_FILL = 0.9
 
---  Is every tile row the body would overlap at `position` submerged?
+--  A HARMFUL LIQUID IS HARMFUL AT 0.1, NOT AT 0.9, AND THAT ASYMMETRY IS THE
+--  WHOLE POINT OF HAVING TWO NUMBERS.
 --
---  THE BODY BOX, NOT A POINT. A point test passes with the unit's head out of
---  the water, which is the same class of mistake as resolving a hover point on
---  the far side of a floor -- geometrically near, physically wrong.
---
---  Rows only. Liquid fills by row, and a column-wise test would answer a
---  question liquid does not have.
-function petports_submergedAt(position, bounds)
-  if position == nil then return false end
-  bounds = bounds or mcontroller.boundBox()
-
-  local x = position[1]
-  local bottom = math.floor(position[2] + bounds[2])
-  local top = math.ceil(position[2] + bounds[4]) - 1
-
-  for row = bottom, top do
-    local level = world.liquidAt({ x, row + 0.5 })
-
-    --  world.liquidAt returns {liquidId, level} or nil. A nil is air, which is
-    --  a definite answer and not a missing one.
-    if level == nil or (level[2] or 0) < PETPORTS_SUBMERGED_FILL then
-      return false
-    end
-  end
-
-  return true
-end
+--  minimumLiquidStatusEffectPercentage is 0.1 on every chassis here, so that is
+--  the fill at which the engine starts applying a liquid's status effects. A
+--  tile one tenth full of lava is not deep enough to swim in and is entirely
+--  deep enough to kill, so a denied liquid is refused from the moment it is
+--  present rather than from the moment it is swimmable.
+local PETPORTS_HARMFUL_FILL = 0.1
 
 --  SHOULD THIS CHASSIS REFUSE TO STAND IN LIQUID?
 --
@@ -399,8 +380,7 @@ end
 --  standableNear resolved the spot happily (it passes avoidLiquid false), then
 --  vanilla's approachPoint refused the same point one line later, left
 --  self.approachPosition nil, and the unit stood still for 10.7 seconds until
---  two progress strikes failed the task. It then churned deposit/drain at a
---  reachable crate until the port offered the submerged machine again.
+--  two progress strikes failed the task.
 --
 --  Two resolvers aiming at the same point under different rules is exactly the
 --  router-versus-walker split the handoff records. THEY MUST AGREE, and this
@@ -420,22 +400,150 @@ function petports_freeMover()
   return not mcontroller.baseParameters().gravityEnabled
 end
 
---  Is the single tile containing `position` submerged?
+--  LIQUIDS THIS CHASSIS WILL NOT ENTER, BY NAME.
 --
---  A POINT, NOT THE BODY BOX, and the distinction is the whole reason this
---  exists separately. petports_submergedAt asks "may my body occupy this", which
---  is the right question about a standing spot and the WRONG one about a target:
---  a crate resting just under the surface is submerged while a body centred on
---  it would straddle the waterline, so a body test would refuse work the unit
---  can plainly do.
-function petports_submergedPoint(position)
-  if position == nil then return false end
+--  BY NAME AND NOT BY ID, DELIBERATELY. Starbound has 255 liquid slots and the
+--  numbering is not something to hardcode from memory -- the one id this mod
+--  has ever measured is 12 for swampwater, which matches no ordering anyone
+--  would guess. root.liquidConfig resolves an id to its config, and the
+--  watering code already relies on that call, so names are available and
+--  numbers do not have to be.
+--
+--  A DENY-LIST, NOT AN ALLOW-LIST, AND THE REASONING IS NOT THE USUAL ONE. An
+--  allow-list fails closed, which is normally right -- but there are hundreds of
+--  benign modded liquids and three or four dangerous ones, so an allow-list
+--  would break every liquid mod on contact and demand a patch per mod. The
+--  asymmetry runs the other way here: the dangerous set is small, nameable, and
+--  mostly vanilla.
+--
+--  ENTRIES MATCH LOOSELY ON PURPOSE. A liquid's name and its itemDrop are not
+--  the same string ("lava" versus "liquidlava"), and which one root.liquidConfig
+--  exposes is not something to assume, so both are compared and a bare number is
+--  accepted too for anyone working from the wiki table. An unmatched liquid logs
+--  what it actually resolved to, once, so a wrong entry is a one-cycle fix
+--  rather than a mystery.
+local function avoidedLiquids()
+  if self.petportsAvoidLiquids ~= nil then return self.petportsAvoidLiquids end
 
-  local level = world.liquidAt(position)
-  return level ~= nil and (level[2] or 0) >= PETPORTS_SUBMERGED_FILL
+  local names = {}
+  for _, entry in ipairs(config.getParameter("petports_avoidLiquids", {})) do
+    names[string.lower(tostring(entry))] = true
+  end
+
+  self.petportsAvoidLiquids = names
+  return names
 end
 
---  Chassis capability. Cached per unit: these are monstertype parameters and
+--  Is this liquid one this chassis refuses to be in? Cached per id, because
+--  this is asked once per tile row per candidate position inside searches that
+--  already run eighty-one of them.
+function petports_liquidDenied(liquidId)
+  if liquidId == nil then return false end
+
+  self.petportsLiquidVerdict = self.petportsLiquidVerdict or {}
+  local cached = self.petportsLiquidVerdict[liquidId]
+  if cached ~= nil then return cached end
+
+  local denied = false
+  local names = avoidedLiquids()
+
+  if next(names) ~= nil then
+    local ok, liquid = pcall(root.liquidConfig, liquidId)
+    local resolved = {}
+
+    if ok and type(liquid) == "table" then
+      if liquid.name ~= nil then table.insert(resolved, tostring(liquid.name)) end
+      if type(liquid.config) == "table" then
+        if liquid.config.name ~= nil then table.insert(resolved, tostring(liquid.config.name)) end
+        if liquid.config.itemDrop ~= nil then table.insert(resolved, tostring(liquid.config.itemDrop)) end
+      end
+    end
+
+    table.insert(resolved, tostring(liquidId))
+
+    for _, candidate in ipairs(resolved) do
+      if names[string.lower(candidate)] then denied = true break end
+    end
+
+    sb.logInfo("UNIT liquid %s resolves to %s -- %s",
+      sb.printJson(liquidId), sb.printJson(resolved),
+      denied and "DENIED, this chassis will not enter it" or "allowed")
+  end
+
+  self.petportsLiquidVerdict[liquidId] = denied
+  return denied
+end
+
+--  WHAT MEDIUM IS THE BODY IN AT `position`? "air", "swim" or "forbidden".
+--
+--  THREE STATES, NOT TWO, AND THE THIRD IS WHY THIS REPLACED A BOOLEAN. A
+--  denied liquid is neither swimmable nor air. Reporting it as "not submerged"
+--  would make a flyer treat a lava lake as open sky; reporting it as "submerged"
+--  would let a swimmer that happens to allow water treat it as home. It has to
+--  refuse both, so it needs its own answer.
+--
+--  Rows only. Liquid fills by row, and a column-wise test would answer a
+--  question liquid does not have.
+--
+--  FORBIDDEN WINS OVER EVERYTHING. One row of lava anywhere in the body's
+--  footprint condemns the position, however much water surrounds it.
+function petports_mediumAt(position, bounds)
+  if position == nil then return "air" end
+  bounds = bounds or mcontroller.boundBox()
+
+  local x = position[1]
+  local bottom = math.floor(position[2] + bounds[2])
+  local top = math.ceil(position[2] + bounds[4]) - 1
+
+  local submerged = true
+
+  for row = bottom, top do
+    local level = world.liquidAt({ x, row + 0.5 })
+
+    --  world.liquidAt returns {liquidId, level} or nil. A nil is air, which is
+    --  a definite answer and not a missing one.
+    local fill = (level ~= nil) and (level[2] or 0) or 0
+
+    if fill >= PETPORTS_HARMFUL_FILL and petports_liquidDenied(level[1]) then
+      return "forbidden"
+    end
+
+    if fill < PETPORTS_SUBMERGED_FILL then submerged = false end
+  end
+
+  return submerged and "swim" or "air"
+end
+
+--  Point version of petports_mediumAt, same three states.
+--
+--  A POINT, NOT THE BODY BOX, and the distinction is the whole reason this
+--  exists separately. petports_mediumAt asks "may my body occupy this", which is
+--  the right question about a standing spot and the WRONG one about a target: a
+--  crate resting just under the surface is submerged while a body centred on it
+--  would straddle the waterline, so a body test would refuse work the unit can
+--  plainly do.
+function petports_mediumAtPoint(position)
+  if position == nil then return "air" end
+
+  local level = world.liquidAt(position)
+  local fill = (level ~= nil) and (level[2] or 0) or 0
+
+  if fill >= PETPORTS_HARMFUL_FILL and petports_liquidDenied(level[1]) then
+    return "forbidden"
+  end
+
+  return (fill >= PETPORTS_SUBMERGED_FILL) and "swim" or "air"
+end
+
+--  Kept as a boolean for the callers that only ask "is this water". A forbidden
+--  liquid is deliberately NOT submerged here: nothing should ever treat it as
+--  somewhere to swim, and every caller that cares about the difference asks
+--  petports_mediumAt instead.
+function petports_submergedAt(position, bounds)
+  return petports_mediumAt(position, bounds) == "swim"
+end
+
+--  Chassis capability. Cached per unit--  Chassis capability. Cached per unit: these are monstertype parameters and
 --  cannot change for the life of an entity, and this is called per candidate
 --  position inside a search that already runs eighty-one of them.
 function petports_media()
@@ -485,7 +593,17 @@ end
 --
 --  The reason travels with it because "the port despawned my pet" has to say
 --  why in one line, or it reads as the mod losing units.
-function petports_canInhabit(wet, dry)
+function petports_canInhabit(wet, dry, liquids)
+  --  A LIQUID THIS CHASSIS REFUSES ANYWHERE IN THE FOOTPRINT IS DISQUALIFYING,
+  --  regardless of how much dry footing the port also offers. A petport with
+  --  one tile of lava in it is not a home for anything that avoids lava, and it
+  --  is checked before capability because no capability answers it.
+  for _, id in ipairs(liquids or {}) do
+    if petports_liquidDenied(id) then
+      return { ok = false, reason = "the port sits in a liquid this chassis will not enter" }
+    end
+  end
+
   if petports_freeMover() then
     local media = petports_media()
 
@@ -538,8 +656,13 @@ end
 --  told, and it belongs in the aquatic unit's item description.
 function petports_targetAllowed(position)
   local media = petports_media()
+  local medium = petports_mediumAtPoint(position)
 
-  if petports_submergedPoint(position) then
+  if medium == "forbidden" then
+    return false, "target sits in a liquid this chassis will not enter"
+  end
+
+  if medium == "swim" then
     if media.swim then return true, "target is submerged" end
     return false, "target is submerged and this chassis cannot swim"
   end
@@ -567,7 +690,16 @@ function petports_mediumAllows(position, bounds)
 
   local media = petports_media()
 
-  if petports_submergedAt(position, bounds) then
+  local medium = petports_mediumAt(position, bounds)
+
+  --  FORBIDDEN OUTRANKS BOTH CAPABILITIES. This is not "a medium I lack the
+  --  equipment for", it is one this chassis is configured to stay out of, and
+  --  no combination of canFly and canSwim overrides that.
+  if medium == "forbidden" then
+    return false, "a liquid this chassis will not enter"
+  end
+
+  if medium == "swim" then
     if media.swim then return true, "submerged" end
     return false, "submerged and this chassis cannot swim"
   end
