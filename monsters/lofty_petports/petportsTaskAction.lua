@@ -131,7 +131,7 @@ local TASK_DEBUG = true
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-08-27r swim mover for every chassis"
+local BUILD_STAMP = "2026-08-28b origin nudge scoped to searches"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -201,6 +201,32 @@ local STUCK_MOVE = 0.1
 --  Below vanilla's own 0.5, so the classified line lands before the anonymous
 --  reset does.
 local AIRBORNE_EDGE_STALL = 0.35
+
+--  HOW FAR TO LOOK FOR A NODE THE SEARCH CAN ACTUALLY BEGIN FROM.
+--
+--  Two tiles, and small on purpose. This corrects a unit that is standing a
+--  fraction off its own node, not one that is somewhere wrong -- the measured
+--  case needed 0.61 tiles. A candidate further out than this is not a nudge,
+--  it is a journey, and a journey is the pathfinder's job.
+local ORIGIN_NUDGE_RADIUS = 2
+
+--  How close to the chosen node counts as arrived.
+--
+--  NOT "until the predicate flips", even though that is the condition we care
+--  about. The node boundary sits at x.5, so the predicate flips the instant the
+--  unit crosses it and leaves the body balanced ON the boundary, where a
+--  fraction of drift breaks it again. Walking to the node CENTRE puts half a
+--  tile of margin either side. Measured: the perch at x 2503.39 flips at
+--  2503.5, which is 0.11 tiles of travel and no margin at all.
+local ORIGIN_NUDGE_ARRIVE = 0.25
+
+--  Give up and let the ordinary failure ladder have it.
+--
+--  Generous relative to the distance involved -- 1.5s is roughly twelve tiles
+--  at walk speed and the nudge is never more than two. Anything approaching
+--  this limit means the unit is not travelling, and continuing to push it is
+--  how a recovery turns into a livelock.
+local ORIGIN_NUDGE_TIMEOUT = 1.5
 
 --  The same idea for a GROUNDED WALK edge, and deliberately much longer.
 --
@@ -2329,6 +2355,267 @@ local function approachTargetFor(stateData, rawPosition)
   return stateData.groundTarget
 end
 
+--  CAN THE SEARCH BEGIN FROM WHERE THE UNIT IS STANDING?
+--
+--  THE UNIT'S POSITION AND THE UNIT'S NODE ARE DIFFERENT PLACES, AND THE SEARCH
+--  ONLY KNOWS THE NODE. `PathFinder:find` hands mcontroller.position() to
+--  world.platformerPathStart, which rounds it onto the lattice before anything
+--  else happens. Vanilla checks the TARGET is standable and never checks the
+--  origin at all -- there is no such line in pathing.lua.
+--
+--  So a unit can be genuinely on the ground, pass canPathfind(), and have the
+--  search begin from a node hanging in mid air. The plan then opens with a
+--  ballistic fall the unit cannot perform, the arc-landing guard correctly
+--  refuses it, and A* re-runs from the same unchanged position and returns the
+--  same plan. Nothing in the loop moves, so nothing breaks it.
+--
+--  MEASURED, twice, to the digit. A unit landed on the top-left corner of a
+--  crate at [2503.39,1166.79], carried by a 0.19-tile sliver of it:
+--
+--    body        2502.59 .. 2504.19   overlaps the crate at column 2504
+--    node        [2503,1166.8]
+--    node body   2502.20 .. 2503.80   entirely over the void
+--
+--    UNIT approach at [2503.39,1166.79] (standable true) ... onGround true
+--    UNIT path ACQUIRED ... action Arc ... edge 1 of 93
+--
+--  Standable where it is, airborne where the search thinks it is. Three
+--  different targets that session -- [2520.5,1152.8], [2501.5,1163.8],
+--  [2549.5,1159.8] -- all produced a first edge descending from [2503,1166.8].
+--  THE CONSTANT IS THE ORIGIN, NOT THE GOAL, and that is the whole diagnosis.
+--
+--  297 refusals over 92 seconds, ending in a re-home. Every rung of the
+--  recovery ladder below rehomeUnit re-plans through the same broken origin --
+--  the recall's own plan opened with the identical fall -- so only the teleport
+--  could break it.
+--
+--  THIS FAILS OPEN, DELIBERATELY, AND IT IS THE ONE PLACE IN THIS FILE THAT
+--  DOES. Everything else here fails closed because guessing is worse than
+--  declining. Not this: a false negative refuses to plan and bricks a unit that
+--  was fine, while a false positive plans exactly as the code does today. The
+--  worst outcome of being wrong is the behaviour we already have.
+--
+--  Returns the node alongside the verdict so the caller can log it. A free
+--  mover is always plannable here: mustEndOnGround derives false for it, so
+--  standing is not a property its start node needs. Its equivalent problem is
+--  the medium, and petports_flyPointNear already owns that.
+--
+--  THIS IS A PURE QUESTION ABOUT THE NODE AND ASKS NOTHING ABOUT BEING
+--  AIRBORNE. It used to, and that was a defect: an airborne unit came back
+--  "plannable, node nil", the caller could not tell that from a nudge having
+--  succeeded, and it logged `node null is standable` and rebuilt the pather --
+--  discarding a live path IN FLIGHT, which canPathfind() then cannot replace
+--  until the unit lands. Measured twice:
+--
+--    UNIT FLIGHT left the ground at [2503.03,1166.3] ...
+--    UNIT origin nudge DONE at [2503.03,1166.3]: node null is standable
+--    UNIT path LOST at [2503.03,1166.3]: ... onGround false
+--
+--  The ground gate belongs to the caller, which has somewhere sensible to put
+--  the answer. Two return paths that a caller cannot distinguish is the bug,
+--  not the check itself.
+local function originIsPlannable()
+  if petports_freeMover() then return true, nil end
+
+  local node = petports_nodePosition(mcontroller.position())
+
+  --  pcall because validStandingPosition indexes its arguments, and a shape it
+  --  does not like raises rather than returning false. See standableNear.
+  local ok, standable = pcall(validStandingPosition, node, petports_avoidLiquid())
+  if not ok then return true, node end
+
+  return standable == true, node
+end
+
+--  WHERE TO STAND SO THE SEARCH HAS SOMETHING TO BEGIN FROM.
+--
+--  SAME ROW ONLY, AND THAT IS NOT A SIMPLIFICATION. Walking changes x, not
+--  which floor the unit is standing on -- the lesson petportsJumpMover's
+--  wrong-level branch is built out of. A standable node one row up is not
+--  somewhere a walk can deliver the unit, so offering it would produce motion
+--  toward a place it cannot reach, and motion is what the stall detector reads
+--  as health.
+--
+--  ORDERED BY TRUE DISTANCE, because in a first-fit search the order IS the
+--  answer. petports_flyPointNear's header records what ring-ordering cost when
+--  this was got wrong there.
+local function nudgeTargetNear(node)
+  local here = mcontroller.position()
+
+  local candidates = {}
+  for dx = -ORIGIN_NUDGE_RADIUS, ORIGIN_NUDGE_RADIUS do
+    if dx ~= 0 then
+      local candidate = { node[1] + dx, node[2] }
+      table.insert(candidates, { candidate, world.magnitude(candidate, here) })
+    end
+  end
+
+  table.sort(candidates, function(a, b) return a[2] < b[2] end)
+
+  for _, entry in ipairs(candidates) do
+    local candidate = entry[1]
+
+    local ok, standable = pcall(validStandingPosition, candidate,
+      petports_avoidLiquid())
+
+    --  The same forbidden-liquid gate every other resolver in this file
+    --  applies. A node in lava is standable geometry and not a destination.
+    if ok and standable and petports_mediumAllows(candidate) then
+      return candidate, entry[2]
+    end
+  end
+
+  return nil
+end
+
+--  Push the unit onto its own node before anything asks the pathfinder a
+--  question. Returns true when the caller should stand down for this tick.
+--
+--  RUNS BEFORE THE PLAN, NOT AFTER IT. Catching this from a returned plan is
+--  possible -- a descending airborne first edge while grounded is conclusive --
+--  but it pays for a search first, and in the measured case no usable plan came
+--  back at all. One predicate per tick is cheaper than one A* per tick.
+--
+--  IT DOES NOT DRIVE THE PATHER. While a nudge is running the unit is steered
+--  directly with moveX, because the pathfinder is precisely the thing that
+--  cannot help from here. On completion the pather is rebuilt, since whatever
+--  plan it holds was drawn from the bad node.
+local function nudgeOrigin(stateData, dt)
+  --  AIRBORNE FIRST, BEFORE THE PREDICATE IS EVEN ASKED.
+  --
+  --  A falling unit's node is SUPPOSED to be in mid air, so the predicate has
+  --  no useful answer, and canPathfind() already refuses to search from one.
+  --  This branch used to live inside originIsPlannable, where its "true" was
+  --  indistinguishable from a nudge succeeding -- see the note there for the
+  --  path it destroyed in flight.
+  --
+  --  ABANDONING IS NOT COMPLETING. No freshPather here: the premise was
+  --  "standing in the wrong place", the unit is no longer standing, and gravity
+  --  is now solving it. Whatever plan the pather holds is the landing's problem.
+  if not mcontroller.onGround() then
+    if stateData.originNudge ~= nil then
+      sb.logInfo("UNIT origin nudge ABANDONED at %s: left the ground on the way to %s",
+        sb.printJson(mcontroller.position()), sb.printJson(stateData.originNudge))
+
+      stateData.originNudge = nil
+      stateData.originNudgeTimer = nil
+    end
+
+    return false
+  end
+
+  local plannable, node = originIsPlannable()
+
+  if plannable then
+    if stateData.originNudge ~= nil then
+      sb.logInfo("UNIT origin nudge DONE at %s: node %s is standable after %s s",
+        sb.printJson(mcontroller.position()), sb.printJson(node),
+        sb.printJson(stateData.originNudgeTimer or 0))
+
+      stateData.originNudge = nil
+      stateData.originNudgeTimer = nil
+      freshPather("origin nudge complete")
+    end
+
+    --  Cleared on success so a unit that gets stuck again later gets a fresh
+    --  attempt rather than inheriting an old refusal.
+    stateData.originNudgeFailed = nil
+    return false
+  end
+
+  --  Already tried and could not find anywhere. Do not re-probe every tick;
+  --  the position has not meaningfully changed and the answer will not either.
+  if stateData.originNudgeFailed then return false end
+
+  if stateData.originNudge == nil then
+    --  ONLY WHEN THERE IS NO PLAN TO RUIN.
+    --
+    --  "Pre-flight before every plan" means before a SEARCH, not before every
+    --  tick, and scoping it to the tick was a defect. A plan may legitimately
+    --  walk the unit across a ledge edge, and while it is doing so the node
+    --  under the unit is genuinely not standable -- which is fine, because
+    --  nobody is about to plan from it. Measured: a correct six-edge Walk plan
+    --  deliberately walked the unit LEFT off the crate toward the crops, the
+    --  node flipped un-standable as it crossed x 2503.5, and the nudge fired
+    --  and pushed RIGHT against a plan that was working.
+    --
+    --    UNIT pre-move at [2503.41,1166.8]: action Walk edge 1 of 6
+    --    UNIT origin NOT PLANNABLE at [2503.41,1166.8] ... nudging to [2504,1166.8]
+    --
+    --  It only came out right because momentum carried the unit off the ledge
+    --  anyway. A recovery that overrides a working plan is not a recovery.
+    --
+    --  hasPath false covers both cases that matter: no plan yet, and a plan
+    --  just discarded by a guard or a stall. A search still running (aStar set,
+    --  hasPath false) is one that STARTED from the bad origin and is therefore
+    --  wasted, so interrupting it is right too.
+    --
+    --  A nudge already under way is exempt: it runs the branches above this one
+    --  and never reaches here, so completing it is never cancelled by the stale
+    --  plan the pather is still carrying.
+    local finder = self.pather and self.pather.finder
+
+    if finder ~= nil and finder.hasPath then return false end
+
+    local candidate, distance = nudgeTargetNear(node)
+
+    if candidate == nil then
+      sb.logInfo("UNIT origin NOT PLANNABLE at %s: node %s is not a standing "
+        .. "position and no node within %s tiles on the same row is either -- "
+        .. "the search will plan from mid air, falling through to the ordinary "
+        .. "failure ladder",
+        sb.printJson(mcontroller.position()), sb.printJson(node),
+        sb.printJson(ORIGIN_NUDGE_RADIUS))
+
+      stateData.originNudgeFailed = true
+      return false
+    end
+
+    sb.logInfo("UNIT origin NOT PLANNABLE at %s: node %s is not a standing "
+      .. "position -- nudging to %s (%s tiles) before planning",
+      sb.printJson(mcontroller.position()), sb.printJson(node),
+      sb.printJson(candidate), sb.printJson(distance))
+
+    stateData.originNudge = candidate
+    stateData.originNudgeTimer = 0
+  end
+
+  stateData.originNudgeTimer = (stateData.originNudgeTimer or 0) + dt
+
+  local here = mcontroller.position()
+  local toTarget = stateData.originNudge[1] - here[1]
+
+  if stateData.originNudgeTimer >= ORIGIN_NUDGE_TIMEOUT then
+    sb.logInfo("UNIT origin nudge TIMED OUT at %s after %s s: wanted %s, still "
+      .. "%s tiles short -- giving up and letting the task fail normally",
+      sb.printJson(here), sb.printJson(stateData.originNudgeTimer),
+      sb.printJson(stateData.originNudge), sb.printJson(math.abs(toTarget)))
+
+    stateData.originNudge = nil
+    stateData.originNudgeTimer = nil
+    stateData.originNudgeFailed = true
+    return false
+  end
+
+  --  Arrived by distance. The predicate flipping is checked at the top of the
+  --  next tick and is what actually ends the nudge; this only stops the walk
+  --  from running past the node it was aimed at.
+  if math.abs(toTarget) <= ORIGIN_NUDGE_ARRIVE then
+    --  Vanilla's own braking line from moveLand, read the same way. NOT
+    --  `groundForce or 0` -- a missing field would then brake with no force at
+    --  all, silently, and a unit coasting past its node looks like the nudge
+    --  not working rather than like a bad read.
+    mcontroller.controlApproachXVelocity(0, mcontroller.baseParameters().groundForce)
+    return true
+  end
+
+  local direction = (toTarget > 0) and 1 or -1
+  moveX(direction, false)
+  mcontroller.controlFace(direction)
+
+  return true
+end
+
 --  CAN THE PLAN BE WALKED FROM WHERE THE UNIT IS ACTUALLY STANDING?
 --
 --  THIS REPLACES A HEIGHT COMPARISON, AND THE HEIGHT COMPARISON WAS THE WRONG
@@ -3316,6 +3603,24 @@ function petportsTaskAction.update(dt, stateData)
   --  and falls back to the raw target while it is still falling or when nothing
   --  standable is near -- the settle grace below owns that case.
   local routeTarget = approachTargetFor(stateData, target) or target
+
+  --  PRE-FLIGHT: BEFORE ANYTHING ASKS THE PATHFINDER A QUESTION.
+  --
+  --  Placed above the routing branch rather than beside approachPoint, because
+  --  tryVentRoute probes with real A* searches and those begin from
+  --  mcontroller.position() exactly as the direct walk does. A bad origin
+  --  poisons both, and the probe results are CACHED -- a route refused from a
+  --  node in mid air would be remembered as terrain that does not work. Gating
+  --  here covers every consumer with one call.
+  --
+  --  NOT ONCE ARRIVED. An arrived unit is standing where its work happens and
+  --  is not going to ask for a plan, so a nudge there is pure interference --
+  --  it would walk a waterer off its own soil tile. The water sweep re-earns
+  --  arrival per tile, so the next leg is covered again.
+  if not stateData.arrived and nudgeOrigin(stateData, dt) then
+    petports_think("pathing")
+    return false
+  end
 
   --  Routing mode: probing exits, or waiting for one to be chosen. Runs every
   --  tick so a probe actually makes progress.
