@@ -15,7 +15,10 @@ built. Everything below it is reasoning and traps, which age well; this section
 is the part that rots, and it is rewritten at the end of every session.
 
 **FOUR LOCOMOTION CLASSES EXIST AND ALL FOUR WORK IN GAME.** Ground, flyer,
-aquatic and amphibious. This was one session's work and it went further than
+aquatic and amphibious. A fifth -- pelagic, a flyer that also swims -- was built
+and then CUT; see "Water is a closed set" for why it cannot be made reliable,
+and note that it would also have outclassed every other chassis. Its files are
+deleted; the measurements it produced are kept because they outlived it. This was one session's work and it went further than
 planned: the OTTER ARCHETYPE -- swim while submerged, walk on land -- fell out
 of the amphibious chassis with no transition code at all. It plants and waters
 crops in an air pocket that can only be reached by swimming a flooded tube.
@@ -80,6 +83,16 @@ every class. Cost STEERS the planner toward plans our medium validation will
 accept, rather than us rejecting them afterwards -- and a rejected plan produces
 no motion at all. `maxFScore` is 1200 for everything, up from 400; see the note
 in `petports_pathOptions` for what that costs.
+
+**Shipped after the locomotion work, same session.** A direct-steer fallback so
+a failed search steers at the target instead of idling -- vanilla's own
+structure. `petports_flyPointNear` scans the pathfinder's node lattice instead
+of arbitrary sub-tile offsets. `controlDown` while descending, so platforms stop
+blocking planned drops. And in the upcycler pane, the charge blips had
+`setVisible` inside a change gate keyed on tint, which latched them invisible
+forever once a reopen reused the Lua context -- fixed, plus a pane build stamp,
+because a pane has no visible version and a stale copy is indistinguishable from
+an unfixed one.
 
 **Still not built.** Docking. Cargo capacity as an actual stat. The
 participate/ID interface. The fuel system -- Pet Treats accumulate in seven
@@ -214,6 +227,16 @@ SLOTS, so a merge consumes none of it.
 session; the old 10/30/120/600 punished transient blockages and abandoned items
 for ten minutes.
 
+**Shipped after the locomotion work, same session.** A direct-steer fallback so
+a failed search steers at the target instead of idling -- vanilla's own
+structure. `petports_flyPointNear` scans the pathfinder's node lattice instead
+of arbitrary sub-tile offsets. `controlDown` while descending, so platforms stop
+blocking planned drops. And in the upcycler pane, the charge blips had
+`setVisible` inside a change gate keyed on tint, which latched them invisible
+forever once a reopen reused the Lua context -- fixed, plus a pane build stamp,
+because a pane has no visible version and a stale copy is indistinguishable from
+an unfixed one.
+
 **Still not built.** Docking. Cargo capacity as an actual stat (any cargo is
 treated as a full load, deliberately). The participate/ID interface — networks
 derive correctly, but nothing lets a player author a network id or opt a port
@@ -278,8 +301,10 @@ recovers from every overshoot instead of looping, which is the better property,
 but it pays a replan and a wasted arc each time. `collisionCancelled` is the
 outstanding experiment and has never been run.
 
-**Debug flags.** `TASK_DEBUG` in `petportsTaskAction.lua`, `VENT_DEBUG` in
-`petports_petvent.lua`, `DEBUG` in `petports_petport.lua` — all ON.
+**DEBUG FLAGS -- THIS LIST IS THE PRE-RELEASE CHORE.** All of these are ON and
+every one of them should be reviewed before shipping. `TASK_DEBUG` in
+`petportsTaskAction.lua`, `VENT_DEBUG` in `petports_petvent.lua`, `DEBUG` in
+`petports_petport.lua`, `DEBUG` in `upcyclerconfig.lua`.
 
 ADDED THIS SESSION AND ALL STILL ON, all in the locomotion path:
 `FLY_POINT_DEBUG` in `petports_contract.lua`, `DRAW_PLAN` and `FLY_TELEMETRY` in
@@ -2023,6 +2048,113 @@ home across multiple crossings".
 `maxFScore` bounds a FAILING search, not a succeeding one, so raising it raises
 the cost of proving something unreachable -- time spent motionless. It is
 cross-referenced with `healthCheck`'s stall limit for that reason.
+
+### Traps found in the locomotion session, part two -- read from the source
+
+The OpenStarbound repository is a usable reference for RETAIL behaviour, PER
+FILE, verified through the commit history. `StarPlatformerAStar.cpp` is
+unchanged since the initial import apart from a 2024 clang cleanup, so it is
+the shipped implementation rather than a fork's.
+
+PER FILE IS NOT PEDANTRY. `applyTestOperation`'s `search` operand exists only in
+the fork and is already recorded above as a trap. Check the history view before
+citing a file; it costs ten seconds and it is the difference between a fact and
+a guess. Two residual risks even then: a file can be untouched while its
+DEPENDENCIES changed, and "not modified" is not "same universe".
+
+This turned a class of question from "measure it in game over several cycles"
+into "read it", which is a materially better tool than this project had before.
+
+#### WATER IS A CLOSED SET -- A GRAVITY-DISABLED ACTOR CANNOT PATH OUT OF LIQUID
+
+    void PathFinder::getSwimmingNeighbors(Node const& node, List<Edge>& neighbors) const {
+      getFlyingNeighbors(node, neighbors);
+
+      // Also allow jumping out of the water if we're at the surface:
+      RectF box = boundBox(node.position);
+      if (acceleration(node.position)[1] != 0.0f && m_world->liquidLevel(box).level < 1.0f)
+        getJumpingNeighbors(node, neighbors);
+
+      neighbors.filter([this](Edge& edge) -> bool {
+        return inLiquid(edge.target.position);
+      });
+
+EVERY neighbour of a submerged node is discarded unless its target is ALSO in
+liquid. Air-to-water plans fine; water-to-air is not merely expensive, it is
+UNREACHABLE -- the goal can never enter the open set.
+
+The one escape is that `getJumpingNeighbors` call. A Jump edge's target is
+`node.withVelocity(vel)` -- the SAME position -- so it survives the filter, and
+the node then carries velocity, goes to `getArcNeighbors`, and can arc clean
+out. That is the Swim -> Jump -> Arc the ground and amphibious chassis do.
+
+IT IS GATED ON `acceleration[1] != 0.0f`, AND ACCELERATION IS ZERO IF ANY OF:
+`gravityEnabled` false, `gravityMultiplier` 0, or `mass` 0. So a flyer or a
+swimmer can never take it. A "gravity on, multiplier 0" chassis was tried
+specifically to get Jump edges back and fails for the same reason.
+
+THIS IS WHY THE PELAGIC CHASSIS WAS CUT. A flyer-swimmer would have outclassed
+every other locomotion type while being the least reliable of them, and making
+it work needs a cached map of liquid-to-air transition points. Not v1.
+
+VANILLA'S OWN ANSWER IS NOT TO FIX IT. `flyapproach.behavior` wires pathfinding
+as `optional -> inverter -> moveToPosition`, falling through to
+`flyInGeneralDirection` -- straight at the target with a randomised wobble and
+no terrain awareness. Flying monsters surface to attack because WHEN THE SEARCH
+FAILS THEY STOP ASKING IT. petports_flyapproach.lua now does the same.
+
+#### THE NODE LATTICE, CONFIRMED
+
+    float bottom = boundBox.yMin();
+    float x = round(pos[0] / NodeGranularity) * NodeGranularity;
+    float y = round((pos[1] + bottom) / NodeGranularity) * NodeGranularity - bottom;
+
+`NodeGranularity` is 1.0. So nodes are at whole-number x and at
+`integer - boundBox.yMin()` in y -- `.8` for a body with `bounds[2]` of -0.8.
+Measured first at 120 of 120 edge targets, then confirmed here.
+
+DERIVED FROM `yMin`, NOT FROM HALF THE HEIGHT. They coincide only for a
+symmetric poly: a 1.6-tall body with `bounds[2]` of -0.5 needs `.5` and
+half-height would say `.8`. `petports_nodePosition` uses vanilla's own formula.
+
+#### THE PATHFINDER AND THE MOVEMENT CONTROLLER DISAGREE ABOUT WHAT IS PASSABLE
+
+    CollisionSet const CollisionSolid{CollisionKind::Null, CollisionKind::Slippery,
+                                      CollisionKind::Block, CollisionKind::Slippery};
+
+`validPosition` tests against that set and PLATFORM IS NOT IN IT, so A* routes
+straight down through platforms. The movement controller does not: standing on a
+platform, a downward `controlApproachVelocity` does nothing, `onGround` stays
+true, and the edge never completes.
+
+MEASURED: an amphibious unit stood on the very crate it was delivering to,
+planning a Swim edge one tile below itself, for the full ten seconds until the
+progress watchdog fired. `mcontroller.controlDown()` is the opt-in, and it is
+the first line of vanilla's `flyInGeneralDirection`.
+
+SECOND INSTANCE OF ONE PATTERN THIS SESSION. The `avoidLiquid` bug was the same
+shape: the search and the walker answering one question differently. Both cost
+a ten-second stall, neither produced an error. EXPECT A THIRD.
+
+#### NUMBERS WORTH HAVING
+
+    DefaultSwimCost        40      and swimCost is a MULTIPLIER: edge.cost *= swimCost
+    DefaultLiquidJumpCost  10      priced per jump made FROM liquid
+    DefaultMaxDistance     50      filters neighbours by distance from the search START
+    NodeGranularity        1.0
+    BoundBoxRoundingErrorScaling 0.99   every bound box shrinks 1% before collision
+    minimumLiquidPercentage 0.5    what `inLiquid` means to the ENGINE
+
+That last one is a live discrepancy: PETPORTS_SUBMERGED_FILL is 0.9, so a tile
+between 0.5 and 0.9 is LIQUID to the pathfinder and AIR to us.
+
+The heuristic is Manhattan distance x 2 -- deliberately overestimating, so
+searches terminate faster and paths are feasible rather than optimal.
+
+`goalReachedFn` under `mustEndOnGround` refuses any node that is not `onGround`
+OR that still carries velocity, and `validateEndFn` additionally refuses
+`Action::Jump` as the final edge. A target reachable only mid-arc is
+unreachable by construction.
 
 ## Two diagnoses that were wrong, and what gave them away
 
@@ -6219,6 +6351,18 @@ matters and it is a much smaller ratio than the perpetual-motion worry.
 author one. This is the largest gap between what the design says and what is
 reachable in game, and it gates anything that wants per-network priorities.
 
+**THE NEXT MILESTONE IS THE PETPORT UI** -- the pane that shows a unit's info and
+metrics. Deliberately NOT started in the locomotion session: it is pane
+construction, widget lifecycle and layout, which shares nothing with pathfinder
+internals, and mixing them wastes a context on noise. Start it fresh.
+
+Read `## The upcycler pane` first. Every trap in it applies -- `addListItem`
+repaints the whole container, a container pane binds three itemgrids by
+hardcoded name, `setListSelected(list, nil)` throws. And the blip bug from the
+end of that session is the newest one: DO NOT COUPLE A WIDGET'S VISIBILITY TO A
+CHANGE GATE, because the gate's cache outlives the widget's visibility and the
+thing never appears again.
+
 **Locomotion leftovers.** All four classes work; these are refinements.
 
   - THE OTTER'S NEUTRAL BUOYANCY. The amphibious chassis walks the bottom rather
@@ -6235,7 +6379,12 @@ reachable in game, and it gates anything that wants per-network priorities.
     bug. Three wide works. Porting the nudge closes the last asymmetry between
     how walkers and free movers find a spot to stand.
   - LIQUID PERMISSIONS FROM PET UPGRADES, in `petData` rather than chassis
-    config. See "Liquid permissions".
+    config. See "Liquid permissions". A pet equivalent of a poison block
+    augment: grant one, set the unit loose in a poison ocean, no further config.
+  - A DENY-LIST FOR WALKERS' avoidLiquid. `petports_avoidLiquid` is a boolean,
+    so an amphibious walker distinguishes liquid from no-liquid and nothing
+    else. The forbidden-liquid test covers it today because it runs before the
+    walker short-circuit, but the two mechanisms should be one.
   - A REFUSED-FOR-LIQUID SPEECH BUBBLE. When a unit declines work because a
     denied liquid blocks the only route, it should whine at the player visually
     rather than silently declining. `groundPet.emote()` already bursts
