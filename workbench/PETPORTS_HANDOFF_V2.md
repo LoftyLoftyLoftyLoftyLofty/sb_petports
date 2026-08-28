@@ -48,6 +48,11 @@ File it as that, not as the story.
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
+CAVEAT ON THIS PASS: the 2026-08-28 pathing session touched only
+`petportsTaskAction.lua`, so only the pathing paragraph was rewritten and the
+rest was left standing rather than re-verified. Treat the other paragraphs as
+carrying their previous session's date.
+
 **Core loop.** A petport places, opens, spawns a unit from a socketed item, and
 the unit's state round-trips through that item across despawn, world reload and
 being carried to another world. Placement validation, leashing, recall and
@@ -96,6 +101,29 @@ eight frames.
 Renaming is free while there is one variant and expensive once there are
 several, since which monsterpart a unit wears follows from its seed over the
 matching set.
+
+**Pathing -- FOUR FIXES THIS SESSION, ALL VERIFIED AGAINST LOGS.**
+
+*The crate perch.* A unit landing on the corner of a crate, body genuinely on
+the ground and search NODE hanging over the void, looped forever -- 297 refused
+plans over 92 seconds, ending in a re-home. The origin is now checked before
+anything asks the pathfinder a question and the unit is nudged onto a node the
+search can begin from. One nudge, one tick, task completed.
+
+*The resolver.* `standableNear` returned the first column that resolved rather
+than the nearest spot, and sent a waterer 5.7 tiles down into the sea when the
+crop's own column was blocked by a cliff. It now ranks by true distance.
+
+*The jump model, and this is the big one.* `smallJumpMultiplier` was pinned at
+1.0, which meant A* was offered ONE jump height -- the maximum -- for the entire
+life of the mod. Every planned jump was an 8.44-tile launch. At 0.5 it gains a
+2.1-tile hop and dramatic overshoots became measured hops across the board. A
+share of what this file catalogues as MOVER defects was downstream of this.
+
+*Why the coffee route dove into the sea.* Not a cost bug. The pathfinder cannot
+generate a walk-up edge for a one-tile SQUARE step (`slopeUp` needs a diagonal
+polygon side), so the step was jump-only, and the only jump available was 8.44
+tiles. Dropping into the water was the ONLY route, not a stupid one.
 
 **Debug flags, all ON, all wanting review before release.** `TASK_DEBUG`,
 `VENT_DEBUG`, `DEBUG` in the petport and upcycler panes, `FLY_POINT_DEBUG`,
@@ -1314,6 +1342,122 @@ Scaling `jumpSpeed` does NOT fix this: planner and movement controller both read
 `airJumpProfile.jumpSpeed`, so lowering it shrinks both and the percentage error
 survives.
 
+### `standableNear` ranks every column by true distance
+`arch.pathing.standablerank` -- see also `arch.pathing.homewardbias`
+
+`COLUMN_SEARCH` is `{ 0, 1, -1, 2, -2, 3, -3 }` and the loop used to return the
+FIRST column that resolved. That is nearest BY COLUMN: each column was exhausted
+over its full `GROUND_SEARCH_UP` (4) and `GROUND_SEARCH_DOWN` (-6) before the
+next was tried, so a spot SIX TILES DOWN in the target's own column beat one a
+single tile SIDEWAYS at exactly the right height.
+
+MEASURED, watering coffee against a cliff with sea at its foot:
+
+    UNIT water CAST tile [2499,1152]                        tile 1, from [2499.85,1153.8]
+    UNIT standable for [2498.5,1153.5] -> [2498.5,1147.8]   column offset 0
+    UNIT reporting failed: arrived but 5.80751 from tile [2498,1152]
+
+The unit had just watered tile 1 from 1.36 tiles away and was then sent 5.7
+tiles down into the water. `WATER_REACH` (4.0) refused correctly -- the reach
+check was never the problem, the destination was.
+
+**TWO THINGS MUST BOTH HOLD FOR IT TO LAND SOMEWHERE THAT SILLY**, which is why
+it reproduced in one place and nowhere else. A WALL kills the target's own
+column at every sane height, because a 1.6-wide body centred on the tile
+overlaps it. And WATER BELOW makes the deep spot acceptable to an amphibious
+chassis, since `petports_avoidLiquid()` is false -- which skips
+`findGroundPosition`'s own liquid rejection AND makes `validStandingPosition`
+count liquid as standable. A drone refuses it and searches on.
+
+**THIRD INSTANCE OF ONE PATTERN.** `petports_flyPointNear` had this exact bug and
+its header carries the lesson -- "in a first-fit search the order IS the answer"
+-- but only free movers reach that function.
+
+**WHY RANKING PER-COLUMN BESTS IS EXACT, NOT AN APPROXIMATION.**
+`findGroundPosition` walks outward from `position[2]`, so it returns the smallest
+`|dy|` in its column. Every other spot in that column shares its `dx` and has a
+larger `|dy|`, hence larger true distance. The column's first answer is also the
+column's nearest, so the minimum across columns is the genuine global minimum.
+The up-before-down bias survives only as a tie-break, and `searchUp = 0` still
+disables climbing for homeward tasks.
+
+Cost is seven `findGroundPosition` calls instead of an early exit, once per
+resolve, cached on `stateData.groundTarget`.
+
+**STILL UNFIXED AND NOW INCONSISTENT: `petports_standingPointNear` in
+`petports_contract.lua` has the identical first-fit loop**, and it is the
+resolver the PORT uses at dispatch time via `callScriptedEntity`. Two resolvers
+answering one question by different rules is the failure class
+`fact.pathing.approachliquid` was written about. On the geometry above the port
+would judge reachability from `[2498.5,1147.8]` while the unit walks to
+`[2499.5,1153.8]`.
+
+### The origin nudge -- a pre-flight on where the search will START from
+`arch.pathing.originnudge` -- see also `fact.pathing.originnode`, `fact.pathing.ongroundtest`, `todo.pathing.nodeformula`
+
+Vanilla checks the TARGET is standable and never checks the origin at all --
+there is no such line in `pathing.lua`. `petportsTaskAction` now does, in
+`nudgeOrigin`, before anything asks the pathfinder a question.
+
+`originIsPlannable` asks `validStandingPosition` about
+`petports_nodePosition(mcontroller.position())` -- the NODE, not the position.
+When it says no, `nudgeTargetNear` takes the nearest standable node on the same
+row within `ORIGIN_NUDGE_RADIUS` (2), and the unit is steered there with `moveX`
+until it is within `ORIGIN_NUDGE_ARRIVE` (0.25). On success the pather is
+rebuilt, because whatever plan it holds was drawn from the bad node.
+
+**IT FAILS OPEN, AND IT IS THE ONE THING IN THAT FILE THAT DOES.** A false
+negative refuses to plan and bricks a healthy unit; a false positive plans
+exactly as the code did before. The worst case of being wrong is the behaviour
+we already had. That is also why `fact.pathing.ongroundtest` is tolerable: every
+way the Lua predicate differs from the engine's makes it STRICTER, which lands
+as a wasted tick rather than a missed trap.
+
+**SAME ROW ONLY.** Walking changes x, not which floor you are standing on --
+`petportsJumpMover`'s wrong-level branch is built out of that same fact. A
+standable node one row up is not somewhere a walk can deliver the unit, and
+offering it would produce motion toward an unreachable place. Motion is what the
+stall detector reads as health.
+
+**IT WALKS TO THE NODE CENTRE, NOT TO WHERE THE PREDICATE FLIPS.** The node
+boundary is at `x.5`, so the flip leaves the body balanced ON it, where a
+fraction of drift breaks it again. Measured: the perch at 2503.39 flips at
+2503.5, which is 0.11 tiles of travel and no margin. The centre gives half a
+tile either side.
+
+**THE SCOPE IS PER SEARCH, NOT PER TICK, AND GETTING THAT WRONG WAS A REAL
+DEFECT.** Build 28a ran it every tick and it fought live plans: a correct
+six-edge Walk plan deliberately walked the unit LEFT off a crate toward the
+crops, the node went un-standable as it crossed x 2503.5, and the nudge pushed
+RIGHT against a plan that was working. It came out right only because momentum
+carried the unit off the ledge anyway. It now starts only when `finder.hasPath`
+is false. A nudge already under way is exempt, because it exits through the
+branches above that gate.
+
+**ABANDONING IS NOT COMPLETING, AND CONFLATING THEM DESTROYED PATHS IN FLIGHT.**
+28a put the airborne check inside `originIsPlannable`, which returned
+`true, nil` -- indistinguishable to the caller from a nudge succeeding. It
+logged `node null is standable` and called `freshPather`, discarding a live path
+MID-FLIGHT, which `canPathfind()` cannot then replace until the unit lands.
+`node null` in an old log is that bug. The ground gate now lives in the caller,
+which has somewhere sensible to put the answer, and abandoning does NOT rebuild
+the pather.
+
+**Not run once arrived**, or it walks a waterer off its own soil tile.
+
+**IT DOES NOT ESCALATE.** Timeout is `ORIGIN_NUDGE_TIMEOUT` (1.5s), and both
+failure paths -- nowhere to nudge to, or ran out of time -- set
+`originNudgeFailed` and fall through to the ordinary failure ladder. That is
+deliberate: this exists to give a unit a push before it sticks itself, not to
+replace the recovery that catches it when it does.
+
+MEASURED, one geometry, two hops off a one-tile ramp onto a crate one tile
+right at the top:
+
+    before   297 refusals, 92 s, zero displacement, ended in a re-home
+    28a      1 nudge fixed it in one tick, plus 2 spurious firings
+    28b      1 nudge, 1 tick, 0 spurious, 0 `node null`, 0 ABANDONED
+
 ### Pathing is vanilla's, with corrections and two replaced movers
 `arch.pathing.overview`
 
@@ -1441,12 +1585,17 @@ declares. Sub-object merge is happening.
 walk-speed jumps, so changing it changes edge costs and SILENTLY RE-ROUTES.
 Dropping 8 to 4 during testing picked a different and worse takeoff tile.
 
-**`smallJumpMultiplier` is 1.0 and should stay.** It tells A* it may plan hops at
-a fraction of full strength, but the actor CANNOT perform a partial jump --
+**`smallJumpMultiplier` WAS 1.0 AND IS NOW 0.5. SUPERSEDED 2026-08-28 -- see
+`fact.pathing.smalljump`.** This paragraph used to end "and should stay", on the
+grounds that the actor cannot perform a partial jump because
 `default_actor_movement.config` sets `jumpInitialPercentage` 1.0 and
-`jumpHoldTime` 0.0 and the drone overrides neither, so every jump fires at full
-strength. At 0.75 the planner drew arcs for a 33.75 jump the unit answered with a
-45 one.
+`jumpHoldTime` 0.0. Those govern the jump CONTROL and `petportsJumpMover` does
+not use it -- it sets velocity directly. The measured failure behind the pin was
+real (a 33.75 arc answered with a 45 launch) but it was VANILLA's `moveJump`
+doing that, not physics.
+
+The consequence of leaving it at 1.0 was that A* was offered exactly ONE jump
+height for the entire life of the mod, and it was the maximum.
 
 #### Targets and unreachability
 
@@ -4294,6 +4443,18 @@ SECOND INSTANCE OF ONE PATTERN THIS SESSION. The `avoidLiquid` bug was the same
 shape: the search and the walker answering one question differently. Both cost
 a ten-second stall, neither produced an error. EXPECT A THIRD.
 
+**THE THIRD ARRIVED, 2026-08-28, AND IT IS THE MOST EXPENSIVE OF THE THREE.**
+`mcontroller.onGround()` says grounded; the search's rounded start node says
+airborne. Same shape again -- two answers to one question, no error raised --
+but where the first two cost a ten-second stall this one cost 92 seconds and a
+re-home, because nothing in its loop moved and so nothing could break it. See
+`fact.pathing.originnode` and `arch.pathing.originnudge`.
+
+EXPECT A FOURTH. Three instances is a pattern, not a coincidence: the Lua and
+the C++ hold SEPARATE implementations of walkability, standing and grounding,
+and nothing keeps them in step. `fact.pathing.ongroundtest` lists five more
+places the two already disagree that have not yet cost anything.
+
 ### Dropping through a platform is a PLACEMENT, not a control press
 `fact.pathing.platformdrop`
 
@@ -4351,10 +4512,199 @@ refuse again -- is the intuition that produced a whole build of over-engineering
 here. It is only true when A* genuinely returns the same plan from the same
 tile, which is the unexecutable-jump case and nothing else.
 
+**THERE IS A SECOND CASE AND IT IS WORSE.** "Begins where the unit actually is"
+is only a guarantee of progress if the unit MOVES. A unit whose start node is
+not `onGround` gets a plan opening with a ballistic fall it cannot perform, the
+arc-landing guard correctly refuses it, and A* re-runs from a byte-identical
+position and returns a byte-identical plan. Measured at 297 refusals over 92
+seconds with zero displacement -- see `fact.pathing.originnode`. Read the
+sentence above as "refusing a plan does not loop PROVIDED the refusal changes
+something", and note that a refusal on its own changes nothing.
+
 Related, and safe: `reset()` does not clear `aStar`, but `explore()` sets
 `aStar` to nil on BOTH success and failure. So after a completed path there is
 no live search, and calling `reset()` to force a replan is safe. That is why the
 stall detector has always been able to do it.
+
+### THE SEARCH STARTS FROM A ROUNDED NODE WITH NO VELOCITY, AND AN AIRBORNE ONE PLANS A FALL
+`fact.pathing.originnode` -- see also `arch.pathing.originnudge`, `fact.pathing.searchorigin`, `ref.pathing.nodelattice`
+
+CONFIRMED FROM SOURCE, `StarPlatformerAStar.cpp`. `initAStar` does:
+
+    Vec2F roundedFrom = roundToNode(m_searchFrom);
+    m_astar->start(Node{roundedFrom, {}}, Node{roundedTo, {}});
+
+The start node is the ROUNDED position and carries NO velocity. `neighbors()`
+then dispatches on that node:
+
+    if (node.velocity.isValid())            getArcNeighbors
+    else if (inLiquid(node.position))       getSwimmingNeighbors
+    else if (acceleration[1] == 0.0f)       getFlyingNeighbors
+    else if (onGround(node.position))       getWalkingNeighbors + Jump (+ Drop)
+    else                                    getFallingNeighbors     // Action::Arc
+
+**SO A START NODE THAT IS NOT `onGround` PRODUCES A PLAN BEGINNING WITH Arc
+EDGES -- A BALLISTIC FALL.** Not an exhausted search, which is what this looked
+like from in game and what was guessed twice. See `dead.pathing.originexhaust`.
+
+THE UNIT AND ITS NODE ARE DIFFERENT PLACES. A body 1.6 wide standing on the
+corner of a crate is genuinely `onGround` while its node hangs over the void:
+
+    unit        [2503.39,1166.79]   body 2502.59..2504.19, crate at column 2504
+    node        [2503,1166.8]       body 2502.20..2503.80, entirely over air
+    carried by a 0.19-tile sliver of crate
+
+    UNIT approach at [2503.39,1166.79] (standable true) ... onGround true
+    UNIT path ACQUIRED ... action Arc ... edge 1 of 93
+
+**THE ORIGIN IS THE CONSTANT, NOT THE GOAL.** Three different targets that
+session -- [2520.5,1152.8], [2501.5,1163.8], [2549.5,1159.8] -- all produced a
+first edge descending from [2503,1166.8]. That is the diagnosis in one line, and
+it is the check to run first if this shape ever reappears.
+
+**EVERY RUNG OF THE RECOVERY LADDER BELOW `rehomeUnit` IS BLIND TO IT.** The
+recall is a `"return"` task that plans from the same origin and gets the
+identical fall, so only the teleport can break the loop. 297 refusals, 92
+seconds, `unreachableFailures 3 of 3`, re-home.
+
+**The drop machinery cannot rescue this and refusing is correct.** Two probes
+over the same tile row and the same body width settle what the perch is:
+`validStandingPosition`'s ground region collides with
+`{Null, Block, Dynamic, Platform}` while `lastPlatformToPass` finds nothing
+against `{Platform}` alone -- so it is Block or Dynamic, and there is nothing to
+fall through. A crate top is not a platform surface.
+
+### `smallJumpMultiplier` IS A SECOND JUMP HEIGHT, AND AT 1.0 THE PLANNER HAS ONLY ONE
+`fact.pathing.smalljump` -- see also `fact.pathing.squarestep`, `fact.pathing.partialjump`, `todo.pathing.jumpmodel`
+
+    void PathFinder::getJumpingNeighbors(Node const& node, List<Edge>& n) const {
+      if (Maybe<float> jumpSpeed = m_movementParams.airJumpProfile.jumpSpeed) {
+        ...
+        forEachArcVelocity(*jumpSpeed, addVel);
+        forEachArcVelocity(*jumpSpeed * smallJumpMultiplier, addVel);
+      }
+    }
+
+`forEachArcVelocity` emits five velocities -- `(0,vy)`, `(+-walkSpeed,vy)`,
+`(+-runSpeed,vy)` -- so this runs TWICE and A* is offered TWO jump strengths.
+
+**IT IS NOT A MINIMUM, NOT A TOLERANCE, AND NOT A CONSTRAINT THAT JUMPS MUST
+MATCH.** Every one of those readings is natural from the name and all are wrong.
+It ADDS a set of options; it never removes any. At 1.0 the second call is a
+duplicate of the first and **the planner has exactly one jump available, the
+maximum**.
+
+**SO EVERY JUMP THIS MOD EVER PLANNED WAS A FULL-STRENGTH LAUNCH.** 45 into
+g 120 is an 8.44-tile rise and 6.0 tiles of horizontal travel at walkSpeed. A
+unit that needed to get onto a ONE-TILE STEP was planned that, or nothing.
+
+Rise goes with the SQUARE of the multiplier, so the numbers are much smaller
+than the name suggests:
+
+    mult      launch    rise    airtime   x @walk8   x @run12
+    1.0        45.00    8.438     0.750       6.00       9.00   what we had
+    0.75       33.75    4.746     0.562       4.50       6.75   C++ default
+    0.70711    31.82    4.219     0.530       4.24       6.36   vanilla Lua, half HEIGHT
+    0.5        22.50    2.109     0.375       3.00       4.50   ours now
+
+**0.5 IS NOT VANILLA'S HALF-HEIGHT.** Vanilla's Lua picks `1/sqrt(2)`
+deliberately, commented "0.5 multiplier to jump height", because of the square.
+0.5 QUARTERS the height. That is a choice about the terrain players build --
+one and two tile steps -- not an attempt to match vanilla. `0.70711` is the next
+stop if 0.5 proves too small, and the reason to prefer it would be "match
+vanilla", not "fix a bug".
+
+**MEASURED IN GAME, AND THE EFFECT IS NOT SUBTLE.** Dramatic overshoots became
+measured hops across the board. A large share of what this file catalogues as
+MOVER defects was downstream of arcs being four times taller than the terrain
+required -- `ref.pathing.horizontaljumps` measuring three tiles of clearance for
+a 1.75-wide body, and `todo.pathing.jumpmodel`'s wall-clip cancellation which
+"only occurs where an arc touches a wall". A quarter-height arc sweeps a small
+fraction of the volume and touches far fewer walls.
+
+**NOTHING BECOMES UNREACHABLE.** The full 8.44 jump is still generated, and
+`jumpCost` is FLAT regardless of strength (`DefaultJumpCost` 3.0, or
+`liquidJumpCost` from liquid), so A* is not biased toward the small hop -- it
+picks on path length. If a high ledge that used to work stops working, that
+CONTRADICTS this model and wants a log.
+
+**THE COST TO WATCH IS SEARCH TIME, NOT REACHABILITY.** Branching factor at the
+jump nodes doubles from five distinct velocities to ten. `maxFScore` is 1200, so
+a long route that previously fit could in principle exhaust. The readout is the
+`path found after X s` line.
+
+### THE PATHFINDER CANNOT WALK UP A ONE-TILE SQUARE STEP
+`fact.pathing.squarestep` -- see also `fact.pathing.smalljump`, `ref.pathing.landings`
+
+CONFIRMED FROM SOURCE AND FROM A TERRAIN PROBE. `getWalkingNeighborsInDirection`
+offers the step-up node only under `slopeUp`:
+
+    if (slopeUp && onGround(forwardAndUp) && validPosition(forwardAndUp))
+      addNode(Node{forwardAndUp, {}});           // walk up a slope
+    else if (validPosition(forward) && onGround(forward))
+      addNode(Node{forward, {}});                // walk along a flat plane
+
+and `slopeUp` can only be set inside a test that requires a DIAGONAL polygon
+side:
+
+    if (sideDir[0] != 0 && sideDir[1] != 0 && ...)
+
+**A SQUARE BLOCK HAS ONLY AXIS-ALIGNED SIDES, SO `slopeUp` IS ALWAYS FALSE AND
+THE `forwardAndUp` BRANCH IS UNREACHABLE FOR IT.** Meanwhile `forward` fails
+`validPosition` because the block is inside the body at the current height. So
+walking into a one-tile square step generates **NO NEIGHBOUR AT ALL** in that
+direction.
+
+**AND THE NODE IT REFUSES IS PERFECTLY GOOD.** Measured: a `logblock` at x 2502
+row 1152, rows 1153 and 1154 empty above it. A body with feet at 1153.0 fits and
+is `onGround`. The engine declines to offer it purely because the block is
+square.
+
+**SO A ONE-TILE STEP IS JUMP-ONLY**, and with `smallJumpMultiplier` at 1.0 the
+only jump available was 8.44 tiles. That combination is what produced the coffee
+route: walk the platform, DROP INTO THE SEA, cross underwater, and launch back
+out onto the crop bed. It read as a stupid plan and was the ONLY plan -- walking
+up was not an edge, and the hop did not exist.
+
+MEASURED, `/entityeval` on row 1152 and the two above it:
+
+    2498:dirt/false/false   2501:dirt/false/false    2504:false/false/false
+    2499:dirt/false/false   2502:logblock/false/false
+    2500:dirt/false/false   2503:false/false/false
+
+**PLAYERS BUILD SQUARE STEPS CONSTANTLY.** This is not an exotic geometry. A
+platform at the step is traversable and fixes it outright; a genuinely sloped
+block would too, since that is the only thing `slopeUp` recognises.
+
+### `validStandingPosition` IS NOT THE ENGINE'S `onGround`, AND FIVE THINGS DIFFER
+`fact.pathing.ongroundtest` -- see also `arch.pathing.originnudge`, `fact.pathing.plannerdisagrees`
+
+    bool PathFinder::onGround(Vec2F pos, BoundBoxKind boundKind) const {
+      auto groundRect = groundCollisionRect(pos, boundKind);
+      if (rectTileCollision(boundBox(pos, boundKind), CollisionDynamic))
+        return rectTileCollision(groundRect, CollisionFloorOnly);
+      return rectTileCollision(groundRect, CollisionAny)
+          || rectTileCollision(groundRect.translated(Vec2I(0, 1)), CollisionSolid);
+    }
+
+Against `pathutil.lua`'s `validStandingPosition`:
+
+1.  `CollisionAny` includes **Slippery**. The Lua set is
+    `{Null, Block, Dynamic, Platform}`. **ICE IS NOT GROUND TO US AND IS TO THE
+    ENGINE.**
+2.  The `translated(0,1)` clause lets the engine count ground **a full tile
+    below** the feet -- "rounded collision polys". The Lua has no equivalent.
+3.  Standing INSIDE a Dynamic object switches the engine to `CollisionFloorOnly`.
+    No Lua equivalent.
+4.  The engine uses `RectI::integral`; the Lua uses float rects.
+5.  The engine's `onGround` never checks the body FITS. `validStandingPosition`
+    does, via `not rectTileCollision(boundRegion, collisionSet)`.
+
+**EVERY ONE OF THESE MAKES THE LUA STRICTER**, so a disagreement surfaces as a
+spurious nudge, never as a missed trap. That is the only reason
+`arch.pathing.originnudge` can lean on the wrong predicate safely, and it is
+load-bearing -- if the Lua is ever made more permissive, re-derive that argument
+before shipping it.
 
 ### `moveSwim` HAS NO `while` LOOP, AND THAT IS THE RUBBERBANDING
 `fact.pathing.swimnoloop`
@@ -4646,6 +4996,33 @@ descriptor: clamp the count to one stack, because a container slot can hold more
 than `maxStack` and an oversized descriptor crossing the wire surfaces as a
 `bad_alloc` on the far side naming neither the pane nor the item.
 
+### The crate perch: two wrong theories and a collision type that was not what anyone said
+`dead.pathing.originexhaust` -- see also `fact.pathing.originnode`
+
+**"THE SEARCH EXHAUSTS."** Held independently by both the mod author (from
+watching it in game) and Claude (from `petports_flyPointNear`'s note about
+positions that cannot plan). It was wrong: the search SUCCEEDS in 0.92 s and
+returns 93 edges. What is broken is the plan's first edge, not the search.
+
+The reasoning that made it plausible was itself sound and still is -- "no
+fallthrough was observed, so there is no Drop edge" is correct, because the plan
+uses **Arc** edges, and Arc is what a falling start node produces. Two correct
+premises, one wrong conclusion, because nobody had read `neighbors()`.
+
+**"A DROP EDGE WOULD DROP IT THROUGH THE CRATE."** Claude argued the opposite --
+that `petportsTimedDrop` would fail closed on a non-platform crate and look
+identical to a stall -- from a confident claim that crates are `Dynamic`.
+Corrected by the author to Platform. Both were wrong in different directions,
+and the log settled it without either: the perch collides with
+`{Null, Block, Dynamic, Platform}` but not with `{Platform}` alone. See
+`fact.pathing.originnode`.
+
+**THE RULE ALL THREE POINT AT.** Every one of these was a claim about ENGINE
+INTERNALS asserted from memory or from watching behaviour. The C++ is public and
+takes two minutes to read -- `StarPlatformerAStar.cpp` answered all three
+outright and would have answered them before the first repro was requested. Read
+the source before theorising about the source.
+
 ### Two diagnoses that were wrong, and what gave them away
 `dead.pathing.diagnoses`
 
@@ -4867,7 +5244,40 @@ Measured first at 120 of 120 edge targets, then confirmed here.
 
 DERIVED FROM `yMin`, NOT FROM HALF THE HEIGHT. They coincide only for a
 symmetric poly: a 1.6-tall body with `bounds[2]` of -0.5 needs `.5` and
-half-height would say `.8`. `petports_nodePosition` uses vanilla's own formula.
+half-height would say `.8`.
+
+**THE FUNCTION IS `PathFinder::roundToNode`, AND IT TAKES `bottom` FROM
+`m_searchParams.boundBox`** -- the pathOptions box, falling back to
+`standingPoly`, NOT from the movement controller. They are the same today
+(`[-0.8,-0.8,0.8,0.8]` for every chassis) so nothing is wrong, but pad
+`boundBox` in `petports_pathOptions` and the lattice moves. Note also that
+`roundToNode` reads the box UNSCALED: `BoundBoxRoundingErrorScaling` is applied
+in `boundBox()`, not here.
+
+**`petports_nodePosition` DOES NOT MATCH IT, AND THIS SENTENCE USED TO CLAIM IT
+DID.** The old wording -- "uses vanilla's own formula" -- conflated two
+different vanilla formulas. The Lua uses `findGroundPosition`'s ALIGNMENT line
+(`math.ceil(y) - (bounds[2] % 1)`, snap to the tile line above); the engine uses
+`roundToNode` (snap to the NEAREST node). Writing y as `N + f`:
+
+    ours     ceil(y) - 0.2        = N + 0.8   for all f > 0
+    engine   round(y - 0.8) + 0.8 = N + 0.8   for f >= 0.3
+                                  = N - 0.2   for f <  0.3
+
+So they diverge for **frac(y) in (0, 0.3)**, and ours is then exactly one tile
+ABOVE the engine's node.
+
+**IT WAS NOT A MISTAKE WHEN IT WAS WRITTEN.** Git has the Lua landing in
+`728928f` and the C++ formula recorded in the handoff at `cc3d3c4`, later the
+same day. Its only caller was `petports_flyPointNear`, which needs "a
+lattice-aligned anchor near this target" and does not care which lattice point,
+because candidates are sorted by true distance afterwards. It acquired a second
+caller with a stricter requirement and nobody re-derived it.
+
+**DELIBERATELY NOT FIXED -- see `todo.pathing.nodeformula`.** A settled unit
+rests at `frac 0.80`, outside the window, so this is only reachable on
+transient heights. Measured at 0.97% of grounded samples in a clean log, and
+NOT ONE sample in any log discriminates the two formulas.
 
 ### NUMBERS WORTH HAVING
 `ref.pathing.numbers`
@@ -5069,6 +5479,95 @@ Shape of the fix if needed: accept on distance in BOTH axes; walk toward the
 target when grounded but short; and when landed far off in y, do NOT advance --
 that is a broken path and should surface as one.
 
+### The fallback pather in `approachPoint` binds only `moveSwim`
+`todo.pathing.fallbackpather` -- see also `fact.pathing.smalljump`
+
+    self.pather = self.pather or PathMover:new({run = running})
+    ...
+    if self.pather.moveSwim ~= petportsFreeMover then
+      self.pather.moveSwim = petportsFreeMover
+    end
+
+`freshPather` binds `moveJump`, `moveWalk`, `moveArc`, `moveSwim`, `timedDrop`
+and `keepDropping`. This fallback binds ONE of them. **A pather built here runs
+VANILLA `moveJump`, which ignores `edge.jumpVelocity` and fires at full
+strength.**
+
+**IT BECAME LOAD-BEARING THE MOMENT `smallJumpMultiplier` LEFT 1.0.** While the
+planner only ever drew 45s, a mover that always fires 45 agreed with it by
+accident. Now the planner draws 22.5 edges, and vanilla's `moveJump` answering
+one with a 45 launch is EXACTLY the failure the old pin was written to stop --
+"the planner drew arcs for a 33.75 jump the unit answered with a 45 one".
+
+**MEASURED SCOPE, because the reflex is to over-estimate it.** `approachPoint`
+has four callers: two in `petportsTaskAction` and two in `petportsSleepAction`.
+`freshPather` runs on entering ANY task state, INCLUDING leash, and `self.pather`
+persists on the script table afterwards. So the fallback can only fire for a
+unit that reaches `petportsSleepAction` before it has ever held a task -- a fresh
+spawn that goes straight to rest. Narrow, real, and it will not announce itself:
+the symptom is one overshooting jump on a newly placed pet.
+
+The fix is to bind the full set, or better, to have the fallback call
+`freshPather` so there is ONE place that knows what a pather needs. It was left
+alone deliberately on 2026-08-28 so the multiplier change could be measured
+without a second variable.
+
+### The debug colour legend does not match the game
+`todo.pathing.debugcolours` -- see also `proc.pathing.debugpath`
+
+`DRAW_PLAN` uses vanilla's `debugPathEdgeColor` from `/scripts/pathing.lua`,
+which maps:
+
+    Walk blue   Jump green   Drop cyan   Swim white   Fly magenta
+    Land yellow   Arc red (yellow at the apex, where target velocity y is 0)
+
+**IN GAME, WHITE IS WALK AND MAGENTA IS JUMP.** Observed directly by the mod
+author against a plan whose actions were independently known from the log.
+
+Two possibilities and they are not equally comfortable:
+
+1.  the colours do not render as named, which is cosmetic; or
+2.  **the `pathing.lua` in `workbench/` is not the version the game runs**,
+    which is not cosmetic at all -- a whole session's engine reasoning was read
+    out of that file.
+
+UNRESOLVED. Settle it by dumping a known plan's actions alongside a screenshot,
+or by diffing the workbench copy against the game's unpacked assets. Until then,
+**do not read edge ACTIONS off a screenshot** -- get them from the log or from
+`/entityeval`, both of which are unambiguous.
+
+### `petports_nodePosition` does not match `roundToNode` -- DELIBERATELY NOT FIXED
+`todo.pathing.nodeformula` -- see also `ref.pathing.nodelattice`, `fact.pathing.ongroundtest`
+
+Two known divergences from the engine, both understood, neither fixed, and that
+is a decision rather than a backlog item that got missed.
+
+**THE Y FORMULA.** `ceil` where the engine uses `round`; diverges for
+`frac(y) in (0, 0.3)`, ours a tile high. Full derivation in
+`ref.pathing.nodelattice`.
+
+**THE PREDICATE.** `originIsPlannable` asks `validStandingPosition`, which is
+not the engine's `onGround` -- five differences in `fact.pathing.ongroundtest`.
+
+**WHY NOT NOW.** Nothing measurable is broken. A settled unit rests at
+`frac 0.80`, outside the divergence window; it was 0.97% of grounded samples in
+a clean log, all landing transients. Every difference makes the Lua stricter, so
+both faults land as a wasted tick in a mechanism that already fails open. And
+critically, **NOT ONE SAMPLE IN ANY LOG DISCRIMINATES THE TWO FORMULAS** -- every
+measured `edge 1 src` sat at `frac 0.73` to `0.80`, where they agree. The C++ is
+the only evidence, so a fix could not be verified by the change it produced.
+
+**WHAT WOULD MAKE IT URGENT.** A chassis whose `boundBox` bottom is not -0.8; a
+`petports_pathOptions` that pads `boundBox`, since `roundToNode` reads the
+pathOptions box and not the controller's; ice underfoot, per difference 1;
+`petports_flyPointNear` declining targets it should accept, since a shifted
+anchor loses the bottom row of its window and its refusals are silent.
+
+**HOW TO MEASURE IT WHEN THAT DAY COMES, FOR FREE.** The engine hands over its
+own answer: `edges[1].source.position` on any acquired plan IS
+`roundToNode(position)`. Log `petports_nodePosition` beside it and shout on
+mismatch. No probing, no re-derivation, data already flowing through the log.
+
 ### Three overlapping recovery ladders
 `todo.pathing.recoveryladders`
 
@@ -5137,6 +5636,64 @@ the hop against `MAX_REPEAT_HOPS`. Both are labelled in the log
 (`[ENTRY SITE A]` / `[ENTRY SITE B]`).
 
 ## PROCESS
+
+### A correction filed against a decision does not correct the decision
+`proc.pathing.supersede`
+
+TWICE IN ONE SESSION, a fact entry recorded that a premise was false while the
+decision resting on that premise stayed in force, unchanged, for weeks.
+
+**`smallJumpMultiplier`.** `arch.pathing.overview` said, in bold, that it "is 1.0
+and should stay" because the actor cannot perform a partial jump.
+`fact.pathing.partialjump` later established that the setting cited governs the
+jump CONTROL and `petportsJumpMover` does not use it -- and then said so and
+stopped. The pin survived. Cost: every jump the mod ever planned was a
+maximum-height launch, and a share of the mover defects catalogued here were
+downstream of it.
+
+**`petports_nodePosition`.** `ref.pathing.nodelattice` recorded the C++
+`roundToNode` formula and, two paragraphs later, asserted the Lua "uses vanilla's
+own formula". It used a different one. The correction and the wrong claim sat in
+the SAME ENTRY.
+
+**THE RULE.** When a fact entry falsifies the premise of a decision, EDIT THE
+DECISION IN THE SAME PASS -- either change it, or write down why it stands
+anyway. A fact filed beside an unchanged decision reads as agreement, and the
+next reader will trust the bold sentence over the paragraph five sections away.
+
+**WHERE TO LOOK.** `grep 'should stay'` and `grep 'do not change'` in this file,
+then check each against the ENGINE FACTS section. Every superseded claim should
+now name its successor tag inline, as the two above do.
+
+### Read the source before theorising about the source
+`proc.pathing.readsource`
+
+THIS SESSION PRODUCED FIVE WRONG THEORIES ABOUT ENGINE BEHAVIOUR, AND
+`StarPlatformerAStar.cpp` ANSWERED EVERY ONE OF THEM OUTRIGHT.
+
+    "the search exhausts"                      -> neighbors() dispatches to
+                                                  getFallingNeighbors, so it
+                                                  plans an Arc. It succeeds.
+    "crates are Dynamic" / "crates are Platform"
+                                               -> two probes in the log settled
+                                                  it and neither guess was needed
+    "swimCost makes water attractive"          -> it is a MULTIPLIER; at 5 water
+                                                  costs 5x a walk. Backwards.
+    "smallJumpMultiplier is a minimum arc"     -> it is a second jump height
+    "the planner thinks the unit can fly"      -> acceleration() reads
+                                                  airBuoyancy, which is nil, so
+                                                  gravity is 120 and never zero
+
+The file is public, it is 540 lines, and it takes minutes to read. **A confident
+claim about engine internals with no source or measurement behind it is a guess
+wearing a fact's clothes**, and this session shipped several before the source
+was opened.
+
+Corollary, learned the same day: `/entityeval` gets structured state out of a
+LIVE PAUSED WORLD with no code change and no rebuild -- the plan's edge list,
+`mcontroller.baseParameters()`, a row of `world.material` probes. It answered in
+three commands what a diagnostic build would have taken a session to answer.
+Reach for it before writing instrumentation.
 
 ### What is written down for modders
 `proc.filter.modders`
@@ -5381,7 +5938,9 @@ Wrong theories that cost test cycles, recorded so they are not re-run:
   instructive. An Arc edge's `dst` is a WAYPOINT, not the summit, and only the
   edge the unit is currently on is logged. Reading a waypoint as an apex produced
   a ratio that happened to look like the multiplier. **Do not derive an apex from
-  a single edge.**
+  a single edge.** (The multiplier was nonetheless wrong, for an unrelated
+  reason found much later -- `fact.pathing.smalljump`. Being wrong about why a
+  number is bad is not evidence the number is good.)
 - "moveJump zeroing airFriction explains the overshoot" -- no: the default is
   already 0.0, so it is a no-op.
 - "the padded standingBoundBox produces arcs that clip" -- no: `pad = 0` produced

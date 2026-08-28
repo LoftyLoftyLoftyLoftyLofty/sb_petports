@@ -131,7 +131,7 @@ local TASK_DEBUG = true
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-08-28b origin nudge scoped to searches"
+local BUILD_STAMP = "2026-08-28c standableNear ranks by distance"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -2226,6 +2226,58 @@ local function standableNear(position, searchUp)
 
   if searchUp == nil then searchUp = GROUND_SEARCH_UP end
 
+  --  EVERY COLUMN IS ASKED, AND THE NEAREST ANSWER WINS. THIS USED TO RETURN
+  --  THE FIRST ONE.
+  --
+  --  COLUMN_SEARCH is ordered nearest-first, which made the old first-fit loop
+  --  look correct, and it is nearest BY COLUMN. Each column was exhausted --
+  --  the full GROUND_SEARCH_UP above and GROUND_SEARCH_DOWN below -- before the
+  --  next column was examined at all. So a spot six tiles DOWN in the target's
+  --  own column beat one a single tile SIDEWAYS at exactly the right height.
+  --
+  --  MEASURED, watering a row of coffee against a cliff with water at its foot:
+  --
+  --    UNIT water CAST tile [2499,1152]                        tile 1, from [2499.85,1153.8]
+  --    UNIT standable for [2498.5,1153.5] -> [2498.5,1147.8]   column offset 0
+  --    UNIT reporting failed: arrived but 5.80751 from tile [2498,1152]
+  --
+  --  The unit had just watered tile 1 while standing 1.36 tiles from tile 2's
+  --  standing point, and was then sent 5.7 tiles straight down into the sea.
+  --
+  --  TWO THINGS HAVE TO BE TRUE FOR IT TO LAND SOMEWHERE THAT SILLY, which is
+  --  why it reproduces in one place and nowhere else. A WALL kills the target's
+  --  own column at every sane height, because a 1.6-wide body centred on the
+  --  tile overlaps it. And WATER BELOW makes the deep spot acceptable to an
+  --  amphibious chassis: petports_avoidLiquid() is false, which skips
+  --  findGroundPosition's own liquid rejection AND makes validStandingPosition
+  --  count liquid as standable. A drone would have refused it and searched on.
+  --
+  --  THIRD INSTANCE OF ONE PATTERN. petports_flyPointNear had exactly this bug
+  --  and its header carries the lesson -- "in a first-fit search the order IS
+  --  the answer" -- but only free movers reach that function, and this one never
+  --  got the same treatment.
+  --
+  --  WHY THE PER-COLUMN BEST IS SAFE TO RANK. findGroundPosition walks outward
+  --  from position[2], so what it returns is the SMALLEST |dy| standable spot in
+  --  that column. Every other spot in the same column shares its dx and has a
+  --  larger |dy|, hence a larger true distance -- so the column's first answer
+  --  is also the column's nearest, and taking the minimum across columns gives
+  --  the genuine nearest overall rather than an approximation of it.
+  --
+  --  ITS UP-BEFORE-DOWN BIAS SURVIVES ONLY AS A TIE-BREAK. Up and down at equal
+  --  |dy| are equidistant, so ranking cannot separate them and the column search
+  --  still prefers up. That is unchanged behaviour, and `searchUp = 0` is still
+  --  how a homeward task refuses to climb -- see approachTargetFor.
+  --
+  --  COST: seven findGroundPosition calls instead of an early exit on the first.
+  --  This runs once per resolve, cached on stateData.groundTarget, not per tick.
+  --
+  --  STRICTLY LESS THAN, so ties keep COLUMN_SEARCH's order and the target's own
+  --  column still wins whenever it can.
+  local best = nil
+  local bestOffset = nil
+  local bestDistance = nil
+
   for _, offset in ipairs(COLUMN_SEARCH) do
     local x = math.floor(position[1] + offset) + 0.5
 
@@ -2260,11 +2312,20 @@ local function standableNear(position, searchUp)
     end
 
     if usable then
+      local candidate = { resolved[1], resolved[2] }
+      local distance = world.magnitude(candidate, position)
+
       if TASK_DEBUG then
-        sb.logInfo("UNIT standable for %s -> %s (column offset %s)",
-          sb.printJson(position), sb.printJson(resolved), sb.printJson(offset))
+        sb.logInfo("UNIT standable candidate %s for %s (column offset %s) dist %s",
+          sb.printJson(candidate), sb.printJson(position),
+          sb.printJson(offset), sb.printJson(distance))
       end
-      return { resolved[1], resolved[2] }
+
+      if bestDistance == nil or distance < bestDistance then
+        best = candidate
+        bestOffset = offset
+        bestDistance = distance
+      end
     end
 
     if TASK_DEBUG and not ok then
@@ -2273,9 +2334,22 @@ local function standableNear(position, searchUp)
     end
   end
 
-  if TASK_DEBUG then
-    sb.logInfo("UNIT no standable column near %s", sb.printJson(position))
+  if best ~= nil then
+    --  ALWAYS LOGGED, not behind TASK_DEBUG. The old line was the one that
+    --  named the bug -- "-> [2498.5,1147.8] (column offset 0)" is the whole
+    --  diagnosis in one string -- and a resolve landing somewhere surprising is
+    --  worth seeing without a flag set. The distance is what makes a wrong one
+    --  obvious at a glance.
+    sb.logInfo("UNIT standable for %s -> %s (column offset %s, dist %s)",
+      sb.printJson(position), sb.printJson(best),
+      sb.printJson(bestOffset), sb.printJson(bestDistance))
+
+    return best
   end
+
+  sb.logInfo("UNIT no standable column near %s within %s columns (up %s, down %s)",
+    sb.printJson(position), sb.printJson(#COLUMN_SEARCH),
+    sb.printJson(searchUp), sb.printJson(GROUND_SEARCH_DOWN))
   return nil
 end
 

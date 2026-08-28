@@ -1307,34 +1307,65 @@ function petports_pathOptions()
     boundBox = bounds,
     standingBoundBox = { bounds[1] + pad, bounds[2], bounds[3] - pad, bounds[4] },
     droppingBoundBox = { bounds[1] + pad, bounds[2], bounds[3] - pad, bounds[4] },
-    --  1.0, NOT 0.75. THE ACTOR CANNOT PERFORM A PARTIAL JUMP.
+    --  A SECOND JUMP HEIGHT FOR THE PLANNER. IT DOES NOT REPLACE THE FIRST.
     --
-    --  This tells A* it may plan hops at a fraction of full jump strength, and
-    --  it plans arcs on that basis. The movement controller then fires every
-    --  jump at FULL strength, because default_actor_movement.config sets
-    --  jumpInitialPercentage 1.0 and jumpHoldTime 0.0 and the drone overrides
-    --  neither -- there is no mechanism by which a weaker jump can happen.
+    --  From PlatformerAStar.cpp, getJumpingNeighbors:
     --
-    --  MEASURED, from an arc the unit flew in a two-wide chute:
+    --      forEachArcVelocity(*jumpSpeed, addVel);
+    --      forEachArcVelocity(*jumpSpeed * smallJumpMultiplier, addVel);
     --
-    --    velocity samples fell -10 per tick at ~1/12s  ->  g = 120
-    --    (world gravity 80 x gravityMultiplier 1.5, inherited from the
-    --     default actor config -- confirming movementSettings are MERGED)
+    --  forEachArcVelocity emits five velocities -- (0,vy), (+-walkSpeed,vy),
+    --  (+-runSpeed,vy) -- so this is called TWICE and A* is offered two jump
+    --  strengths. It is not a minimum, not a tolerance, and not a constraint
+    --  that jumps must match. AT 1.0 THE SECOND CALL DUPLICATES THE FIRST, and
+    --  the planner has exactly ONE jump available: full strength.
     --
-    --    real apex   45^2 / (2*120)          = 8.44 tiles   observed 8.75
-    --    planned apex from the arc edges     = 5.25 tiles
-    --    velocity implied by a 5.25 arc      = 33.75 = 45 * 0.75
+    --  THAT IS WHY EVERY JUMP THIS MOD HAS EVER PLANNED IS A MAXIMUM-HEIGHT
+    --  LAUNCH. A unit that needs to get onto a ONE-TILE STEP was planned an
+    --  8.44-tile arc or nothing, and "nothing" is what produced the coffee
+    --  route that dropped into the sea to jump back out -- walking up a square
+    --  step is not an edge the engine generates (see the step entry in the
+    --  handoff), so the hop was the only way up and there was no small hop.
     --
-    --  So the planner was drawing arcs for a 33.75 jump the unit answers with a
-    --  45 one. It clears its own planned arc by three tiles, hits ceilings that
-    --  were never in the plan, and lands where no mover can recover -- which is
-    --  every stall catalogued so far: moveLand with delta[1] 4.58, moveJump at
-    --  srcDist 4.03, moveArc grounded under a vertical arc.
+    --  Rise goes with the SQUARE of the multiplier, so the numbers are smaller
+    --  than the name suggests. g 120, jumpSpeed 45, walkSpeed 8:
     --
-    --  Raise this only as far as the actor can actually go. If shorter hops are
-    --  ever wanted, the honest place is the monstertype's airJumpProfile, so
-    --  that plan and execution move together.
-    smallJumpMultiplier = 1.0,
+    --      mult    launch    rise    airtime   x @walk8
+    --      1.0      45.00    8.438     0.750       6.00   what we had
+    --      0.7071   31.82    4.219     0.530       4.24   vanilla Lua, half HEIGHT
+    --      0.5      22.50    2.109     0.375       3.00   here
+    --
+    --  0.5 IS NOT VANILLA'S HALF-HEIGHT AND THE DIFFERENCE IS DELIBERATE.
+    --  Vanilla picks 1/sqrt(2) to halve the height; 0.5 quarters it, giving a
+    --  hop sized for the one and two tile steps players actually build. If it
+    --  proves too small, 0.70711 is the next stop and the reason to prefer it
+    --  is "match vanilla", not "fix a bug".
+    --
+    --  WHY THE OLD PIN AT 1.0 WAS RIGHT WHEN IT WAS WRITTEN, AND IS NOT NOW.
+    --  It read "the actor cannot perform a partial jump", citing
+    --  jumpInitialPercentage 1.0 and jumpHoldTime 0.0, and it was measured: the
+    --  planner drew a 33.75 arc and the unit answered with 45, clearing its own
+    --  plan by three tiles. But those settings govern the jump CONTROL, and
+    --  petportsJumpMover does not use it -- it calls
+    --  mcontroller.setVelocity({edge.jumpVelocity[1], vy}), and launchVelocity
+    --  returns the PLANNED velocity untouched unless the arc needs more. A 22.5
+    --  edge is flown at 22.5 (plus the 2% JUMP_VELOCITY_MARGIN). Only ever
+    --  raising is a policy, not a physical constraint.
+    --
+    --  THE ONE PATH THAT COULD STILL BREAK IT. approachPoint in
+    --  petports_flyapproach.lua has a fallback `self.pather = self.pather or
+    --  PathMover:new(...)` that rebinds moveSwim and NOTHING ELSE -- so a pather
+    --  built there runs VANILLA moveJump, which ignores edge.jumpVelocity and
+    --  fires at full strength. That is exactly the 33.75-planned/45-flown
+    --  failure above. It is narrow today: freshPather runs on entering any task
+    --  state including leash, and self.pather persists on the script table
+    --  afterwards, so the fallback can only fire for a unit that reaches
+    --  petportsSleepAction before it has ever held a task. Fix that binding
+    --  before trusting this value on a fresh spawn.
+    --
+    --  Parameterised like the search costs below so the value can be retuned
+    --  from the monstertype without editing this file.
+    smallJumpMultiplier = config.getParameter("petports_smallJumpMultiplier", 0.5),
     jumpDropXMultiplier = 0.125,
     enableWalkSpeedJumps = true,
     enableVerticalJumpAirControl = true,
