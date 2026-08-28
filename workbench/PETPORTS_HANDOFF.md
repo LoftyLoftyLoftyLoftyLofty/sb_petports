@@ -14,6 +14,84 @@ Read this section first and trust nothing else in the document about what is
 built. Everything below it is reasoning and traps, which age well; this section
 is the part that rots, and it is rewritten at the end of every session.
 
+**FOUR LOCOMOTION CLASSES EXIST AND ALL FOUR WORK IN GAME.** Ground, flyer,
+aquatic and amphibious. This was one session's work and it went further than
+planned: the OTTER ARCHETYPE -- swim while submerged, walk on land -- fell out
+of the amphibious chassis with no transition code at all. It plants and waters
+crops in an air pocket that can only be reached by swimming a flooded tube.
+
+The capstone was expected to need runtime `gravityEnabled` toggling and a mode
+chosen per destination. It does not, because THE ENGINE'S SEARCH ALREADY MODELS
+THE BOUNDARY: it emits Swim edges by MEDIUM rather than by chassis, and plans
+Swim edges up to a surface followed by Jump arcs out. What gravity toggling
+would still buy is neutral buoyancy -- swimming mid-water instead of walking the
+bottom -- which is a FEEL difference, not a capability one.
+
+    chassis      gravity  media                    liquids refused
+    drone        on       physics (avoidLiquid)    all liquid
+    flyer        off      canFly                   all liquid
+    aquatic      off      canSwim                  lava, corelava, poison
+    amphibious   on       physics, avoidLiquid off lava, corelava, poison
+
+**MEDIUM IS A PERMISSION, NOT A LOCOMOTION CLASS.** Two flags, `petports_canFly`
+and `petports_canSwim`, and one predicate asked at every destination and every
+path edge. An aquatic unit is a flyer that may not occupy air; a flyer is one
+that may not occupy liquid. Both false is a bricked pet and is ALLOWED -- a
+modder who configures that did it deliberately. See "Locomotion classes" for the
+whole design.
+
+Walkers are governed by physics rather than permission, so the flags do not
+apply to them; `petports_avoidLiquid` is their equivalent and an amphibious
+chassis is that one flag flipped.
+
+**LIQUID PERMISSIONS ARE A DENY-LIST, MATCHED BY NAME.** `petports_avoidLiquids`
+on the chassis, resolved through `root.liquidConfig` against both the liquid's
+name and its `itemDrop`. A deny-list rather than an allow-list because there are
+hundreds of benign modded liquids and three or four dangerous ones -- an
+allow-list would break every liquid mod on contact.
+
+Verified against an adversarial case: a sealed block of poison water placed as
+an obstacle inside an otherwise valid submerged route. The unit refused the
+path.
+
+**THE APPROACH LAYER IS SHARED AND CHASSIS-GATED.** `petports_flyapproach.lua`
+is loaded by EVERY chassis now. It carries a parallel `approachPoint` for
+walkers (vanilla's cannot be delegated to -- the defect is inside its body), a
+`setJumpState` shadow, and `petportsFreeMover`, which replaces both `moveFly`
+AND `moveSwim` on every chassis.
+
+**THREE STRANDING MECHANISMS, AND SIX WAYS A UNIT WAS STRANDED THIS SESSION.**
+A unit that cannot reach its own port is the shared shape; the medium is not.
+
+- **Environment retirement.** The port measures its own footprint every 5s and
+  retires a unit whose chassis cannot inhabit it. Cargo and state are written
+  back to the item first, so it is recoverable. Not latched -- a port that
+  floods and later drains brings its unit back with no player action.
+- **Work-failure escalation.** `no net progress` now counts toward
+  `unreachableFailures`, which was matching only `no route` and had left
+  `rehomeUnit` as unreachable code.
+- **Health check.** Every 30s the port asks whether the unit has moved. Three
+  still checks away from the port and it re-homes. This is the one that catches
+  a unit wedged in an opaque hatch with no work to fail at, and it caught one.
+
+**SEARCH COSTS ARE PER CHASSIS.** `swimCost`, `liquidJumpCost`, `dropCost`,
+`maxFScore` and `maxDistance` were never set, so vanilla's defaults applied to
+every class. Cost STEERS the planner toward plans our medium validation will
+accept, rather than us rejecting them afterwards -- and a rejected plan produces
+no motion at all. `maxFScore` is 1200 for everything, up from 400; see the note
+in `petports_pathOptions` for what that costs.
+
+**Still not built.** Docking. Cargo capacity as an actual stat. The
+participate/ID interface. The fuel system -- Pet Treats accumulate in seven
+flavors and nothing eats one. Vents do not yet cross a medium boundary. Liquid
+permissions from PET UPGRADES rather than chassis config.
+
+**ART.** Bespoke: the unit body and the petport. Placeholder: the vent, the
+upcycler, the eight Pet Treats, and all four chassis colour strips -- pink
+drone, blue flyer, green aquatic, purple amphibious. HUE-SPACE IS EXHAUSTED AT
+FOUR and a fifth chassis cannot be told apart by colour; the real answer is
+species silhouettes, which is what the art pass will bring anyway.
+
 **The core loop works and is verified in game.** A petport places, opens, spawns
 a unit from a socketed item, and the unit's state round-trips through that item
 across despawn, world reload and being carried to another world. Placement
@@ -76,7 +154,7 @@ for the two halves still missing.
 
 - `items/lofty_petports/fuels/` holds eight treats: the unflavored one and seven
   flavors, each carrying exactly one `petports_flavor_<id>` tag.
-- `scripts/lofty_petports/petports_flavors.config` maps 91 reagents to flavors
+- `scripts/lofty_petports/petports_flavors.config` maps 252 reagents to flavors
   with a WEIGHT each, where weight is how many treats one reagent flavors.
 - The filter manifest gained a `petports_fuel` GROUP at order 1201, pinned under
   Petports at 1200, with eight subgroups matching on the flavor tags. Treats are
@@ -88,7 +166,7 @@ on the left, schematic and progress top right, two tabs owning the lower right:
 
 The Flavors tab is a picker beside a grid, cloned from the beacon pane's
 picker-and-tile-grid rather than invented. It exists because the reagent table
-is 251 entries and NOTHING IN GAME otherwise says which item makes which flavor
+is 252 entries and NOTHING IN GAME otherwise says which item makes which flavor
 -- Chilli making Spicy is guessable, Bio Sample making Zesty and Metal Coated
 Wood making Sharp are not.
 
@@ -202,6 +280,23 @@ outstanding experiment and has never been run.
 
 **Debug flags.** `TASK_DEBUG` in `petportsTaskAction.lua`, `VENT_DEBUG` in
 `petports_petvent.lua`, `DEBUG` in `petports_petport.lua` — all ON.
+
+ADDED THIS SESSION AND ALL STILL ON, all in the locomotion path:
+`FLY_POINT_DEBUG` in `petports_contract.lua`, `DRAW_PLAN` and `FLY_TELEMETRY` in
+`petports_flyapproach.lua`. `PLAN_SHAPE_DEBUG` is already off with its answer
+recorded beside it.
+
+`FLY_POINT_DEBUG` is the expensive one: measured at 8.5 lines per second of pure
+repetition with three chassis running, because the port re-asks the same
+unchanging question about the same ten targets every scan. The refusal itself is
+nearly free -- one `liquidAt` before any searching -- so this is a logging
+problem rather than a cost one, and the fix is a change-gate keyed on target
+plus reason rather than turning it off and losing the diagnosis.
+
+`DRAW_PLAN` needs `/debug` in game and draws vanilla's own plan renderer,
+coloured by edge action -- magenta Fly, white Swim, blue Walk, green Jump, cyan
+Drop, yellow Land, red Arc. It answers "is the detour in the PLAN or the
+EXECUTION" on sight, which is worth keeping reachable even when it is off.
 `PETPORTS_FILTER_DEBUG` in `petports_filters.lua` is OFF and should stay off:
 it fires per cargo stack per candidate container and was measured at 89% of one
 session's entire log. Turn it on only to diagnose something sorting into the
@@ -234,7 +329,11 @@ correct next step was instrumentation rather than reading harder.
     items/categories.config.patch                      -- petports_unit + petports_beacon
                                                        -- + petports_fuel
     items/lofty_petports/
-      petports_unit_test.item, .png
+      units/
+        petports_unit_test.item, .png       -- ground
+        petports_unit_flyer.item, .png
+        petports_unit_aquatic.item, .png
+        petports_unit_amphibious.item, .png
       fuels/
         petports_petfuel.item, .png            -- unflavored
         petports_petfuel_<flavor>.item, .png   -- spicy sweet sour sharp
@@ -256,19 +355,15 @@ correct next step was instrumentation rather than reading harder.
       petports_filters.lua       -- the filter resolver
       petports_filtergroups.config -- 75 groups, 219 subgroups
       petports_flavors.lua       -- flavor table access + reagent index
-      petports_flavors.config    -- 251 reagents -> 7 flavors, with weights
+      petports_flavors.config    -- 252 reagents -> 7 flavors, with weights
       petports_polymorphic.config
     workbench/tools/
       petports_tagdump.py, .bat    -- what categories and tags exist
       petports_fooddump.py, .bat   -- produce and materials, WITH SINKS
       petports_panetitles.py       -- container panes vs their own titles
-      petports_filters.lua       -- the filter resolver
-      petports_filtergroups.config -- 75 groups, 217 subgroups
-      petports_flavors.config    -- reagent -> flavor, with weights
-      petports_polymorphic.config
-    workbench/tools/
-      petports_tagdump.py, .bat  -- what categories and tags exist
-      petports_fooddump.py, .bat -- produce, food and materials, WITH SINKS
+      petports_luacheck.py         -- call-before-definition + undefined
+                                   -- petports_* globals. RUN BEFORE DELIVERY;
+                                   -- both shapes have crashed the mod already.
     stagehands/lofty_petports/
       petports_residency.stagehand
       petports_residency.lua     -- keepAlive; holds one port's rect resident
@@ -279,9 +374,15 @@ correct next step was instrumentation rather than reading harder.
       petports_think.lua         -- thinking spinner; ping per tick, no release call
       petportsSleepAction.lua    -- replaces vanilla sleepAction
       petportsTaskAction.lua     -- executes a dispatched task
-      drone/
-        petports_drone.monstertype, .animation
-        body/  drone_placeholder.monsterpart, art, default.frames
+      petports_flyapproach.lua   -- shared: approachPoint + setJumpState +
+                                 -- petportsFreeMover. EVERY chassis loads it.
+      drone/     petports_drone.monstertype, .animation
+                 body/  drone_placeholder.monsterpart, art, default.frames
+      flyer/     petports_flyer.monstertype, .animation, body/
+      aquatic/   petports_aquatic.monstertype, .animation, body/
+      amphibious/ petports_amphibious.monstertype, .animation, body/
+
+                 -- one category per chassis, or they wear each other's bodies
       shared/
         spinner/ spinner.png, .frames   -- shared across unit types on purpose
     projectiles/lofty_petports/
@@ -1716,6 +1817,213 @@ planner's apex would launch at ~15.3, rise a tile, and land back on the rung it
 left, because the plan's DESCENT through a platform is unexecutable too. The
 plan was wrong at both ends.
 
+### Traps found in the locomotion session
+
+Four locomotion classes in one session. Every one of these was measured, and
+three of them killed a confident theory of mine first.
+
+#### THE PATHFINDER PICKS EDGE TYPE BY MEDIUM, NOT BY CHASSIS
+
+A gravity-DISABLED actor submerged in water is planned `Swim` edges, not `Fly`.
+A gravity-ENABLED ground unit dropped into a lake is planned `Swim` edges too,
+and then `Jump` arcs to get out. The chassis does not enter into it.
+
+This is the single most useful fact of the session and the otter fell out of it.
+It also means A MOVER BOUND TO THE SLOT THAT "SHOULD" APPLY IS NOT ENOUGH:
+`petportsFreeMover` was assigned to `moveFly` only, so underwater it was never
+called once and vanilla's `moveSwim` ran instead. The telemetry said so plainly
+-- `aim null skip null` on every line, fields nothing else writes.
+
+Bind both slots on every chassis.
+
+#### `controlFly` DOES NOTHING FOR A GRAVITY-ENABLED CHASSIS
+
+Vanilla's `moveSwim` steers with
+
+    mcontroller.controlApproachVelocity(
+      vec2.mul(vec2.norm(self.delta), mcontroller.baseParameters().walkSpeed),
+      mcontroller.baseParameters().liquidJumpProfile.jumpControlForce)
+
+and NOT with `controlFly`. That is not an accident of style. Measured: a ground
+unit standing on a lake bottom, 22 Swim edges planned, target one tile straight
+up, y velocity pinned at -1.535 for the whole run, edge 1 never advancing. No
+upward force was ever applied.
+
+I had taken vanilla's whole `moveSwim` as broken and replaced all of it,
+including the one part that was correct. The mover now branches on
+`gravityEnabled` for ACTUATION ONLY -- the look-ahead, the consume loop and the
+clearance test are shared, because those were right for both.
+
+The before-and-after is what named it: vanilla's `moveSwim` moved the unit
+badly, mine did not move it at all.
+
+#### `moveSwim` HAS NO `while` LOOP, AND THAT IS THE RUBBERBANDING
+
+`moveFly` drains the whole run of passed edges each tick. `moveSwim` advances at
+most ONE. So any overshoot of more than one edge leaves the cursor BEHIND the
+unit, and the next command points back at a waypoint already passed. That is the
+visible left-right oscillation, and it appeared identically on the aquatic
+chassis and then on a ground unit in water.
+
+#### groundPet's `approachPoint` PASSES A DIRECTION INTO `avoidLiquid`
+
+    findGroundPosition(targetPosition, -20, 1, util.toDirection(-toTarget[1]))
+
+The fourth parameter is `avoidLiquid`. `util.toDirection` returns 1 or -1 and
+BOTH ARE TRUTHY IN LUA, so vanilla always avoids liquid here, by accident, with
+no way to ask for anything else.
+
+MEASURED COST: our `standableNear` passes `avoidLiquid` false and resolved a
+submerged upcycler happily; vanilla's `approachPoint` refused the same point one
+line later, left `self.approachPosition` nil, and the unit stood still for 10.7
+seconds until two progress strikes failed the task. Two resolvers aiming at the
+same point under different rules.
+
+There were FIVE resolvers answering this question and THREE different answers --
+`false` hardcoded in three places, a truthy direction in vanilla's, and NO
+ARGUMENT AT ALL in `petports_findRestPosition`, which read as nil and therefore
+false. They all now call `petports_avoidLiquid()`.
+
+#### `approachPoint`'s ARRIVAL BRANCH IS UNREACHABLE FOR A FREE MOVER
+
+    if self.approachPosition and (targetDistance > stopDistance or not mcontroller.onGround()) then
+      ...
+      return false
+    elseif targetDistance <= stopDistance then
+      return true
+    end
+
+`not onGround()` is permanently true for a gravity-disabled actor, so the first
+branch always wins and the `elseif` can never be reached. The unit flies to its
+target, sits on it, and reports not-arrived until `APPROACH_TIMEOUT`.
+
+NOTE WHAT IS NOT THE PROBLEM, because it looks like it should be: `PathMover
+:move`'s return value. `approachPoint` never uses it as an arrival signal -- it
+only compares against `"running"` to pick an animation state. Arrival is decided
+by distance to the RAW target and nothing else. I got this wrong first.
+
+#### `PathMover:new` DEFAULTS `mustEndOnGround` FROM `gravityEnabled`
+
+    mustEndOnGround = mcontroller.baseParameters().gravityEnabled,
+
+`petports_pathOptions` hardcoded `true`, which overrode that default and gated
+every flyer target through `validStandingPosition`. That deletes the entire
+locomotion class. It is now derived.
+
+#### `validStandingPosition` TREATS ANY LIQUID AS STANDABLE WHEN `avoidLiquid` IS FALSE
+
+    if (world.rectTileCollision(groundRegion, {...})
+        or (not avoidLiquid and world.liquidAt(position)))
+       and not world.rectTileCollision(boundRegion, collisionSet) then
+
+So for an amphibious walker, `mustEndOnGround` being true does not restrict
+underwater targets at all -- a submerged position IS a valid standing position.
+This is most of why the otter works without any transition code.
+
+#### ONE CONTROL SAMPLE PER EDGE -- THE PLANNER IS AT THE NYQUIST LIMIT
+
+Measured on a level run at `flySpeed` 12:
+
+    srcDist 1.11743  dstDist 0.117458   edge 4 -> edge 5
+    srcDist 1.11719  dstDist 0.117188   edge 5 -> edge 6
+    srcDist 1.11694  dstDist 0.116943   edge 6 -> edge 7
+
+Edges are a tile apart and the unit covers one tile per ~81ms script tick,
+landing a constant 0.117 PAST each waypoint and advancing exactly one edge. The
+control loop gets ONE SAMPLE PER WAYPOINT and cannot track a path whose
+waypoints are spaced at its own per-tick travel distance.
+
+Invisible on level ground -- y holds to within 0.002 for twenty edges. It bites
+when a plan puts its whole vertical change on ONE edge: a 45-degree dive held
+for two ticks overshot by 0.59 tiles, reversed, overshot back by 0.14. EVERY
+excursion measured was edge 1 of a fresh plan; not one was mid-plan.
+
+FIXED BY STRING-PULLING, not by tuning. `petportsFreeMover` aims at the furthest
+waypoint with clear line of sight rather than the next one, which turns a
+53-degree dive into a 2-degree descent spread over seven ticks. Simulated
+against the logged geometry: per-tick vertical commitment fell from 0.778 tiles
+to 0.032.
+
+It also kills `passedTarget`'s defect as a side effect. That predicate is
+
+    passedTargetOnAxis(edge, 1) or passedTargetOnAxis(edge, 2)
+
+an OR, so a waypoint is consumed the moment EITHER component is crossed while
+the other still carries error. A unit that stays on the line crosses both
+together and the OR stops being reachable.
+
+#### REPORTED VELOCITY IS A FRICTION SAMPLING ARTIFACT -- READ POSITIONS
+
+`mcontroller.velocity()` read from `approachPoint` returns a rigid
+`flySpeed x (1 - airFriction/60)`. At `flySpeed` 12 and `airFriction` 24 that is
+exactly 7.2, on every sample, to four decimals. Physics runs at 60Hz and takes
+friction's cut each engine tick; the script runs every ~5 engine ticks and
+happens to sample post-friction, pre-control, every time.
+
+THE UNIT IS ACTUALLY TRAVELLING 12. Logged POSITIONS advance a full tile per
+81ms. This is the pre/post-move measurement trap wearing a new hat, and it cost
+a wrong theory before the positions settled it.
+
+DISTINGUISHING A REAL LOSS FROM THE ARTIFACT: an aquatic unit reported 3.6 and
+its positions confirmed 6.17 tiles/s -- a genuine halving, caused by
+`liquidImpedance`, which `default_actor_movement.config` sets and which nothing
+here had overridden. Zeroing it makes `flySpeed` mean what it says underwater.
+Always check the positions.
+
+#### `root.liquidConfig` RESOLVES NAMES, AND LIQUID IDS ARE NOT GUESSABLE
+
+`world.liquidAt` returns `{liquidId, level}` and every check in this mod was
+reading only `level[2]` and discarding the id. `root.liquidConfig(id)` returns a
+config carrying `itemDrop` (the watering code already relies on it), so a
+deny-list can be written as NAMES.
+
+That matters: the only liquid id this mod has ever measured is 12 for
+swampwater. Any ordering anyone would guess from memory is wrong.
+
+Matched against the liquid's `name` AND its `itemDrop`, because "lava" and
+"liquidlava" are different strings and which one the engine exposes is not
+something to assume. Whatever each id resolves to is logged once, so a wrong
+entry is a one-cycle fix.
+
+#### A HARMFUL LIQUID IS HARMFUL AT 0.1 FILL, NOT 0.9
+
+`minimumLiquidStatusEffectPercentage` is 0.1 on every chassis, so that is when
+the engine starts applying a liquid's status effects. Deep enough to SWIM in is
+a much higher bar than deep enough to KILL. Hence two thresholds, and hence a
+THIRD medium state: `petports_mediumAt` returns `air`, `swim` or `forbidden`,
+because reporting denied liquid as "not submerged" would make a flyer treat a
+lava lake as open sky, and "submerged" would let a swimmer treat it as home.
+
+Forbidden outranks every capability, and it is tested BEFORE the walker
+short-circuit -- it sat after it at first, which meant an amphibious walker
+would have waded into lava for exactly the reason an aquatic unit would have
+without a deny-list.
+
+#### A* HAS NO CONCEPT OF MEDIUM, SO COST IS THE ONLY STEERING AVAILABLE
+
+Destinations and string-pull shortcuts were gated and the PLAN ITSELF was not.
+Refusing a shortcut only falls back to aiming at the next waypoint, which is
+still on the illegal route. Measured: a flyer routed through water on the way to
+an air target, ended up submerged, and then A* returned ZERO edges to every
+target for 21 seconds -- its own leash, a crate, a machine. Frozen.
+
+Plan edges are now validated once per plan, ASYMMETRICALLY: a unit already
+somewhere illegal is allowed any route, because every route out of water begins
+with edges in water and refusing those turns a recoverable mistake into a
+permanent one.
+
+But validation only refuses. COST is what makes A* hand back an acceptable plan
+instead of one we reject, and a refusal produces no motion at all. Vanilla's
+defaults -- `swimCost` 5, `liquidJumpCost` 15 -- were applying to every class.
+`liquidJumpCost` is the price of a water BOUNDARY, so an amphibious route that
+exits, re-enters and exits again pays it four times: 60 of a 400 F-score budget
+before one tile of distance is counted. That was the whole cause of "no path
+home across multiple crossings".
+
+`maxFScore` bounds a FAILING search, not a succeeding one, so raising it raises
+the cost of proving something unreachable -- time spent motionless. It is
+cross-referenced with `healthCheck`'s stall limit for that reason.
+
 ## Two diagnoses that were wrong, and what gave them away
 
 Both cost a round trip. Both were caught by evidence already in the log.
@@ -1970,7 +2278,7 @@ anything, because vanilla already did it.
 **Savory is the exception and it is deliberate.** Its anchor is Raw Steak at
 weight 4, not 8, because meat is a trivially common monster drop and an 8 would
 make savory far cheaper than every other flavor. It is also the widest class in
-the set at 32 of the 91 reagents. Those two partly cancel -- wide but cheap per
+the set at 78 of the 252 reagents. Those two partly cancel -- wide but cheap per
 unit -- but savory is still the easiest flavor to keep stocked, and a uniform
 preference roll will leave a player long on it and short on spicy.
 
@@ -2165,26 +2473,72 @@ and the current level and nothing else.
 
 #### Locomotion classes
 
-Three intended, in order:
+FOUR, AND ALL FOUR ARE BUILT. The design that made this cheap is that MEDIUM IS
+A PERMISSION RATHER THAN A LOCOMOTION CLASS.
 
-- **Ground** — what is being built now. `groundPet.lua` and its action states
-  assume it throughout: `approachPoint` resolves through `findGroundPosition`,
-  `move()` gates on `validStandingPosition`, `sleepAction` teleports onto a
-  ground target.
-- **Flyer** — deferred until ground units work. Requires `gravityEnabled: false`
-  plus a replaced movement layer; flipping the config alone leaves ground-based
-  pathing running against a unit that never touches ground.
-- **Aquatic** — flyers constrained to fluid volumes. Same movement layer as
-  flyers with a containment check.
+- **Ground** — `gravityEnabled` on, `petports_avoidLiquid` true. Vanilla's
+  locomotion, with our corrections.
+- **Flyer** — `gravityEnabled` false, `canFly`. Free movement in air.
+- **Aquatic** — `gravityEnabled` false, `canSwim`. The SAME movement layer as
+  the flyer with the opposite permission. There is no swimming code.
+- **Amphibious** — `gravityEnabled` on, `avoidLiquid` FALSE. A walker that
+  stops refusing water. This is the otter and it needed no transition code.
 
-The unit's art is now its own and it is a ground unit drawn as one, so the old
-warning about flying placeholder sprites is retired. The constraint that
-survives is the code one below.
+Two flags, `petports_canFly` and `petports_canSwim`, feed one predicate
+(`petports_mediumAllows`) asked at every destination, every path edge and every
+string-pull sample. Both false bricks the pet and is permitted -- adding a guard
+would mean silently overriding an author's stated intent.
 
-`petports_placement.lua` is ground-specific in its position-finding
-(`validStandingPosition`, `findGroundPosition` offsets). Its occupancy logic and
-allow-list survive a flying unit unchanged; the candidate-position search does
-not, and will need a hover-point and perch concept.
+WALKERS ARE GOVERNED BY PHYSICS, NOT PERMISSION. The flags do not apply to them;
+their medium is whatever they sink into. `petports_avoidLiquid` is the walker's
+equivalent question and it is a different question with a different answer.
+`petports_mediumAllows` short-circuits for walkers -- AFTER the forbidden-liquid
+test, which applies to everything.
+
+**WHY THE AQUATIC UNIT IS NOT A FISH.** Vanilla's swimming monsters keep gravity
+on and float on `liquidBuoyancy`. They also CANNOT PATHFIND: `canPathfind` is
+`onGround() or not gravityEnabled`, and a gravity-enabled actor suspended in
+water is neither. Vanilla works around this by not pathfinding at all --
+`swimmingMonster.lua` steers on whisker sensors and reverses when it bumps
+something, which is fine for ambient wildlife and useless for a unit that must
+reach a named crate two rooms away.
+
+**WHY THE OTTER NEEDED NOTHING.** The capstone was specified as runtime
+`gravityEnabled` toggling with a mode chosen per destination. It turned out the
+engine's search already models the boundary -- see the traps section. What
+toggling would still buy is neutral buoyancy, so the unit swims mid-water rather
+than walking the bottom. That is a feel difference and it is the only reason to
+revisit this.
+
+If it is ever built: the toggle must land in BASE parameters via
+`applyParameters`, because `PathFinder:start` hands `mcontroller.baseParameters()`
+straight to `world.platformerPathStart` and `canPathfind` reads it directly.
+`mustEndOnGround` is captured once at `PathMover:new`, which `freshPather`
+rebuilds per task -- fine until a unit needs to change medium MID-task.
+
+#### Liquid permissions
+
+A DENY-LIST ON THE CHASSIS, `petports_avoidLiquids`, matched by NAME through
+`root.liquidConfig`.
+
+Deny rather than allow, and the reasoning is not the usual one. An allow-list
+fails closed, which is normally right -- but there are hundreds of benign modded
+liquids and three or four dangerous ones, so an allow-list would break every
+liquid mod on contact and demand a patch per mod. The asymmetry runs the other
+way here.
+
+INFERRING HARM FROM STATUS EFFECTS WAS CONSIDERED AND REJECTED. Deciding
+programmatically whether a modded effect is beneficial is pattern-matching on
+names and fails the first time someone writes `moltenimmunity`. A list is
+honest about being a list.
+
+**Still to build: permissions from PET UPGRADES.** The intent is a pet
+equivalent of a poison block augment -- grant one and the unit works a poison
+ocean with no further configuration. That has to live in `petData` on the ITEM,
+because that is the only thing surviving despawn, unsocket and world reload, and
+it is already where per-unit state like `crosshairColors` lives. The resolved
+set is chassis defaults merged with item grants, cached alongside
+`petports_media()`.
 
 #### Vents are infrastructure, not a workaround
 
@@ -4811,7 +5165,7 @@ is what the tile grid exists to fix.
 
 ## The upcycler pane -- BUILT, and the decisions inside it
 
-### The flavors tab exists because 251 reagents are otherwise invisible
+### The flavors tab exists because 252 reagents are otherwise invisible
 
 Nothing in game says which item makes which flavor. Chilli making Spicy is
 guessable from the name; Bio Sample making Zesty, Metal Coated Wood making
@@ -5809,10 +6163,11 @@ and one behaviour, none of it blocking:
   - BESPOKE PANE ART. The current background is spliced from the beacon pane's,
     extended by copying whole 19px tiles.
   - The instructions copy is placeholder.
-  - The itemgrid limit still stands: a container pane binds exactly TWO
-    itemgrids, so the schematic's third slot group needs an `itemslot` proxy --
-    the mech assembly station's pattern, and `player.swapSlotItem` is confirmed
-    available from a container pane script.
+  - ~~The itemgrid limit~~ RETIRED AND WRONG. A container pane binds THREE
+    itemgrids -- `itemGrid`, `itemGrid2` and `outputItemGrid` -- and the pane
+    already uses all three at slotOffsets 0, 1 and 2. This paragraph claimed two
+    and proposed an `itemslot` proxy; correcting it retired a session's worth of
+    proxy workarounds. See the trap of the same name above.
 
 **The reagent branch -- BUILT AND WORKING.** The upcycler reads its reagent
 slot, refuses anything that is not a reagent, spends one at a time and pays out
@@ -5863,6 +6218,30 @@ matters and it is a much smaller ratio than the perpetual-motion worry.
 **The network control interface.** Networks derive correctly and no player can
 author one. This is the largest gap between what the design says and what is
 reachable in game, and it gates anything that wants per-network priorities.
+
+**Locomotion leftovers.** All four classes work; these are refinements.
+
+  - THE OTTER'S NEUTRAL BUOYANCY. The amphibious chassis walks the bottom rather
+    than swimming mid-water. Runtime `gravityEnabled` toggling would fix the
+    feel and buys nothing else -- see "Locomotion classes" for the two things
+    that make it fiddly.
+  - VENTS DO NOT CROSS A MEDIUM BOUNDARY. `petports_probeStep` refuses any `to`
+    failing `validStandingPosition`, so a swimmer cannot vent-hop to a mid-water
+    target. Fails loudly. Expected to be small.
+  - GROUND RESOLVERS HAVE NO SUB-TILE NUDGE. `petports_flyPointNear` gained one
+    and returns nil for a walker, so `standableNear`'s ground branch still snaps
+    to tile centres -- which means A WALKER CANNOT ENTER A 2-TILE-WIDE VERTICAL
+    SHAFT, for exactly the window reason recorded under the flyer's corridor
+    bug. Three wide works. Porting the nudge closes the last asymmetry between
+    how walkers and free movers find a spot to stand.
+  - LIQUID PERMISSIONS FROM PET UPGRADES, in `petData` rather than chassis
+    config. See "Liquid permissions".
+  - A REFUSED-FOR-LIQUID SPEECH BUBBLE. When a unit declines work because a
+    denied liquid blocks the only route, it should whine at the player visually
+    rather than silently declining. `groundPet.emote()` already bursts
+    `emoteconfused` and the animation defines it, so this needs no new art --
+    and it should pair with the crosshair markers, which already have a
+    vocabulary for "the port thinks this is unroutable".
 
 **Movement leftovers.** Vanilla's `moveLand`. The arc-skip predicate leaving the
 unit grounded at the port for 0.35s. The ~7% jump-height over-estimate. Each
@@ -5942,6 +6321,54 @@ Wrong theories that cost test cycles, recorded so they are not re-run:
   vent once it can REACH that vent, so a vent nothing can get to is never
   expanded and its distances are never measured. Absence of a probe is not a
   negative result.
+
+**Wrong theories from the locomotion session**, same discipline:
+
+- "the flyer never reports arrival because `PathMover:move` never returns true"
+  -- WRONG. `approachPoint` ignores that return except to pick an animation
+  state. The real blocker was `not onGround()` in the arrival gate.
+- "`controlFly` takes the displacement as a speed, so the unit crawls near
+  waypoints" -- disproved: commanded distance varied 0.45 to 1.24 while measured
+  speed was a rigid 7.2. The engine normalises.
+- "7.2 is a speed cap" -- no, it is `flySpeed x (1 - airFriction/60)` sampled
+  post-friction. Positions showed the unit genuinely travelling 12.
+- "A* cannot express a submerged-to-air transition for a gravity-disabled
+  actor" -- UNRESOLVED and possibly wrong. Offered as an explanation for a
+  frozen flyer; the plan-grouping heuristic used to test it could not tell one
+  mixed plan from two consecutive ones, so the result was discarded rather than
+  believed. Prevention made the question academic.
+
+**A repeating pair of SUCCESSES is invisible to every failure mechanism.** Three
+livelocks this session -- drain/deposit, restock/deposit, and the earlier
+withdraw/deposit -- ran at up to 2.4 cycles per second with `done` on every
+single line. The reject machinery cannot see them, the failure counters cannot
+see them, and the log looks like a busy fleet. THE GENERAL RULE THEY ALL
+VIOLATED: any generator whose DESTINATION differs from its SOURCE must validate
+both. Checking only the source produces work that completes and accomplishes
+nothing.
+
+**A CORRECT FIX CAN MAKE A LATENT BUG LOOK NEW.** The drain livelock existed
+before `petports_avoidLiquid` landed; the unit simply accepted the unreachable
+machine and stood still for ten seconds per attempt, so the loop ran slowly
+enough to pass for ordinary retrying. Making the refusal correct turned a slow
+failure loop into a fast success loop and made it visible. Do not assume the
+change that revealed a bug caused it.
+
+**REPEAT-SUPPRESSION PLUS A CHATTY GENERATOR HIDES STARVATION.** A port picked
+work it could never dispatch, rejected it, and never fell through to anything
+else -- for 104 seconds. The reject printed ONCE, correctly, and then eighteen
+seconds of `draining dirtmaterial x289, x294, x299` scrolled past looking like a
+port hard at work. The reject pattern behaved exactly as designed and still hid
+a total starvation.
+
+**BULK TEXT REPLACEMENT DELETES THINGS SILENTLY.** Rewriting a block of
+`petports_contract.lua` removed `petports_freeMover` and `petports_avoidLiquid`
+-- called from eleven sites across four files -- and a follow-up replace that
+matched nothing dropped a third function. Nothing errored until runtime. There
+is now a mechanical check (`workbench/tools/`, described below) for two things
+that had both already caused crashes: a `local function` called above its
+definition, and any `petports_*` call with no definition anywhere in the mod.
+Run it before delivering Lua.
 
 **Measurement traps.** The per-tick `post-move` line runs AFTER approachPoint, so
 the state a mover saw on a given tick is the PREVIOUS line's end state -- that

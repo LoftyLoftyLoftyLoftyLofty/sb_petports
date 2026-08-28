@@ -82,7 +82,7 @@
 --  delegate, and stays one.
 local vanillaSetJumpState = setJumpState
 
-local BUILD_STAMP = "2026-08-27u plan medium validation"
+local BUILD_STAMP = "2026-08-27x direct-steer fallback"
 local stampLogged = false
 
 --  DELETE ME ONCE THE ANSWER IS IN THE LOG.
@@ -203,11 +203,77 @@ local FLY_ARRIVAL = 1.0
 --
 --  Change-gated rather than log-once, per the logging discipline: a log-once
 --  hides a stuck state and a per-tick line buries everything else.
+--  DIAGNOSTIC. DELETE ONCE THE ANSWER IS IN THE LOG.
+--
+--  THE QUESTION: is a failed search failing because THE UNIT IS STANDING
+--  SOMEWHERE THE PATHFINDER CANNOT PLAN FROM?
+--
+--  petports_flyPointNear nudges to a SUB-TILE position where the body fits --
+--  y 1146.8 rather than the tile centre 1146.5 -- which is what stopped flyers
+--  scooping items through walls and is not a mistake to undo. But the engine's
+--  A* navigates between TILE-ALIGNED nodes, and nothing has ever checked that a
+--  nudged position is somewhere a search can START.
+--
+--  If it is not, the search has nothing to expand and exhausts immediately.
+--  That matches what was measured: "pathfinding" then "false" on alternate
+--  ticks at a FIXED position, with a target 49 tiles away and maxFScore 1200.
+--  exploreRate is 25-150 by world fidelity, so two ticks is 50 to 300 nodes --
+--  not a small region, a search with almost nothing to look at.
+--
+--  READING IT. Three outcomes and they point three different ways:
+--
+--    body fits HERE but NOT at the tile centre
+--        confirmed. The nudge parks units where the pathfinder cannot begin,
+--        and the fix is to steer to the nearest tile-centre-valid position
+--        before planning -- the same search the nudge runs, inverted.
+--
+--    body fits at NEITHER
+--        different bug. The unit is somewhere it does not fit at all, and how
+--        it got there is the question rather than why it cannot plan.
+--
+--    body fits at BOTH
+--        hypothesis dead. The start is fine and the failure is in the engine's
+--        neighbour generation, which is where this was before the nudge became
+--        the suspect.
+--
+--  Also reports the TARGET the same way, because a goal the search cannot place
+--  on a node is unreachable for the same reason and would look identical.
+local function probeStartNode(targetPosition)
+  local bounds = mcontroller.boundBox()
+
+  local function fits(x, y)
+    return not world.rectTileCollision({
+      x + bounds[1], y + bounds[2],
+      x + bounds[3], y + bounds[4]
+    }, { "Null", "Block" })
+  end
+
+  local here = mcontroller.position()
+  local hereCentre = { math.floor(here[1]) + 0.5, math.floor(here[2]) + 0.5 }
+
+  local there = targetPosition
+  local thereCentre = { math.floor(there[1]) + 0.5, math.floor(there[2]) + 0.5 }
+
+  sb.logInfo("UNIT PATHNODE PROBE -- at %s body fits %s | its tile centre %s fits %s "
+    .. "|| target %s body fits %s | its tile centre %s fits %s || %s",
+    sb.printJson(here), tostring(fits(here[1], here[2])),
+    sb.printJson(hereCentre), tostring(fits(hereCentre[1], hereCentre[2])),
+    sb.printJson(there), tostring(fits(there[1], there[2])),
+    sb.printJson(thereCentre), tostring(fits(thereCentre[1], thereCentre[2])),
+    (fits(here[1], here[2]) and not fits(hereCentre[1], hereCentre[2]))
+      and "<<<< START IS SUB-TILE VALID AND TILE-CENTRE INVALID, hypothesis confirmed"
+      or "start and its tile centre agree -- look elsewhere")
+end
+
 local function reportFlyPathEnd(result, targetPosition, distance)
   local reason = tostring(result)
 
   if self.petportsFlyPathEnd == reason then return end
   self.petportsFlyPathEnd = reason
+
+  --  Only on a genuine failure. "pathfinding" means the search is still
+  --  running and says nothing about the start being valid.
+  if result == false then probeStartNode(targetPosition) end
 
   sb.logInfo("UNIT FLY path ended with %s at %s: target %s still %s away (arrival %s) "
     .. "-- replanning next tick",
@@ -893,6 +959,78 @@ function approachPoint(dt, targetPosition, stopDistance, running)
     --  worth telling apart eventually; for now the distance in the line says
     --  which one it was.
     reportFlyPathEnd(result, targetPosition, targetDistance)
+
+    --  A FAILED SEARCH IS NOT A REASON TO STOP MOVING. STEER DIRECTLY.
+    --
+    --  THIS IS VANILLA'S OWN ANSWER, copied from flyapproach.behavior, which
+    --  wires its pathfinding action as
+    --
+    --      optional (shouldRun: usePathfinding)
+    --        inverter
+    --          moveToPosition { groundPosition: false, avoidLiquid: ... }
+    --      ...
+    --      flyInGeneralDirection { position: movePosition }
+    --
+    --  The optional-plus-inverter wrapper means TRY PATHFINDING, AND WHEN IT
+    --  FAILS FALL THROUGH TO DIRECT STEERING. flyInGeneralDirection is a
+    --  controlApproachVelocity straight at the target with a randomised wobble
+    --  and NO terrain awareness at all.
+    --
+    --  That is why vanilla flying monsters climb out of water to attack: not
+    --  because the search routes them out, but because when it cannot they stop
+    --  asking it. Our units did the opposite -- setIdleState and sit there --
+    --  which is how a pelagic unit came to alternate "pathfinding" and "false"
+    --  for twenty seconds while a reachable target sat 49 tiles away.
+    --
+    --  WE CAN DO BETTER THAN THE WOBBLE. vanilla relies on randomness to get
+    --  round obstacles because it has no collision test here; flyPathClear
+    --  already sweeps the BODY along a line, so aim straight when the line is
+    --  clear and only fall back to vanilla's blind approach when it is not.
+    --
+    --  BOUNDED BY EVERYTHING THAT ALREADY EXISTS. This only runs on a failed
+    --  search, so it cannot interfere with a working plan; the progress
+    --  watchdog still fails the task if steering gets nowhere; and the
+    --  stranding ladder still re-homes a unit that cannot recover. It buys a
+    --  chance to escape before those fire, which is exactly what it is for.
+    local toTarget = world.distance(targetPosition, here)
+    local length = math.sqrt(toTarget[1] * toTarget[1] + toTarget[2] * toTarget[2])
+
+    if length > 0.0001 then
+      local clear = flyPathClear(here, targetPosition)
+
+      --  MEDIUM STILL APPLIES. Steering blind is a licence to ignore the
+      --  PATHFINDER, not a licence to swim into lava or for a flyer to dive.
+      --  flyPathClear tests medium on every sample, so a clear line is already
+      --  a legal one; the blind case below has to check the destination itself.
+      local legal = clear or petports_mediumAllows(targetPosition)
+
+      if legal then
+        if self.petportsSteerBlind ~= clear then
+          self.petportsSteerBlind = clear
+          sb.logInfo("UNIT STEERING DIRECTLY at %s from %s -- no route, line is %s. "
+            .. "This is vanilla's flyInGeneralDirection fallback, not a plan.",
+            sb.printJson(targetPosition), sb.printJson(here),
+            clear and "clear, aiming straight" or "blocked, approaching anyway")
+        end
+
+        --  Normalised to flySpeed rather than passing the raw displacement, so
+        --  a distant target does not command a speed the controller will simply
+        --  clamp and a near one does not crawl.
+        local speed = mcontroller.baseParameters().flySpeed
+
+        mcontroller.controlFly({
+          toTarget[1] / length * speed,
+          toTarget[2] / length * speed
+        })
+
+        mcontroller.controlFace(toTarget[1])
+        setMovementState(running)
+
+        return false
+      end
+    end
+
+    self.petportsSteerBlind = nil
     setIdleState()
   end
 
