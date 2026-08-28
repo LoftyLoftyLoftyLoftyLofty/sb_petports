@@ -157,6 +157,21 @@
     //  LOCOMOTION MEDIA. Air only -- this chassis is not sealed. Stated rather
     //  than left to the defaults in petports_media() so the flyer and the
     //  aquatic chassis can be read side by side and differ in exactly one line.
+    //  SEARCH COSTS. WATER IS EXPENSIVE, AND THIS IS A FIX RATHER THAN A
+    //  PREFERENCE.
+    //
+    //  MEASURED: a flyer was routed through water on the way to an air target,
+    //  ended up submerged, and then A* returned zero edges to every target it
+    //  was given for twenty-one seconds. Plan validation now REFUSES wet routes
+    //  for this chassis -- but a refusal produces no motion, so if the search
+    //  keeps offering the same wet route the unit simply never goes anywhere.
+    //
+    //  Cost is what makes A* hand back a DRY route instead of one we reject.
+    //  High rather than infinite because there is no way to forbid an edge type
+    //  outright, and a merely expensive crossing still beats no path at all when
+    //  water is the only way through.
+    "petports_swimCost" : 50,
+
     "petports_canFly" : true,
     "petports_canSwim" : false,
 

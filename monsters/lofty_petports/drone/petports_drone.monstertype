@@ -115,6 +115,15 @@
       "/monsters/lofty_petports/petports_flyapproach.lua"
     ],
 
+    //  SEARCH COSTS. Vanilla's defaults, STATED rather than inherited.
+    //
+    //  swimCost 5 already encodes "get out of the water and back onto land",
+    //  which is exactly what this chassis wants, and it is the one locomotion
+    //  class with no reported pathing problem. Changing search costs here would
+    //  be untested churn against something that works -- so the value is written
+    //  down to make the choice deliberate, not to change it.
+    "petports_swimCost" : 5,
+
     "petBehavior" : "petBehavior",
 
     //  MUST match the port object's objectName exactly. groundPet.lua kills the

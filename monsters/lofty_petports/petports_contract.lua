@@ -1336,7 +1336,6 @@ function petports_pathOptions()
   return {
     returnBest = false,
     mustEndOnGround = not flying,
-    maxDistance = 200,
     boundBox = bounds,
     standingBoundBox = { bounds[1] + pad, bounds[2], bounds[3] - pad, bounds[4] },
     droppingBoundBox = { bounds[1] + pad, bounds[2], bounds[3] - pad, bounds[4] },
@@ -1371,7 +1370,76 @@ function petports_pathOptions()
     jumpDropXMultiplier = 0.125,
     enableWalkSpeedJumps = true,
     enableVerticalJumpAirControl = true,
-    maxFScore = 400,
+    --  SEARCH COSTS ARE PER CHASSIS, AND THEY STEER THE PLANNER RATHER THAN
+    --  MERELY EXPRESSING A PREFERENCE.
+    --
+    --  These were never set, so vanilla's defaults applied to every locomotion
+    --  class: swimCost 5, liquidJumpCost 15, dropCost 2. Those encode "swimming
+    --  is a last resort", which is right for a humanoid NPC wading a river and
+    --  wrong for something built to swim.
+    --
+    --  WHY IT IS NOT COSMETIC. Plan medium validation REFUSES a route through a
+    --  medium this chassis may not occupy, and a refusal produces no motion at
+    --  all -- if A* keeps handing back the same illegal route, the unit never
+    --  moves and the task dies on the progress watchdog. Cost is what makes the
+    --  search return an ACCEPTABLE plan instead of one we have to reject. So
+    --  making water expensive for a flyer is not a nicety, it is how the flyer
+    --  gets a dry route rather than a refusal.
+    --
+    --  THE ASYMMETRY: there is no flyCost. Water can be made attractive or
+    --  costly, air cannot, so an aquatic chassis still relies on validation to
+    --  refuse air routes rather than on cost to avoid them. Nothing to be done
+    --  about that from here.
+    --
+    --  liquidJumpCost IS THE PRICE OF A WATER BOUNDARY, paid on every jump made
+    --  from liquid. An amphibious route that leaves the water, re-enters and
+    --  leaves again pays it FOUR TIMES -- 60 F-score of the 400 budget before a
+    --  single tile of distance is counted, on top of swimCost 5 per submerged
+    --  tile. That is the suspected cause of an amphibious unit failing to find
+    --  any route home across multiple crossings, and these values are the test
+    --  of it.
+    swimCost = config.getParameter("petports_swimCost", 5),
+    liquidJumpCost = config.getParameter("petports_liquidJumpCost", 15),
+    dropCost = config.getParameter("petports_dropCost", 2),
+
+    --  BUDGETS, ALSO PER CHASSIS. A route that exits water, re-enters and exits
+    --  again is far longer than the straight line to its target, so maxDistance
+    --  bounds it out of existence before maxFScore ever gets a say.
+    --
+    --  SHARED WITH THE PROBE, WHICH IS WHY THESE READ FROM CONFIG RATHER THAN
+    --  BEING PASSED IN. petports_probeStep builds its finder from this same
+    --  function, and the handoff is emphatic that a probe searching with
+    --  different options than the real walk does not predict it -- and its
+    --  answers are CACHED and pushed to the port, so a mismatch poisons routing
+    --  for every future unit. Config keeps both sides identical by construction.
+    --  1200, UP FROM VANILLA'S 400, FOR EVERY CHASSIS.
+    --
+    --  MEASURED: an amphibious unit could route home across two shallow pools
+    --  at 800 and failed on a slightly longer case -- out of the water, up a
+    --  platform, back in, back out. 800 was scraping the edge, so the budget is
+    --  the binding constraint on multi-crossing routes rather than anything
+    --  structural in the search.
+    --
+    --  WHAT IT ACTUALLY COSTS, because this is not free. maxFScore bounds a
+    --  FAILING search, not a succeeding one: a reachable target is found and the
+    --  budget never comes near. An UNREACHABLE target explores until it hits
+    --  this or maxNodesToSearch, so tripling this triples how long the unit
+    --  spends proving something cannot be reached -- and that time is spent
+    --  MOTIONLESS, because canPathfind refuses to search while airborne and the
+    --  unit is not moving during a cold search anyway.
+    --
+    --  The hard ceiling is maxNodesToSearch 70000 at exploreRate 300 per tick,
+    --  which is 233 ticks -- roughly 19 seconds at the measured ~82ms tick. So
+    --  the worst case per search is bounded regardless; what changes is how many
+    --  searches reach that ceiling instead of stopping early.
+    --
+    --  SEE THE NOTE ON healthCheck IN petports_petport.lua. Its stall limit was
+    --  set at 90 seconds specifically to clear the 45-50s cold-cache probe
+    --  measured in the handoff, and vent routing runs several searches back to
+    --  back. If a probing unit ever gets re-homed mid-search, this number and
+    --  that one are the pair to look at together -- not either alone.
+    maxFScore = config.getParameter("petports_maxFScore", 1200),
+    maxDistance = config.getParameter("petports_maxDistance", 200),
     maxNodesToSearch = 70000,
     maxLandingVelocity = -10.0
   }

@@ -162,6 +162,20 @@
     //
     //  BOTH FALSE IS PERMITTED and bricks the pet, deliberately -- see the
     //  header on petports_media().
+    //  SEARCH COSTS. Water is this chassis's element, so a submerged tile must
+    //  not cost five times a dry one -- vanilla's default encodes "swimming is a
+    //  last resort", which is the opposite of true here.
+    //
+    //  liquidJumpCost is left at the default and is nearly inert: it prices a
+    //  jump made FROM liquid, and a gravity-disabled actor does not jump.
+    //
+    //  NOTE THE ASYMMETRY, because it decides what cost can and cannot do for
+    //  this chassis: there is no flyCost. Water can be made cheap, air cannot be
+    //  made expensive, so an air route is still refused by plan validation
+    //  rather than avoided by the search. Cost helps this unit find good wet
+    //  routes; it cannot help it stop finding dry ones.
+    "petports_swimCost" : 1,
+
     "petports_canFly" : false,
     "petports_canSwim" : true,
 

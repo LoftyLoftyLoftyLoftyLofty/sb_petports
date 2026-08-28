@@ -115,6 +115,41 @@
     //  free-mover permissions and a walking chassis is governed by physics, not
     //  permission. petports_mediumAllows short-circuits for walkers -- after
     //  the forbidden-liquid test, which applies to everything.
+    //  SEARCH COSTS -- AND THESE ARE A PROBE, NOT A TUNING.
+    //
+    //  MEASURED FAILURE: an amphibious unit already submerged, needing a route
+    //  home that exits the water, re-enters, and exits again, got NO PATH BACK
+    //  and stalled. Vanilla's defaults are the prime suspect and these numbers
+    //  are the test of that:
+    //
+    //    swimCost 5        every submerged tile costs five times a walked one
+    //    liquidJumpCost 15 paid on every jump made FROM liquid, so a route with
+    //                      four water boundaries spends 60 of a 400 F-score
+    //                      budget before one tile of distance is counted
+    //    maxDistance 200   a route that leaves and re-enters water twice is far
+    //                      longer than the straight line it is bounded against
+    //
+    //  SET GENEROUSLY ON PURPOSE. If the path still does not appear with water
+    //  costed like land and the budgets doubled, cost is genuinely ruled out and
+    //  the limitation is structural in the engine's search -- which is worth
+    //  knowing for certain rather than assuming. Tighten these afterwards; do
+    //  not treat them as chosen values.
+    //
+    //  swimCost 1 is the defensible one regardless of the outcome: this chassis
+    //  is built to swim, so a stroke should not cost five paces.
+    "petports_swimCost" : 1,
+    "petports_liquidJumpCost" : 2,
+    //  maxFScore is NOT overridden here any more. 800 was measured as too tight
+    //  for a route with four water crossings, and the shared default is now
+    //  1200 for every chassis -- so an override would be a second source of
+    //  truth saying the same thing, and the kind that goes stale silently.
+    //
+    //  maxDistance stays overridden: it bounds ROUTE LENGTH, and a path that
+    //  leaves the water, climbs, re-enters and leaves again is far longer than
+    //  the straight line to its target. That is specific to this chassis in a
+    //  way the F-score budget is not.
+    "petports_maxDistance" : 400,
+
     "petports_avoidLiquid" : false,
 
     //  LIQUIDS IT WILL STILL NOT ENTER, and this list is why the forbidden test
