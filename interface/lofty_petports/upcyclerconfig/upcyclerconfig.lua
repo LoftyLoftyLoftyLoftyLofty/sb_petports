@@ -31,6 +31,9 @@ require "/scripts/lofty_petports/petports_flavors.lua"
 
 local DEBUG = true
 
+--  Bump on every change to this file. See the log line in init().
+local PANE_BUILD_STAMP = "2026-08-28a blip visibility unlatched"
+
 --  sb.logInfo accepts %s and nothing else. Pre-format through string.format,
 --  which has no such limit, and hand the logger one string.
 --  "1 rule" and "2 rules", never "1 rule(s)".
@@ -901,19 +904,37 @@ local function refreshBlips(queue)
 		--  than an invisible one.
 		local tint = flavor ~= nil and petports_flavorColor(flavor) or BLIP_EMPTY
 
+		--  ONLY THE IMAGE IS CHANGE-GATED. VISIBILITY IS NOT, AND MUST NOT BE.
+		--
+		--  setVisible used to sit inside the gate, which coupled "is this cell
+		--  visible" to "did its colour change since the last poll". That is a
+		--  latch, and it fails exactly the way latches do:
+		--
+		--    the widgets are declared visible:false in the .config
+		--    blipShown is a FILE-SCOPE local, so it outlives a pane close if the
+		--      Lua context is reused
+		--    on reopen the cells are invisible again and blipShown still holds
+		--      their old tints, so the gate says "already painted that" and
+		--      setVisible is never reached
+		--    the charge bar never appears again for the life of that context
+		--
+		--  An empty charge makes it worst: every cell computes BLIP_EMPTY, so a
+		--  bar that was empty when the pane closed can never come back at all.
+		--  That is the "fine, then flaky, then nonfunctional" this had.
+		--
+		--  The gate exists to avoid redundant setImage calls -- painting is the
+		--  expensive half. setVisible on an already-visible widget costs nothing
+		--  and cannot be wrong, so it runs unconditionally.
+		--
+		--  All eight are still painted in the same pass, so they appear together
+		--  and the bar never changes length -- absent for a frame, never briefly
+		--  wrong.
 		if blipShown[index] ~= tint then
 			blipShown[index] = tint
 			pcall(widget.setImage, "blip" .. index, BLIP_ART .. "?multiply=" .. tint)
-
-			--  THE BLIPS ARE DECLARED INVISIBLE and first become visible here,
-			--  once they have a colour. That is what stops eight white cells
-			--  flashing between the pane opening and the first poll returning.
-			--
-			--  All eight are painted in the same pass, so they appear together
-			--  and the bar never changes length -- absent for a frame, never
-			--  briefly wrong.
-			pcall(widget.setVisible, "blip" .. index, true)
 		end
+
+		pcall(widget.setVisible, "blip" .. index, true)
 	end
 end
 
@@ -1408,6 +1429,28 @@ function createTooltip(screenPosition)
 end
 
 function init()
+	--  WHICH BUILD OF THIS PANE IS RUNNING.
+	--
+	--  Added because a blip bug was diagnosed, fixed, and then reproduced in a
+	--  log with no way to tell whether the log predated the fix. A pane is the
+	--  worst place to guess at that: it has no visible version, it is reloaded
+	--  independently of the object, and a stale copy behaves exactly like an
+	--  unfixed one.
+	sb.logInfo("PETPORTS upcyclerconfig build: %s", PANE_BUILD_STAMP)
+
+	--  CLEAR THE ONLY FILE-SCOPE DRAW CACHE THAT NEVER CLEARS ITSELF.
+	--
+	--  Every self.* field below is reset here; the file-scope locals are not,
+	--  because they are all wholesale reassigned during a rebuild -- shownFlavors
+	--  from petports_flavors(), the row maps when the list is rebuilt -- so they
+	--  self-heal. blipShown is the exception: it is written per cell and never
+	--  reassigned, so a reused Lua context carries last session's tints into a
+	--  fresh set of widgets and the change gate above suppresses the repaint.
+	--
+	--  Belt and braces with the unconditional setVisible in refreshBlips: either
+	--  alone fixes the bar, and they fail differently, so keep both.
+	blipShown = {}
+
 	self.rules = {}
 	self.enabled = false
 	self.loaded = false
