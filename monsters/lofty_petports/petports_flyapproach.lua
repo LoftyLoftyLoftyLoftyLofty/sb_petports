@@ -82,7 +82,7 @@
 --  delegate, and stays one.
 local vanillaSetJumpState = setJumpState
 
-local BUILD_STAMP = "2026-08-27x direct-steer fallback"
+local BUILD_STAMP = "2026-08-28b platform drop via controlDown"
 local stampLogged = false
 
 --  DELETE ME ONCE THE ANSWER IS IN THE LOG.
@@ -735,6 +735,46 @@ function petportsFreeMover(pather)
   --  was ever applied. Before this mover was bound, vanilla's moveSwim moved the
   --  same unit -- badly, but it moved it. That before-and-after is what named
   --  the line.
+  --  DESCENDING? HOLD controlDown, OR PLATFORMS WILL STOP THE PLAN DEAD.
+  --
+  --  THE PATHFINDER WILL ROUTE STRAIGHT DOWN THROUGH A PLATFORM AND IS RIGHT TO.
+  --  PlatformerAStar::validPosition tests against CollisionSolid, which is
+  --  {Null, Slippery, Block} -- PLATFORM IS NOT IN IT. So a submerged or flying
+  --  node happily generates a neighbour one tile below through a platform.
+  --
+  --  The movement controller disagrees. Standing on a platform, a downward
+  --  controlApproachVelocity does nothing at all: the platform holds the unit
+  --  up, onGround stays true, and the edge never completes.
+  --
+  --  MEASURED: an amphibious unit standing on the very crate it was delivering
+  --  to, planning "Swim edge 1 of 3, dst [2509,1148.8]" one tile below itself,
+  --  velocity pinned, onGround true, for the full ten seconds until the progress
+  --  watchdog failed the task. The crate is a platform.
+  --
+  --  VANILLA'S ANSWER IS THE FIRST LINE OF flyInGeneralDirection --
+  --  mcontroller.controlDown() held unconditionally, every tick, so platforms
+  --  never block a flyer. Neither vanilla's moveSwim nor our replacement did it.
+  --
+  --  CONDITIONAL, NOT UNCONDITIONAL, AND THE DIFFERENCE MATTERS. Vanilla can
+  --  hold it forever because flyInGeneralDirection only ever runs on
+  --  gravity-disabled actors, which have nothing to fall through TO. An
+  --  amphibious chassis is gravity-ENABLED: hold controlDown permanently and it
+  --  drops through every platform it is trying to stand on. So it is held only
+  --  while the aim is genuinely below the unit.
+  --
+  --  THE DEADBAND IS THE POINT. Level travel along a platform must not trip
+  --  this, and a string-pulled aim wobbles by fractions of a tile, so a bare
+  --  "dy < 0" would fire constantly on a flat run.
+  --
+  --  NOTE the handoff's warning that controlDown starts an unobservable
+  --  fall-through state. That was learned for petportsTimedDrop, which has to
+  --  know WHEN the unit has cleared the platform in order to stop dropping.
+  --  Nothing here needs to know: the next tick re-reads position and re-aims,
+  --  so an extra tick of falling is simply progress along the edge.
+  if delta[2] < -0.25 then
+    mcontroller.controlDown()
+  end
+
   if mcontroller.baseParameters().gravityEnabled then
     --  Vanilla's actuation, unchanged, including walkSpeed. A swimming ground
     --  unit's speed is a separate tuning question from its steering, and
