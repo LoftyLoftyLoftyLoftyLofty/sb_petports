@@ -89,7 +89,30 @@
       "/monsters/lofty_petports/petports_placement.lua",
       "/monsters/lofty_petports/petports_think.lua",
       "/monsters/lofty_petports/petportsSleepAction.lua",
-      "/monsters/lofty_petports/petportsTaskAction.lua"
+      "/monsters/lofty_petports/petportsTaskAction.lua",
+
+      //  LOADED BY A GROUND CHASSIS TOO, AND THAT IS NEW.
+      //
+      //  This file was flyer-only, on the reasoning that a ground unit which
+      //  never loads it cannot be affected by it. Two things changed that.
+      //
+      //  It defines petportsFreeMover, which petportsTaskAction.freshPather
+      //  binds to moveSwim for EVERY chassis -- because the pathfinder picks
+      //  edge type by MEDIUM, not by chassis, and a ground unit dropped in deep
+      //  water gets planned a route of Swim edges. Without this file that
+      //  binding is a nil global.
+      //
+      //  And its approachPoint shadow is where the avoidLiquid correction will
+      //  live for an amphibious ground chassis.
+      //
+      //  SAFE, BECAUSE THE SHADOWS DELEGATE. approachPoint and setJumpState both
+      //  capture vanilla's version and hand straight back to it whenever
+      //  gravityEnabled is true, which for this chassis is always. The ground
+      //  unit's behaviour is vanilla's, unchanged, plus one mover binding it
+      //  previously lacked.
+      //
+      //  MUST STAY AFTER groundPet.lua -- the capture binds nil otherwise.
+      "/monsters/lofty_petports/petports_flyapproach.lua"
     ],
 
     "petBehavior" : "petBehavior",

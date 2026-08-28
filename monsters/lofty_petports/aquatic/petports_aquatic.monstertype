@@ -1,51 +1,49 @@
-//  M.A.U.S. UTILITY UNIT -- FLYER
+//  M.A.U.S. UTILITY UNIT -- AQUATIC
 //
-//  A COPY of drone/petports_drone.monstertype with a different locomotion
-//  class. Read that file for the modelled-on-petbunny reasoning, how parts and
-//  monsterparts bind, and why anchorName and metaBoundBox are what they are --
-//  all of that is identical and none of it is repeated here.
+//  A COPY of flyer/petports_flyer.monstertype. Read that file for why the
+//  ground recovery machinery needs no removing, why gravityEnabled reaches the
+//  engine's pathfinder, and where the arrival radius comes from -- all of it
+//  applies here unchanged, because AN AQUATIC UNIT IS A FLYER WITH A MEDIUM
+//  CONSTRAINT AND NOTHING ELSE.
 //
-//  WHAT ACTUALLY DIFFERS FROM THE DRONE
+//  WHY IT IS NOT A FISH
 //
-//    type / categories        unique, or the two types wear each other's bodies
+//  Vanilla's swimming monsters keep gravity ON and float on liquidBuoyancy.
+//  They also cannot pathfind: PathFinder:canPathfind is
+//
+//      mcontroller.onGround() or not mcontroller.baseParameters().gravityEnabled
+//
+//  and a gravity-enabled actor suspended in water is not onGround, so find()
+//  never starts a search. Vanilla works around this by not pathfinding at all --
+//  swimmingMonster.lua steers on whisker sensors and reverses when it bumps
+//  something. Fine for ambient wildlife, useless for a unit that must reach a
+//  named crate two rooms away.
+//
+//  So gravity stays OFF and the constraint is authored. See petports_canFly and
+//  petports_canSwim below.
+//
+//  WHAT DIFFERS FROM THE FLYER
+//
+//    type / categories        unique, or the chassis wear each other's bodies
 //    animation                its own file, same content today
-//    movementSettings         gravityEnabled false, and the consequences below
-//    scripts                  one extra: petports_flyapproach.lua
+//    petports_canFly/canSwim  false / true -- the entire locomotion difference
+//    liquid force + friction  mirroring the air values
+//    liquidBuoyancy           0, stated rather than defaulted
 //
-//  Everything else -- the behavior fork, the contract, placement, thinking,
-//  sleep, the task action, resources, action params, status settings -- is the
-//  drone's, unchanged, on purpose. The whole point of the locomotion split is
-//  that it is a MOVEMENT change and not a behaviour one.
-//
-//  WHY THE GROUND MACHINERY DOES NOT NEED REMOVING
-//
-//  petportsTaskAction carries four recovery ladders built for a jumping unit:
-//  tryPlanDrop, the SURFACE clearance replan, the airborne-edge stall detector
-//  and the grounded-walk stall detector. Every one of them is gated on
-//  mcontroller.onGround(), which is permanently false here, so they are dead
-//  code for a flyer rather than hazards. The same is true of the replaced
-//  movers -- petportsJumpMover, petportsWalkMover, petportsArcMover,
-//  petportsTimedDrop, petportsKeepDropping -- which are only reachable from
-//  Walk, Jump, Arc, Drop and Land edges. A Fly plan has none, so they stay
-//  assigned in freshPather and are simply never called.
-//
-//  The cost of that is stated plainly: A FLYER HAS NO STALL DETECTION. What is
-//  left watching is vanilla's stuckTimer, the displacement reset in
-//  petportsTaskAction.update, and one change-gated line in
-//  petports_flyapproach.lua. See that file's header.
+//  Everything else is the flyer's, unchanged, on purpose.
 
 {
-  "type" : "petports_flyer",
+  "type" : "petports_aquatic",
   "shortdescription" : "Utility Unit",
-  "description" : "A M.A.U.S. utility unit fitted for flight. Small, tireless, and untroubled by floors.",
+  "description" : "A M.A.U.S. utility unit sealed for submersion. Small, tireless, and entirely at home underwater.",
 
   //  Binding key for this type's monsterpart pool. MUST DIFFER FROM THE DRONE'S
   //  -- the engine picks at random from every monsterpart matching the category,
   //  so a shared one means each type randomly wears the other's body.
-  "categories" : [ "petports_flyer" ],
+  "categories" : [ "petports_aquatic" ],
   "parts" : [ "body" ],
 
-  "animation" : "petports_flyer.animation",
+  "animation" : "petports_aquatic.animation",
 
   "dropPools" : [ ],
 
@@ -154,11 +152,18 @@
 	//	go to the port and stay there when idle. do not wander
 	"strictPortTethering" : true,
 
-    //  LOCOMOTION MEDIA. Air only -- this chassis is not sealed. Stated rather
-    //  than left to the defaults in petports_media() so the flyer and the
-    //  aquatic chassis can be read side by side and differ in exactly one line.
-    "petports_canFly" : true,
-    "petports_canSwim" : false,
+    //  LOCOMOTION MEDIA -- the whole difference between this chassis and the
+    //  flyer, and the reason there is no separate "swimming" code anywhere.
+    //
+    //  petports_mediumAllows in petports_contract.lua reads these and gates
+    //  every destination and every path sample against them. An aquatic unit is
+    //  a flyer that may not occupy air; a flyer is one that may not occupy
+    //  liquid; an amphibious chassis sets both true and needs nothing else.
+    //
+    //  BOTH FALSE IS PERMITTED and bricks the pet, deliberately -- see the
+    //  header on petports_media().
+    "petports_canFly" : false,
+    "petports_canSwim" : true,
 
     "movementSettings" : {
 
@@ -199,6 +204,57 @@
       //  is deliberately absent here rather than set to 1.0 -- a gravity knob on
       //  a gravity-disabled actor implies something it does not do.
       //
+      //  LIQUID MIRRORS AIR, DELIBERATELY AND EXACTLY.
+      //
+      //  controlFly is the swim primitive as well as the flight one -- vanilla's
+      //  own fish issue exactly that call -- and liquid only swaps WHICH
+      //  parameters govern it. So the air numbers this chassis inherits are
+      //  mirrored rather than re-derived, on the expectation that the force and
+      //  friction formula is the same in both media.
+      //
+      //  THAT EXPECTATION IS UNVERIFIED. If an aquatic unit drifts or overshoots
+      //  where a flyer does not, this pair is the first suspect and the flyer's
+      //  measured ladder (0.25 drifty, 1.0 biological, 2.0 robotic, 24 crisp)
+      //  is the ladder to walk again in liquid.
+      //
+      //  For reference, vanilla's largefish ships liquidForce 150 and
+      //  liquidFriction 2.0 -- which is a fish that glides, and would put the
+      //  per-tick turn authority back where the overshoot bug lived.
+      "liquidForce" : 9999.0,
+      "liquidFriction" : 24.0,
+
+      //  ZERO, SO flySpeed MEANS WHAT IT SAYS UNDERWATER.
+      //
+      //  MEASURED: with this left at the default, an aquatic unit configured for
+      //  flySpeed 12 covered 6.17 tiles/s (median over 421 samples), taken from
+      //  LOGGED POSITIONS rather than mcontroller.velocity(). Exactly half.
+      //
+      //  Read the positions, not the velocity, when checking this. Both chassis
+      //  report a velocity well under flySpeed -- the flyer reads a rigid 7.2 --
+      //  because friction takes its cut each engine tick and the script samples
+      //  post-friction. That one is an artifact and the flyer genuinely travels
+      //  ~12.3 tiles/s. The halving here was NOT an artifact and the positions
+      //  are what separated the two.
+      //
+      //  liquidImpedance is the default_actor_movement parameter that exists to
+      //  slow actors in water, and neither chassis overrode it. Zeroing it is
+      //  the fix on the expectation that it is the 0.5; if the measurement does
+      //  not move to ~12.3 after this, it is something else and the positions
+      //  will say so again.
+      "liquidImpedance" : 0.0,
+
+      //  ZERO, NOT THE FISH'S 1.0. Buoyancy is a force opposing gravity and
+      //  there is no gravity here, so it should compute to nothing -- but
+      //  "should" is doing work in that sentence and an unexplained upward
+      //  drift would read as a tuning problem while being a physics one. Stated
+      //  explicitly so it is never the unknown.
+      "liquidBuoyancy" : 0.0,
+
+      //  Vanilla's fish also carry moveRatioLimit 0.6, which stops them
+      //  swimming straight up. Deliberately absent: that is fish character, and
+      //  a utility unit that cannot rise vertically cannot service a column of
+      //  submerged crates.
+
       //  THE TUNING LADDER, MEASURED IN GAME ACROSS FOUR RUNS.
       //
       //    airForce 25   airFriction 0.25  the reference flyer's. Coasted well

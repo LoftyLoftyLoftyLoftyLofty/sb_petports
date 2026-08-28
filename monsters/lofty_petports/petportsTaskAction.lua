@@ -131,7 +131,7 @@ local TASK_DEBUG = true
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-08-27i flyer locomotion class"
+local BUILD_STAMP = "2026-08-27r swim mover for every chassis"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -1987,6 +1987,27 @@ freshPather = function(why)
   self.pather.moveWalk = petportsWalkMover
   self.pather.moveArc = petportsArcMover
 
+  --  SWIM IS BOUND FOR EVERY CHASSIS, INCLUDING GROUND ONES.
+  --
+  --  THE PATHFINDER PICKS EDGE TYPE BY MEDIUM, NOT BY CHASSIS. Measured: a
+  --  gravity-ENABLED ground unit dropped into deep water was planned a route of
+  --  Swim edges. canPathfind() is `onGround() or not gravityEnabled`, so it can
+  --  only start that search while touching the bottom -- which it was.
+  --
+  --  So any unit can end up on a Swim edge, and vanilla's moveSwim is four
+  --  lines with no look-ahead and NO `while` LOOP: it advances at most one edge
+  --  per tick, so any overshoot leaves the cursor behind the unit and the next
+  --  command points back at a waypoint already passed. That is the rubberbanding
+  --  seen first on the aquatic chassis and then, identically, on a ground unit
+  --  in water.
+  --
+  --  petportsFreeMover handles both Fly and Swim and is defined in
+  --  petports_flyapproach.lua, which EVERY chassis now loads for exactly this
+  --  reason. Called bare rather than nil-guarded: a missing script raises and is
+  --  loud, while a guarded call to a file nobody loaded is silent, and the
+  --  handoff records that costing a session.
+  self.pather.moveSwim = petportsFreeMover
+
   --  Vanilla's moveDrop itself is fine and is left alone -- the x snap to
   --  nextPathPosition, setXVelocity(0) and advancePath all do the right thing.
   --  Only the two functions it leans on are broken. See petportsTimedDrop.
@@ -2161,11 +2182,19 @@ local COLUMN_SEARCH = { 0, 1, -1, 2, -2, 3, -3 }
 --  one. petports_flyPointNear returns nil for a ground unit, so the whole
 --  existing path below is untouched.
 local function standableNear(position, searchUp)
-  local flyPoint = petports_flyPointNear(position)
-  if flyPoint ~= nil then
+  --  A FREE-MOVING CHASSIS OWNS THIS ANSWER OUTRIGHT, INCLUDING THE nil.
+  --  Same correction as petports_standingPointNear -- read the note there for
+  --  the measurement. Short version: nil from petports_flyPointNear now means
+  --  REFUSED as well as "not a flyer", and falling through to the ground search
+  --  handed an aquatic unit a dry-land target one line after it declined one.
+  if petports_freeMover() then
+    local flyPoint = petports_flyPointNear(position)
+
     if TASK_DEBUG then
-      sb.logInfo("UNIT fly point for %s -> %s", sb.printJson(position), sb.printJson(flyPoint))
+      sb.logInfo("UNIT fly point for %s -> %s",
+        sb.printJson(position), (flyPoint ~= nil) and sb.printJson(flyPoint) or "REFUSED")
     end
+
     return flyPoint
   end
 
@@ -2174,8 +2203,13 @@ local function standableNear(position, searchUp)
   for _, offset in ipairs(COLUMN_SEARCH) do
     local x = math.floor(position[1] + offset) + 0.5
 
+    --  petports_avoidLiquid(), NOT a hardcoded false. This resolver and the one
+    --  inside approachPoint must answer the same question the same way, or a
+    --  target resolves here and is refused there -- which is precisely how a
+    --  unit ends up standing still with approachPosition nil and nothing in the
+    --  log to explain it. See the flag's header in petports_contract.lua.
     local ok, resolved = pcall(findGroundPosition,
-      {x, position[2]}, GROUND_SEARCH_DOWN, searchUp, false)
+      {x, position[2]}, GROUND_SEARCH_DOWN, searchUp, petports_avoidLiquid())
 
     --  Guard the SHAPE, not just nil-ness: pcall returns the error message in
     --  this slot on failure, and a string indexes without complaint.

@@ -296,6 +296,286 @@ end
 --  Searched as Chebyshev rings so the nearest ring wins; order WITHIN a ring is
 --  arbitrary and not distance-sorted. Fine at radius 4 (81 candidates worst
 --  case, and offset 0 answers almost every real call).
+--------------------------------------------------------------------------------
+--  LOCOMOTION MEDIUM
+--------------------------------------------------------------------------------
+--
+--  A chassis declares which MEDIA it may occupy, and every position and every
+--  path edge is tested against that. Two flags, one predicate:
+--
+--      petports_canFly    may occupy air
+--      petports_canSwim   may occupy liquid
+--
+--  Both true is an amphibious flyer. canFly only is the ordinary flyer. canSwim
+--  only is the aquatic unit. BOTH FALSE IS A BRICKED PET AND THAT IS ALLOWED --
+--  a modder who configures a chassis that way did it deliberately, and adding a
+--  guard would mean silently overriding an author's stated intent to protect
+--  them from a mistake they had to go out of their way to make.
+--
+--  DECLARED ON THE CHASSIS, NOT THE UNIT. One visual identity owns one
+--  behavioural parameter set, so these live in the monstertype and are read
+--  through config.getParameter -- which spawn parameters also satisfy, so a
+--  future item-level override needs no change here.
+--
+--  WHY THIS IS NOT gravityEnabled
+--
+--  An authentic fish keeps gravity ON and floats on liquidBuoyancy. It also
+--  CANNOT PATHFIND, because PathFinder:canPathfind is
+--
+--      mcontroller.onGround() or not mcontroller.baseParameters().gravityEnabled
+--
+--  and a gravity-enabled actor suspended in water is not onGround, so find()
+--  never starts a search. Vanilla's own fish work around this by not
+--  pathfinding at all -- swimmingMonster.lua steers on whisker sensors and
+--  reverses when it bumps something, which is fine for ambient wildlife and
+--  useless for a unit that must reach a named crate two rooms away.
+--
+--  So an aquatic unit is a FLYER WITH A MEDIUM CONSTRAINT. controlFly is the
+--  swim primitive too -- vanilla's fish issue exactly that call -- and liquid
+--  only swaps which parameters govern it: liquidForce and liquidFriction in
+--  place of airForce and airFriction, with flySpeed shared.
+
+--  SUBMERGED MEANS 0.9 FILL, NOT 0.1.
+--
+--  0.1 is vanilla's threshold in findGroundPosition and it is there to keep
+--  NPCs out of shallow lava, where a splash is enough to matter. Swimming is a
+--  different question: a tile that is one tenth full is not water to move
+--  through. 0.9 rather than 1.0 leaves margin for a player measuring the top
+--  row of a hand-dug pool, where fill settles slightly under full.
+--
+--  CONSEQUENCE, AND IT IS A DESIGN CONSTRAINT WORTH STATING: the body is 1.6
+--  tall, so it always overlaps at least two tile rows. A POOL THEREFORE NEEDS
+--  TWO FULL ROWS OF DEPTH AT MINIMUM, and at exactly two the only legal body
+--  centre is the single point on the row boundary -- reachable, but only via a
+--  sub-tile nudge at the far edge of its range. Three rows gives a full tile of
+--  window and is the comfortable number.
+local PETPORTS_SUBMERGED_FILL = 0.9
+
+--  Is every tile row the body would overlap at `position` submerged?
+--
+--  THE BODY BOX, NOT A POINT. A point test passes with the unit's head out of
+--  the water, which is the same class of mistake as resolving a hover point on
+--  the far side of a floor -- geometrically near, physically wrong.
+--
+--  Rows only. Liquid fills by row, and a column-wise test would answer a
+--  question liquid does not have.
+function petports_submergedAt(position, bounds)
+  if position == nil then return false end
+  bounds = bounds or mcontroller.boundBox()
+
+  local x = position[1]
+  local bottom = math.floor(position[2] + bounds[2])
+  local top = math.ceil(position[2] + bounds[4]) - 1
+
+  for row = bottom, top do
+    local level = world.liquidAt({ x, row + 0.5 })
+
+    --  world.liquidAt returns {liquidId, level} or nil. A nil is air, which is
+    --  a definite answer and not a missing one.
+    if level == nil or (level[2] or 0) < PETPORTS_SUBMERGED_FILL then
+      return false
+    end
+  end
+
+  return true
+end
+
+--  SHOULD THIS CHASSIS REFUSE TO STAND IN LIQUID?
+--
+--  True for an ordinary ground pet, false for an amphibious one. Free movers
+--  never consult it -- their medium is governed by petports_canFly and
+--  petports_canSwim, which is a permission question rather than an avoidance
+--  one.
+--
+--  THIS EXISTS BECAUSE VANILLA'S IS A BUG, NOT A SETTING. groundPet.lua does
+--
+--      findGroundPosition(targetPosition, -20, 1, util.toDirection(-toTarget[1]))
+--
+--  and the fourth parameter is avoidLiquid. It is being handed a DIRECTION --
+--  1 or -1, and BOTH ARE TRUTHY IN LUA -- so vanilla always avoids liquid here,
+--  by accident, with no way to ask for anything else.
+--
+--  MEASURED COST: a ground unit was dispatched to a submerged upcycler. Our own
+--  standableNear resolved the spot happily (it passes avoidLiquid false), then
+--  vanilla's approachPoint refused the same point one line later, left
+--  self.approachPosition nil, and the unit stood still for 10.7 seconds until
+--  two progress strikes failed the task. It then churned deposit/drain at a
+--  reachable crate until the port offered the submerged machine again.
+--
+--  Two resolvers aiming at the same point under different rules is exactly the
+--  router-versus-walker split the handoff records. THEY MUST AGREE, and this
+--  flag is what they agree on.
+function petports_avoidLiquid()
+  if petports_freeMover() then return false end
+  return config.getParameter("petports_avoidLiquid", true)
+end
+
+--  Does this chassis move freely -- fly, swim, or both -- rather than walk?
+--
+--  THE ONE THING THAT DECIDES WHO OWNS A POSITION ANSWER. A free-moving chassis
+--  resolves its own destinations through petports_flyPointNear and NEVER falls
+--  back to the ground search, because for it a nil is a REFUSAL and not an
+--  absence. See the note on that fall-through in petports_standingPointNear.
+function petports_freeMover()
+  return not mcontroller.baseParameters().gravityEnabled
+end
+
+--  Is the single tile containing `position` submerged?
+--
+--  A POINT, NOT THE BODY BOX, and the distinction is the whole reason this
+--  exists separately. petports_submergedAt asks "may my body occupy this", which
+--  is the right question about a standing spot and the WRONG one about a target:
+--  a crate resting just under the surface is submerged while a body centred on
+--  it would straddle the waterline, so a body test would refuse work the unit
+--  can plainly do.
+function petports_submergedPoint(position)
+  if position == nil then return false end
+
+  local level = world.liquidAt(position)
+  return level ~= nil and (level[2] or 0) >= PETPORTS_SUBMERGED_FILL
+end
+
+--  Chassis capability. Cached per unit: these are monstertype parameters and
+--  cannot change for the life of an entity, and this is called per candidate
+--  position inside a search that already runs eighty-one of them.
+function petports_media()
+  if self.petportsMedia == nil then
+    self.petportsMedia = {
+      fly = config.getParameter("petports_canFly", true),
+      swim = config.getParameter("petports_canSwim", false)
+    }
+
+    sb.logInfo("UNIT locomotion media: canFly %s, canSwim %s%s",
+      tostring(self.petportsMedia.fly), tostring(self.petportsMedia.swim),
+      (not self.petportsMedia.fly and not self.petportsMedia.swim)
+        and " -- NEITHER, this chassis can legally occupy nothing and will refuse every target"
+        or "")
+  end
+
+  return self.petportsMedia
+end
+
+--  May this chassis occupy `position`? The single question every destination
+--  and every path sample is asked.
+--
+--  Returns the verdict and a reason, because "the unit refuses to go anywhere"
+--  is otherwise indistinguishable from "the unit cannot path there".
+--  CAN THIS CHASSIS LIVE AT A PORT THAT OFFERS THESE MEDIA?
+--
+--  Called BY THE PORT, which measures its own footprint and passes what it
+--  found. The port cannot answer this itself: capability is a monstertype
+--  parameter and only the unit has read it.
+--
+--  `wet` and `dry` are "at least one tile of my footprint is like this", NOT
+--  "all of them". A port half in the water offers BOTH, and that is the right
+--  answer for both chassis -- a swimmer can sit in the flooded half, a flyer in
+--  the dry half, and neither has to be told which.
+--
+--  A WALKER IS A DIFFERENT QUESTION AND MUST NOT BE ASKED THE FLYER ONE. Its
+--  media flags default to canFly true / canSwim false, which would read as "air
+--  only" and is meaningless -- a ground unit does not fly. What decides for a
+--  walker is whether it will stand in liquid at all, which is petports_avoidLiquid.
+--
+--  RETURNS ONE TABLE, NOT TWO VALUES. Whether world.callScriptedEntity
+--  forwards multiple return values across the boundary is not something this
+--  mod has measured, and the handoff already records that it returns nil
+--  SILENTLY for a function that does not exist -- so a marshalling difference
+--  here would look like a unit that simply never answers. A table is
+--  unambiguous and costs nothing.
+--
+--  The reason travels with it because "the port despawned my pet" has to say
+--  why in one line, or it reads as the mod losing units.
+function petports_canInhabit(wet, dry)
+  if petports_freeMover() then
+    local media = petports_media()
+
+    if media.swim and wet then
+      return { ok = true, reason = "port is submerged and this chassis swims" }
+    end
+    if media.fly and dry then
+      return { ok = true, reason = "port is in air and this chassis flies" }
+    end
+
+    if wet and not dry then
+      return { ok = false, reason = "the port is fully submerged and this chassis cannot swim" }
+    end
+    if dry and not wet then
+      return { ok = false, reason = "the port is out of the water and this chassis cannot leave it" }
+    end
+
+    return { ok = false, reason = "this chassis can occupy neither medium the port offers" }
+  end
+
+  if not petports_avoidLiquid() then
+    return { ok = true, reason = "amphibious walker, any medium" }
+  end
+
+  if dry then return { ok = true, reason = "port has dry footing" } end
+  return { ok = false, reason = "the port is fully submerged and this walker will not stand in liquid" }
+end
+
+--  MAY THIS CHASSIS WORK ON A TARGET SITTING AT `position`?
+--
+--  A DIFFERENT QUESTION FROM "may I stand here", AND OMITTING IT COST A REAL
+--  BUG. Measured 2026-08-27: an aquatic unit was dispatched to drain a crate at
+--  [2506,1152], which sits in AIR above a waterline at about 1148.5. The
+--  position search did exactly what it was told -- found the nearest spot the
+--  body could occupy in an allowed medium -- and returned [2506.5,1148.5], three
+--  and a half tiles BELOW the crate at the surface. The unit flew there and
+--  REPORTED THE DRAIN DONE without ever reaching it.
+--
+--  Line of sight cannot catch this. Straight up through water into air is
+--  clear; the point is legal, reachable, sighted and useless.
+--
+--  So the target's OWN medium is a separate precondition. An aquatic unit does
+--  not service a crate in air by hovering under it, any more than it waters a
+--  dry field by floating beside one.
+--
+--  CONSEQUENCE WORTH SAYING OUT LOUD: an aquatic chassis can never take a
+--  watering task, because dry tilled soil is by definition not submerged. That
+--  is correct rather than a limitation -- a submerged farm does not go dry --
+--  but it will read as "the unit ignores my farm" to anyone who has not been
+--  told, and it belongs in the aquatic unit's item description.
+function petports_targetAllowed(position)
+  local media = petports_media()
+
+  if petports_submergedPoint(position) then
+    if media.swim then return true, "target is submerged" end
+    return false, "target is submerged and this chassis cannot swim"
+  end
+
+  if media.fly then return true, "target is in air" end
+  return false, "target is not submerged and this chassis cannot leave the water"
+end
+
+function petports_mediumAllows(position, bounds)
+  --  MEDIUM PERMISSION IS A FREE-MOVER CONCEPT ONLY.
+  --
+  --  A walking chassis has no medium PERMISSION -- its medium is decided by
+  --  physics. It sinks, it wades, it swims when the engine says so, and none of
+  --  that is ours to allow or refuse. Whether it should enter water at all is
+  --  the avoidLiquid question, which lives in the approach shadow and is a
+  --  different question with a different answer.
+  --
+  --  THIS IS NOT A TIDINESS EDIT. Without it, a ground unit that string-pulls
+  --  through water gets every submerged sample of flyPathClear refused, because
+  --  the drone declares no flags and therefore defaults to canSwim false. The
+  --  shortcut silently collapses to "aim at the next waypoint", the mover
+  --  appears bound and does nothing, and the rubberbanding it was added to fix
+  --  carries on exactly as before with no line in the log to say why.
+  if not petports_freeMover() then return true, "walking chassis, medium is physics" end
+
+  local media = petports_media()
+
+  if petports_submergedAt(position, bounds) then
+    if media.swim then return true, "submerged" end
+    return false, "submerged and this chassis cannot swim"
+  end
+
+  if media.fly then return true, "air" end
+  return false, "not submerged and this chassis cannot fly"
+end
+
 --  WHERE A FLYING UNIT SHOULD SIT TO WORK ON SOMETHING AT `position`.
 --
 --  Three defects were measured in game on 2026-08-27 and all three are fixed
@@ -372,6 +652,20 @@ local function flyBodyFits(x, y, bounds)
   }, FLY_TILE_SET)
 end
 
+--  Fits AND is in a medium this chassis may occupy. Both conditions travel
+--  together everywhere, because a position that is geometrically free but in
+--  the wrong medium is exactly as unusable as one inside a wall -- and keeping
+--  them in one function is what stops a future caller checking only the half it
+--  remembered.
+local function flyBodyUsable(x, y, bounds)
+  if not flyBodyFits(x, y, bounds) then return false, "body does not fit" end
+
+  local ok, why = petports_mediumAllows({ x, y }, bounds)
+  if not ok then return false, why end
+
+  return true
+end
+
 --  Is `target` visible from `point`, i.e. are they on the same side of the
 --  terrain? A ray, not a sweep: this asks whether the unit is in the right
 --  PLACE, while getting there is the pather's problem and has its own body
@@ -419,7 +713,7 @@ local function nudgeProbe(cx, cy, bounds, target, budget)
     local x = cx + offset[1]
     local y = cy + offset[2]
 
-    if flyBodyFits(x, y, bounds) then
+    if flyBodyUsable(x, y, bounds) then
       local point = { x, y }
       if flySighted(point, target) then return point, spent, offset[3] end
     end
@@ -520,9 +814,26 @@ function petports_flyPointNear(position, radius)
   local originX = math.floor(position[1]) + 0.5
   local originY = math.floor(position[2]) + 0.5
 
+  --  THE TARGET'S OWN MEDIUM, BEFORE ANY SEARCHING. Refusing here rather than
+  --  inside the loop is not just an optimisation: the loop's job is to find the
+  --  nearest usable spot, and for an out-of-medium target every answer it can
+  --  give is wrong. Letting it run produced a unit that hovered under a crate
+  --  it could not reach and reported the work done.
+  local targetOk, targetWhy = petports_targetAllowed(position)
+
+  if not targetOk then
+    if FLY_POINT_DEBUG then
+      sb.logInfo("UNIT flypoint DECLINED %s outright: %s -- no position near it can help, "
+        .. "so this target is not workable by this chassis",
+        sb.printJson(position), tostring(targetWhy))
+    end
+
+    return nil
+  end
+
   if FLY_POINT_DEBUG then
-    sb.logInfo("UNIT flypoint SEARCH for %s: origin tile centre %s, radius %s, boundBox %s",
-      sb.printJson(position), sb.printJson({ originX, originY }),
+    sb.logInfo("UNIT flypoint SEARCH for %s (%s): origin tile centre %s, radius %s, boundBox %s",
+      sb.printJson(position), tostring(targetWhy), sb.printJson({ originX, originY }),
       sb.printJson(radius), sb.printJson(bounds))
     logFlySpan(position, bounds)
   end
@@ -559,18 +870,26 @@ function petports_flyPointNear(position, radius)
       local spent
       point, spent, offset = nudgeProbe(cx, cy, bounds, position, budget)
       budget = budget - (spent or 0)
-      if point == nil then reason = "no fitting, sighted offset within " .. tostring(FLY_NUDGE_RANGE) end
+      if point == nil then
+        --  Name the medium when it is the medium, so "refuses everything" and
+        --  "cannot path there" never look alike in the log.
+        local _, why = petports_mediumAllows({ cx, cy }, bounds)
+        reason = "no usable, sighted offset within " .. tostring(FLY_NUDGE_RANGE)
+          .. " (tile centre: " .. tostring(why) .. ")"
+      end
 
     --  Beyond the nudge rings, or out of budget: the tile centre only, and it
     --  still has to see the target.
-    elseif flyBodyFits(cx, cy, bounds) then
-      if flySighted({ cx, cy }, position) then
+    else
+      local usable, why = flyBodyUsable(cx, cy, bounds)
+
+      if not usable then
+        reason = why
+      elseif flySighted({ cx, cy }, position) then
         point, offset = { cx, cy }, 0
       else
         reason = "fits but cannot see the target"
       end
-    else
-      reason = "body does not fit"
     end
 
     examined = examined + 1
@@ -596,9 +915,10 @@ function petports_flyPointNear(position, radius)
 
   if FLY_POINT_DEBUG then
     sb.logInfo("UNIT flypoint NO POINT for %s after %s tile(s) out to radius %s -- "
-      .. "nothing within reach both fits this body and can see the target, so this "
-      .. "target will be DECLINED rather than worked through terrain",
-      sb.printJson(position), sb.printJson(examined), sb.printJson(radius))
+      .. "nothing within reach fits this body, sits in a medium it may occupy, and can "
+      .. "see the target, so this target will be DECLINED (media: canFly %s canSwim %s)",
+      sb.printJson(position), sb.printJson(examined), sb.printJson(radius),
+      tostring(petports_media().fly), tostring(petports_media().swim))
   end
 
   return nil
@@ -608,17 +928,38 @@ function petports_standingPointNear(position, radius)
   if position == nil then return nil end
   radius = radius or 4
 
-  --  FLYER FIRST. Returns nil for a ground unit, so this costs one baseParameters
-  --  read and nothing else on the path that has always worked.
-  local flyPoint = petports_flyPointNear(position, radius)
-  if flyPoint ~= nil then return flyPoint end
+  --  A FREE-MOVING CHASSIS OWNS THIS ANSWER OUTRIGHT, INCLUDING THE nil.
+  --
+  --  This used to be "try the flyer answer, fall through to the ground one",
+  --  which was correct while nil could only mean "not a flyer". It stopped being
+  --  correct the moment petports_flyPointNear gained a REFUSAL: nil now also
+  --  means "I am a free mover and this target is not workable by me", and
+  --  falling through turns that refusal into a ground answer one line later.
+  --
+  --  MEASURED, and it is exactly as silly as it sounds:
+  --
+  --    UNIT flypoint DECLINED [2501.5,1158.5]: target is not submerged and this
+  --      chassis cannot leave the water
+  --    UNIT standable for [2501.5,1158.5] -> [2501.5,1158.8] (column offset 0)
+  --
+  --  An aquatic unit refused a dry crop and was handed a dry-land standing spot
+  --  on the next line. It then spent twenty seconds failing to path there,
+  --  burned its progress strikes, and the port re-dispatched on a ten-second
+  --  loop forever.
+  --
+  --  A ground unit never enters this branch, so the path that has always worked
+  --  is untouched.
+  if petports_freeMover() then
+    return petports_flyPointNear(position, radius)
+  end
 
   for offset = 0, radius do
     for _, dx in ipairs(offset == 0 and { 0 } or { -offset, offset }) do
       --  Tile centre. findGroundPosition only resolves the y.
       local x = math.floor(position[1] + dx) + 0.5
 
-      local ground = findGroundPosition({ x, position[2] }, -radius, radius, false)
+      local ground = findGroundPosition({ x, position[2] }, -radius, radius,
+        petports_avoidLiquid())
 
       if ground ~= nil and validStandingPosition(ground, false) then
         return { ground[1], ground[2] }
@@ -944,7 +1285,7 @@ function petports_probeStep(from, to, fromKey, toKey, exploreRate)
     --  is invalid but ground sits a fraction of a tile away, the vent's entry
     --  position is misaligned rather than the geometry being wrong.
     local fromValid = validStandingPosition(from, false)
-    local fromGround = findGroundPosition(from, -4, 4, false)
+    local fromGround = findGroundPosition(from, -4, 4, petports_avoidLiquid())
 
     sb.logInfo("UNIT probe START %s -> %s: from %s (standable %s, ground %s) to %s rate %s",
       tostring(fromKey), tostring(toKey), sb.printJson(from),

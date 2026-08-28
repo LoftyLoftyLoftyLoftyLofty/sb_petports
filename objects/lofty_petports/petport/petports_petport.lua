@@ -42,6 +42,49 @@ require "/scripts/lofty_petports/petports_filters.lua"
 --  happens separately.
 
 local STATUS_INTERVAL = 2.0
+
+--  How often the port re-measures the liquid in its own footprint.
+--
+--  SHORT ON PURPOSE. Water level is not static -- it rains, players dig, pools
+--  drain -- so this cannot be a one-shot check at spawn. Five seconds is
+--  responsive enough that a flooding port retires its unit before the unit gets
+--  itself stuck, and the measurement is sixteen liquid lookups, which is
+--  nothing against a per-second work scan.
+local ENVIRONMENT_INTERVAL = 5.0
+
+--  Fill fraction that counts as submerged. MUST MATCH PETPORTS_SUBMERGED_FILL
+--  in petports_contract.lua -- the port and the unit have to agree about what
+--  water is, or a unit is retired for an environment it would have accepted.
+local ENVIRONMENT_SUBMERGED_FILL = 0.9
+
+--  How often the port asks whether its unit is still alive in the useful sense.
+--
+--  SEPARATE FROM DISPATCHED-WORK FAILURE, AND IT HAS TO BE. The stranding ladder
+--  in noteFailure only counts tasks that fail, so a unit wedged in an opaque
+--  hatch with nothing to do generates no signal at all -- and that is precisely
+--  the case where a player goes looking for their pet and cannot find it. Work
+--  failure is the RESPONSIVE path when there is work; this is the one that
+--  notices when there is not.
+local HEALTH_INTERVAL = 30.0
+
+--  Consecutive still checks before re-homing. THE NUMBER IS SET BY COLD-CACHE
+--  ROUTE PLANNING, NOT BY IMPATIENCE: the first plan from a port spends roughly
+--  45-50 seconds probing, motionless, because every unreachable edge has to
+--  exhaust A* to answer. At two checks this would abort those searches for ever
+--  and the route cache would never populate. Three puts the floor at 90 seconds,
+--  comfortably past the longest legitimate stillness measured.
+local HEALTH_STALL_LIMIT = 3
+
+--  Displacement that counts as "moved" between checks. Generous, because the
+--  question is "is this thing alive", not "is it making good progress".
+local HEALTH_MOVE = 1.0
+
+--  How close to the port counts as parked. A unit on station is motionless BY
+--  DESIGN under strictPortTethering, so home has to be excluded or every idle
+--  fleet re-homes itself every ninety seconds. Wider than the unit's own
+--  TETHER_SLACK of 3.0, since the unit parks on resolved ground that can sit a
+--  little off the port's own origin.
+local HEALTH_HOME_SLACK = 5.0
 local RESPAWN_GRACE = 1.0
 
 --  Periodic flush of drifting state into the socketed item.
@@ -722,8 +765,36 @@ local function noteFailure(taskId, reason)
   --  door cannot accumulate its way to a re-home.
   sb.logInfo("PETPORT %s noteFailure %s: %s", stationUniqueId(), taskId, tostring(reason))
 
-  if string.find(reason or "", "no vent route", 1, true) ~= nil
-     or string.find(reason or "", "no route", 1, true) ~= nil then
+  --  WHICH FAILURES MEAN "THIS UNIT IS STRANDED" RATHER THAN "THAT JOB IS HARD".
+  --
+  --  This matched only "no route", which was every stranding the mod could
+  --  produce when it was written. It is not any more, and the consequence was
+  --  that rehomeUnit -- the whole failsafe -- became unreachable code:
+  --  unreachableFailures never climbed, so `stranded` was never true, so the
+  --  inside-the-rect guard in returnWork returned early and reset recallFailures
+  --  every tick.
+  --
+  --  MEASURED tonight in three separate shapes, none of which say "no route":
+  --  a unit wedged in a trapdoor, a flyer frozen in water it could not plan out
+  --  of, and a unit walled into dirt. All three reported "no net progress --
+  --  moved 0 in 10s", which is the single most direct statement of "this unit
+  --  is stuck" the system produces.
+  --
+  --  DELIBERATELY NOT MATCHING "no standable position" OR "no ground position".
+  --  Those describe a TARGET the unit cannot occupy, not a unit that cannot
+  --  move -- an aquatic pet correctly declining a dry crate says one of those
+  --  every time, and counting it would re-home a perfectly healthy unit for
+  --  doing its job right.
+  --
+  --  Three of these in a row still has to happen, and ANY successful task
+  --  resets the counter, so a single awkward target cannot accumulate its way
+  --  to a re-home.
+  local strandedReason =
+    string.find(reason or "", "no vent route", 1, true) ~= nil
+    or string.find(reason or "", "no route", 1, true) ~= nil
+    or string.find(reason or "", "no net progress", 1, true) ~= nil
+
+  if strandedReason then
     self.unreachableFailures = (self.unreachableFailures or 0) + 1
     sb.logInfo("PETPORT %s unreachable failure %s of %s: %s",
       stationUniqueId(), self.unreachableFailures, STRANDED_LIMIT, reason)
@@ -1917,6 +1988,182 @@ end
 
 --------------------------------------------------------------------------------
 
+--  WHAT MEDIA DOES THIS PORT'S OWN FOOTPRINT OFFER?
+--
+--  Returns wet, dry -- each meaning "at least one occupied tile is like this".
+--  A port straddling a waterline offers both, which is correct: there is a wet
+--  half for a swimmer and a dry half for a flyer.
+--
+--  world.objectSpaces RATHER THAN AN ASSUMED 4x4. The footprint is whatever the
+--  object declares, and hardcoding its current size would go quietly wrong the
+--  first time the art changes. Spaces are relative to the object, so they are
+--  offset by its position before being read.
+local function portMedia()
+  local spaces = world.objectSpaces(entity.id())
+  if spaces == nil or #spaces == 0 then return false, true end
+
+  local origin = entity.position()
+  local wet, dry = false, false
+
+  for _, space in ipairs(spaces) do
+    local level = world.liquidAt({
+      math.floor(origin[1]) + space[1] + 0.5,
+      math.floor(origin[2]) + space[2] + 0.5
+    })
+
+    if level ~= nil and (level[2] or 0) >= ENVIRONMENT_SUBMERGED_FILL then
+      wet = true
+    else
+      dry = true
+    end
+
+    if wet and dry then break end
+  end
+
+  return wet, dry
+end
+
+--  RETIRE A UNIT THE PORT'S ENVIRONMENT NO LONGER SUITS, AND REFUSE TO SPAWN
+--  ONE INTO AN ENVIRONMENT IT CANNOT LIVE IN.
+--
+--  FOUR SYMPTOMS, ONE CAUSE. A flyer socketed into a flooded port could not path
+--  out of the water. An aquatic unit in a dry port worked nearby pools and then
+--  stalled the moment its leash asked it to come home. A ground unit leashing to
+--  a submerged port sat still. All three are the same sentence: THE UNIT CANNOT
+--  OCCUPY ITS OWN HOME, and no amount of retrying fixes it because home does not
+--  move.
+--
+--  DESPAWNING IS SAFE AND IS THE POINT. saveAndDespawn writes the unit's state
+--  and its CARGO back into the item first, so nothing is lost -- the item sits
+--  in the port holding whatever it was carrying, and socketing it into a
+--  suitable port later unloads it. A retired unit is recoverable; a unit frozen
+--  in terrain is not.
+--
+--  RE-EVALUATED, NOT LATCHED. The environment changes: rain floods a port, a
+--  player drains a pool, a dug channel reaches the base. So the same check that
+--  retires a unit also brings it back, and self.envUnsuitable is a cache of the
+--  last verdict rather than a permanent decision.
+--
+--  ASKS THE UNIT WHILE IT STILL EXISTS. Capability is a monstertype parameter
+--  and only the unit has read it, so the port measures its footprint and the
+--  unit judges it. That also means this needs no knowledge of chassis types
+--  here, and a locomotion class added later is covered without touching this.
+local function environmentCheck()
+  if self.petId == nil or not world.entityExists(self.petId) then return end
+
+  local wet, dry = portMedia()
+
+  local called, verdict = pcall(world.callScriptedEntity, self.petId,
+    "petports_canInhabit", wet, dry)
+
+  --  A UNIT THAT CANNOT ANSWER IS LEFT ALONE. callScriptedEntity returns nil
+  --  silently for a function the target does not define, so a nil here is
+  --  indistinguishable from an older unit script -- and failing closed on that
+  --  would retire working units over a version mismatch. A late retirement
+  --  costs a few seconds; a wrong one costs the player their pet.
+  if not called or type(verdict) ~= "table" then return end
+
+  if verdict.ok then
+    self.envUnsuitable = nil
+    return
+  end
+
+  sb.logInfo("PETPORT %s RETIRING unit: %s (footprint wet %s, dry %s). Its state and "
+    .. "cargo are written back to the item, which stays socketed -- move it to a "
+    .. "suitable port to unload it.",
+    stationUniqueId(), tostring(verdict.reason or "cannot inhabit this port"),
+    tostring(wet), tostring(dry))
+
+  self.envUnsuitable = verdict.reason or "cannot inhabit this port"
+  self.envWet, self.envDry = wet, dry
+
+  saveAndDespawn()
+end
+
+--  DEFINED HERE, NOT BESIDE findWork, AND THE PLACEMENT IS LOAD-BEARING.
+--
+--  A `local function` called from ABOVE its definition is a nil GLOBAL, and it
+--  fails at the call rather than at load -- so it looks like a runtime bug in
+--  whatever function happened to reach it first.
+--
+--  MEASURED, and it was mine: gating the findWork rungs by pattern-matching
+--  `if X ~= nil then return X end` also matched a line inside depositWork some
+--  four thousand lines earlier, which happens to use the same shape. Result:
+--
+--      attempt to call a nil value (global 'dispatchable')
+--
+--  the first time a unit had cargo. So this sits directly under
+--  stationUniqueId -- the last thing it depends on -- and above every caller.
+--  Do not move it back down beside its users.
+
+--  WHICH WORK TYPES ARE CHECKED AGAINST THIS PORT'S OWN RECT.
+--
+--  AN ALLOW-LIST, INVERTED FROM WHAT THIS USED TO BE, and the inversion is the
+--  point. The old test named six types as exempt and checked everything else,
+--  which quietly assumed that anything not listed was generated from this
+--  port's own scan. That is false for a NETWORK: drain, deposit and upcycle all
+--  name a machine or a crate that a MEMBER port found, and in a three-port
+--  network they routinely sit in someone else's rect.
+--
+--  MEASURED, and it cost the whole run. A ground port with rect [2511,...]
+--  picked drain:13:dirtmaterial at [2506.5,1163.8] on every single tick,
+--  failed this check every time, and dispatched nothing else for 104 seconds
+--  while drops sat inside its own coverage.
+--
+--  So the honest question is not "which types are exempt" but "which positions
+--  did this port INVENT". Only diag does: it calls findStandingPoint against
+--  its own rect and the result must land inside it, so a failure there really
+--  is the generator being wrong. Everything else names a discovered entity and
+--  belongs to the network.
+--
+--  A deny-list grows every time a work type is added and fails closed in the
+--  worst way -- by silently starving a unit rather than by erroring. This
+--  fails open, which for work dispatch is the correct direction.
+local RECT_CHECKED_TYPES = {
+  ["diag"] = true
+}
+
+--  Is this work actually dispatchable by this port, or should findWork keep
+--  looking?
+--
+--  ORDERING IS NOT A GUARD, AND NEITHER IS SELECTION. findWork is a ladder of
+--  "first non-nil wins", and the rect test used to run in the CALLER after the
+--  winner was chosen -- so a candidate that could never be dispatched ended the
+--  tick and everything below it never ran. That is starvation from a single
+--  refused task, and the log made it invisible: the reject was change-gated, so
+--  it printed once and then eighteen seconds of "draining dirtmaterial x289,
+--  x294, x299" scrolled past looking like a busy port.
+--
+--  Same lesson as the note further up this file about depositWork: precedence
+--  cannot order an option that does not exist. A rung must decline, not end the
+--  search.
+local function dispatchable(work)
+  if work == nil then return nil end
+
+  if RECT_CHECKED_TYPES[work.type]
+     and not petports_rectContains(coverageRect(), work.position) then
+
+    --  Not via reject(): that sets the port's single refusal reason and returns
+    --  from the tick, and this is a rung declining rather than the tick ending.
+    --  Change-gated on its own key so a rung that refuses every tick says so
+    --  once rather than per tick.
+    local note = string.format("%s type %s at %s outside own rect %s",
+      tostring(work.id), tostring(work.type), sb.printJson(work.position),
+      sb.printJson(coverageRect()))
+
+    if self.lastRectSkip ~= note then
+      self.lastRectSkip = note
+      sb.logInfo("PETPORT %s SKIPPING %s -- generated point outside rect, "
+        .. "falling through to the next kind of work",
+        stationUniqueId(), note)
+    end
+
+    return nil
+  end
+
+  return work
+end
+
 --------------------------------------------------------------------------------
 --  WORK DISCOVERY AND DISPATCH
 --------------------------------------------------------------------------------
@@ -2320,6 +2567,72 @@ local function rehomeUnit(reason)
   self.unreachableFailures = 0
   self.spawnTimer = 0
 end
+
+--  PLACED BELOW rehomeUnit ON PURPOSE. It calls it, and a `local function`
+--  called from above its definition is a nil GLOBAL that fails at the call
+--  rather than at load. That has already cost this file one crash, so the rule
+--  is now checked mechanically rather than by eye.
+
+--  IS THE UNIT STILL GOING ANYWHERE?
+--
+--  Purely an observation from the port: position now against position last
+--  check. No new contract function, and no dependence on the unit noticing its
+--  own problem -- which matters, because every stranding found tonight was a
+--  unit that believed it was fine and kept trying.
+--
+--  THREE EXCLUSIONS, and each one is a false positive that would otherwise
+--  re-home a healthy unit:
+--
+--    parked at home    a tethered unit is motionless on purpose
+--    it moved          anything covering HEALTH_MOVE between checks is alive
+--    no unit           nothing to judge
+--
+--  What is left is a unit sitting still, away from its port, for HEALTH_INTERVAL
+--  x HEALTH_STALL_LIMIT. In a working fleet that state does not occur.
+--
+--  RE-HOMING IS CHEAP AND RECOVERABLE, which is what makes a rare false positive
+--  acceptable: saveAndDespawn writes state and cargo back to the item first, so
+--  the worst case is one abandoned task and a respawn at the port. The worst
+--  case of NOT having this is a pet the player cannot find.
+local function healthCheck()
+  if self.petId == nil or not world.entityExists(self.petId) then
+    self.healthAnchor = nil
+    self.healthStalls = 0
+    return
+  end
+
+  local position = world.entityPosition(self.petId)
+  if position == nil then return end
+
+  local anchor = self.healthAnchor
+  self.healthAnchor = position
+
+  local home = world.magnitude(position, entity.position()) <= HEALTH_HOME_SLACK
+  local moved = anchor == nil or world.magnitude(position, anchor) > HEALTH_MOVE
+
+  if home or moved then
+    self.healthStalls = 0
+    return
+  end
+
+  self.healthStalls = (self.healthStalls or 0) + 1
+
+  sb.logInfo("PETPORT %s unit has not moved in %s check(s) of %ss at %s, %s tile(s) from "
+    .. "the port and not on station -- %s",
+    stationUniqueId(), sb.printJson(self.healthStalls), sb.printJson(HEALTH_INTERVAL),
+    sb.printJson(position),
+    sb.printJson(math.floor(world.magnitude(position, entity.position()))),
+    (self.healthStalls >= HEALTH_STALL_LIMIT) and "RE-HOMING"
+      or ("re-homing at " .. tostring(HEALTH_STALL_LIMIT)))
+
+  if self.healthStalls >= HEALTH_STALL_LIMIT then
+    self.healthStalls = 0
+    self.healthAnchor = nil
+    rehomeUnit("motionless away from the port for "
+      .. tostring(HEALTH_INTERVAL * HEALTH_STALL_LIMIT) .. "s")
+  end
+end
+
 
 local function returnWork()
   local rect = coverageRect()
@@ -2979,7 +3292,7 @@ local function depositWork()
   --  network is over the threshold, and the input slot has room -- so anything
   --  else falls straight through to the crates below.
   local upcycle = upcyclerWork()
-  if upcycle ~= nil then return upcycle end
+  if dispatchable(upcycle) ~= nil then return upcycle end
 
   local targets = petports_beaconsFor("deposit")
   if #targets == 0 then
@@ -5934,9 +6247,44 @@ local function restockFetchWork()
   local beacons = restockBeacons()
   if #beacons == 0 then return nil, "no configured restock beacon in coverage" end
 
-  local short, unstocked, noRoom = 0, 0, 0
+  local short, unstocked, noRoom, unreachable = 0, 0, 0, 0
 
   for _, beacon in ipairs(beacons) do
+    --  THE REQUEST CRATE IS THE DESTINATION, AND IT MUST BE REACHABLE FIRST.
+    --
+    --  THIRD INSTANCE OF ONE BUG. This generator, like drainWork before it,
+    --  validated its SOURCE and never its DESTINATION -- so a unit was sent to
+    --  withdraw stock for a crate it could not deliver to, and the result is a
+    --  livelock in which every single task succeeds:
+    --
+    --    restock:17:petports_petfuel_savory  withdraw from crate 31   done
+    --    restockDeliverWork refuses 17, unreachable
+    --    deposit -> crate 31                                          done
+    --    request 17 is still short                                    withdraw again
+    --
+    --  MEASURED at roughly one cycle every three seconds against a submerged
+    --  request crate, with nothing in the log resembling an error.
+    --
+    --  THE GENERAL SHAPE, since it has now cost three sessions' worth of
+    --  symptoms: ANY GENERATOR WHOSE DESTINATION DIFFERS FROM ITS SOURCE MUST
+    --  CHECK BOTH. Checking only the source produces work that completes and
+    --  accomplishes nothing, and a repeating pair of successes is invisible to
+    --  the reject machinery and to the failure counters alike.
+    --
+    --  standingPointNear asks the UNIT, so this is per-chassis for free: a
+    --  submerged request crate is unreachable for a walker and fine for a
+    --  swimmer, with no special case here.
+    if standingPointNear(beacon.position, 4) == nil then
+      unreachable = unreachable + 1
+
+      if self.lastRestockSkip ~= beacon.id then
+        self.lastRestockSkip = beacon.id
+        sb.logInfo("PETPORT %s NOT restocking %s at %s: this unit cannot reach the request "
+          .. "crate, so fetching for it would only cycle stock in and out of storage",
+          stationUniqueId(), sb.printJson(beacon.id), sb.printJson(beacon.position))
+      end
+
+    else
     for _, request in ipairs(beacon.requests) do
       local have = restockHeld(beacon.id, request.item)
 
@@ -5978,15 +6326,41 @@ local function restockFetchWork()
             --  containerItems and matching names.
             local source, available = nil, 0
 
+            --  THE SOURCE MUST BE REACHABLE TOO, AND IT IS A SEPARATE QUESTION
+            --  FROM THE REQUEST CRATE'S REACHABILITY.
+            --
+            --  The destination check above stops a unit fetching FOR somewhere
+            --  it cannot deliver. This stops the mirror image: fetching FROM
+            --  somewhere it cannot collect. Measured with an aquatic unit and a
+            --  submerged request crate whose only stock sat in a crate above
+            --  the waterline -- the destination check passed, the source was
+            --  never asked about, and the unit was dispatched to a withdraw it
+            --  could not begin.
+            --
+            --  KEEP LOOKING RATHER THAN GIVE UP. Sources are iterated, so an
+            --  unreachable crate is skipped and the next one considered -- a
+            --  network with the same item in a wet crate and a dry one should
+            --  serve a swimmer from the wet one rather than refusing the
+            --  request outright.
             for _, crate in ipairs(petports_beaconsFor("deposit")) do
               if world.entityExists(crate.id) then
                 local n = world.containerAvailable(crate.id,
                   { name = request.item, count = 1 })
 
                 if type(n) == "number" and n >= 1 then
-                  source = crate
-                  available = n
-                  break
+                  if standingPointNear(crate.position, 4) == nil then
+                    if self.lastRestockSourceSkip ~= crate.id then
+                      self.lastRestockSourceSkip = crate.id
+                      sb.logInfo("PETPORT %s restock source %s at %s SKIPPED: holds %s but "
+                        .. "this unit cannot reach it -- looking for another source",
+                        stationUniqueId(), sb.printJson(crate.id),
+                        sb.printJson(crate.position), tostring(request.item))
+                    end
+                  else
+                    source = crate
+                    available = n
+                    break
+                  end
                 end
               end
             end
@@ -6044,16 +6418,20 @@ local function restockFetchWork()
         end
       end
     end
+    end
   end
 
   if short == 0 then
     return nil, "every restock request is at or above its minimum"
   end
 
+  --  unreachable is reported alongside the others because "N short, none
+  --  actionable" reads as a stock problem, and a crate this chassis simply
+  --  cannot get to is a completely different thing to go and look at.
   return nil, string.format(
     "%s restock request(s) short, none actionable: %s with none in storage, "
-    .. "%s with the request crate full",
-    short, unstocked, noRoom)
+    .. "%s with the request crate full, %s with an unreachable request crate",
+    short, unstocked, noRoom, unreachable)
 end
 
 --  Every crate the network can act on, both kinds, in a stable order.
@@ -6330,10 +6708,47 @@ local function drainWork()
   for _, machine in ipairs(self.machines or {}) do
     if machine.kind == "upcycler" and machine.enabled
        and world.entityExists(machine.id) then
-      table.insert(ranked, {
-        machine = machine,
-        free = machineInputFree(machine.id)
-      })
+
+      --  THE DESTINATION MUST BE REACHABLE BEFORE ITS SUPPLY IS WORTH FETCHING.
+      --
+      --  This checked the SOURCE CRATE and never the machine, so a unit could
+      --  be sent to pull stock for somewhere it could not go. That is not a
+      --  wasted trip, it is a LIVELOCK, and it is invisible because every task
+      --  in it succeeds:
+      --
+      --    drain dirtmaterial out of crate 31 for upcycler 13   done
+      --    deposit -> upcyclerWork refuses 13, unreachable      done, back in 31
+      --    census sees dirtmaterial over threshold again        drain again
+      --
+      --  MEASURED at 2.4 full cycles per second against a submerged upcycler,
+      --  with a "done" on every line and nothing resembling an error anywhere
+      --  in the log. Same shape as the withdraw/deposit loop recorded above
+      --  replantWork, and the same reason it was hard to see.
+      --
+      --  IT WAS ALWAYS BROKEN. Before petports_avoidLiquid landed, the unit
+      --  accepted the unreachable machine and stood still for ten seconds per
+      --  attempt, so the loop ran slowly enough to look like ordinary retrying.
+      --  Making the refusal correct is what turned it into a fast loop and made
+      --  it visible.
+      --
+      --  standingPointNear ASKS THE UNIT, so this is per-chassis by
+      --  construction: a submerged machine is unreachable for a walker and fine
+      --  for a swimmer, and neither has to be special-cased here.
+      local reachable = standingPointNear(machine.position, 4)
+
+      if reachable == nil then
+        if self.lastDrainSkip ~= machine.id then
+          self.lastDrainSkip = machine.id
+          sb.logInfo("PETPORT %s NOT draining for %s at %s: this unit cannot reach the "
+            .. "machine, so fetching its input would only cycle stock in and out of storage",
+            stationUniqueId(), sb.printJson(machine.id), sb.printJson(machine.position))
+        end
+      else
+        table.insert(ranked, {
+          machine = machine,
+          free = machineInputFree(machine.id)
+        })
+      end
     end
   end
 
@@ -6788,7 +7203,7 @@ end
 local function findWork()
   --  Before anything else: a unit that has strayed cannot reach work anyway.
   local recall = returnWork()
-  if recall ~= nil then return recall end
+  if dispatchable(recall) ~= nil then return recall end
 
   --  CARGO OUTRANKS COLLECTION. A unit holding a load has exactly one job, and
   --  letting it pick up more first is how a unit ends up hoarding instead of
@@ -6804,13 +7219,13 @@ local function findWork()
   --  nothing in the log looking like an error because every individual task
   --  succeeded.
   local putBack, noPutBack = replantWork()
-  if putBack ~= nil then return putBack end
+  if dispatchable(putBack) ~= nil then return putBack end
 
   --  WATER SITS WITH REPLANT, ABOVE DEPOSIT, and for exactly the same reason:
   --  a unit carrying liquid that matches dry soil is mid-job, and deposit fires
   --  on ANY cargo.
   local wet, noWet = waterWork()
-  if wet ~= nil then return wet end
+  if dispatchable(wet) ~= nil then return wet end
 
   --  RESTOCK DELIVERY SITS HERE FOR THE THIRD TIME OVER. A unit holding a stack
   --  a request crate asked for is mid-job in exactly the way a held seed or a
@@ -6820,10 +7235,10 @@ local function findWork()
   --  looking wrong -- which is precisely what replantWork's header records
   --  happening when it was written on the wrong side of this line.
   local restock = restockDeliverWork()
-  if restock ~= nil then return restock end
+  if dispatchable(restock) ~= nil then return restock end
 
   local drop, noDrop = depositWork()
-  if drop ~= nil then return drop end
+  if dispatchable(drop) ~= nil then return drop end
 
 	--  ORDERING IS NOT A GUARD.
 	--
@@ -6885,7 +7300,7 @@ local function findWork()
 	end
 
   local work, why = collectionWork()
-  if work ~= nil then return work end
+  if dispatchable(work) ~= nil then return work end
 
   --  HARVEST SITS BELOW COLLECT, and the reason is perishability. An item drop
   --  has a despawn timer; a ripe crop does not, and will be exactly as ripe in
@@ -6896,48 +7311,48 @@ local function findWork()
   --  them, deposit runs because deposit outranks collect, come back, harvest
   --  the next one.
   local crop, noCrop = harvestWork()
-  if crop ~= nil then return crop end
+  if dispatchable(crop) ~= nil then return crop end
 
   --  BESIDE CROP HARVESTING, below collection, for the same reason: an animal
   --  that is ready stays ready, where a drop on the ground is on a despawn
   --  timer. Nothing is lost by clearing the ground first.
   local beast, noBeast = animalWork()
-  if beast ~= nil then return beast end
+  if dispatchable(beast) ~= nil then return beast end
 
   --  Fetching is the lowest-priority thing a unit can do: it is the only work
   --  that MANUFACTURES cargo rather than clearing something. See withdrawWork.
   local fetch, noFetch = withdrawWork()
-  if fetch ~= nil then return fetch end
+  if dispatchable(fetch) ~= nil then return fetch end
 
   local fetchWater, noFetchWater = withdrawWaterWork()
-  if fetchWater ~= nil then return fetchWater end
+  if dispatchable(fetchWater) ~= nil then return fetchWater end
 
   --  RESTOCKING SITS ABOVE TIDYING AND BELOW EVERYTHING ELSE. It manufactures
   --  cargo, like fetching a seed does, so it goes near the bottom -- but a
   --  player who asked for 2000 hazard blocks asked for something, where tidying
   --  is the network's own housekeeping and nobody requested it.
   local stock, noStock = restockFetchWork()
-  if stock ~= nil then return stock end
+  if dispatchable(stock) ~= nil then return stock end
 
   --  FUEL SITS ABOVE TIDYING because it UNBLOCKS something. A machine whose
   --  output slot is full stops converting, so collecting from it restarts work
   --  that is otherwise halted -- where tidying is purely cosmetic and nothing
   --  waits on it.
   local fuel, noFuel = fuelWork()
-  if fuel ~= nil then return fuel end
+  if dispatchable(fuel) ~= nil then return fuel end
 
   --  BELOW EVERYTHING, INCLUDING FETCHING. Tidying is the only work that is
   --  purely cosmetic from the network's point of view -- nothing is lost, no
   --  timer is running, and every other job represents something that either
   --  perishes or is already half done.
   local tidy, noTidy = tidyWork()
-  if tidy ~= nil then return tidy end
+  if dispatchable(tidy) ~= nil then return tidy end
 
   --  THE VERY BOTTOM. Tidying moves something that is in the wrong box;
   --  compaction reshapes something that is already in the right one. If there
   --  is any other job in the network at all, it outranks this.
   local squash, noSquash = compactWork()
-  if squash ~= nil then return squash end
+  if dispatchable(squash) ~= nil then return squash end
 
   --  BELOW THE VERY BOTTOM. Draining is the only IRREVERSIBLE work in the mod:
   --  everything above moves things, and this one feeds them to a machine that
@@ -6947,14 +7362,19 @@ local function findWork()
   --  Nothing is waiting on it either. The surplus has been sitting there and
   --  will keep sitting there.
   local drain, noDrain = drainWork()
-  if drain ~= nil then return drain end
+  if dispatchable(drain) ~= nil then return drain end
 
 	--  The old noDrop fallback lived here and is now unreachable: noDrop is only
 	--  ever set when cargo is non-empty, and the guard above returns on that
 	--  condition before anything below runs.
 
+  --  THE ONLY TYPE RECT_CHECKED_TYPES ACTUALLY GUARDS, so it is the one rung
+  --  that must not bypass dispatchable(). diagnosticWork calls findStandingPoint
+  --  against this port's own rect, so a point outside it means the generator is
+  --  wrong -- which is what the original assertion was always for.
   if DIAG_FALLBACK then
-    return diagnosticWork()
+    local diag = diagnosticWork()
+    if dispatchable(diag) ~= nil then return diag end
   end
 
   --  Both reasons, because "no drops in network coverage" alone reads as though
@@ -7022,21 +7442,9 @@ local function dispatchWork()
     return reject("unit went away while work was being chosen")
   end
 
-  --  Belt and braces: the rect is authoritative for what may be claimed, and
-  --  findStandingPoint is supposed to respect it. If this ever fires, the
-  --  generator is wrong, not the check.
-  --  "collect" and "harvest" both name a target the NETWORK found, which may
-  --  legitimately sit inside another member port's rect. Only points this port
-  --  GENERATED itself are checked against its own rect.
-  if work.type ~= "collect" and work.type ~= "harvest"
-     and work.type ~= "replant" and work.type ~= "withdraw"
-     and work.type ~= "water" and work.type ~= "animal"
-     and not petports_rectContains(coverageRect(), work.position) then
-    return reject(string.format(
-      "generated point outside rect: %s type %s at %s, own rect %s",
-      tostring(work.id), tostring(work.type), sb.printJson(work.position),
-      sb.printJson(coverageRect())))
-  end
+  --  The rect check now lives in findWork, at every rung, so a refused
+  --  candidate falls through to the next kind of work instead of ending the
+  --  tick. See RECT_CHECKED_TYPES and dispatchable() above findWork.
 
   if not petports_claimTake(work.id, stationUniqueId(), petUniqueId(),
                             work.type, work.position, CLAIM_TTL) then
@@ -7892,10 +8300,49 @@ function update(dt)
       abandonTask("socketed item is not a pet")
       return
     end
+
+    --  A NEW UNIT GETS A FRESH ENVIRONMENT VERDICT.
+    --
+    --  envUnsuitable answers "can THIS chassis live at THIS port", so it belongs
+    --  to the PAIR -- and it was being stored on the port alone. Consequence,
+    --  measured: retire a flyer at a flooded port, socket an AQUATIC unit into
+    --  the same port, and nothing spawns. The footprint has not changed, so the
+    --  change test in update() never fires, envUnsuitable never clears, and the
+    --  port refuses every chassis including the one that would have been fine.
+    --  One retirement bricked the port.
+    --
+    --  Clearing here rather than in the swap branch above covers both routes in:
+    --  a swap nils petData first and then arrives here, and a first socket
+    --  arrives here directly.
+    --
+    --  An unsuitable unit socketed into an unsuitable port still spawns and is
+    --  retired within ENVIRONMENT_INTERVAL. That flicker is deliberate -- it is
+    --  once per player action, and the retirement line says why, which is worth
+    --  more than a silent refusal to spawn.
+    self.envUnsuitable = nil
+    self.envWet, self.envDry = nil, nil
+
     self.spawnTimer = 0
   end
 
   setHullAnimationStateIntent("open")
+
+  --  ENVIRONMENT. Retires a unit whose home has become uninhabitable, and is
+  --  also what clears self.envUnsuitable when it becomes habitable again.
+  self.environmentTimer = (self.environmentTimer or 0) - dt
+  if self.environmentTimer <= 0 then
+    self.environmentTimer = ENVIRONMENT_INTERVAL
+    environmentCheck()
+  end
+
+  --  HEALTH. The slow backstop for a unit that is stuck with no work to fail
+  --  at. See healthCheck for why the interval and the stall limit are what they
+  --  are -- the limit is set by cold-cache route probing, not by patience.
+  self.healthTimer = (self.healthTimer or 0) - dt
+  if self.healthTimer <= 0 then
+    self.healthTimer = HEALTH_INTERVAL
+    healthCheck()
+  end
 
   --  Spawn, or respawn after an unload/death.
   if self.petId == nil or not world.entityExists(self.petId) then
@@ -7905,7 +8352,35 @@ function update(dt)
         --  It existed and now does not. Keep whatever state we last heard.
         self.petId = nil
       end
-      spawnPet()
+
+      --  DO NOT RESPAWN INTO AN ENVIRONMENT THAT JUST RETIRED THIS UNIT.
+      --
+      --  Without this the port would spawn on RESPAWN_GRACE, environmentCheck
+      --  would retire it up to five seconds later, and the pair would loop
+      --  forever -- a flicker rather than a fix, and one that writes the item
+      --  back on every cycle.
+      --
+      --  envUnsuitable is CLEARED BY environmentCheck ITSELF once the footprint
+      --  suits the chassis again, so a port that floods and later drains brings
+      --  its unit back with no player action. It cannot clear itself while no
+      --  unit exists to be asked, so the re-measure below is what reopens it.
+      if self.envUnsuitable ~= nil then
+        local wet, dry = portMedia()
+
+        if wet ~= self.envWet or dry ~= self.envDry then
+          self.envWet, self.envDry = wet, dry
+          self.envUnsuitable = nil
+
+          sb.logInfo("PETPORT %s environment changed (wet %s, dry %s) -- allowing a "
+            .. "respawn attempt for the socketed unit",
+            stationUniqueId(), tostring(wet), tostring(dry))
+        end
+      end
+
+      if self.envUnsuitable == nil then
+        spawnPet()
+      end
+
       self.spawnTimer = RESPAWN_GRACE
     end
   end

@@ -1,0 +1,48 @@
+//  M.A.U.S. UTILITY UNIT -- AQUATIC PLACEHOLDER BODY VARIANT
+//
+//  Sibling of drone/body/drone_placeholder.monsterpart and the flyer's. Read
+//  the drone's header for how category + type binding works; only what DIFFERS
+//  is recorded here.
+//
+//  Own category, therefore own monsterpart, therefore own pngs -- otherwise the
+//  three chassis would randomly wear each other's bodies, since the engine
+//  picks at random from every monsterpart matching a category.
+//
+//  THE GREEN IS MEASURED, NOT PICKED.
+//
+//  Three chassis now have to be told apart at a glance, and pink versus green
+//  is the classic pair that collapses under red-green colour blindness. So the
+//  candidates were simulated (Vienot 1999 LMS) under deuteranopia and
+//  protanopia and compared TIER BY TIER -- brightest against brightest, mid
+//  against mid -- because all three sprites share identical structure, so the
+//  comparison a player actually makes is the same pixel on two units.
+//
+//  Worst-case luminance separation, x100:
+//
+//      drone pink  vs  flyer blue     1.9      <- the existing pair, and weak
+//      aquatic green vs drone pink    9.2
+//      aquatic green vs flyer blue   11.8
+//
+//  Green wins because it is naturally the brightest of the three at equal
+//  saturation and value, so it separates on LIGHTNESS as well as hue -- which
+//  is the same property that made the seven treat colours survive. A straight
+//  hue rotation to 130 with saturation and value held is therefore the right
+//  answer here, and darkening it to "match" the others destroys the margin:
+//  at v*0.70 the separation collapses to 0.0 and 0.1.
+//
+//  NOTE THE FIRST ROW. Pink versus blue at 1.9 is poor, and that is my doing --
+//  the flyer's blue was chosen to PRESERVE the pink's luminance, which is
+//  correct for keeping a sprite's internal contrast and wrong for telling two
+//  sprites apart. Worth re-deriving the flyer's blue if a third party ever
+//  reports trouble; it is not worth breaking a working chassis over now.
+
+{
+  "name" : "aquatic_placeholder",
+  "category" : "petports_aquatic",
+  "type" : "body",
+
+  "frames" : {
+    "body" : "body_0_lit.png",
+    "bodyfullbright" : "body_0_fullbright.png"
+  }
+}

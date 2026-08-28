@@ -257,8 +257,18 @@ function petports_findRestPosition(position, maxOffset, options)
     local directions = (offset == 0) and {0} or {1, -1}
 
     for _, direction in ipairs(directions) do
+      --  THE FOURTH ARGUMENT IS avoidLiquid AND IT WAS OMITTED, so this read
+      --  as nil, so as false: a resting unit would settle in water while every
+      --  other resolver in the mod refused to. Three call sites answering one
+      --  question three different ways is how a target resolves in one place
+      --  and is refused in another -- see the flag's header in
+      --  petports_contract.lua for what that cost when it happened for real.
+      --
+      --  Unreachable today, because petports_allowSleep is false. That is
+      --  exactly why it is worth fixing now rather than when it wakes up.
       local candidate = findGroundPosition(
-        {position[1] + direction * offset, position[2]}, -4, 4)
+        {position[1] + direction * offset, position[2]}, -4, 4,
+        petports_avoidLiquid())
 
       if candidate then
         candidate = tileCentre(candidate)

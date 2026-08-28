@@ -1,0 +1,93 @@
+//  AQUATIC UNIT ITEM
+//
+//  A COPY of petports_unit_flyer.item, itself a copy of the test unit's. Read
+//  those for the crosshair colour block and how petData merges.
+//
+//  ONLY monsterType DIFFERS IN ANY LOAD-BEARING WAY. It must match the
+//  monstertype's "type" exactly; a mismatch makes spawnPet return nil and the
+//  petport looks perfectly fine while doing nothing.
+//
+//  The description says "will not leave the water" because that is a REFUSAL,
+//  not a preference -- an aquatic chassis declines every target it cannot reach
+//  while submerged, and a player who does not know that will read a working
+//  unit as a broken one.
+//
+//  Icon is the drone's rotated to hue 130. Placeholder.
+
+{
+  "itemName" : "petports_unit_aquatic",
+  "price" : 0,
+  "rarity" : "Rare",
+  "category" : "petports_pet",
+  "inventoryIcon" : "petports_unit_aquatic.png",
+  "description" : "A dormant M.A.U.S. utility unit sealed for submersion. It works only on what is underwater with it, and will not tend a dry field. Socket it into a Petport to bring it online.",
+  "shortdescription" : "Utility Unit (Aquatic)",
+  "itemTags" : [ "petports", "petports_unit", "petports_no_upcycling" ],
+
+  //  CROSSHAIR COLOURS, PER UNIT.
+  //
+  //  The port reads these off the unit's ITEM PARAMETERS -- petData.crosshairColors
+  //  -- and falls back to its own defaults when absent, so this block is both
+  //  the documentation of the shape and the thing a future modification
+  //  interface would rewrite.
+  //
+  //  PER UNIT RATHER THAN GLOBAL, deliberately. Red-versus-green carries real
+  //  meaning here, and a player who cannot distinguish them should be able to
+  //  change it without editing the mod. Per unit also means a fleet can be
+  //  colour-coded by owner if someone wants that.
+  //
+  //  RRGGBBAA, applied as "?multiply=" against a white sprite with a black
+  //  outline: white takes the colour, the outline stays black.
+  //
+  //    routing     dispatched, unit heading for it
+  //    enroute     route found and being walked. The unit reports movement
+  //                once it has genuinely covered ground, so this is the colour
+  //                that says a vanished vent-routing unit is making progress
+  //                rather than having lost interest.
+  //    unroutable  cannot get there from here
+  //    blocked     can get there, cannot do the job -- no room, nothing accepts
+  //    unclaimed   in coverage, nobody has claimed it yet. On screen far more
+  //                than the others, so it is deliberately the dullest: a marker
+  //                that competes with the ones that mean something makes all of
+  //                them easier to ignore.
+  "crosshairColors" : {
+    "routing" : "ffff20ff",
+    "enroute" : "20ff20ff",
+    "unroutable" : "ff2020ff",
+    "blocked" : "ff8020ff",
+    "unclaimed" : "606060ff"
+  },
+
+  //  Not stackable: each unit carries its own saved state in parameters below.
+  "maxStack" : 1,
+
+  //  PET DEFINITION
+  //
+  //  Everything the petport needs in order to spawn this specific unit. A found
+  //  item ships with just `monsterType` and whatever flavour fields the loot
+  //  entry sets; the rest is written back by the petport as the unit lives.
+  //
+  //  The item IS the unit. There is no capture pod, no pod uuid, no collar --
+  //  which also means the ship-pet/wild-monster boundary is enforced by the
+  //  item schema rather than by a runtime type check: a wild monster has no
+  //  petports_unit item, so it can never be socketed.
+  //
+  //  petports_petport.lua reads this through root.itemConfig(item).config.petData
+  //  and merges item.parameters.petData over the top, so anything here is a
+  //  DEFAULT that a lived-in item overrides.
+  "petData" : {
+    //  MUST match the monstertype's "type" exactly. A mismatch makes spawnPet
+    //  return nil and the petport looks fine while doing nothing.
+    "monsterType" : "petports_aquatic",
+
+    //  Display fields, shown in the petport UI
+    "petName" : "Diver",
+
+    //  Written back by the petport. Left empty on a freshly found item.
+    //  status  -- health and other resources, so a unit resumes where it left off
+    //  storage -- the monster's own storage table: knownPlayers, foodLikings,
+    //             petResources, and anything else its scripts persist
+    "status" : {},
+    "storage" : {}
+  }
+}

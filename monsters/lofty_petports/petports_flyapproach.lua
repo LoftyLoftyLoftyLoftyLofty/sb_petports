@@ -1,12 +1,24 @@
---  M.A.U.S. UTILITY UNIT -- FLYER APPROACH
+--  M.A.U.S. UTILITY UNIT -- FREE-MOVEMENT APPROACH
 --
---  Shadows groundPet.lua's global approachPoint for FLYING units only.
+--  Shadows groundPet.lua's approachPoint and setJumpState for any chassis that
+--  moves without gravity -- flyers, swimmers, and amphibious units, which are
+--  the same movement layer with different MEDIUM permissions rather than
+--  different locomotion code.
 --
---  LISTED IN THE FLYER MONSTERTYPE'S scripts ARRAY AND NOWHERE ELSE. The ground
---  drone never loads this file, so the working ground unit cannot be affected
---  by anything in it even if the gravity check below were wrong.
+--  SHARED, AND THE GATE IS NOW LOAD-BEARING.
 --
---  CAPTURE AND DELEGATE, NOT A FORK
+--  This was flyer-only, listed in one monstertype, and its safety came from the
+--  ground drone never loading it. That stops being true the moment an
+--  amphibious GROUND chassis needs the avoidLiquid correction below, so the
+--  runtime gravity check is now the thing keeping ground units on vanilla's
+--  path rather than a belt-and-braces second line. Treat it accordingly: any
+--  new branch here must state which chassis it applies to.
+--
+--  CAPTURE AND DELEGATE WHERE POSSIBLE; A PARALLEL COPY WHERE IT IS NOT
+--
+--  setJumpState is a delegate. approachPoint WAS one and is now a parallel
+--  implementation, because the defect it had to fix sits inside vanilla's body
+--  rather than around it. See the ground branch for the measurement.
 --
 --  Every script in a monstertype's scripts list executes into ONE shared Lua
 --  environment, in list order. groundPet.lua is first, so approachPoint is a
@@ -63,10 +75,14 @@
 --  the split the handoff records under "the router and the walker must aim at
 --  the same point".
 
-local vanillaApproachPoint = approachPoint
+--  approachPoint IS NO LONGER CAPTURED, and that is a deliberate downgrade from
+--  capture-and-delegate to a parallel implementation. The reason is in the
+--  ground branch below: the line needing correction is inside vanilla's body,
+--  so there is nothing useful to delegate to. setJumpState is still a genuine
+--  delegate, and stays one.
 local vanillaSetJumpState = setJumpState
 
-local BUILD_STAMP = "2026-08-27n string-pulled fly mover"
+local BUILD_STAMP = "2026-08-27u plan medium validation"
 local stampLogged = false
 
 --  DELETE ME ONCE THE ANSWER IS IN THE LOG.
@@ -317,7 +333,49 @@ end
 --  MOVEMENT -- STRING-PULL THE FLY PLAN
 --------------------------------------------------------------------------------
 
---  REPLACEMENT FOR PathMover:moveFly. Assigned to the pather INSTANCE, so it
+--  REPLACEMENT FOR BOTH PathMover:moveFly AND PathMover:moveSwim.
+--
+--  THE ENGINE EMITS "Swim" EDGES, NOT "Fly", FOR A SUBMERGED ACTOR. Measured
+--  2026-08-27: an aquatic unit's plan came back "Swim edge 3 of 20" throughout,
+--  so edgeMove dispatched to moveSwim and this mover -- assigned only to
+--  moveFly -- was never called once. The telemetry said so plainly, since `aim`
+--  and `skip` are written nowhere else and both logged null on every line.
+--
+--  WHAT VANILLA'S moveSwim DOES, AND WHY IT IS NOT ENOUGH:
+--
+--      function PathMover:moveSwim()
+--        self.deltaX = self.delta[1]
+--        mcontroller.controlApproachVelocity(
+--          vec2.mul(vec2.norm(self.delta), mcontroller.baseParameters().walkSpeed),
+--          mcontroller.baseParameters().liquidJumpProfile.jumpControlForce)
+--        if passedTarget(self.edge) then self:advancePath() end
+--        return "running"
+--      end
+--
+--  Three defects in four lines. No look-ahead, so the one-sample-per-edge
+--  problem this mover exists to solve is back in full. NO `while` LOOP -- it
+--  advances at most ONE edge per tick where moveFly drains the whole passed
+--  run, so an overshoot of more than one edge leaves the cursor BEHIND the unit
+--  and the next command points back at a waypoint already passed. That is the
+--  visible back-and-forth. And it steers on walkSpeed through
+--  liquidJumpProfile.jumpControlForce, neither of which any chassis here tunes:
+--  measured speed was a rigid 4.8, which is walkSpeed 8 x the 0.6 friction
+--  sampling factor, not flySpeed at all.
+--
+--  controlFly IS THE SWIM PRIMITIVE FOR A FREE MOVER. Vanilla's own fish issue
+--  exactly that call while submerged, and it honours flySpeed with liquidForce
+--  and liquidFriction governing instead of the air pair.
+--
+--  IT IS NOT THE PRIMITIVE FOR A GRAVITY-ENABLED CHASSIS, which is a correction
+--  to the first version of this note and cost a test cycle. controlFly does
+--  nothing at all for a walker, so a ground unit swimming needs vanilla's
+--  controlApproachVelocity. See the actuation branch at the end of the mover.
+--
+--  So there is still ONE mover bound to both slots -- the steering, the
+--  look-ahead and the clearance test are shared by every chassis -- and only
+--  the final control call differs.
+--
+--  Assigned to the pather INSTANCE, so it
 --  shadows PathMover.moveFly through the metatable for this pather only --
 --  vanilla's stays reachable, no other entity is affected, nothing is patched
 --  globally. Same technique as petportsJumpMover and the other four.
@@ -389,7 +447,15 @@ local FLY_SWEEP_STEP = 0.8
 --  would refuse every shortcut passing under one.
 local FLY_SWEEP_SET = { "Null", "Block", "Dynamic" }
 
---  Can this body travel the straight line from `from` to `to` without clipping?
+--  Can this body travel the straight line from `from` to `to`?
+--
+--  TWO CONDITIONS ON EVERY SAMPLE, geometry and MEDIUM. One-tile plan edges are
+--  safe to test at their endpoints, but this line runs up to eight tiles and a
+--  shortcut that leaves the water halfway is exactly as illegal as one that
+--  clips a corner -- and far easier to miss, because both ends are wet.
+--
+--  The medium test rides on the samples the body sweep already walks, so it
+--  costs nothing beyond the liquid lookups themselves.
 --
 --  Sweeps the BOUNDING BOX along the line rather than testing a line of points.
 --  A point test would happily approve a route that takes the unit's shoulders
@@ -418,15 +484,99 @@ local function flyPathClear(from, to)
     }
 
     if world.rectTileCollision(region, FLY_SWEEP_SET) then return false end
+
+    --  MEDIUM, SAMPLED ALONG THE SHORTCUT. petports_mediumAllows is the same
+    --  predicate the destination resolver uses, so a chassis cannot be offered
+    --  a route through something it is not allowed to be offered a position in.
+    if not petports_mediumAllows({ x, y }, bounds) then return false end
   end
 
   return true
 end
 
-function petportsFlyMover(pather)
+--  Both action names this mover owns. A plan may legitimately mix them for an
+--  amphibious chassis crossing a surface, and string-pulling across that
+--  boundary is safe because flyPathClear tests the MEDIUM on every sample.
+local function isFreeEdge(edge)
+  return edge ~= nil and (edge.action == "Fly" or edge.action == "Swim")
+end
+
+--------------------------------------------------------------------------------
+--  PLAN MEDIUM VALIDATION
+--------------------------------------------------------------------------------
+--
+--  A* HAS NO CONCEPT OF MEDIUM, so it will happily route a chassis through
+--  something that chassis is not allowed to occupy. Destinations are gated by
+--  petports_flyPointNear and shortcut samples by flyPathClear, and NEITHER
+--  COVERS THE PLAN ITSELF: refusing a shortcut only falls back to aiming at the
+--  next waypoint, which is still on the illegal route.
+--
+--  MEASURED, and it was not merely untidy. A flyer -- canSwim false -- was
+--  routed through water on the way to an air target, ended up submerged at
+--  [2503.97,1146.8], and then A* returned ZERO edges to every target it was
+--  given for twenty-one seconds: its own leash, a crate, a machine. Velocity
+--  [0,0], standable true, completely frozen. Whether that is a submerged-to-air
+--  transition the search cannot express for a gravity-disabled actor, or rising
+--  rainwater having sealed the route, is UNRESOLVED -- and prevention does not
+--  depend on knowing which, because a flyer that never gets wet never asks.
+--
+--  ENDPOINTS ARE ENOUGH. Plan edges are a tile apart, so a route cannot cross a
+--  medium boundary between two consecutive waypoints without one of them
+--  landing in it. The long straight line that CAN skip a boundary is the
+--  string-pull shortcut, and flyPathClear already samples that at 0.8 intervals.
+--
+--  ONCE PER PLAN, NOT PER TICK. The verdict cannot change while the plan does
+--  not, and re-walking forty edges every tick would be the largest thing this
+--  mover does.
+
+--  ASYMMETRIC, AND THIS IS THE PART THAT MATTERS.
+--
+--  The rule is "do not ENTER a medium you are not allowed in", NOT "never be in
+--  one". A unit that is ALREADY somewhere illegal -- however it got there --
+--  must be allowed to plan its way out, and every route out of water begins
+--  with edges in water. Rejecting those would turn a recoverable mistake into a
+--  permanent one, which is precisely the state this check exists to prevent.
+--
+--  So: if the unit is currently in a disallowed medium, every plan is accepted.
+local function planMediumValid(finder)
+  if finder == nil or finder.edges == nil then return true end
+
+  local bounds = mcontroller.boundBox()
+
+  --  Already in violation: escaping outranks the constraint. See above.
+  if not petports_mediumAllows(mcontroller.position(), bounds) then
+    return true, nil, nil, "already out of medium, any route out is allowed"
+  end
+
+  for index, edge in ipairs(finder.edges) do
+    local target = edge.target and edge.target.position
+
+    if target ~= nil then
+      local ok, why = petports_mediumAllows(target, bounds)
+      if not ok then return false, index, target, why end
+    end
+  end
+
+  return true
+end
+
+--  Cheap identity for "is this the same plan as last tick". Edge count plus the
+--  final waypoint: a replan to the same target with the same shape is the same
+--  plan for this purpose, and a genuinely new one differs in one or the other.
+local function planSignature(finder)
+  if finder == nil or finder.edges == nil or #finder.edges == 0 then return nil end
+
+  local last = finder.edges[#finder.edges]
+  local target = last and last.target and last.target.position
+
+  return tostring(#finder.edges) .. "@"
+    .. (target and (tostring(target[1]) .. "," .. tostring(target[2])) or "?")
+end
+
+function petportsFreeMover(pather)
   --  Vanilla's consume loop, unmodified. Runs first so the cursor is current
   --  before anything looks ahead of it.
-  while pather.edge and pather.edge.action == "Fly" do
+  while isFreeEdge(pather.edge) do
     if passedTarget(pather.edge) then
       pather:advancePath()
     else
@@ -434,13 +584,41 @@ function petportsFlyMover(pather)
     end
   end
 
-  if pather.edge == nil or pather.edge.action ~= "Fly" then
+  if not isFreeEdge(pather.edge) then
     pather.petportsFlySkip = nil
     return "running"
   end
 
   local here = mcontroller.position()
   local finder = pather.finder
+
+  --  VALIDATE THE PLAN'S MEDIUM, ONCE PER PLAN.
+  local signature = planSignature(finder)
+
+  if pather.petportsPlanSig ~= signature then
+    pather.petportsPlanSig = signature
+
+    local ok, index, at, why = planMediumValid(finder)
+    pather.petportsPlanRejected = not ok
+
+    if not ok then
+      sb.logInfo("UNIT PLAN REFUSED at %s: edge %s of %s ends at %s, which is %s -- "
+        .. "issuing no control, so this task will fail on the progress watchdog "
+        .. "rather than fly the unit somewhere it cannot get out of",
+        sb.printJson(here), sb.printJson(index),
+        sb.printJson(finder.edges and #finder.edges), sb.printJson(at), tostring(why))
+    end
+  end
+
+  --  SCRAP MOTION, DO NOT RESET THE FINDER. Resetting would restart a cold A*
+  --  every tick and hand back the same illegal plan; leaving it alone and
+  --  issuing nothing lets the progress watchdog fail the task in ten seconds and
+  --  the port back it off, which is the correct outcome for a target that is
+  --  unreachable within this chassis's medium.
+  if pather.petportsPlanRejected then
+    pather.petportsFlySkip = nil
+    return "running"
+  end
 
   --  FURTHEST FIRST, AND THAT ORDER IS THE OPTIMISATION.
   --
@@ -454,9 +632,9 @@ function petportsFlyMover(pather)
   for i = FLY_LOOKAHEAD, 1, -1 do
     local ahead = finder ~= nil and finder.lookAhead and finder:lookAhead(i) or nil
 
-    --  Fly edges only. A plan that changes action mid-run is not one to smooth
-    --  across -- the mover for that action owns its own approach.
-    if ahead ~= nil and ahead.action == "Fly"
+    --  Fly and Swim only. A plan that changes to a GROUND action mid-run is not
+    --  one to smooth across -- the mover for that action owns its own approach.
+    if isFreeEdge(ahead)
        and ahead.target ~= nil and ahead.target.position ~= nil then
 
       local candidate = ahead.target.position
@@ -475,8 +653,40 @@ function petportsFlyMover(pather)
   pather.petportsFlyAim = aim
 
   local delta = world.distance(aim, here)
-  mcontroller.controlFly(delta)
   pather.deltaX = delta[1]
+
+  --  ACTUATION IS BY CHASSIS. STEERING IS NOT.
+  --
+  --  Everything above -- draining the passed run, the look-ahead, the swept
+  --  clearance test -- is right for anything on a Fly or Swim edge. HOW THE
+  --  FORCE IS APPLIED IS NOT, and taking vanilla's whole moveSwim as broken
+  --  threw away the one part of it that was correct.
+  --
+  --  MEASURED: a ground unit standing on the bottom of a lake, planned 22 Swim
+  --  edges, target one tile straight up, y velocity pinned at -1.535 for the
+  --  entire run and edge 1 never advancing. controlFly is the FLYING-actor
+  --  control and does nothing for a gravity-enabled chassis, so no upward force
+  --  was ever applied. Before this mover was bound, vanilla's moveSwim moved the
+  --  same unit -- badly, but it moved it. That before-and-after is what named
+  --  the line.
+  if mcontroller.baseParameters().gravityEnabled then
+    --  Vanilla's actuation, unchanged, including walkSpeed. A swimming ground
+    --  unit's speed is a separate tuning question from its steering, and
+    --  changing both at once is how a fix stops being attributable.
+    local length = math.sqrt(delta[1] * delta[1] + delta[2] * delta[2])
+
+    if length > 0.0001 then
+      local speed = mcontroller.baseParameters().walkSpeed
+      local force = mcontroller.baseParameters().liquidJumpProfile.jumpControlForce
+
+      mcontroller.controlApproachVelocity(
+        { delta[1] / length * speed, delta[2] / length * speed }, force)
+    end
+  else
+    --  Free movers: controlFly honours flySpeed and is the primitive vanilla's
+    --  own fish use while submerged.
+    mcontroller.controlFly(delta)
+  end
 
   return "running"
 end
@@ -510,11 +720,80 @@ function setJumpState()
 end
 
 function approachPoint(dt, targetPosition, stopDistance, running)
-  --  GROUND UNITS TAKE VANILLA'S PATH, UNMODIFIED. Guarded even though this
-  --  file is only listed in the flyer's monstertype, because the day someone
-  --  adds it to the drone's list is the day that costs a session otherwise.
+  --  GROUND UNITS TAKE A PARALLEL COPY, NOT VANILLA'S.
+  --
+  --  This delegated to vanillaApproachPoint until 2026-08-27. It cannot any
+  --  more, because the one line that needs correcting lives inside it:
+  --
+  --      findGroundPosition(targetPosition, -20, 1, util.toDirection(-toTarget[1]))
+  --
+  --  The fourth parameter is avoidLiquid and it is being handed a DIRECTION.
+  --  Both 1 and -1 are truthy, so vanilla always avoids liquid here by accident
+  --  and offers no way to ask otherwise. That made our standableNear and
+  --  vanilla's internal resolver disagree about the same point, which is how a
+  --  ground unit came to stand still for 10.7 seconds with approachPosition nil.
+  --
+  --  EVERYTHING ELSE BELOW IS VANILLA'S, LINE FOR LINE, DELIBERATELY. Only the
+  --  avoidLiquid argument, the moveSwim binding and the closing log line differ,
+  --  so when Starbound changes groundPet.lua the diff to re-check is exactly
+  --  this one function and the three deviations are marked.
   if mcontroller.baseParameters().gravityEnabled then
-    return vanillaApproachPoint(dt, targetPosition, stopDistance, running)
+    local toTarget = world.distance(targetPosition, mcontroller.position())
+    local targetDistance = world.magnitude(targetPosition, mcontroller.position())
+
+    --  THE CORRECTION, AND THE ONLY ONE. A real boolean from the chassis flag.
+    local groundPosition = findGroundPosition(targetPosition, -20, 1,
+      petports_avoidLiquid())
+
+    if groundPosition then
+      self.approachPosition = groundPosition
+    end
+
+    self.pather = self.pather or PathMover:new({run = running})
+    self.pather.options.run = running
+
+    --  A GROUND UNIT CAN STILL BE HANDED Swim EDGES. The pathfinder picks edge
+    --  type by medium, so a walker in water gets them, and vanilla's moveSwim
+    --  advances at most one edge per tick. freshPather binds this too; the
+    --  binding is repeated here for any caller that reaches approachPoint
+    --  without one, exactly as the pather construction above is.
+    if self.pather.moveSwim ~= petportsFreeMover then
+      self.pather.moveSwim = petportsFreeMover
+    end
+
+    if self.approachPosition
+       and (targetDistance > stopDistance or not mcontroller.onGround()) then
+
+      if self.pather:move(self.approachPosition, dt) == "running" then
+        mcontroller.controlFace(self.pather.deltaX or toTarget[1])
+        setMovementState(running)
+      else
+        setIdleState()
+      end
+
+      return false
+
+    elseif targetDistance <= stopDistance then
+      return true
+    end
+
+    --  VANILLA FALLS OFF THE END HERE AND RETURNS nil, WHICH IS NOT NOTHING.
+    --
+    --  It happens when no ground position has ever been assigned and the target
+    --  is still far away -- so the unit does not move, does not arrive, and
+    --  says nothing. That silence is what made the submerged-upcycler failure
+    --  take ten seconds to show up as anything at all. The behaviour is
+    --  unchanged, because callers already treat nil as "not arrived"; only the
+    --  silence is fixed.
+    if self.petportsNoGroundAt ~= sb.printJson(targetPosition) then
+      self.petportsNoGroundAt = sb.printJson(targetPosition)
+      sb.logInfo("UNIT no ground position for %s (avoidLiquid %s) -- approachPosition is %s, "
+        .. "so this unit will not move toward it",
+        sb.printJson(targetPosition), tostring(petports_avoidLiquid()),
+        self.approachPosition and sb.printJson(self.approachPosition) or "nil")
+    end
+
+    return nil
   end
 
   --  First flyer call only. Same reason the task action's stamp is not at file
@@ -583,8 +862,13 @@ function approachPoint(dt, targetPosition, stopDistance, running)
   --  not learn about this mover. Re-asserting here is what keeps the two apart
   --  without a nil-guarded call in shared code, which is the silent-failure
   --  shape petports_think.lua warns about.
-  if self.pather.moveFly ~= petportsFlyMover then
-    self.pather.moveFly = petportsFlyMover
+  --  BOTH SLOTS. Which one the engine dispatches to depends on whether the unit
+  --  is submerged at that instant, and an amphibious chassis crosses that line
+  --  mid-route. Binding only the one that "should" apply is how the first
+  --  aquatic test ended up silently running vanilla's moveSwim.
+  if self.pather.moveFly ~= petportsFreeMover then
+    self.pather.moveFly = petportsFreeMover
+    self.pather.moveSwim = petportsFreeMover
   end
 
   local result = self.pather:move(targetPosition, dt)
