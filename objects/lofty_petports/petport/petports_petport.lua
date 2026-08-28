@@ -749,6 +749,13 @@ local function noteFailure(taskId, reason)
 
   if taskId == "return:" .. stationUniqueId() then
     self.recallFailures = (self.recallFailures or 0) + 1
+
+    --  WHEN, NOT JUST HOW MANY. See paneDiagnostics: the COUNT is escalation
+    --  state and is right to persist, but a player reading a persistent count
+    --  on an idle unit concludes it is broken. The timestamp is what lets the
+    --  readout say "currently struggling" without touching the escalation.
+    self.recallAt = world.time()
+
     sb.logInfo("PETPORT %s recall failed (%s of %s): %s",
       stationUniqueId(), self.recallFailures, RECALL_LIMIT, reason)
     return
@@ -796,6 +803,7 @@ local function noteFailure(taskId, reason)
 
   if strandedReason then
     self.unreachableFailures = (self.unreachableFailures or 0) + 1
+    self.unreachableAt = world.time()
     sb.logInfo("PETPORT %s unreachable failure %s of %s: %s",
       stationUniqueId(), self.unreachableFailures, STRANDED_LIMIT, reason)
   end
@@ -911,6 +919,121 @@ function init()
       self.dirty = true
       trace("petStatus message -> storage", self.petData.storage)
     end
+  end))
+
+  --  ---- THE PANE'S WRITE PATH ----------------------------------------------
+  --
+  --  The pane READS through a mirrored parameter and WRITES through these. It
+  --  never guesses at an outcome: every one of these rewrites the mirror, and
+  --  the pane repaints from the mirror on its next poll. So a refused action
+  --  simply leaves the pane showing what is actually true.
+
+  --  TAKE CARGO. The port debits petData and RETURNS the descriptor; the pane
+  --  gives it to the player.
+  --
+  --  ONE AUTHORITY, WHICH IS THE WHOLE REASON THIS IS A BUTTON AND NOT A BOUND
+  --  ITEMGRID. Cargo lives on petData, which is what makes it survive unsocket,
+  --  respawn and world reload. A grid bound to container slots would be a
+  --  second store, and the two diverge exactly when a unit is out in the field:
+  --  player empties the slot, unit still believes it is carrying.
+  --
+  --  KNOWN GAP -- the debit happens here and the give happens in the pane, so a
+  --  player whose inventory cannot take the stack loses it. player.giveItem
+  --  drops rather than destroys, but a drop in front of a petport is an item
+  --  this network will promptly collect again. Wants an ack before the debit.
+  message.setHandler("petports_takeCargo", simpleHandler(function()
+    if self.petData == nil or self.petData.cargo == nil then return nil end
+    if #self.petData.cargo == 0 then return nil end
+
+    local stack = table.remove(self.petData.cargo, 1)
+    self.dirty = true
+    self.paneSignature = nil
+
+    sb.logInfo("PETPORT %s pane took cargo: %s", stationUniqueId(), sb.printJson(stack))
+    return stack
+  end))
+
+  --  SET A MODULE. The pane sends the cursor descriptor and does NOT take the
+  --  cursor itself, so this is what decides.
+  --
+  --  mechassemblygui's gate, which is `not item or <valid for this slot>`: an
+  --  empty cursor always succeeds so a module can always be removed, and a full
+  --  one has to pass. What vanilla never needed is the count check, because
+  --  mech parts cannot stack -- see the pane, which refuses a stack before it
+  --  ever gets here.
+  --
+  --  NOT BUILT: there is no module item and therefore no validity test yet, so
+  --  this refuses everything except removal and says so. Refusing loudly is the
+  --  right failure while the vocabulary does not exist -- accepting anything
+  --  would let a player socket a banana and then wonder why nothing changed.
+  message.setHandler("petports_setModule", simpleHandler(function(payload)
+    if self.petData == nil or type(payload) ~= "table" then return false end
+
+    local index = tonumber(payload.index)
+    if index == nil then return false end
+
+    if payload.item ~= nil then
+      sb.logInfo("PETPORT %s refusing module in slot %s: modules are not built yet (%s)",
+        stationUniqueId(), tostring(index), sb.printJson(payload.item))
+      return false
+    end
+
+    self.petData.modules = self.petData.modules or {}
+    self.petData.modules[index] = nil
+    self.dirty = true
+    self.paneSignature = nil
+    return true
+  end))
+
+  --  FEED. One treat, consumed on drop if the unit has room for it.
+  --
+  --  NOT BUILT: nothing eats a treat yet -- that is the last gap between the
+  --  flavor work and it mattering. Logged rather than silently dropped, so the
+  --  wiring can be verified before there is anything on the far end of it.
+  message.setHandler("petports_feedUnit", simpleHandler(function(payload)
+    if type(payload) ~= "table" or payload.item == nil then return false end
+    sb.logInfo("PETPORT %s feed requested with %s -- nothing consumes fuel yet",
+      stationUniqueId(), sb.printJson(payload.item))
+    return false
+  end))
+
+  --  PER-UNIT DISPLAY TOGGLES. These live on petData rather than on the port,
+  --  because they describe the UNIT and have to travel with it when the item
+  --  moves to another port.
+  message.setHandler("petports_setToggles", simpleHandler(function(payload)
+    if self.petData == nil or type(payload) ~= "table" then return false end
+
+    self.petData.toggles = {
+      carried = payload.carried == true,
+      crosshairs = payload.crosshairs == true,
+      bubbles = payload.bubbles == true,
+      sleep = payload.sleep ~= false
+    }
+    self.dirty = true
+    self.paneSignature = nil
+
+    sb.logInfo("PETPORT %s toggles: %s", stationUniqueId(), sb.printJson(self.petData.toggles))
+    return true
+  end))
+
+  --  PORT-LEVEL CONTROLS. These belong to the PORT, not the unit -- a network
+  --  id means something whether or not anything is socketed, which is also why
+  --  they sit above the divider in the pane and outside the empty-port overlay.
+  --
+  --  NOT BUILT. Networks derive correctly and no player can author one; this is
+  --  the largest gap between what the design says and what is reachable in
+  --  game. The handlers exist so the pane's wiring can be tested against
+  --  something real before the feature lands.
+  message.setHandler("petports_setPortEnabled", simpleHandler(function(payload)
+    sb.logInfo("PETPORT %s port enable requested: %s -- not built",
+      stationUniqueId(), sb.printJson(payload))
+    return false
+  end))
+
+  message.setHandler("petports_setParticipation", simpleHandler(function(payload)
+    sb.logInfo("PETPORT %s participation requested: %s -- not built",
+      stationUniqueId(), sb.printJson(payload))
+    return false
   end))
 
   self.workTimer = 0
@@ -1984,6 +2107,279 @@ function stationUniqueId()
     world.setUniqueId(entity.id(), uniqueId)
   end
   return uniqueId
+end
+
+--------------------------------------------------------------------------------
+--  THE PANE MIRROR
+--------------------------------------------------------------------------------
+--
+--  ONE PARAMETER, READ DIRECTLY BY THE PANE. world.getObjectParameter is
+--  reachable from a container pane script -- proven on the upcycler -- so the
+--  pane needs no message to read and no round trip to open. Same transport the
+--  upcycler uses for points and blips, so there is one of these in the mod
+--  rather than two.
+--
+--  CHANGE-GATED, AND THE GATE IS THE WHOLE DESIGN.
+--
+--  A port cannot know whether anyone has the pane open -- there is deliberately
+--  no way to ask -- so this runs on every port in the world forever. An
+--  ungated mirror would be a setConfigParameter several times a second per
+--  port to track numbers that mostly do not move.
+--
+--  So FUEL IS QUANTISED TO A BLIP INDEX BEFORE IT IS WRITTEN, not after. A unit
+--  draining its whole bar costs eight writes rather than one per tick, and the
+--  pane cannot tell the difference because eight blips is all it draws. Every
+--  other field here changes on a task boundary or slower.
+--
+--  NOTHING IS COMPUTED FOR THE PANE'S BENEFIT. Every field is state the port
+--  already holds for its own reasons; this only reshapes it. If a readout ever
+--  needs a number that has to be derived, it belongs in the port's own logic
+--  with a name, not in here.
+
+local PANE_STATE_KEY = "petports_paneState"
+local PANE_MIRROR_INTERVAL = 0.5
+
+--  THE PANE'S BLIP COUNT AND THIS PORT'S WRITE RESOLUTION ARE THE SAME NUMBER,
+--  and that is the coupling worth knowing about. Hunger is quantised to this
+--  many steps BEFORE the mirror is written, which is what keeps a draining unit
+--  down to twenty writes across its whole bar rather than one per tick -- on
+--  every port in the world, since a port cannot know whether anyone is looking.
+--
+--  Lowering it here makes the pane's top blips unreachable. Raising it costs
+--  writes. petportconfig.lua's BLIP_COUNT carries the matching note.
+local PANE_FUEL_BLIPS = 20
+
+--  The pane draws four at most, so there is no point mirroring more. Ordered
+--  worst-first: a red condition should never be pushed off the row by an
+--  informational one.
+local PANE_DIAG_LIMIT = 4
+
+local function paneFuelBlips()
+  local resources = self.petData and self.petData.storage and self.petData.storage.petResources
+  if type(resources) ~= "table" then return PANE_FUEL_BLIPS end
+
+  local hunger = tonumber(resources.hunger)
+  if hunger == nil then return PANE_FUEL_BLIPS end
+
+  --  QUANTISED HERE AND NOWHERE ELSE. See the gate note above -- this is what
+  --  keeps the mirror cheap, so a caller wanting the raw number must read the
+  --  resource rather than scaling this back up.
+  local blips = math.floor((hunger / 100.0) * PANE_FUEL_BLIPS + 0.5)
+  return math.max(0, math.min(PANE_FUEL_BLIPS, blips))
+end
+
+--  ONE STACK, CLAMPED. Cargo capacity is one stack by design, and an oversized
+--  descriptor crossing the wire surfaces as a bad_alloc naming neither the pane
+--  nor the item -- so the clamp happens on this side, before it is written.
+local function paneCargo()
+  if self.petData == nil or self.petData.cargo == nil then return nil end
+
+  local out = {}
+  for _, stack in ipairs(self.petData.cargo) do
+    if stack.name then
+      local cap = stackSizeOf(stack.name) or 1000
+      table.insert(out, {
+        name = stack.name,
+        count = math.min(tonumber(stack.count) or 1, cap),
+        parameters = stack.parameters
+      })
+    end
+  end
+
+  if #out == 0 then return nil end
+  return out
+end
+
+--  WORST FIRST, AND CAPPED TWO WAYS. These are conditions the port already
+--  tracks; nothing new is measured to produce them.
+--
+--  SHORT ENOUGH TO FIT THE COLUMN, WHICH IS A HARD RULE RATHER THAN A STYLE.
+--  The pet column is about 108px and the label does not wrap -- deliberately,
+--  since a wrapped label grows UPWARD into the icon row above it. So anything
+--  longer than DIAG_MAX_CHARS runs off the pane, and the truncation below is
+--  the backstop for a message someone adds later without measuring it.
+--
+--  `lastReject` IS DELIBERATELY NOT HERE, and was, and it was wrong twice over.
+--
+--  It is the LOGGER'S repeat-suppression state, not a condition: it changes
+--  every time the rejection reason changes, so a port alternating between two
+--  reasons flips it every scan. That put a per-scan write back into a mirror
+--  whose entire design is a change gate -- on every port in the world, whether
+--  or not anyone has the pane open.
+--
+--  And its contents are developer prose with tile rects in them. "no drops in
+--  network coverage (own rect [2518, 1129, 2582, 1193])" is a log line. It
+--  belongs in the log, where it already is.
+local DIAG_MAX_CHARS = 26
+
+--  TWO STRINGS PER DIAGNOSTIC, AND THAT IS WHAT THE ICON ROW IS FOR.
+--
+--  `short` is what fits under the icons -- capped, single line, no wrap. `full`
+--  is what the icon's tooltip says, and it is allowed to be a sentence, because
+--  a tooltip has its own box and does not push the layout around.
+--
+--  This is what makes the icons a readout rather than decoration. Only the
+--  worst condition's short form can be on screen at once, so without the
+--  tooltip a second icon is a shape with no way to find out what it means.
+local function paneDiag(severity, short, full)
+  local capped = short
+  if #capped > DIAG_MAX_CHARS then
+    capped = string.sub(capped, 1, DIAG_MAX_CHARS - 1) .. "..."
+  end
+  return { severity = severity, short = capped, full = full or short }
+end
+
+--  A DIAGNOSTIC IS A LIVE CONDITION, NOT A TALLY, AND THAT DISTINCTION IS THE
+--  WHOLE REASON THIS EXISTS.
+--
+--  `unreachableFailures` clears only when a task reports done -- returnWork
+--  clears recallFailures and deliberately not this one, because a unit that
+--  walked home is no proof it can reach WORK. That is correct for the
+--  STRANDED_LIMIT escalation it was written for.
+--
+--  It is wrong as a persistent readout. A unit that leashed home, idled and is
+--  perfectly healthy sat there reporting "2 unreachable" forever, and a player
+--  reads that as a fault rather than as history.
+--
+--  So the COUNT is untouched and the DISPLAY is gated on recency. The lifetime
+--  tally is a Stats-tab number; the status line carries only what is true now.
+local DIAG_FRESH = 30.0
+
+local function fresh(at)
+  if at == nil then return false end
+  return (world.time() - at) < DIAG_FRESH
+end
+
+local function paneDiagnostics()
+  local out = {}
+
+  if self.envUnsuitable ~= nil then
+    table.insert(out, paneDiag("error", "Wrong environment",
+      "This unit's chassis cannot survive the liquid or air at its port. "
+      .. "It has been retired and will return on its own once the port drains "
+      .. "or floods back."))
+  end
+
+  if (self.unreachableFailures or 0) > 0 and fresh(self.unreachableAt) then
+    table.insert(out, paneDiag("warn",
+      string.format("%d unreachable", self.unreachableFailures),
+      string.format("%d job(s) were abandoned because no route could be found. "
+        .. "Usually terrain: a gap too wide, a shaft too narrow, or a door the "
+        .. "unit cannot open.", self.unreachableFailures)))
+  end
+
+  if (self.recallFailures or 0) > 0 and fresh(self.recallAt) then
+    table.insert(out, paneDiag("warn",
+      string.format("%d recalls failed", self.recallFailures),
+      string.format("%d attempt(s) to walk home failed. The unit will be "
+        .. "re-homed to its port if this keeps happening.", self.recallFailures)))
+  end
+
+  while #out > PANE_DIAG_LIMIT do table.remove(out) end
+  if #out == 0 then return nil end
+  return out
+end
+
+--  THE SPECIES NAME COMES FROM THE ITEM, NOT FROM A STORED COPY. A stored
+--  default would drift the moment the item's shortdescription changed, and the
+--  pane's "show the species only when renamed" test would then compare a name
+--  against a stale one and show the subtitle forever.
+local function paneSpecies()
+  local item = socketedItem()
+  if item == nil or item.name == nil then return nil end
+
+  local ok, resolved = pcall(root.itemConfig, { name = item.name, count = 1 })
+  if not ok or type(resolved) ~= "table" or type(resolved.config) ~= "table" then
+    return nil
+  end
+  return resolved.config.shortdescription
+end
+
+--  AUTHORED ON THE ITEM, NOT DERIVED FROM RARITY. Rarity is the convention --
+--  Common 0, Uncommon 1, Rare 2, Legendary 3 -- and deliberately not the rule,
+--  because the first modded pet to bracket into the normally-unobtainable
+--  Essential tier would break a derivation and there would be no way to author
+--  around it.
+local function paneModuleSlots()
+  local item = socketedItem()
+  if item == nil then return 0 end
+
+  if item.parameters and item.parameters.petports_moduleSlots ~= nil then
+    return tonumber(item.parameters.petports_moduleSlots) or 0
+  end
+
+  local ok, resolved = pcall(root.itemConfig, { name = item.name, count = 1 })
+  if ok and type(resolved) == "table" and type(resolved.config) == "table" then
+    return tonumber(resolved.config.petports_moduleSlots) or 0
+  end
+  return 0
+end
+
+--  Derived from the seed rather than stored as its own field. The seed already
+--  exists, already persists, and already decides which monsterpart the unit
+--  wears -- so a serial taken from it is stamped at build time by construction
+--  and cannot drift from the unit it names.
+local function paneSerial()
+  local seed = self.petData and self.petData.seed
+  if seed == nil then return nil end
+  return string.format("%06d", math.floor(tonumber(seed) or 0) % 1000000)
+end
+
+function mirrorPaneState(dt)
+  self.paneTimer = (self.paneTimer or 0) - (dt or 0)
+  if self.paneTimer > 0 then return end
+  self.paneTimer = PANE_MIRROR_INTERVAL
+
+  local state
+  if self.petData == nil then
+    state = { hasUnit = false }
+  else
+    state = {
+      hasUnit = true,
+      petName = self.petData.petName or paneSpecies() or "Utility Unit",
+      species = paneSpecies(),
+      serial = paneSerial(),
+      fuelBlips = paneFuelBlips(),
+      cargo = paneCargo(),
+      task = self.task and self.task.type or "idle",
+      diagnostics = paneDiagnostics(),
+      moduleSlots = paneModuleSlots(),
+      modules = self.petData.modules,
+
+      --  THE LIVE UNIT'S ENTITY ID, WHICH IS THE WHOLE PORTRAIT MECHANISM.
+      --
+      --  world.entityPortrait(id, mode) returns a list of DRAWABLES for a
+      --  portrait entity -- the same call the bounty board uses -- so the pane
+      --  draws the actual unit rather than a static per-chassis icon that goes
+      --  stale at the art pass.
+      --
+      --  IT IS ONLY VALID WHILE THE UNIT EXISTS. A socketed-but-unspawned unit,
+      --  a dead one inside RESPAWN_GRACE, or a retired one all have no entity,
+      --  so this goes nil and the pane draws nothing. That is honest -- the
+      --  portrait is a live view of a live unit, not a picture of the item.
+      --
+      --  NOT self.petId DIRECTLY: it survives in the field after the entity is
+      --  gone, and handing the pane a dead id would have it call entityPortrait
+      --  on nothing every poll.
+      petId = (self.petId ~= nil and world.entityExists(self.petId)) and self.petId or nil,
+
+      --  NOT BUILT, AND ABSENT RATHER THAN FAKED. A rolled flavor and the stats
+      --  block both belong here and neither exists yet. The pane renders a
+      --  blank for a missing field and a wrong value for a placeholder one, so
+      --  absent is the honest option.
+      flavor = self.petData.flavor,
+      stats = nil,
+      network = nil
+    }
+  end
+
+  --  ONE SIGNATURE FOR THE WHOLE BLOB. Cheaper than comparing fields, and it
+  --  cannot fall out of step with the table above when a field is added.
+  local ok, signature = pcall(sb.printJson, state)
+  if ok and signature == self.paneSignature then return end
+  if ok then self.paneSignature = signature end
+
+  object.setConfigParameter(PANE_STATE_KEY, state)
 end
 
 --------------------------------------------------------------------------------
@@ -8408,6 +8804,12 @@ function update(dt)
     writeBackToItem()
     self.writeTimer = WRITE_INTERVAL
   end
+
+  --  ABOVE workUpdate, DELIBERATELY. workUpdate is the last line of update and
+  --  the petport's no-item return sits inside it -- which is exactly how the
+  --  replant sweep ended up never running for an empty port. A pane opened on
+  --  an empty port still has to be told it is empty.
+  mirrorPaneState(dt)
 
   workUpdate(dt)
 end

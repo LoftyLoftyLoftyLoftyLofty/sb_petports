@@ -54,9 +54,18 @@
   //  One pet, one slot.
   "slotCount" : 1,
 
-  //  Custom panel. Modelled on the pet tether's; replace the path once the
-  //  bespoke interface config exists.
-  "uiConfig" : "/interface/chests/pettether.config",
+  //  THE BESPOKE PANE. Replaced the borrowed /interface/chests/pettether.config
+  //  on 2026-08-28. A ContainerPane WITH A SCRIPT, the same third thing the
+  //  upcycler is -- real container slots plus arbitrary widgets in one window.
+  "uiConfig" : "/interface/lofty_petports/petportconfig/petportconfig.config",
+
+  //  ContainerPane DRAWS ITS OWN HEADER ICON from `inventoryIcon` unless this
+  //  is false. With it left unset the pane would show the port's inventory
+  //  sprite and the title widget's own `icon` child would be invisible
+  //  underneath it -- and since both pointed at the same file on the upcycler,
+  //  the two were indistinguishable for a while. The fuel hatch's pattern:
+  //  turn ContainerPane's off, supply a different image in the title widget.
+  "hasWindowIcon" : false,
 
   //  Container must not auto-close while the player is fiddling with options.
   "autoCloseCooldown" : 3600,
