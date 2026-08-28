@@ -672,13 +672,30 @@ function petports_targetAllowed(position)
 end
 
 function petports_mediumAllows(position, bounds)
+  local medium = petports_mediumAt(position, bounds)
+
+  --  FORBIDDEN FIRST, AND FOR EVERY CHASSIS INCLUDING WALKERS.
+  --
+  --  This test used to sit BELOW the free-mover short-circuit, which meant a
+  --  walking chassis never reached it -- fine while the only walker refused all
+  --  liquid outright, and wrong the moment an amphibious one exists. An
+  --  amphibious walker with the short-circuit first wades into lava for exactly
+  --  the reason the aquatic unit would have without a deny-list.
+  --
+  --  The distinction that matters: "forbidden" is not a medium this chassis
+  --  lacks the equipment for, it is one it is configured to stay out of. No
+  --  combination of canFly, canSwim or avoidLiquid overrides it, so it is asked
+  --  before any of them.
+  if medium == "forbidden" then
+    return false, "a liquid this chassis will not enter"
+  end
+
   --  MEDIUM PERMISSION IS A FREE-MOVER CONCEPT ONLY.
   --
   --  A walking chassis has no medium PERMISSION -- its medium is decided by
   --  physics. It sinks, it wades, it swims when the engine says so, and none of
-  --  that is ours to allow or refuse. Whether it should enter water at all is
-  --  the avoidLiquid question, which lives in the approach shadow and is a
-  --  different question with a different answer.
+  --  that is ours to allow or refuse. Whether it should enter ordinary water at
+  --  all is the avoidLiquid question, which is separate and answered elsewhere.
   --
   --  THIS IS NOT A TIDINESS EDIT. Without it, a ground unit that string-pulls
   --  through water gets every submerged sample of flyPathClear refused, because
@@ -686,18 +703,11 @@ function petports_mediumAllows(position, bounds)
   --  shortcut silently collapses to "aim at the next waypoint", the mover
   --  appears bound and does nothing, and the rubberbanding it was added to fix
   --  carries on exactly as before with no line in the log to say why.
-  if not petports_freeMover() then return true, "walking chassis, medium is physics" end
+  if not petports_freeMover() then
+    return true, "walking chassis, medium is physics"
+  end
 
   local media = petports_media()
-
-  local medium = petports_mediumAt(position, bounds)
-
-  --  FORBIDDEN OUTRANKS BOTH CAPABILITIES. This is not "a medium I lack the
-  --  equipment for", it is one this chassis is configured to stay out of, and
-  --  no combination of canFly and canSwim overrides that.
-  if medium == "forbidden" then
-    return false, "a liquid this chassis will not enter"
-  end
 
   if medium == "swim" then
     if media.swim then return true, "submerged" end
@@ -1093,7 +1103,11 @@ function petports_standingPointNear(position, radius)
       local ground = findGroundPosition({ x, position[2] }, -radius, radius,
         petports_avoidLiquid())
 
-      if ground ~= nil and validStandingPosition(ground, false) then
+      --  Same forbidden-liquid gate as standableNear in petportsTaskAction --
+      --  the two resolvers must agree, and a denied liquid is the one thing
+      --  petports_mediumAllows refuses for a walking chassis.
+      if ground ~= nil and validStandingPosition(ground, false)
+         and petports_mediumAllows({ ground[1], ground[2] }) then
         return { ground[1], ground[2] }
       end
     end

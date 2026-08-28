@@ -745,6 +745,13 @@ function approachPoint(dt, targetPosition, stopDistance, running)
     local groundPosition = findGroundPosition(targetPosition, -20, 1,
       petports_avoidLiquid())
 
+    --  AND THE SAME GATE HERE, because this resolver is independent of the
+    --  other two and a disagreement between them is what left a unit standing
+    --  still with approachPosition nil earlier tonight.
+    if groundPosition and not petports_mediumAllows(groundPosition) then
+      groundPosition = nil
+    end
+
     if groundPosition then
       self.approachPosition = groundPosition
     end

@@ -1,0 +1,47 @@
+//  M.A.U.S. UTILITY UNIT -- AMPHIBIOUS PLACEHOLDER BODY VARIANT
+//
+//  Sibling of the drone, flyer and aquatic monsterparts. Read the drone's for
+//  how category + type binding works; only what DIFFERS is recorded here.
+//
+//  Own category, therefore own monsterpart, therefore own pngs -- the engine
+//  picks at random from every monsterpart matching a category, so a shared one
+//  would have the four chassis wearing each other's bodies.
+//
+//  HUE-SPACE IS EXHAUSTED AT FOUR CHASSIS, AND THIS IS WHERE IT RAN OUT.
+//
+//  The other three were chosen by simulating deuteranopia and protanopia
+//  (Vienot 1999) and comparing tier by tier -- brightest against brightest --
+//  because all four sprites share identical structure, so the comparison a
+//  player actually makes is the same pixel on two units. Worst-case luminance
+//  separation, x100:
+//
+//      drone pink    vs flyer blue      1.9   <- already weak
+//      aquatic green vs drone pink      9.2
+//      aquatic green vs flyer blue     11.8
+//      amphibious purple vs drone pink  0.4   <- this one
+//      amphibious purple vs flyer blue  0.9
+//      amphibious purple vs aquatic    10.7
+//
+//  Purple sits BETWEEN pink and blue in hue, so under red-green colour
+//  blindness it collapses against both. Every value and saturation variant was
+//  searched; the best available was 3.6 and only by darkening it to 0.35 value,
+//  which stops a FULLBRIGHT GLOW LAYER reading as a glow at all. Not worth
+//  trading the thing's whole purpose for two points of separation.
+//
+//  SO THE FINDING IS RECORDED RATHER THAN THE PROBLEM SOLVED: a fifth chassis
+//  cannot be told apart by hue, and neither can this one from the drone under
+//  colour blindness. The answer when real art lands is SHAPE or a marking --
+//  a fin, a rotor, a plate -- not another colour. Green worked because it is
+//  naturally the brightest at equal saturation; there is no second slot like
+//  that left.
+
+{
+  "name" : "amphibious_placeholder",
+  "category" : "petports_amphibious",
+  "type" : "body",
+
+  "frames" : {
+    "body" : "body_0_lit.png",
+    "bodyfullbright" : "body_0_fullbright.png"
+  }
+}

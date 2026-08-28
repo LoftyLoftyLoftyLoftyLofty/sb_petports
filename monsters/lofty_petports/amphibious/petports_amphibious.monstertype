@@ -1,0 +1,268 @@
+//  M.A.U.S. UTILITY UNIT -- AMPHIBIOUS
+//
+//  A COPY of drone/petports_drone.monstertype -- the GROUND chassis, not the
+//  flyer -- because an amphibious unit walks. Read the drone's file for the
+//  modelled-on-petbunny reasoning, the parts binding and the collision poly.
+//
+//  WHAT DIFFERS
+//
+//    type / categories      unique, or the chassis wear each other's bodies
+//    animation              its own file, same content today
+//    petports_avoidLiquid   false -- the entire locomotion difference
+//    petports_avoidLiquids  lava, corelava, poison
+//
+//  Everything else is the drone's, unchanged, on purpose.
+
+{
+  "type" : "petports_amphibious",
+  "shortdescription" : "Utility Unit",
+  "description" : "A M.A.U.S. utility unit sealed against immersion. It walks on land, swims when it has to, and is fussy about what it swims in.",
+
+  //  Binding key for this type's monsterpart pool. Unique per unit type.
+  "categories" : [ "petports_amphibious" ],
+  "parts" : [ "body" ],
+
+  "animation" : "petports_amphibious.animation",
+
+  "dropPools" : [ ],
+
+  //  petbunny omits this and relies on the default. Stated explicitly because a
+  //  utility unit is ship equipment: capture-podding one out of its station
+  //  would strand the item and drag it into the capture-pod economy.
+  "capturable" : false,
+
+  "baseParameters" : {
+    "persistent" : true,
+    "damageTeamType" : "ghostly",
+
+
+    "scripts" : [
+      "/monsters/pets/groundPet.lua",
+      "/scripts/pathing.lua",
+      "/scripts/stateMachine.lua",
+      "/scripts/util.lua",
+      "/scripts/vec2.lua",
+
+      "/monsters/pets/idleState.lua",
+      "/monsters/pets/wanderState.lua",
+
+      //  Vanilla petBehavior.lua is deliberately ABSENT -- replaced by our fork
+      //  below, which defines the same global. See petports_petBehavior.lua.
+      "/monsters/pets/actions/followAction.lua",
+      "/monsters/pets/actions/inspectAction.lua",
+      "/monsters/pets/actions/eatAction.lua",
+      "/monsters/pets/actions/begAction.lua",
+      "/monsters/pets/actions/pounceAction.lua",
+
+      //  OURS. Vanilla's sleepAction.lua is deliberately absent -- both would
+      //  register as action states answering the same args key, and whichever
+      //  the state machine reached first would win.
+      //
+      //  petports_placement.lua must be present or petportsSleepAction calls a
+      //  nil global.
+      "/scripts/lofty_petports/petports_work.lua",
+      "/monsters/lofty_petports/petports_petBehavior.lua",
+      "/monsters/lofty_petports/petports_contract.lua",
+      "/monsters/lofty_petports/petports_placement.lua",
+      "/monsters/lofty_petports/petports_think.lua",
+      "/monsters/lofty_petports/petportsSleepAction.lua",
+      "/monsters/lofty_petports/petportsTaskAction.lua",
+
+      //  LOADED BY A GROUND CHASSIS TOO, AND THAT IS NEW.
+      //
+      //  This file was flyer-only, on the reasoning that a ground unit which
+      //  never loads it cannot be affected by it. Two things changed that.
+      //
+      //  It defines petportsFreeMover, which petportsTaskAction.freshPather
+      //  binds to moveSwim for EVERY chassis -- because the pathfinder picks
+      //  edge type by MEDIUM, not by chassis, and a ground unit dropped in deep
+      //  water gets planned a route of Swim edges. Without this file that
+      //  binding is a nil global.
+      //
+      //  And its approachPoint shadow is where the avoidLiquid correction will
+      //  live for an amphibious ground chassis.
+      //
+      //  SAFE, BECAUSE THE SHADOWS DELEGATE. approachPoint and setJumpState both
+      //  capture vanilla's version and hand straight back to it whenever
+      //  gravityEnabled is true, which for this chassis is always. The ground
+      //  unit's behaviour is vanilla's, unchanged, plus one mover binding it
+      //  previously lacked.
+      //
+      //  MUST STAY AFTER groundPet.lua -- the capture binds nil otherwise.
+      "/monsters/lofty_petports/petports_flyapproach.lua"
+    ],
+
+    //  AMPHIBIOUS: A WALKER THAT STOPS REFUSING WATER.
+    //
+    //  This chassis keeps gravity, so it is the drone's locomotion in every
+    //  respect except one -- it no longer treats liquid as a wall.
+    //
+    //  petports_avoidLiquid false is the whole difference. It reaches
+    //  findGroundPosition's avoidLiquid argument through every resolver in the
+    //  mod, so submerged ground becomes standable and submerged targets become
+    //  workable. The pathfinder does the rest: it emits Swim edges by MEDIUM
+    //  rather than by chassis, and it will plan Swim edges up to a surface
+    //  followed by Jump arcs out -- measured in game, and the reason this class
+    //  needs no transition code of its own.
+    //
+    //  NOT THE OTTER. A true otter would switch gravity at runtime to swim
+    //  neutrally rather than walking along the bottom. That needs applyParameters
+    //  and a mode chosen per destination, because PathFinder:start reads
+    //  baseParameters and mustEndOnGround is captured at PathMover:new. This is
+    //  the version that needs none of it.
+    //
+    //  petports_canFly and petports_canSwim are ABSENT on purpose: they are
+    //  free-mover permissions and a walking chassis is governed by physics, not
+    //  permission. petports_mediumAllows short-circuits for walkers -- after
+    //  the forbidden-liquid test, which applies to everything.
+    "petports_avoidLiquid" : false,
+
+    //  LIQUIDS IT WILL STILL NOT ENTER, and this list is why the forbidden test
+    //  had to move above the walker short-circuit. With avoidLiquid false and
+    //  no deny-list, an amphibious walker wades into lava for exactly the reason
+    //  an aquatic unit would without one.
+    //
+    //  Matched by NAME through root.liquidConfig, against both the liquid's name
+    //  and its itemDrop, because "lava" and "liquidlava" are different strings
+    //  and which one the engine exposes is not something to assume. A bare
+    //  number works too. Whatever each id resolved to is logged once.
+    "petports_avoidLiquids" : [ "lava", "corelava", "poison" ],
+
+    "petBehavior" : "petBehavior",
+
+    //  MUST match the port object's objectName exactly. groundPet.lua kills the
+    //  unit outright if it cannot find an anchor of this name.
+    "anchorName" : "petports_petport",
+
+    //  SLEEP KILL SWITCH. False while dispatch and routing are being tested --
+    //  a unit that nods off mid-diagnosis produces a stationary unit that looks
+    //  identical to a stalled one.
+    "petports_allowSleep" : false,
+
+    "petResources" : {
+      "sleepy" : 10,
+      "hunger" : 60,
+      "playful" : 10,
+      "curiosity" : 60
+    },
+    "petResourceDeltas" : {
+      "sleepy" : 1,
+      "hunger" : 0.5,
+      "playful" : 1,
+      "curiosity" : 1
+    },
+
+    "actionParams" : {
+      "hungerStarvingLevel" : 80,
+      "beg" : { "minScore" : 50, "cooldown" : 5, "distance" : 3, "emoteCooldown" : 2 },
+
+      //  Vanilla's follow is the source of the shadowing complaint: curiosity
+      //  regenerates at 1/sec against a minScore of 35, while followAction only
+      //  drains it at 5/sec and its boredTimer does not start until the pet has
+      //  arrived. Net effect is a permanent 3-tile tail. Raised the bar, made it
+      //  bore quickly, and pushed stopDistance out of the player's footprint.
+      //  This is tuning, not a fix -- the behavior rewrite comes later.
+      "follow" : {
+        "minScore" : 70,
+        "cooldown" : 30,
+        "curiosityDelta" : -25,
+        "boredTime" : 1.5,
+        "startDistance" : 10,
+        "stopDistance" : 5,
+        "runDistance" : 20
+      },
+
+      "inspect" : { "minScore" : 20, "cooldown" : 8 },
+      "eat" : { "minScore" : 0, "minHunger" : 40, "cooldown" : 0, "distance" : 2 },
+
+      //  petbunny carries this block too and there is no playAction.lua in
+      //  either scripts list, so it is inert in vanilla as well. Kept for the
+      //  behavior rewrite.
+      "play" : { "minScore" : 20, "cooldown" : 2 },
+
+      "sleep" : { "minScore" : 50, "minSleepy" : 75, "cooldown" : 10 },
+      "starving" : { "minScore" : 60, "cooldown" : 3 }
+    },
+
+    "pathing" : { "canOpenDoors" : false },
+
+    //  Sized to the body, not to vanilla's oversized click target.
+    "metaBoundBox" : [-0.5, -0.75, 0.5, 0.6],
+    "scale" : 1.0,
+
+    "querySurroundingsCooldown" : 1,
+
+    "wander" : {
+      "wanderTime" : [5, 10],
+      "changeDirectionTime" : [5, 10],
+      "changeDirectionWait" : [1, 3]
+    },
+    "idle" : { "idleTime" : [4, 8], "standTime" : 2 },
+    "pounce" : { "maxRange" : 10, "minRange" : 5 },
+	
+	//	go to the port and stay there when idle. do not wander
+	"strictPortTethering" : true,
+
+    "movementSettings" : {
+	
+	  //  a width and height of 1.6 here is deliberate:
+	  //  it must be larger than 1.5 for the pathfinder to reject 1-tile-high tunnels, 
+	  //  and it must be small enough to thread the needle into 2-tile-high gaps when coming out of a jump arc
+	  
+      "collisionPoly" :  [ [-0.8, -0.6], [-0.6, -0.8], [0.6, -0.8], [0.8, -0.6],
+                    [0.8, 0.6], [0.6, 0.8], [-0.6, 0.8], [-0.8, 0.6] ],
+      "mass" : 1.0,
+      "walkSpeed" : 8,
+      "runSpeed" : 12,
+      "flySpeed" : 15,
+      "airForce" : 50.0,
+	  
+	  "gravityMultiplier" : 1.5
+    },
+
+    "bodyMaterialKind" : "robotic",
+
+    //  petbunny's values. knockoutEffect "blink" is defined in the animation.
+    "knockoutTime" : 0,
+    "knockoutEffect" : "blink",
+    "deathParticles" : "deathPoof",
+
+    //  petbunny does 15 lash damage on touch, which is vanilla being careless
+    //  with a pet. A utility unit should never hurt anyone.
+    "touchDamage" : { "poly" : [], "damage" : 0, "teamType" : "ghostly", "damageSourceKind" : "default" },
+
+    "statusSettings" : {
+      "statusProperties" : { "targetMaterialKind" : "robotic" },
+
+      "appliesEnvironmentStatusEffects" : false,
+      "appliesWeatherStatusEffects" : false,
+      "minimumLiquidStatusEffectPercentage" : 0.1,
+
+      "primaryScriptSources" : [ "/stats/monster_primary.lua" ],
+      "primaryScriptDelta" : 5,
+
+      "stats" : {
+        "knockbackStunTime" : { "baseValue" : 0.25 },
+        "knockbackThreshold" : { "baseValue" : 9 },
+        "maxHealth" : { "baseValue" : 72 },
+        "protection" : { "baseValue" : 1.0 },
+        "healthRegen" : { "baseValue" : 0.0 },
+        "powerMultiplier" : { "baseValue" : 1.0 }
+      },
+
+      //  Mirrors petbunny's shape: defaultPercentage, not initialValue, and the
+      //  stunned resource that knockout drains.
+      "resources" : {
+        "stunned"   : { "deltaValue" : -1.0, "initialValue" : 0.0 },
+        "health"    : { "maxStat" : "maxHealth", "deltaStat" : "healthRegen", "defaultPercentage" : 100 },
+        "sleepy"    : { "maxValue" : 100, "defaultPercentage" : 10 },
+        "hunger"    : { "maxValue" : 100, "defaultPercentage" : 10 },
+        "playful"   : { "maxValue" : 100, "defaultPercentage" : 10 },
+        "curiosity" : { "maxValue" : 100, "defaultPercentage" : 10 }
+      }
+    },
+
+    "mouthOffset" : [0, 0],
+    "feetOffset" : [0, -8]
+  }
+}

@@ -2218,6 +2218,21 @@ local function standableNear(position, searchUp)
       and type(resolved[1]) == "number"
       and type(resolved[2]) == "number"
 
+    --  A GROUND SPOT IN A FORBIDDEN LIQUID IS NOT A SPOT.
+    --
+    --  findGroundPosition answers a geometry question and knows nothing about
+    --  which liquids this chassis refuses. For a walker petports_mediumAllows
+    --  returns true for everything EXCEPT a denied liquid, so this costs one
+    --  predicate on the path that has always worked and is the only thing
+    --  stopping an amphibious chassis from wading into lava.
+    if usable and not petports_mediumAllows({ resolved[1], resolved[2] }) then
+      if TASK_DEBUG then
+        sb.logInfo("UNIT ground spot %s rejected: a liquid this chassis will not enter",
+          sb.printJson(resolved))
+      end
+      usable = false
+    end
+
     if usable then
       if TASK_DEBUG then
         sb.logInfo("UNIT standable for %s -> %s (column offset %s)",
