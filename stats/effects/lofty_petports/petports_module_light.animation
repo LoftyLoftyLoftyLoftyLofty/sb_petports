@@ -1,0 +1,24 @@
+//  PETPORTS -- LAMP MODULE LIGHT
+//
+//  THE WHOLE EFFECT IS THIS FILE. A status effect's animationConfig gets its
+//  own animator on the wearer, and a `lights` block in one is a real world
+//  light -- no script, no part, no drawable.
+//
+//  POSITION IS [0, 0] BECAUSE THAT IS THE BODY CENTRE, and that is what lets
+//  the flip script go. See the .statuseffect for the reasoning; the short
+//  version is that a centred light looks identical mirrored, and every unit
+//  chassis in this mod has its collisionPoly centred on the origin.
+//
+//  pointLight -- a plain radial source rather than a directional beam. A beam
+//  would need a facing, which is the thing we just removed.
+
+{
+	"lights" : {
+		"petports_module_lamp" : {
+			"active" : true,
+			"position" : [ 0.0, 0.0 ],
+			"color" : [ 140, 140, 140 ],
+			"pointLight" : true
+		}
+	}
+}

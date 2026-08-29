@@ -57,6 +57,18 @@
     "unclaimed" : "606060ff"
   },
 
+  //  MODULE SLOTS, AUTHORED RATHER THAN LEFT TO THE DERIVATION.
+  //
+  //  petports_petport.lua falls back to MODULE_SLOTS_BY_RARITY when this is
+  //  absent, and Rare derives to exactly this number -- so the field changes
+  //  nothing today and is written anyway.
+  //
+  //  BECAUSE RARITY IS A BALANCE KNOB AND SLOT COUNT IS A CAPABILITY. Retuning
+  //  this unit to Legendary some day should be a decision about how it drops,
+  //  not a silent grant of a fourth slot noticed at playtest. Units this mod
+  //  ships state what they get; the derivation is for units it does not own.
+  "petports_moduleSlots" : 3,
+
   //  Not stackable: each unit carries its own saved state in parameters below.
   "maxStack" : 1,
 

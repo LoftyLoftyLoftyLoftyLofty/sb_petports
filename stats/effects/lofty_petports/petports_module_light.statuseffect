@@ -1,0 +1,39 @@
+//  PETPORTS -- LAMP MODULE EFFECT
+//
+//  MODELLED ON VANILLA'S lightaugment1, WITH ITS SCRIPT DELIBERATELY DROPPED.
+//
+//  That augment ships `lightaugment.lua`, whose entire body is
+//
+//      animator.setFlipped(mcontroller.facingDirection() == -1)
+//
+//  and it needs it because its light sits at [-1.0, 1.0] -- offset to one side
+//  of the body, so an unflipped light would swap shoulders every time the
+//  wearer turned around. Ours is centred on the body, where a mirror is the
+//  identity, so the script would run three times a second to do nothing.
+//
+//  A CENTRED LIGHT IS ALSO THE RIGHT CHOICE FOR THIS FLEET, not just the cheap
+//  one. Four chassis exist with more to come, their art is placeholder, and a
+//  shoulder offset measured against the drone's current body would be wrong for
+//  every one of them the first time a sprite changes size.
+//
+//  APPLIED PERSISTENTLY AND NEVER BY DURATION. The port calls
+//  status.setPersistentEffects, which holds an effect for as long as it is in
+//  the set and drops it the moment it leaves. `defaultDuration` is therefore
+//  unread on the path we use -- it is stated anyway, at vanilla's value, so
+//  that an effect applied some other way later behaves like the thing it was
+//  copied from rather than expiring instantly.
+//
+//  THE COLOUR IS VANILLA'S, ON PURPOSE, FOR THIS FIRST TEST. [140,140,140] is
+//  the value the reference augment ships. Tinting it to the chassis is an
+//  obvious later polish, and doing it now would mean the first in-game check
+//  could not distinguish "our effect works" from "our colour is wrong".
+
+{
+	"name" : "petports_module_light",
+
+	"effectConfig" : {},
+
+	"defaultDuration" : 5,
+
+	"animationConfig" : "petports_module_light.animation"
+}

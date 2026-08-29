@@ -28,7 +28,7 @@ local DEBUG = true
 --  Bump on every change to this file. A pane has no visible version and a stale
 --  copy is indistinguishable from an unfixed one -- which cost a cycle on the
 --  upcycler before the stamp existed.
-local PANE_BUILD_STAMP = "2026-08-28f facing normalised, orphan end fixed"
+local PANE_BUILD_STAMP = "2026-08-29c module write token, no eaten modules"
 
 local PANE_STATE_KEY = "petports_paneState"
 
@@ -60,7 +60,24 @@ local BLIP_LOW = "ffc75fff"
 local BLIP_CRITICAL = "ff6b6bff"
 
 local DIAG_SLOTS = 4
-local MODULE_SLOTS = 3
+
+--  FIVE, AND THE CONFIG MUST DECLARE EXACTLY THIS MANY moduleSlot WIDGETS.
+--  petports_petport.lua's MODULE_SLOTS_MAX is the same number and clamps on the
+--  write side, so an item authoring more gets five rather than a set of
+--  invisible slots whose contents could never be taken out again.
+local MODULE_SLOTS = 5
+
+--  THE TAG THAT MAKES SOMETHING A MODULE.
+--
+--  THE PANE IS ALLOWED TO ASK THIS, AND THAT IS NOT A DUPLICATED RULE. It is a
+--  question about the ITEM, answered by root.itemHasTag, and the port's commit
+--  handler asks the same question of the same item -- so the two cannot come
+--  back with different answers the way two hand-written predicates could.
+--
+--  It has to be asked HERE because the swap is performed here. See
+--  moduleSlotClicked.
+local MODULE_TAG = "petports_module"
+
 local STATS_LINES = 8
 
 --  Severity tints for the diagnostic row, sharing the crosshair vocabulary on
@@ -77,16 +94,15 @@ local TAB_WIDGETS = { "tabDetails", "tabSettings", "tabStats" }
 --  so showTab has exactly one list to be wrong about.
 local TAB_MEMBERS = {
 	tabDetails = {
-		"detailsModulesLabel", "moduleSlot1", "moduleSlot2", "moduleSlot3",
+		"detailsModulesLabel",
+		"moduleSlot1", "moduleSlot2", "moduleSlot3", "moduleSlot4", "moduleSlot5",
 		"detailsFlavorLabel", "detailsFlavorValue",
 		"feedSlot", "feedHint",
 		"detailsSerial", "renameButton"
 	},
 	tabSettings = {
 		"setCarried", "setCarriedLabel",
-		"setCrosshairs", "setCrosshairsLabel",
-		"setBubbles", "setBubblesLabel",
-		"setSleep", "setSleepLabel"
+		"setCrosshairs", "setCrosshairsLabel"
 	},
 	tabStats = {
 		"statsLine1", "statsLine2", "statsLine3", "statsLine4",
@@ -160,6 +176,11 @@ end
 --  ---------------------------------------------------------------------------
 --  PAINTING
 --  ---------------------------------------------------------------------------
+
+--  WHICH TAB IS SHOWING. Declared here rather than beside showTab because
+--  paintModuleSlots is defined above that section and has to read it -- a
+--  `local` further down the file is a nil global to everything before it.
+local activeTab = "tabDetails"
 
 --  Last drawn tint per cell. This runs every poll, so an unchanged bar has to
 --  cost nothing.
@@ -529,21 +550,141 @@ local function paintPreview(petId)
 	end
 end
 
-local function paintModules(state)
-	local slots = math.max(0, math.min(MODULE_SLOTS, state.moduleSlots or 0))
-	local modules = state.modules or {}
+--  THE PANE'S OWN COPY OF THE MODULE SET, AND IT IS NOT A SECOND AUTHORITY.
+--
+--  mechassemblygui keeps `self.itemSet` for exactly this reason: a swap needs to
+--  know what is currently in the slot in order to hand it back to the cursor,
+--  and vanilla does NOT read that back off the widget. It is followed here
+--  rather than reaching for widget.itemSlotItem, which is unverified in this
+--  codebase -- and the failure mode if it does not exist is the OLD module
+--  being overwritten with nil instead of returned, which destroys an item.
+--
+--  REBUILT FROM THE MIRROR ON EVERY REPAINT, so it can only be stale for as long
+--  as it takes the port to write one, and the port's write is what wins.
+--
+--  Keyed by slot number, holding descriptors. The WIRE format is a record list
+--  -- see moduleRecords -- because a table with holes does not survive Json.
+local paneModules = {}
+local paneModuleSlotCount = 0
+
+--  Wire format out. See petports_petport.lua's MODULES section: a Lua table with
+--  a hole converts to a Json OBJECT with string keys, so a slot-indexed array
+--  loses a module the first time the item round-trips. A record list is sparse
+--  and contiguous at once.
+local function moduleRecords()
+	local out = {}
+	for i = 1, MODULE_SLOTS do
+		if paneModules[i] ~= nil then
+			table.insert(out, { slot = i, item = paneModules[i] })
+		end
+	end
+	return out
+end
+
+--  A SLOT IS VISIBLE ONLY IF THE UNIT HAS EARNED IT *AND* THE DETAILS TAB IS
+--  THE ONE SHOWING, AND THE SECOND HALF OF THAT IS A BUG FIX.
+--
+--  This runs from paintModules, which runs from refresh, which runs on every
+--  poll where the port's state changed -- regardless of which tab the player is
+--  looking at. So switching to Settings hid the slots correctly, and then the
+--  next mirror write painted them straight back on top of the Settings tab.
+--
+--  It only ever looked right because tabDetailsClicked calls refresh(true)
+--  immediately after showTab, so the path INTO details always corrected itself.
+--  The path out did not.
+--
+--  THE ASYMMETRY IS WHY THIS LIVES HERE RATHER THAN IN showTab. showTab hides
+--  every member of the outgoing tab wholesale, which is right; what it cannot
+--  do is stop a later repaint from disagreeing with it. The paint has to carry
+--  the condition itself.
+local function paintModuleSlots()
+	local showing = (activeTab == "tabDetails")
 
 	for i = 1, MODULE_SLOTS do
 		local name = "moduleSlot" .. i
-		if i <= slots then
+		if showing and i <= paneModuleSlotCount then
 			widget.setVisible(name, true)
-			widget.setItemSlotItem(name, modules[i])
+			widget.setItemSlotItem(name, paneModules[i])
 		else
 			--  An unearned slot is ABSENT, not empty. An empty slot invites a
 			--  drag that would be silently refused, which reads as a bug.
+			--
+			--  The CONTENTS are still written above only when it is visible;
+			--  a hidden slot keeps whatever it last held, which is harmless
+			--  because paneModules is the authority and it gets rewritten
+			--  before the slot is ever shown again.
 			widget.setVisible(name, false)
 		end
 	end
+end
+
+--  AN OUTSTANDING MODULE WRITE, AND THIS IS WHAT STOPS THE PORT EATING ONE.
+--
+--  THE BUG IT FIXES, IN ORDER. paneModules is BOTH the display state and the
+--  source of the wire payload. paintModules rebuilds it from the mirror, and the
+--  mirror carries cargo -- so a unit picking an item up moves the signature for
+--  a reason that has nothing to do with modules. If that write was composed
+--  before the port processed a pending setModules, the repaint puts paneModules
+--  back to the PRE-SWAP set while the module is already out of the cursor.
+--
+--  The next click is what destroys it. moduleRecords() is built from a table
+--  that no longer mentions the module, the port replaces the whole set with
+--  that, and `previous` reads nil -- so setSwapSlotItem hands the player nothing
+--  back either. The module exists nowhere. Repeated socketing with cargo moving
+--  is exactly the shape that reaches it.
+--
+--  A TOKEN RATHER THAN A TIMEOUT. The pane stamps each write, the port echoes
+--  the stamp it last acted on, and the pane treats the mirror's module set as
+--  authoritative only once its own stamp comes back. A deadline would have to
+--  guess how long a commit takes and would be wrong on a loaded server.
+--
+--  IT RESOLVES ON REFUSAL TOO, which is the property that makes it safe. The
+--  port stamps before it validates, so a rejected set still echoes and the pane
+--  stops waiting and repaints from truth -- the module visibly disappears
+--  instead of the pane waiting forever showing a phantom.
+--
+--  ONLY MODULES ARE HELD BACK. Everything else in a mirror arriving mid-flight
+--  -- fuel, cargo, task, diagnostics -- is painted normally. The port is the
+--  authority on all of it and none of it is in flight.
+local moduleWriteToken = nil
+local moduleTokenSeq = 0
+
+local function nextModuleToken()
+	moduleTokenSeq = moduleTokenSeq + 1
+
+	--  UUID-PREFIXED SO TWO PANES CANNOT COLLIDE. On a server, two players can
+	--  have this open on the same port at once, and a bare counter would let one
+	--  pane's echo resolve the other's wait.
+	local ok, uuid = pcall(sb.makeUuid)
+	return (ok and tostring(uuid) or "pane") .. ":" .. tostring(moduleTokenSeq)
+end
+
+local function paintModules(state)
+	paneModuleSlotCount = math.max(0, math.min(MODULE_SLOTS, state.moduleSlots or 0))
+
+	if moduleWriteToken ~= nil then
+		if state.moduleToken ~= moduleWriteToken then
+			--  THIS MIRROR PREDATES OUR WRITE. Keep the local set, repaint the
+			--  widgets from it so a slot count change still lands, and wait.
+			dbg("holding module paint: mirror token %s, waiting on %s",
+				tostring(state.moduleToken), tostring(moduleWriteToken))
+			paintModuleSlots()
+			return
+		end
+		moduleWriteToken = nil
+	end
+
+	--  REBUILT, NOT MERGED. Anything the port no longer reports is gone, which
+	--  is what makes the port the authority rather than this table.
+	paneModules = {}
+	for _, record in ipairs(state.modules or {}) do
+		local slot = tonumber(record and record.slot)
+		if slot ~= nil and slot >= 1 and slot <= MODULE_SLOTS then
+			paneModules[slot] = record.item
+		end
+	end
+
+	paintModuleSlots()
 end
 
 local function paintStats(lines)
@@ -557,8 +698,6 @@ end
 --  TABS
 --  ---------------------------------------------------------------------------
 
-local activeTab = "tabDetails"
-
 local function showTab(which)
 	activeTab = which
 
@@ -566,6 +705,12 @@ local function showTab(which)
 		widget.setChecked(name, name == which)
 		setVisibleAll(TAB_MEMBERS[name], name == which)
 	end
+
+	--  setVisibleAll SHOWS ALL FIVE MODULE SLOTS, including the ones this unit
+	--  has not earned, because it works off a flat membership list that cannot
+	--  know the count. Re-applying the count here means the correction does not
+	--  depend on the caller remembering to force a refresh afterwards.
+	paintModuleSlots()
 
 	dbg("tab -> %s", which)
 end
@@ -585,6 +730,9 @@ local function refresh(force)
 
 	if state == nil then
 		livePetId = nil
+		paneModules = {}
+		paneModuleSlotCount = 0
+		moduleWriteToken = nil
 		widget.setText("petName", "No unit")
 		widget.setText("petSpecies", "")
 		widget.setText("taskLabel", "")
@@ -606,8 +754,30 @@ local function refresh(force)
 	setVisibleAll(PET_COLUMN, hasUnit)
 	setVisibleAll(TAB_MEMBERS[activeTab], hasUnit)
 
+	--  THE PORT BAND IS PAINTED ABOVE THE hasUnit RETURN, AND THAT PLACEMENT IS
+	--  THE WHOLE POINT OF THE BAND.
+	--
+	--  Network id and the enabled switch belong to the PORT, so they mean
+	--  something with nothing socketed -- which is exactly when a player is most
+	--  likely to be looking at them. Painting them at the bottom of this
+	--  function, below the early return, meant an empty port showed whatever the
+	--  config declared: "id: --" forever, and an enabled checkbox stuck ON no
+	--  matter what the port actually was.
+	--
+	--  Same shape as the unreachable progress signal in the task action: a
+	--  paint below a branch that returns is a paint that does not happen.
+	--
+	--  setChecked RATHER THAN A GATE. The port is the authority; a refused
+	--  toggle has to be able to move the box back, and it can only do that if
+	--  every repaint asserts the port's value over whatever the click left.
+	widget.setChecked("portEnabled", state.enabled ~= false)
+	widget.setText("portNetworkLabel", "id: " .. tostring(state.network or "--"))
+
 	if not hasUnit then
 		livePetId = nil
+		paneModules = {}
+		paneModuleSlotCount = 0
+		moduleWriteToken = nil
 		widget.setText("petName", "No unit")
 		widget.setText("petSpecies", "")
 		return
@@ -640,8 +810,6 @@ local function refresh(force)
 	widget.setText("detailsSerial", state.serial and ("Serial " .. state.serial) or "")
 
 	paintStats(state.stats)
-
-	widget.setText("portNetworkLabel", "id: " .. tostring(state.network or "--"))
 end
 
 --  ---------------------------------------------------------------------------
@@ -711,17 +879,50 @@ local function pollTake()
 	refresh(true)
 end
 
---  MECH ASSEMBLY'S SWAP, WITH ONE ADDITION.
+--  MECH ASSEMBLY'S SWAP, PERFORMED HERE AND SYNCHRONOUSLY, WITH TWO ADDITIONS.
 --
---  Its shape is `if not swapItem or <valid for this slot> then` -- an empty
---  cursor always succeeds so taking a module OUT is never blocked, and a full
---  one has to pass. What vanilla never needed is a count check: swapSlotItem
---  returns the WHOLE cursor stack and mechassemblygui does not clamp it,
---  because mech parts cannot stack. Modules must be maxStack 1 for the same
---  reason, and this refuses rather than trusting that they are.
+--  THE EARLIER DESIGN SENT THE DESCRIPTOR AND LET THE PORT DECIDE, AND THAT WAS
+--  A DUPLICATION BUG WAITING FOR THE PORT TO STOP REFUSING. It read the cursor
+--  and deliberately did not take it, so the moment the far end accepted
+--  anything the player kept the item AND the unit gained a copy.
+--
+--  A ROUND TRIP CANNOT BE MADE ATOMIC, and every ordering of one is wrong in a
+--  different direction. Take the cursor first and a refusal destroys the item.
+--  Commit on the port first and a dropped reply duplicates it. Vanilla never
+--  faces the choice because mechassemblygui never crosses the boundary
+--  mid-move: it reads the cursor, writes the old occupant back to the cursor,
+--  repaints, and only then reports the finished set. So does this.
+--
+--  WHICH MEANS THE PANE HOLDS THE TEST -- but not a rule of its own. It asks
+--  root.itemHasTag, and the port's commit handler asks the same question of the
+--  same item, so the two cannot disagree the way two hand-written predicates
+--  could. That is the property that makes doing the swap here safe.
+--
+--  vanilla's gate is `if not swapItem or <valid for this slot>`: an empty cursor
+--  always succeeds, so taking a module OUT is never blocked, and a full one has
+--  to pass.
+--
+--  ADDITION ONE, THE COUNT CHECK. player.swapSlotItem() returns the WHOLE cursor
+--  stack and mechassemblygui does not clamp it, because mech parts cannot stack.
+--  Modules are maxStack 1 for the same reason and this refuses rather than
+--  trusting that every module ever authored will be.
+--
+--  ADDITION TWO, THE SLOT GATE. Vanilla's slots all exist; ours are earned, and
+--  a click on a slot beyond what this unit has must not write one the port would
+--  then reject -- with the item already out of the cursor.
 function moduleSlotClicked(widgetName)
+	--  THE LAST CHARACTER, WHICH SURVIVES A PATH. Some widget callbacks receive
+	--  a full widget path rather than a leaf name, and both end in the same
+	--  digit. Correct for moduleSlot1..9; MODULE_SLOTS is 5 and the config
+	--  declares exactly that many, so the two-digit case is unreachable.
 	local index = tonumber(string.sub(widgetName, -1))
-	if index == nil then return end
+	if index == nil or index < 1 or index > MODULE_SLOTS then return end
+
+	if index > paneModuleSlotCount then
+		dbg("ignoring click on slot %s: unit has %s", tostring(index),
+			tostring(paneModuleSlotCount))
+		return
+	end
 
 	local cursor = player.swapSlotItem()
 
@@ -730,15 +931,51 @@ function moduleSlotClicked(widgetName)
 		return
 	end
 
-	--  THE PORT DECIDES, NOT THE PANE. Sending the descriptor and letting the
-	--  object accept or refuse keeps one authority over petData -- the pane
-	--  cannot know what a valid module is without duplicating the rule.
+	if cursor ~= nil then
+		local ok, isModule = pcall(root.itemHasTag, cursor.name, MODULE_TAG)
+		if not ok or isModule ~= true then
+			dbg("refusing module swap: %s is not a module", tostring(cursor.name))
+			return
+		end
+	end
+
+	--  THE MOVE, IN VANILLA'S ORDER. The old occupant goes to the cursor and the
+	--  new one goes to the slot, so the item count in the world is unchanged at
+	--  every point in between.
+	local previous = paneModules[index]
+	player.setSwapSlotItem(previous)
+	paneModules[index] = cursor
+	widget.setItemSlotItem(widgetName, cursor)
+
+	dbg("slot %s: %s -> %s", tostring(index),
+		tostring(previous and previous.name or "empty"),
+		tostring(cursor and cursor.name or "empty"))
+
+	--  REPORTED AS A FINISHED SET, matching mechassemblygui's itemSetChanged.
+	--  The port stores it and recomputes the unit's effects; its next mirror
+	--  write repaints this pane from what is actually true.
 	--
-	--  So the cursor is NOT taken here. The port answers by rewriting the
-	--  mirror, the next poll repaints the slot, and a refused swap simply
-	--  leaves the cursor alone.
-	tell("petports_setModule", { index = index, item = cursor })
-	refresh(true)
+	--  STAMPED, AND THE STAMP IS WHAT KEEPS THE SET INTACT. Until the port
+	--  echoes this token back, paintModules must not overwrite paneModules from
+	--  a mirror -- an unrelated cargo change would otherwise repaint the module
+	--  we just socketed straight back out of the local set, and the NEXT click
+	--  would then send a payload that does not mention it. See the token block
+	--  above paintModules; that is the item-loss path this closes.
+	--
+	--  A SECOND CLICK BEFORE THE FIRST RESOLVES IS FINE. It stamps a new token
+	--  and sends the accumulated set, and the earlier echo simply fails to match
+	--  and is ignored.
+	moduleWriteToken = nextModuleToken()
+	tell("petports_setModules", {
+		modules = moduleRecords(),
+		token = moduleWriteToken
+	})
+
+	--  NO refresh(true) HERE, AND THAT MATTERS. A forced refresh repaints from
+	--  the mirror, which still holds the PRE-SWAP module set until the port
+	--  writes again -- so it would undo the move on screen and then undo the
+	--  undo half a second later. The signature gate in refresh already does the
+	--  right thing: it repaints when, and only when, the port's state changes.
 end
 
 function feedSlotClicked()
@@ -782,12 +1019,25 @@ function renameClicked()
 	dbg("rename requested -- not built")
 end
 
+--  TWO TOGGLES, AND THE TWO THAT WERE HERE ARE GONE FOR DIFFERENT REASONS.
+--
+--  "Complain when blocked" was never specified anywhere -- it does not appear in
+--  the design intent, nothing reads it, and it was carried into this pane on
+--  nobody's authority.
+--
+--  "May sleep when idle" IS specified and is still WRONG HERE. Sleep is
+--  `petports_allowSleep` on the MONSTERTYPE: it is a property of the chassis, in
+--  the same file as its collisionPoly and its search costs, and a player
+--  checkbox over the top of it would be a second authority that the chassis
+--  cannot see. A unit that is not built to sleep should not offer the option.
+--
+--  What is left describes DISPLAY, which is the right shape for this tab: both
+--  remaining toggles change what the player sees and neither changes what the
+--  unit does.
 function settingToggled()
 	tell("petports_setToggles", {
 		carried = widget.getChecked("setCarried"),
-		crosshairs = widget.getChecked("setCrosshairs"),
-		bubbles = widget.getChecked("setBubbles"),
-		sleep = widget.getChecked("setSleep")
+		crosshairs = widget.getChecked("setCrosshairs")
 	})
 end
 

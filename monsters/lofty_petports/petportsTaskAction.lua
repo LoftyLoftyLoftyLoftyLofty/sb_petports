@@ -1716,8 +1716,12 @@ function petportsJumpMover(pather)
     --  Measured on a four-tile rung climb -- jumpVelocity [8,45], which at
     --  g 120 is 8.4375 tiles of rise, against an arc that turned over 5.85
     --  tiles up. The unit flew the 8.4375 and sailed clean over the rung it was
-    --  aiming for. smallJumpMultiplier is already 1.0, so the catalogued
-    --  explanation does not cover it.
+    --  aiming for. smallJumpMultiplier was 1.0 when this was measured, so the
+    --  catalogued explanation did not cover it. It is 0.70711 now -- see the
+    --  entry beside it in petports_contract.lua -- which means this measurement
+    --  should be RE-TAKEN before it is reasoned from: with only one jump height
+    --  available, every plan was a maximum-height launch, and that alone
+    --  accounts for part of what is described here.
     --
     --  The per-edge VELOCITIES are the discriminator and are the reason this
     --  dump exists rather than a apex number. If the first arc edge's source

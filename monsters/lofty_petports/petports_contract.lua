@@ -61,6 +61,51 @@ function petports_despawn()
   return true
 end
 
+--  WEAR WHAT THE MODULES GRANT.
+--
+--  The port owns the module set, resolves each module item's declared effects,
+--  unions them and pushes the whole result here. This applies it and decides
+--  nothing -- the unit does not know what a module is and should not learn.
+--
+--  setPersistentEffects REPLACES THE CATEGORY WHOLESALE, and that is the entire
+--  reason this is four lines rather than a diff. Everything the port sends is
+--  applied, anything it stops sending is dropped, and removing a module needs no
+--  path of its own. An add/remove protocol would have to stay in step with the
+--  item's stored state across respawn, world reload, and the unit being carried
+--  to a different port -- three places it could silently fall behind.
+--
+--  IDEMPOTENT BY CONSTRUCTION, which matters because the port pushes on a
+--  signature that includes the entity id: a unit that died and respawned gets
+--  pushed to again, and re-applying an identical set has to be free.
+--
+--  A CATEGORY OF OUR OWN, PASSED IN RATHER THAN NAMED HERE. Effects applied by
+--  anything else live under their own categories and are untouched by this.
+--  Defaulted so a caller omitting it still lands somewhere sensible rather than
+--  clearing whatever category `nil` resolves to.
+--
+--  VERIFY ON FIRST RUN: that status.setPersistentEffects is bound for a MONSTER
+--  rather than only for players. The call is standard StatusController API and
+--  the unit has a full statusSettings block, so it should be -- but this file
+--  has been wrong about a binding before, and a silent no-op looks exactly like
+--  a status effect that does not work. The log line below is what tells them
+--  apart.
+function petports_setModuleEffects(effects, category)
+  category = category or "petports_modules"
+  effects = effects or {}
+
+  local ok, err = pcall(status.setPersistentEffects, category, effects)
+
+  if not ok then
+    sb.logInfo("UNIT setModuleEffects FAILED for category %s: %s",
+      tostring(category), tostring(err))
+    return false
+  end
+
+  sb.logInfo("UNIT module effects applied under %s: %s",
+    tostring(category), sb.printJson(effects))
+  return true
+end
+
 --------------------------------------------------------------------------------
 --  VENT CONTRACT
 --------------------------------------------------------------------------------
@@ -1332,14 +1377,26 @@ function petports_pathOptions()
     --
     --      mult    launch    rise    airtime   x @walk8
     --      1.0      45.00    8.438     0.750       6.00   what we had
-    --      0.7071   31.82    4.219     0.530       4.24   vanilla Lua, half HEIGHT
-    --      0.5      22.50    2.109     0.375       3.00   here
+    --      0.7071   31.82    4.219     0.530       4.24   here, and vanilla's
+    --      0.5      22.50    2.109     0.375       3.00   the previous value
     --
-    --  0.5 IS NOT VANILLA'S HALF-HEIGHT AND THE DIFFERENCE IS DELIBERATE.
-    --  Vanilla picks 1/sqrt(2) to halve the height; 0.5 quarters it, giving a
-    --  hop sized for the one and two tile steps players actually build. If it
-    --  proves too small, 0.70711 is the next stop and the reason to prefer it
-    --  is "match vanilla", not "fix a bug".
+    --  0.70711 IS VANILLA'S NUMBER AND THE REASON TO MATCH IT IS NOT "MATCH
+    --  VANILLA". An earlier note here said 0.5 was deliberate -- a hop "sized
+    --  for the one and two tile steps players actually build" -- and offered
+    --  0.70711 only as a fallback if that proved too small, on the grounds of
+    --  parity. That had the argument backwards.
+    --
+    --  1/sqrt(2) HALVES THE HEIGHT. 0.5 QUARTERS IT, and a quarter-height arc is
+    --  low enough that the planner starts SOLVING SHORT HOPS WITH IT -- and a
+    --  very flat arc is the worst tool for a short hop, because clearing any
+    --  height at all then demands horizontal speed the unit carries straight
+    --  past the target. The observed result is comic overshoot on exactly the
+    --  small steps the smaller multiplier was chosen to serve.
+    --
+    --  So the second jump height has to stay high enough that the solver keeps
+    --  reaching for the full arc on anything that needs real lift, and vanilla's
+    --  choice is where that line sits. This is a correction to the value AND to
+    --  why it was picked, not a fallback being taken.
     --
     --  WHY THE OLD PIN AT 1.0 WAS RIGHT WHEN IT WAS WRITTEN, AND IS NOT NOW.
     --  It read "the actor cannot perform a partial jump", citing
@@ -1365,7 +1422,7 @@ function petports_pathOptions()
     --
     --  Parameterised like the search costs below so the value can be retuned
     --  from the monstertype without editing this file.
-    smallJumpMultiplier = config.getParameter("petports_smallJumpMultiplier", 0.5),
+    smallJumpMultiplier = config.getParameter("petports_smallJumpMultiplier", 0.70711),
     jumpDropXMultiplier = 0.125,
     enableWalkSpeedJumps = true,
     enableVerticalJumpAirControl = true,

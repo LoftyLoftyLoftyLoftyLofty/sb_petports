@@ -1,0 +1,65 @@
+//  PETPORTS -- LAMP MODULE
+//
+//  THE FIRST MODULE, AND THE SHAPE EVERY LATER ONE COPIES.
+//
+//  A module is an item socketed into a unit through the petport pane. While it
+//  is socketed the unit carries the status effects this file names, and when it
+//  comes out they are dropped. That is the entire mechanism.
+//
+//  WHY A STATUS EFFECT RATHER THAN A FLAG THE UNIT'S SCRIPTS READ. It mirrors
+//  vanilla augments, which players already understand, and it means the
+//  behaviour is carried by an asset that can be authored, patched or disabled
+//  without touching a line of this mod's Lua. A module that stops working is
+//  one effect to look at, not a branch to find.
+//
+//  petports_moduleEffects IS A LIST, ALWAYS, EVEN FOR ONE ENTRY.
+//
+//  The port has to UNION the effects across every socketed slot before it can
+//  push anything, so a list is the shape it wants at the far end regardless. A
+//  string spelling would be a second way to say the same thing, and the field
+//  would then have two readers that must agree forever -- exactly the split
+//  that `todo.upcycler.slotorderdup` records as a live hazard elsewhere in this
+//  mod. One spelling.
+//
+//  EFFECT NAMES ARE NOT VALIDATED WHEN THIS IS AUTHORED. A name with no
+//  matching .statuseffect is refused by the engine at apply time, on the unit,
+//  with a log line naming the effect. That is the right place for it to fail:
+//  a modder adding a module cannot break the port by misspelling something.
+//
+//  MAXSTACK 1 IS A REQUIREMENT, NOT A PREFERENCE. The pane moves modules with
+//  player.swapSlotItem(), which returns the WHOLE cursor stack, and the mech
+//  assembly station this borrows from never had to clamp it because mech parts
+//  cannot stack either. The pane refuses a stack rather than trusting this
+//  field, but a stackable module would be refused forever and look broken.
+//
+//  RARITY IS COMMON AND CARRIES NO MECHANICAL WEIGHT HERE. On a PET item,
+//  rarity suggests a default module slot count -- see petports_petport.lua's
+//  MODULE_SLOTS_BY_RARITY. On a MODULE item it is decoration.
+
+{
+	"itemName" : "petports_module_light",
+	"price" : 250,
+	"rarity" : "Common",
+
+	//  Its own category, so it sorts as itself rather than falling into a
+	//  vanilla bucket. The label is added in items/categories.config.patch and
+	//  the matching filter subgroup lives in petports_filtergroups.config --
+	//  all three have to exist or the item sorts to Unsorted.
+	"category" : "petports_module",
+
+	"inventoryIcon" : "petports_module_light.png",
+
+	"description" : "A sealed lamp assembly. Socket it into a unit and it lights the ground wherever the unit goes.",
+	"shortdescription" : "Lamp Module",
+
+	//  petports_no_upcycling KEEPS IT OUT OF THE CONVERTER. Without it a module
+	//  is just another surplus item to a unit hauling to an upcycler, and the
+	//  first thing a player would notice is their modules turning into treats.
+	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],
+
+	"maxStack" : 1,
+
+	//  WHAT THIS MODULE DOES. Applied persistently by the port for as long as
+	//  the module occupies a slot.
+	"petports_moduleEffects" : [ "petports_module_light" ]
+}

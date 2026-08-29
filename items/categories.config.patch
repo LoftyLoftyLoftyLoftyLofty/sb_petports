@@ -15,6 +15,17 @@
 		"value" : "Petport Fuel"
 	},
 	{
+		//  MODULES. Its own category so a module sorts as a module rather
+		//  than falling into a vanilla bucket -- and so the filter subgroup
+		//  in petports_filtergroups.config has something to name.
+		//
+		//  A CATEGORY WITH NO LABEL IS THE FAILURE WORTH AVOIDING, which is
+		//  why petports_machine below is kept despite nothing using it.
+		"op" : "add",
+		"path" : "/labels/petports_module",
+		"value" : "Petport Module"
+	},
+	{
 		//  NOTHING USES THIS LABEL RIGHT NOW, AND IT IS KEPT ANYWAY.
 		//
 		//  It was added so the upcycler could carry a petports_machine

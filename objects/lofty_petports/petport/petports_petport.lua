@@ -87,6 +87,27 @@ local HEALTH_MOVE = 1.0
 local HEALTH_HOME_SLACK = 5.0
 local RESPAWN_GRACE = 1.0
 
+--  THE PORT'S OWN OFF SWITCH.
+--
+--  An OBJECT parameter rather than anything on petData: it describes the port,
+--  survives the item being taken out and put back, and does not travel with a
+--  unit carried elsewhere. See the petports_setPortEnabled handler.
+local ENABLED_KEY = "petports_enabled"
+
+--  GLOBAL BECAUSE ITS READERS ARE SCATTERED -- the message handler in init(),
+--  the lifecycle block in update(), and the pane mirror -- and the first of
+--  those is defined 8000 lines above the last. A `local` here would work for
+--  all three, being at file scope and above them; it is a global for
+--  consistency with the other cross-file-scope helpers, and to keep the
+--  ordering rule from having to be re-checked if this ever moves.
+--
+--  ABSENT MEANS ON. Every port placed before this existed has no parameter at
+--  all, and reading that as "disabled" would switch off every port in every
+--  existing world on update. Only an explicit false disables.
+function petportEnabled()
+  return config.getParameter(ENABLED_KEY, true) ~= false
+end
+
 --  Periodic flush of drifting state into the socketed item.
 --
 --  Durable changes (a new known player, a new food liking, the seed) write
@@ -953,35 +974,124 @@ function init()
     return stack
   end))
 
-  --  SET A MODULE. The pane sends the cursor descriptor and does NOT take the
-  --  cursor itself, so this is what decides.
+  --  COMMIT THE WHOLE MODULE SET, NOT ONE SLOT.
   --
-  --  mechassemblygui's gate, which is `not item or <valid for this slot>`: an
-  --  empty cursor always succeeds so a module can always be removed, and a full
-  --  one has to pass. What vanilla never needed is the count check, because
-  --  mech parts cannot stack -- see the pane, which refuses a stack before it
-  --  ever gets here.
+  --  THE SWAP HAS ALREADY HAPPENED BY THE TIME THIS RUNS, and that is the part
+  --  worth understanding before changing anything here.
   --
-  --  NOT BUILT: there is no module item and therefore no validity test yet, so
-  --  this refuses everything except removal and says so. Refusing loudly is the
-  --  right failure while the vocabulary does not exist -- accepting anything
-  --  would let a player socket a banana and then wonder why nothing changed.
-  message.setHandler("petports_setModule", simpleHandler(function(payload)
+  --  The pane performs the item move locally and synchronously -- reads the
+  --  cursor, writes the old occupant back to the cursor, repaints the slot --
+  --  which is exactly mechassemblygui's shape. It is done that way because a
+  --  message round trip CANNOT be made atomic: take the cursor first and a
+  --  refusal destroys the item, commit here first and a dropped reply
+  --  duplicates it. Vanilla avoids the choice by never crossing the boundary
+  --  mid-move, and so do we.
+  --
+  --  WHICH MAKES THIS A COMMIT, NOT A GATE. The validation below is a backstop
+  --  against a malformed payload, not the decision -- the decision was made in
+  --  the pane, against the same root.itemHasTag call this uses, so the two
+  --  cannot disagree about what a module is.
+  --
+  --  A REFUSAL HERE IS THEREFORE LOUD AND WHOLESALE. If any record fails, none
+  --  is stored and the mirror repaints the pane back to what is actually true.
+  --  The player's item is already out of the cursor at that point, so this is a
+  --  loss window -- narrow enough to accept (it needs an item's tags to change
+  --  between the pane opening and the click) and logged at error level so that
+  --  if it ever does happen it is not diagnosed as a pathing bug.
+  --
+  --  See the MODULES section for why the payload is a list of records rather
+  --  than an array indexed by slot.
+  message.setHandler("petports_setModules", simpleHandler(function(payload)
     if self.petData == nil or type(payload) ~= "table" then return false end
 
-    local index = tonumber(payload.index)
-    if index == nil then return false end
+    --  STAMPED BEFORE ANYTHING IS VALIDATED, AND THAT ORDER IS THE POINT.
+    --
+    --  The pane holds its own module set as authoritative until this token comes
+    --  back, because a mirror written between its click and this handler would
+    --  otherwise repaint the module it just socketed back out of the local set
+    --  -- and the next click would then send a payload that does not mention it.
+    --  That is an item-loss path, and it is the one that ate a module in
+    --  testing while a unit was picking up cargo.
+    --
+    --  A REFUSAL MUST RESOLVE THE WAIT TOO, or the pane sits forever showing a
+    --  module the port never accepted. So this is recorded on the way IN, ahead
+    --  of every early return below, rather than beside the commit.
+    --
+    --  paneSignature IS CLEARED UNCONDITIONALLY so the echo is guaranteed to
+    --  reach the pane even when the module set did not actually change -- an
+    --  unchanged blob would otherwise be swallowed by the mirror's change gate
+    --  and the pane would wait on a token that is never sent. Once per click.
+    self.moduleToken = payload.token
+    self.paneSignature = nil
 
-    if payload.item ~= nil then
-      sb.logInfo("PETPORT %s refusing module in slot %s: modules are not built yet (%s)",
-        stationUniqueId(), tostring(index), sb.printJson(payload.item))
+    local records = payload.modules
+    if type(records) ~= "table" then return false end
+
+    --  EVERY REFUSAL BELOW REPAINTS THE PANE, and that is the only thing that
+    --  can be done about the loss window described above.
+    --
+    --  The pane has already taken the item out of the cursor by the time this
+    --  runs. If the set is refused, the port stores nothing and the pane is
+    --  left holding a module that exists in no inventory -- a phantom that
+    --  looks perfectly normal until the pane is closed and it is gone.
+    --
+    --  Clearing the signature forces the next mirror write through the change
+    --  gate whether or not the state moved, so the pane repaints from truth and
+    --  the module visibly disappears. That does not save the item. It turns a
+    --  silent loss into one the player can SEE, which is the difference between
+    --  a bug report and a mystery.
+    local function refuse()
+      self.paneSignature = nil
       return false
     end
 
-    self.petData.modules = self.petData.modules or {}
-    self.petData.modules[index] = nil
+    local slots = petportModuleSlots()
+    local accepted = {}
+    local taken = {}
+
+    for _, record in ipairs(records) do
+      local slot = type(record) == "table" and tonumber(record.slot) or nil
+
+      if slot == nil or slot < 1 or slot > slots then
+        sb.logError("PETPORT %s refusing module set: slot %s outside 1..%s",
+          stationUniqueId(), tostring(slot), tostring(slots))
+        return refuse()
+      end
+
+      --  TWO RECORDS FOR ONE SLOT IS A MALFORMED PAYLOAD, not a last-one-wins
+      --  merge. Silently keeping one would put the pane and the port one module
+      --  apart with nothing to notice it.
+      if taken[slot] then
+        sb.logError("PETPORT %s refusing module set: slot %s appears twice",
+          stationUniqueId(), tostring(slot))
+        return refuse()
+      end
+
+      if not petportIsModuleItem(record.item) then
+        sb.logError("PETPORT %s refusing module set: %s is not a module item",
+          stationUniqueId(), sb.printJson(record.item))
+        return refuse()
+      end
+
+      --  STORED AS A CLEAN RECORD rather than by keeping the payload's table.
+      --  The message table is not ours and copying it here is what keeps a
+      --  stray field out of the item's saved parameters forever.
+      taken[slot] = true
+      table.insert(accepted, { slot = slot, item = copy(record.item) })
+    end
+
+    self.petData.modules = accepted
     self.dirty = true
     self.paneSignature = nil
+
+    --  NOT PUSHED FROM HERE. pushModuleEffects is signature-gated and runs from
+    --  update, so clearing the signature is the whole of what this has to do --
+    --  and it means the push has exactly one call site rather than two that can
+    --  drift apart.
+    self.pushedModuleEffects = nil
+
+    sb.logInfo("PETPORT %s module set committed: %s of %s slot(s) filled",
+      stationUniqueId(), sb.printJson(#accepted), sb.printJson(slots))
     return true
   end))
 
@@ -1000,14 +1110,22 @@ function init()
   --  PER-UNIT DISPLAY TOGGLES. These live on petData rather than on the port,
   --  because they describe the UNIT and have to travel with it when the item
   --  moves to another port.
+  --
+  --  DISPLAY ONLY, WHICH IS NOW THE WHOLE SET. Two more used to be written here
+  --  and both are gone: `bubbles` was never specified and nothing read it, and
+  --  `sleep` duplicated `petports_allowSleep`, which is a MONSTERTYPE parameter
+  --  -- a property of the chassis that this had no business shadowing.
+  --
+  --  WRITTEN WHOLESALE RATHER THAN MERGED, deliberately, which is also what
+  --  retires the two dead fields from an already-lived-in item: the first
+  --  toggle a player touches replaces the table and they are gone. A merge
+  --  would carry them forever with nothing left to read them.
   message.setHandler("petports_setToggles", simpleHandler(function(payload)
     if self.petData == nil or type(payload) ~= "table" then return false end
 
     self.petData.toggles = {
       carried = payload.carried == true,
-      crosshairs = payload.crosshairs == true,
-      bubbles = payload.bubbles == true,
-      sleep = payload.sleep ~= false
+      crosshairs = payload.crosshairs == true
     }
     self.dirty = true
     self.paneSignature = nil
@@ -1024,10 +1142,42 @@ function init()
   --  the largest gap between what the design says and what is reachable in
   --  game. The handlers exist so the pane's wiring can be tested against
   --  something real before the feature lands.
+  --  PORT ENABLED -- A KILL SWITCH FOR ONE PORT, AND IT PERSISTS.
+  --
+  --  STORED AS AN OBJECT PARAMETER, NOT ON petData. It belongs to the PORT: an
+  --  emptied and re-socketed port stays switched off, and a unit carried to a
+  --  different port is not carrying somebody else's off switch with it. That is
+  --  also why it sits above the divider in the pane.
+  --
+  --  object.setConfigParameter IS ALREADY THE MOD'S PERSISTENCE ROUTE -- it is
+  --  what the pane mirror is written through -- so this needs no new mechanism
+  --  and survives a world reload for the same reason the mirror does.
+  --
+  --  DEFAULTS TO ON, WHICH DIVERGES FROM THE UPCYCLER ON PURPOSE. A machine
+  --  defaults off because a freshly placed one would otherwise start converting
+  --  a player's things unasked. A petport does nothing at all until a unit is
+  --  socketed into it, so the equivalent caution is already built in, and a port
+  --  that has to be switched on after placement is a support question.
+  --
+  --  NOTHING IS DESPAWNED FROM IN HERE. The flag is written and update()
+  --  reconciles on its next tick -- one place that decides whether a unit should
+  --  exist, rather than two that can disagree. Same reasoning as the module
+  --  effect push.
   message.setHandler("petports_setPortEnabled", simpleHandler(function(payload)
-    sb.logInfo("PETPORT %s port enable requested: %s -- not built",
-      stationUniqueId(), sb.printJson(payload))
-    return false
+    if type(payload) ~= "table" then return false end
+
+    local enabled = payload.enabled == true
+    object.setConfigParameter(ENABLED_KEY, enabled)
+
+    --  ZEROED SO AN ENABLE IS PROMPT. Otherwise the unit comes back on whatever
+    --  was left of RESPAWN_GRACE, which is a click that appears to do nothing.
+    if enabled then self.spawnTimer = 0 end
+
+    self.paneSignature = nil
+
+    sb.logInfo("PETPORT %s port %s by player", stationUniqueId(),
+      enabled and "ENABLED" or "DISABLED")
+    return true
   end))
 
   message.setHandler("petports_setParticipation", simpleHandler(function(payload)
@@ -1038,6 +1188,10 @@ function init()
 
   self.workTimer = 0
   self.task = nil
+
+  --  The pane write this port last ACTED ON, accepted or refused. Echoed in the
+  --  mirror; see petports_setModules.
+  self.moduleToken = nil
   self.lastReject = nil
   self.lastRejectAt = 0
   self.recallFailures = 0
@@ -2295,25 +2449,219 @@ local function paneSpecies()
   return resolved.config.shortdescription
 end
 
---  AUTHORED ON THE ITEM, NOT DERIVED FROM RARITY. Rarity is the convention --
---  Common 0, Uncommon 1, Rare 2, Legendary 3 -- and deliberately not the rule,
---  because the first modded pet to bracket into the normally-unobtainable
---  Essential tier would break a derivation and there would be no way to author
---  around it.
-local function paneModuleSlots()
+--  AUTHORED ON THE ITEM, WITH RARITY AS THE FALLBACK RATHER THAN THE RULE.
+--
+--  SUPERSEDES the earlier "never derived" position, and the objection that
+--  produced it is what the fallback ordering answers. That objection was that a
+--  modded pet bracketed into the normally-unobtainable Essential tier would have
+--  no way to author around a derivation. It has one: the authored field is read
+--  FIRST and the table is only consulted when nothing is authored. Essential is
+--  also in the table now, so even the un-authored case lands somewhere sensible
+--  instead of at zero.
+--
+--  ONE SLOT AT THE BOTTOM, NOT ZERO. A Common pet with no slots renders the
+--  Modules region of the pane completely empty, which reads as a broken pane
+--  rather than as an unupgraded unit. Every pet can hold something.
+local MODULE_SLOTS_BY_RARITY = {
+  common = 1,
+  uncommon = 2,
+  rare = 3,
+  legendary = 4,
+
+  --  Not normally obtainable, and present precisely because that is where a
+  --  modder brackets a special pet.
+  essential = 5
+}
+
+--  THE CEILING THE PANE CAN ACTUALLY DRAW, and it is a shared number rather
+--  than a local opinion: petportconfig declares exactly this many itemslot
+--  widgets and petportconfig.lua's MODULE_SLOTS carries the matching note.
+--
+--  CLAMPED HERE, ON THE WRITE SIDE, so an item authoring twenty slots gets five
+--  rather than fifteen invisible ones. A slot the player cannot see is a slot
+--  whose contents cannot be removed.
+local MODULE_SLOTS_MAX = 5
+
+function petportModuleSlots()
   local item = socketedItem()
   if item == nil then return 0 end
 
+  local function clamp(n)
+    return math.max(0, math.min(MODULE_SLOTS_MAX, math.floor(n)))
+  end
+
   if item.parameters and item.parameters.petports_moduleSlots ~= nil then
-    return tonumber(item.parameters.petports_moduleSlots) or 0
+    return clamp(tonumber(item.parameters.petports_moduleSlots) or 0)
   end
 
   local ok, resolved = pcall(root.itemConfig, { name = item.name, count = 1 })
-  if ok and type(resolved) == "table" and type(resolved.config) == "table" then
-    return tonumber(resolved.config.petports_moduleSlots) or 0
+  if not ok or type(resolved) ~= "table" or type(resolved.config) ~= "table" then
+    return 0
   end
+
+  local authored = tonumber(resolved.config.petports_moduleSlots)
+  if authored ~= nil then return clamp(authored) end
+
+  --  LOWERCASED BEFORE THE LOOKUP. Rarity is authored as "Rare" in every
+  --  vanilla item file and as "rare" in a fair number of modded ones, and a
+  --  case-sensitive miss here would silently hand back zero slots -- the same
+  --  casing trap SORTING_FOR_MODDERS.md warns about for filter tags.
+  local rarity = resolved.config.rarity
+  if type(rarity) == "string" then
+    local byRarity = MODULE_SLOTS_BY_RARITY[string.lower(rarity)]
+    if byRarity ~= nil then return byRarity end
+  end
+
   return 0
 end
+
+--------------------------------------------------------------------------------
+--  MODULES
+--------------------------------------------------------------------------------
+--
+--  A LIST OF RECORDS, NOT AN ARRAY INDEXED BY SLOT, AND THAT IS A SERIALISATION
+--  DECISION RATHER THAN A STYLE ONE.
+--
+--  The obvious shape is `modules[slot] = descriptor`, and it works perfectly in
+--  Lua right up until it crosses a Json boundary -- which this does twice, into
+--  the item's parameters and into the pane's mirrored parameter. A Lua table
+--  with keys 1 and 3 and a hole at 2 is not a contiguous array, so the engine
+--  converts it to an OBJECT with the string keys "1" and "3". Read back,
+--  `modules[3]` with a NUMBER key misses, and a module in slot 3 silently
+--  vanishes the first time a unit is unsocketed and re-socketed.
+--
+--  Nothing has ever hit this because nothing has ever written a module. The
+--  record list is sparse by construction and contiguous by construction, so it
+--  round-trips identically in both directions with no holes to convert.
+--
+--  BELIEVED, NOT MEASURED. The list-versus-object conversion rule above is from
+--  reading, not from a log in this mod. One socket into slot 2 with slot 1 empty,
+--  followed by an unsocket and re-socket, settles it -- and the record list is
+--  correct whichever way that lands, which is why it is worth taking now rather
+--  than after the measurement.
+--
+--      modules = { { slot = 1, item = <descriptor> }, { slot = 3, item = ... } }
+--
+--  ORDER IN THE LIST IS NOT MEANINGFUL. `slot` is, and every reader keys off it.
+local MODULE_TAG = "petports_module"
+
+--  IS THIS ITEM A MODULE AT ALL?
+--
+--  A QUESTION ABOUT THE ITEM, WHICH IS WHY THE PANE MAY ALSO ASK IT. The pane
+--  performs the swap locally and synchronously -- mech assembly's shape, adopted
+--  because a message round trip cannot be made atomic and every ordering of one
+--  either loses or duplicates the item. That only stays safe while the two sides
+--  cannot disagree about what a module is, and they cannot, because both call
+--  root.itemHasTag on the same item rather than consulting separate rules.
+function petportIsModuleItem(item)
+  if type(item) ~= "table" or item.name == nil then return false end
+  local ok, has = pcall(root.itemHasTag, item.name, MODULE_TAG)
+  return ok and has == true
+end
+
+--  WHAT DOES THIS MODULE GRANT?
+--
+--  Parameters first, then the item config, matching how petportModuleSlots reads
+--  its own field -- so an instance of a module can carry different effects from
+--  its item file, which is the hook a future upgrade or randomisation path needs.
+local function moduleEffectsOf(item)
+  if type(item) ~= "table" or item.name == nil then return {} end
+
+  if item.parameters and type(item.parameters.petports_moduleEffects) == "table" then
+    return item.parameters.petports_moduleEffects
+  end
+
+  local ok, resolved = pcall(root.itemConfig, { name = item.name, count = 1 })
+  if not ok or type(resolved) ~= "table" or type(resolved.config) ~= "table" then
+    return {}
+  end
+
+  local effects = resolved.config.petports_moduleEffects
+  if type(effects) ~= "table" then return {} end
+  return effects
+end
+
+--  THE UNION ACROSS EVERY SOCKETED SLOT, DEDUPLICATED AND SORTED.
+--
+--  SORTED SO THE SIGNATURE IS STABLE. Two modules swapped between slots grant
+--  the same set, and an unsorted list would spell it two different ways and push
+--  a redundant update every time a player rearranged their slots.
+--
+--  DEDUPLICATED BECAUSE setPersistentEffects TAKES A SET. Two lamp modules are a
+--  player wasting a slot, not a brighter unit, and that is the honest outcome --
+--  stacking would need per-effect knowledge this layer does not have.
+function petportModuleEffects()
+  if self.petData == nil or type(self.petData.modules) ~= "table" then return {} end
+
+  local seen = {}
+  local out = {}
+
+  for _, record in ipairs(self.petData.modules) do
+    if type(record) == "table" and record.item ~= nil then
+      for _, effect in ipairs(moduleEffectsOf(record.item)) do
+        if type(effect) == "string" and not seen[effect] then
+          seen[effect] = true
+          table.insert(out, effect)
+        end
+      end
+    end
+  end
+
+  table.sort(out)
+  return out
+end
+
+--  THE CATEGORY THE UNIT HOLDS THEM UNDER.
+--
+--  status.setPersistentEffects REPLACES EVERYTHING UNDER ONE CATEGORY, which is
+--  the entire reason this needs no diffing and no removal path: the port
+--  recomputes the whole set and pushes it, and an effect that is no longer in
+--  the set is gone by construction. An add/remove protocol would have to stay in
+--  step with petData across respawns, reloads and a unit carried to another port.
+--
+--  OURS ALONE. Anything else applying effects to the unit uses its own category
+--  and is untouched by this.
+local MODULE_EFFECT_CATEGORY = "petports_modules"
+
+--  PUSHED ON CHANGE, AND THE PET ID IS PART OF WHAT COUNTS AS A CHANGE.
+--
+--  SIGNATURE-GATED RATHER THAN DIRTY-FLAGGED, deliberately. A dirty flag has to
+--  be set by every site that mutates modules and is silently wrong the moment
+--  one forgets -- and a respawned unit is not a mutation at all, so a flag would
+--  not cover it. Folding the entity id into the signature means a unit that died
+--  and came back re-applies its effects for free, with nobody having to remember.
+--
+--  Same shape as self.ventSignature, for the same reasons.
+function pushModuleEffects()
+  if self.petId == nil or not world.entityExists(self.petId) then
+    --  Cleared so the next unit -- respawn or replacement -- is pushed to,
+    --  rather than matching a signature left behind by its predecessor.
+    self.pushedModuleEffects = nil
+    return
+  end
+
+  local effects = petportModuleEffects()
+
+  local ok, encoded = pcall(sb.printJson, effects)
+  if not ok then encoded = tostring(#effects) end
+  local signature = tostring(self.petId) .. "|" .. encoded
+
+  if signature == self.pushedModuleEffects then return end
+  self.pushedModuleEffects = signature
+
+  sb.logInfo("PETPORT %s pushing %s module effect(s) to unit %s: %s",
+    stationUniqueId(), sb.printJson(#effects), sb.printJson(self.petId), encoded)
+
+  --  Defined in petports_contract.lua. A bare callScriptedEntity naming a
+  --  function the target does not define returns nil SILENTLY rather than
+  --  raising, so a missing contract here would look exactly like a status
+  --  effect that does not work -- hence the log line above, which fires
+  --  whether or not the far end exists.
+  world.callScriptedEntity(self.petId, "petports_setModuleEffects", effects,
+    MODULE_EFFECT_CATEGORY)
+end
+
+--------------------------------------------------------------------------------
 
 --  Derived from the seed rather than stored as its own field. The seed already
 --  exists, already persists, and already decides which monsterpart the unit
@@ -2330,12 +2678,19 @@ function mirrorPaneState(dt)
   if self.paneTimer > 0 then return end
   self.paneTimer = PANE_MIRROR_INTERVAL
 
+  --  A PORT-LEVEL FIELD, SO IT IS ON BOTH BRANCHES. The enabled checkbox sits
+  --  above the divider and means something whether or not anything is socketed
+  --  -- so an empty port has to report it too, or the pane paints the box from
+  --  its config default and shows ON for a port that is off.
+  local enabled = petportEnabled()
+
   local state
   if self.petData == nil then
-    state = { hasUnit = false }
+    state = { hasUnit = false, enabled = enabled }
   else
     state = {
       hasUnit = true,
+      enabled = enabled,
       petName = self.petData.petName or paneSpecies() or "Utility Unit",
       species = paneSpecies(),
       serial = paneSerial(),
@@ -2343,8 +2698,17 @@ function mirrorPaneState(dt)
       cargo = paneCargo(),
       task = self.task and self.task.type or "idle",
       diagnostics = paneDiagnostics(),
-      moduleSlots = paneModuleSlots(),
+      moduleSlots = petportModuleSlots(),
       modules = self.petData.modules,
+
+      --  THE ECHO. The pane stamps every module write and refuses to overwrite
+      --  its own module set from a mirror until its stamp comes back -- see the
+      --  petports_setModules handler for the item-loss path that closes.
+      --
+      --  MIRRORED EVEN WHEN NOTHING CHANGED, which it is, because the handler
+      --  clears paneSignature on the way in. A token swallowed by the change
+      --  gate is a pane waiting forever.
+      moduleToken = self.moduleToken,
 
       --  THE LIVE UNIT'S ENTITY ID, WHICH IS THE WHOLE PORTRAIT MECHANISM.
       --
@@ -8738,7 +9102,42 @@ function update(dt)
     self.spawnTimer = 0
   end
 
-  setHullAnimationStateIntent("open")
+  --  THE OFF SWITCH, RECONCILED HERE AND NOWHERE ELSE.
+  --
+  --  The handler only writes the flag; this is what makes it mean something, so
+  --  there is one place that decides whether a unit should exist. That also
+  --  covers the cases no handler sees: a world reloading with a port already
+  --  switched off, and a disabled port having an item socketed into it.
+  --
+  --  NOT AN EARLY RETURN, AND THAT IS DELIBERATE. Four things below this point
+  --  must keep running while a port is off -- the item write-back, the pane
+  --  mirror, the module effect push and workUpdate's housekeeping -- and an
+  --  early return here is exactly how the replant sweep once stopped running
+  --  for an empty port. A disabled port still holds its coverage rect and its
+  --  residency; it simply has no unit.
+  local enabled = petportEnabled()
+
+  --  THE DOOR NOW MEANS "OPEN FOR BUSINESS" RATHER THAN "SOMETHING IS
+  --  SOCKETED", which is a small widening of what it said before. A switched-off
+  --  port with an item in it reads as closed, which is what it is.
+  setHullAnimationStateIntent(enabled and "open" or "close")
+
+  if not enabled then
+    if self.petId ~= nil then
+      sb.logInfo("PETPORT %s despawning unit: port is switched off. Its state and "
+        .. "cargo are written back to the socketed item.", stationUniqueId())
+
+      --  WRITES THE ITEM BACK FIRST, so cargo and resources survive. Switching a
+      --  port off is not meant to cost the player anything.
+      saveAndDespawn()
+      abandonTask("port disabled")
+
+      --  THE GHOST PROBLEM, SAME AS THE ITEM-REMOVED BRANCH ABOVE. A stale
+      --  published position reads to anotherUnitIsCloser as a live idle unit and
+      --  suppresses dispatch for work nobody will do.
+      publishUnitPosition()
+    end
+  end
 
   --  ENVIRONMENT. Retires a unit whose home has become uninhabitable, and is
   --  also what clears self.envUnsuitable when it becomes habitable again.
@@ -8758,7 +9157,14 @@ function update(dt)
   end
 
   --  Spawn, or respawn after an unload/death.
-  if self.petId == nil or not world.entityExists(self.petId) then
+  --
+  --  `enabled` GATES THE WHOLE BLOCK RATHER THAN THE spawnPet CALL. Gating only
+  --  the call would leave the timer counting down and the environment re-measure
+  --  running every second on a port that is switched off -- work with no
+  --  possible consumer. It also means an enable starts from a zeroed timer,
+  --  which the handler sets, instead of from wherever the countdown happened to
+  --  be.
+  if enabled and (self.petId == nil or not world.entityExists(self.petId)) then
     self.spawnTimer = self.spawnTimer - dt
     if self.spawnTimer <= 0 then
       if self.petId ~= nil then
@@ -8810,6 +9216,15 @@ function update(dt)
   --  replant sweep ended up never running for an empty port. A pane opened on
   --  an empty port still has to be told it is empty.
   mirrorPaneState(dt)
+
+  --  ABOVE workUpdate FOR THE SAME REASON, and it is not a hypothetical here:
+  --  a unit whose modules were removed to empty must still be told, and a port
+  --  that returns early would leave a lamp burning on a unit carrying nothing.
+  --
+  --  UNGATED BY ANY TIMER. The signature compare inside is the gate, and it is
+  --  a string equality against a value that changes only when the module set or
+  --  the entity does -- cheaper than the timer that would guard it.
+  pushModuleEffects()
 
   workUpdate(dt)
 end
