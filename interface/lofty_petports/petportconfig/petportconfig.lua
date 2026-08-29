@@ -23,12 +23,18 @@
 --
 --  WRITE PATH IS A MESSAGE, because three of these actions change state.
 
+--  EVERY VISIBLE STRING COMES FROM THE SHARED TABLE, not from this pane's
+--  config. The config names a key beside each widget and declares "--" as its
+--  value; petports_applyStrings resolves the keys at init and a key that does
+--  not resolve leaves the dash showing. See petports_strings.config.
+require "/scripts/lofty_petports/petports_strings.lua"
+
 local DEBUG = true
 
 --  Bump on every change to this file. A pane has no visible version and a stale
 --  copy is indistinguishable from an unfixed one -- which cost a cycle on the
 --  upcycler before the stamp existed.
-local PANE_BUILD_STAMP = "2026-08-29e pickup/sorting swapped, relabelled"
+local PANE_BUILD_STAMP = "2026-08-29s claim markers to the checkbox column"
 
 local PANE_STATE_KEY = "petports_paneState"
 
@@ -80,6 +86,51 @@ local MODULE_TAG = "petports_module"
 
 local STATS_LINES = 8
 
+--  WHAT THE TASK LABEL SAYS, KEYED ON THE PORT'S INTERNAL TASK TYPE.
+--
+--  The mirror carries `self.task.type` verbatim -- a dispatch identifier, not
+--  copy. "drain" is meaningful to findWork and to nobody else.
+--
+--  TRANSLATED IN THE PANE, NOT AT THE SOURCE. The type is what the port logs,
+--  what work ids are built from, and what every dispatch branch compares
+--  against; renaming it there would be renaming an identifier to fix a caption.
+--  This is a display concern and it lives with the display.
+--
+--  PHRASED AS WHAT THE UNIT IS DOING, present tense, because the label sits
+--  under a portrait of the unit doing it. "Ready" rather than "Idle" -- idle
+--  reads as a fault when a player is waiting for work to happen.
+--
+--  TWO TYPES ARE OVERLOADED AND THEIR LABELS HAVE TO STAY GENERIC.
+--  `withdraw` covers seed withdrawal, water withdrawal AND restock fetch;
+--  `deposit` covers ordinary deposit and restock delivery. Naming either one
+--  specifically would be wrong most of the time. Splitting them needs a subtype
+--  on the task, which is a change to dispatch rather than to this table.
+local TASK_LABELS = {
+	idle = "Ready",
+
+	collect = "Collecting Items",
+	deposit = "Storing Items",
+	tidy = "Tidying Storage",
+	compact = "Compacting Stacks",
+	withdraw = "Fetching Supplies",
+
+	harvest = "Harvesting Crops",
+	replant = "Replanting",
+	water = "Watering Crops",
+	animal = "Tending Livestock",
+
+	drain = "Emptying Upcycler",
+	fuel = "Collecting Treats",
+	upcycle = "Loading Upcycler",
+
+	["return"] = "Returning to Port",
+
+	--  Not player-facing work: the fallback drop task that DIAG_FALLBACK gates,
+	--  which is false. Named anyway so that if it ever does dispatch, the pane
+	--  says something rather than showing a bare identifier.
+	diag = "Running Diagnostics"
+}
+
 --  Severity tints for the diagnostic row, sharing the crosshair vocabulary on
 --  purpose: a player who has learned the world markers can already read these.
 local DIAG_TINT = {
@@ -106,49 +157,25 @@ local GROUP_WIDGET = {
 	machines = "groupMachines"
 }
 
---  WHAT EACH BOX ACTUALLY GATES, IN THE PLAYER'S WORDS.
---
---  ^green; MARKS THE VERB, AND THE ^reset; AFTER IT IS NOT OPTIONAL. Starbound
---  colour codes run until they are reset, so a missing one tints the remainder
---  of the tooltip and, depending on where the box ends, whatever is drawn after
---  it.
---
---  DESCRIBES THE BEHAVIOUR, NOT THE GENERATORS. "Sorting" is four work
---  generators -- restock in both directions, tidying and compaction -- and
---  naming them would be true and useless; what a player sees is items moving
---  from one crate to another.
---
---  THE KEY `hauling` READS AS "Item Pickup" IN THE PANE, and the mismatch is
---  deliberate. The key is what a stored setting names and is frozen; the label
---  is free. See petportParticipates in petports_petport.lua, which carries the
---  same note and the reason renaming the key would quietly re-enable the group
---  on every port already configured.
---
---  NOT WHAT THESE SAY, DELIBERATELY: that deposit and recall are ungated. A
---  player who unticks everything still sees a unit carry its load to a crate
---  and walk home, and explaining why in a tooltip would cost four lines to
---  pre-empt a question nobody has yet asked. It is in the port's comments where
---  the next person to change this will find it.
-local GROUP_TOOLTIP = {
-	hauling = "This pet will ^green;pick up unattended items^reset; within network coverage.",
-	sorting = "This pet will ^green;move items^reset; between storage containers within network coverage.",
-	farming = "This pet will ^green;automatically water and replant crops^reset; within network coverage.",
-	machines = "This pet will automatically ^green;deliver requested items to machines^reset; (such as Upcyclers) within network coverage."
-}
 
 --  Widgets owned by each tab. Membership lives here rather than in the config
 --  so showTab has exactly one list to be wrong about.
 local TAB_MEMBERS = {
 	tabDetails = {
-		"detailsModulesLabel",
+		"detailsModulesLabel", "detailsModulesHint",
 		"moduleSlot1", "moduleSlot2", "moduleSlot3", "moduleSlot4", "moduleSlot5",
 		"detailsFlavorLabel", "detailsFlavorValue",
 		"feedSlot", "feedHint",
-		"detailsSerial", "renameButton"
+		"detailsSerial"
 	},
+
+	--  RENAME LIVES HERE, NOT ON DETAILS. Details is a READOUT -- serial, flavor,
+	--  modules, what the unit is. Renaming CHANGES the unit, which is what this
+	--  tab is for, and it sat on Details only because that is where the serial it
+	--  sits beside happens to be.
 	tabSettings = {
-		"setCarried", "setCarriedLabel",
-		"setCrosshairs", "setCrosshairsLabel"
+		"renameButton",
+		"setCarried", "setCarriedLabel"
 	},
 	tabStats = {
 		"statsLine1", "statsLine2", "statsLine3", "statsLine4",
@@ -258,6 +285,29 @@ local function paintFuel(blips)
 	end
 end
 
+--  "Fuel" OVER A DRONE, "Hunger" OVER AN ANIMAL.
+--
+--  The port mirrors the unit's bodyMaterialKind and this maps it to a key; the
+--  wording itself is in the shared string table with everything else, so a
+--  translator sees both variants side by side rather than one buried in Lua.
+--
+--  ORGANIC IS THE FALLBACK, INCLUDING FOR AN EMPTY PORT. The underlying
+--  resource is vanilla's `hunger` whatever is socketed, so "Hunger" is the
+--  honest word when there is nothing to ask -- and a port with no unit still
+--  shows a bar frame that needs a caption.
+--
+--  A KEY THAT DOES NOT RESOLVE LEAVES THE DASH, exactly as the init sweep does.
+--  This runs on the refresh path rather than at init, so it cannot use the
+--  sweep, but it must not behave differently from it.
+local function paintFuelLabel(bodyKind)
+	local key = (bodyKind == "robotic") and "petport.fuel.robotic" or "petport.fuel.organic"
+	local text = petports_string(key)
+
+	if type(text) == "string" then
+		widget.setText("fuelLabel", text)
+	end
+end
+
 local function paintCargo(cargo)
 	local stack = cargo and cargo[1] or nil
 
@@ -288,7 +338,11 @@ local function paintDiagnostics(diags)
 	for i = 1, DIAG_SLOTS do
 		local d = diags[i]
 		local name = "diag" .. i
-		diagText[i] = d and (d.full or d.short) or nil
+		--  BOTH HALVES KEPT, not just the one the old string-return used. The
+		--  tooltip layout has a title and a description, and `short` is exactly
+		--  a title -- so the row that reads "Blocked" gains the sentence that
+		--  says why underneath it.
+		diagText[i] = d and { title = d.short or "Diagnostic", body = d.full or d.short } or nil
 		if d == nil then
 			widget.setVisible(name, false)
 		else
@@ -581,16 +635,48 @@ local function paintPreview(petId)
 		(size[2] - PORTRAIT_PAD * 2) / layout.h)
 	scale = math.max(1.0, math.min(PORTRAIT_MAX_SCALE, scale))
 
+	--  QUANTISED TO A WHOLE NUMBER, AND THIS IS A RENDERING BUG FIX.
+	--
+	--  The fit lands on 3.917 for a 24x16 sprite in this 106x76 canvas --
+	--  min((106-12)/24, (76-12)/16) -- and a fractional scale samples pixel art
+	--  unevenly: some source columns are drawn three times and some four. Where
+	--  a doubled column is the outline, which is (37,40,42) at luminance 39 and
+	--  the most common colour in the sheet, the result reads as a black band.
+	--
+	--  IT LOOKS FRAME-DEPENDENT because WHICH source columns get doubled is
+	--  fixed while the sprite content under them moves, so the band appears on
+	--  the frames whose outline happens to fall there. That made it look like a
+	--  sprite defect; it is not. All eight frames of the sheet are identical in
+	--  their dark columns.
+	--
+	--  ROUNDED, NOT FLOORED, WITH A FIT CHECK. Flooring 3.917 gives 3 and
+	--  shrinks the portrait by a quarter for no reason. 4 fits -- 24x4 = 96
+	--  against a 106 canvas, 16x4 = 64 against 76 -- so it is both bigger than
+	--  the fractional fit and crisp. It only eats into PORTRAIT_PAD, which is
+	--  breathing room rather than a hard limit; the fallback to floor is what
+	--  guards the real one, the canvas edge.
+	local rounded = math.floor(scale + 0.5)
+	if rounded * layout.w > size[1] or rounded * layout.h > size[2] then
+		rounded = math.floor(scale)
+	end
+	scale = math.max(1, rounded)
+
 	for _, it in ipairs(layout.items) do
 		--  CENTRED, BECAUSE THE TRANSFORM CENTRES. tx and ty put the sprite on
 		--  its own origin, so its centre is what the layout computed and
 		--  centred = true is the matching draw. Anchoring every part on the
 		--  UNION's centre is what keeps parts at different offsets framed as
 		--  one thing instead of each being centred individually.
+		--
+		--  SNAPPED TO WHOLE PIXELS. An integer scale is only half of it: the
+		--  offsets are computed from measured drawable centres and are
+		--  fractional, so a part landing on x.5 is resampled across two
+		--  destination pixels and blurs its own outline. Rounding here is what
+		--  makes the quantised scale actually land on the pixel grid.
 		local image = it.flip and (it.image .. "flipx") or it.image
 		canvas:drawImage(image, {
-				centre[1] + (it.cx - layout.cx) * scale,
-				centre[2] + (it.cy - layout.cy) * scale
+				math.floor(centre[1] + (it.cx - layout.cx) * scale + 0.5),
+				math.floor(centre[2] + (it.cy - layout.cy) * scale + 0.5)
 			},
 			scale, nil, true)
 	end
@@ -817,6 +903,7 @@ local function refresh(force)
 	--  toggle has to be able to move the box back, and it can only do that if
 	--  every repaint asserts the port's value over whatever the click left.
 	widget.setChecked("portEnabled", state.enabled ~= false)
+	widget.setChecked("portCrosshairs", state.crosshairs ~= false)
 	widget.setText("portNetworkLabel", "id: " .. tostring(state.network or "--"))
 
 	--  ABSENT MEANS PARTICIPATING, matching the port's own reader. A mirror from
@@ -854,9 +941,15 @@ local function refresh(force)
 	--  frozen. The animation is the point.
 	livePetId = state.petId
 	paintFuel(state.fuelBlips)
+	paintFuelLabel(state.bodyKind)
 	paintCargo(state.cargo)
 
-	widget.setText("taskLabel", state.task or "")
+	--  UNMAPPED FALLS BACK TO THE RAW TYPE, deliberately. A task type added to
+	--  dispatch without a line in TASK_LABELS then reads as an untranslated
+	--  identifier -- odd-looking and traceable -- rather than as blank, which
+	--  would read as a unit with nothing to do.
+	local task = state.task
+	widget.setText("taskLabel", task and (TASK_LABELS[task] or task) or "")
 	paintDiagnostics(state.diagnostics)
 
 	paintModules(state)
@@ -1049,38 +1142,415 @@ end
 --  nothing else, so the hovered widget has to be resolved from the position and
 --  the text looked up from state the paint pass left behind.
 --
---  widget.getChildAt returns a full widget PATH, not a leaf name, so this
---  matches on a substring rather than comparing equal -- the same reason row
---  member callbacks receive a leaf name that is identical for every row.
+--  ---------------------------------------------------------------------------
+--  THE HOVER LAYER
+--  ---------------------------------------------------------------------------
 --
---  Returning nil means "no tooltip here", which is the right answer for every
---  widget in the pane except these four. Anything an itemslot covers already
---  has the engine's own item tooltip and must not be overridden.
-function createTooltip(screenPosition)
-	local ok, hovered = pcall(widget.getChildAt, screenPosition)
-	if not ok or type(hovered) ~= "string" then return nil end
+--  THIS PANE DRAWS ITS OWN TOOLTIPS, AND createTooltip IS GONE BECAUSE IT WAS
+--  NEVER CALLED.
+--
+--  MEASURED, TWICE, AFTER TWO WRONG FIXES. The first attempt guessed at the hit
+--  test; the second found the pane declared no `tooltipLayout` and fixed that.
+--  Neither mattered. A ContainerPane does not forward createTooltip to its
+--  script at all: the beacon panes open with interactAction "ScriptPane" and
+--  their tooltips work, while this pane and the upcycler open through uiConfig
+--  and produce none. The only tooltips either ContainerPane shows are the item
+--  ones ItemSlotWidget draws for itself, which is why the upcycler's rule slot
+--  looked like a working counter-example.
+--
+--  AND THERE IS NO WIDGET-LEVEL FIELD TO FALL BACK ON -- a grep of the whole
+--  asset tree finds tooltip text only in .tooltip templates, never as a widget
+--  property. createTooltip was the only engine route and it is closed here.
+--
+--  SO: TRACK THE CURSOR ON A CANVAS AND DRAW IT. Same technique
+--  /interface/easel/signstoregui.lua uses for its entire interface.
+--
+--  TWO CANVASES, AND THE SPLIT IS MEASURED RATHER THAN CHOSEN. A single
+--  full-pane canvas on TOP worked for hovering and killed every ITEM tooltip in
+--  the pane -- the socket and the module slots went dead. captureMouseEvents was
+--  already false, so capture is not what does it; being on top is. The sign
+--  store puts its dispenser in a separate container with a separate UI, which
+--  reads less like a design choice once you have seen this.
+--
+--  hoverCanvas is BENEATH EVERYTHING, including the background, and is never
+--  drawn on. It reports the cursor and occludes nothing, because nothing is
+--  under it. tipCanvas is small, topmost and hidden until there is something to
+--  say. Both verified in game.
 
+--  THE CANVAS IS A FIXED 150x80; THE BOX DRAWN INSIDE IT IS NOT.
+--
+--  A canvas can be moved but not resized, so tipCanvas is declared at the size
+--  of the LARGEST tooltip and the visible box is drawn to fit its own text
+--  inside that. The unused remainder is transparent -- it costs a little extra
+--  occlusion while a tooltip is up, and nothing else.
+--
+--  THE FIRST VERSION FILLED THE WHOLE CANVAS and every tooltip came out around
+--  twice as tall as its text. That was not a measurement problem; the estimate
+--  below was already right. It was drawing the container instead of the
+--  contents.
+--
+--  DRAWN FROM THE CANVAS ORIGIN, which is bottom-left, so the box sits at the
+--  bottom of the canvas and lands where the cursor offset puts it. The slack is
+--  above, out of the way.
+local TIP_W = 150
+local TIP_H = 80
+local TIP_PAD = 5
+
+--  Wrap width for the body, inside the padding.
+local TIP_WRAP = TIP_W - TIP_PAD * 2
+
+--  THE PANE'S DRAWABLE WIDTH, taken from the background art rather than
+--  guessed: panetall_body.png is 337 wide. A canvas that crosses it is clipped
+--  by the pane, which is measured -- see the placement note in paintHover.
+local TIP_PANE_W = 337
+
+--  KEEP-OFF FROM THAT EDGE. Two pixels, because landing exactly on 337 clipped.
+local TIP_MARGIN = 2
+
+--  THE ONLY AUTHORED SPACING LEFT, AND IT IS A GAP RATHER THAN A SIZE.
+--
+--  TIP_LINE, TIP_TITLE_H and TIP_CHAR_W are all gone: they were estimates of
+--  how tall rendered text IS, and a label reports that exactly -- see
+--  tipMetrics. This is the space BETWEEN the two blocks, which is a spacing
+--  choice and does not vary with the script the text is written in.
+local TIP_GAP = 4
+
+--  WHY THE ESTIMATE HAD TO GO, AND IT IS NOT ONLY A TRANSLATION PROBLEM.
+--
+--  MEASURED, four English bodies at a 140px wrap, chars divided by real lines:
+--  3.89, 4.44, 5.53, 5.53 px per character. TIP_CHAR_W was 4.3 and could not
+--  have been right, because WRAPPING BREAKS ON WORD BOUNDARIES and a character
+--  count does not predict where those fall. The Machines body was estimated at
+--  four lines and renders in three, which is the extra margin under it.
+--
+--  A translated string makes it worse rather than differently wrong -- a CJK
+--  glyph is roughly twice a Latin one, so the error becomes a factor and it
+--  clips instead of running long -- but the estimate was already unfixable in
+--  the language it was fitted to.
+
+--  FULLY OPAQUE. At alpha 235 the widgets behind the box read straight through
+--  it -- the participation labels were legible under the text.
+local TIP_BG = { 22, 24, 29, 255 }
+local TIP_EDGE = { 74, 82, 92, 255 }
+local TIP_TITLE_COLOR = { 220, 226, 234, 255 }
+local TIP_BODY_COLOR = { 150, 156, 164, 255 }
+
+local hoverCanvas = nil
+local tipCanvas = nil
+local tipShowing = false
+
+--  Widget name -> hit rect, read off the widget itself rather than transcribed.
+local hoverRects = {}
+
+--  Widget name -> { title = , body = }, RESOLVED AT INIT FROM THE SHARED TABLE.
+--
+--  A tooltip is a property of the widget it describes, so the widget names its
+--  key as `petportsTip` in this pane's config and the text itself lives in
+--  petports_strings.config with every other string in the mod. Adding one is a
+--  key in each file and no Lua at all -- which is the whole question this
+--  answers: no per-widget canvas is needed, because one movable canvas serves
+--  every marked widget.
+--
+--  DYNAMIC TIPS STILL COME FROM CODE. The diagnostics say different things at
+--  different times; only their existence is static, so they are not swept.
+local staticTips = {}
+
+local function sweepTips()
+	staticTips = petports_sweepTips()
+end
+
+local function hoverRect(name)
+	if hoverRects[name] ~= nil then return hoverRects[name] end
+
+	local okPos, pos = pcall(widget.getPosition, name)
+	local okSize, size = pcall(widget.getSize, name)
+
+	if not okPos or not okSize or type(pos) ~= "table" or type(size) ~= "table" then
+		return nil
+	end
+
+	hoverRects[name] = { pos[1], pos[2], pos[1] + size[1], pos[2] + size[2] }
+	return hoverRects[name]
+end
+
+local function within(rect, at)
+	return rect ~= nil
+		and at[1] >= rect[1] and at[1] <= rect[3]
+		and at[2] >= rect[2] and at[2] <= rect[4]
+end
+
+--  WHAT IS UNDER THE CURSOR, OR NOTHING.
+--
+--  Diagnostics first and from code, because a hidden icon has no entry in
+--  diagText and must not claim a hover even though its widget still has a
+--  position. Then the swept ones, which carry their own text.
+--
+--  THE RECT COMES BACK TOO, because the box is anchored to the WIDGET and not
+--  to the pointer -- see the placement note in paintHover.
+local function hoverTarget(at)
 	for i = 1, DIAG_SLOTS do
-		if string.find(hovered, "diag" .. i, 1, true) then
-			return diagText[i]
+		local entry = diagText[i]
+		local rect = hoverRect("diag" .. i)
+		if entry ~= nil and within(rect, at) then
+			return entry.title, entry.body, rect
 		end
 	end
 
-	--  THE PARTICIPATION BOXES. Matched on substring for the same reason the
-	--  diagnostics are: getChildAt hands back a full widget PATH, not a leaf
-	--  name.
-	--
-	--  MATCHED AFTER THE DIAGNOSTICS AND WITH NO OVERLAP, since no group widget
-	--  name contains "diag". If a fifth group is ever added, the thing to check
-	--  is that its name does not contain another widget's -- "groupFarm" inside
-	--  "groupFarming" would resolve to whichever is tested first.
-	for _, group in ipairs(GROUPS) do
-		if string.find(hovered, GROUP_WIDGET[group], 1, true) then
-			return GROUP_TOOLTIP[group]
+	for name, tip in pairs(staticTips) do
+		local rect = hoverRect(name)
+		if within(rect, at) then
+			return tip.title, tip.body, rect
 		end
 	end
 
 	return nil
+end
+
+--  HIDDEN AND MOVED, RATHER THAN CLEARED IN PLACE.
+--
+--  A canvas occludes what is under it whether or not anything is drawn on it --
+--  that is what killed every item tooltip in the pane last build. So the drawing
+--  canvas is only visible while a tooltip is up, and only ever covers the patch
+--  the tooltip itself covers.
+local function hideTip()
+	if not tipShowing then return end
+	tipShowing = false
+	pcall(widget.setVisible, "tipCanvas", false)
+end
+
+--  ---- text measurement -------------------------------------------------------
+--
+--  THE BOX IS SIZED FROM WHAT THE TEXT ACTUALLY MEASURES, not from an estimate
+--  of it. A canvas cannot measure text -- drawText returns void and there is no
+--  measure call -- but a LABEL reports the size of the text it laid out, and
+--  widget.getSize hands that back.
+--
+--  MEASURED, in the probe build that established it. Four bodies at a 140px
+--  wrap returned 133x25, 137x16, 127x25 and 139x25 -- widths that vary with the
+--  string and heights that fit 7 + (n - 1) * 9 exactly. So:
+--
+--    A label reports real text bounds, not the nothing it was configured with.
+--    A HIDDEN label lays out. The visible alpha-zero twin returned identical
+--      numbers on all four, so it is gone and this one stays invisible.
+--    There is NO FRAME LAG. Hover order was Farming, Item Pickup, Sorting,
+--      Machines; a lag of one would have given Item Pickup the 25 belonging to
+--      Farming, and it returned its own 16.
+--
+--  TWO LABELS, ONE PER FONT SIZE. The body wraps at fontSize 7 and the title is
+--  a single unwrapped line at 8. Measuring only the body would leave the title
+--  as an authored English constant, which is half a fix.
+--
+--  THE BODY IS MEASURED WITH COLOUR CODES STRIPPED, deliberately. `^green;` is
+--  seven bytes and zero pixels in both renderers, so either string should
+--  measure the same -- but the stripped one is what the probe was verified
+--  against, and it cannot go wrong if a label and a canvas ever disagree about
+--  escapes.
+--
+--  CACHED PER STRING. paintHover runs every update for as long as the cursor
+--  sits still, and a setText plus a getSize per frame is a write and a layout
+--  for an answer that cannot have changed.
+local tipMetricCache = {}
+
+--  IF MEASUREMENT FAILS, DRAW THE WHOLE CANVAS.
+--
+--  The fallback is deliberately NOT a re-derived estimate. An estimate is the
+--  thing this replaced, and a per-language constant buried in a fallback path is
+--  worse than no fallback at all, because it only ever runs where nobody is
+--  looking. A full-height box is roomy, cannot clip, and is obvious on screen.
+local measureFailLogged = false
+
+local function tipMetrics(title, body)
+	local key = tostring(title) .. "\1" .. tostring(body)
+	local cached = tipMetricCache[key]
+	if cached ~= nil then return cached[1], cached[2] end
+
+	local function measure(name, text)
+		local ok, size = pcall(function()
+			widget.setText(name, text)
+			return widget.getSize(name)
+		end)
+
+		if not ok or type(size) ~= "table" or type(size[2]) ~= "number" then return nil end
+		if size[2] <= 0 then return nil end
+		return size[2], size[1]
+	end
+
+	local titleH = measure("tipMeasureTitle", title or "")
+	local bodyH, bodyW = measure("tipMeasure", body or "")
+
+	if titleH == nil or bodyH == nil then
+		if not measureFailLogged then
+			measureFailLogged = true
+			dbg("MEASURE FAILED (title %s, body %s) -- tooltips fall back to the full %d px box",
+				tostring(titleH), tostring(bodyH), TIP_H)
+		end
+		return nil, nil
+	end
+
+	dbg("measure: title %d high, body %s x %d -- %s", titleH, tostring(bodyW), bodyH, body or "")
+
+	tipMetricCache[key] = { titleH, bodyH }
+	return titleH, bodyH
+end
+
+local function paintHover()
+	if hoverCanvas == nil then
+		local ok, bound = pcall(widget.bindCanvas, "hoverCanvas")
+		if not ok or bound == nil then
+			dbg("bindCanvas hoverCanvas FAILED -- no hover tracking this session")
+			return
+		end
+		hoverCanvas = bound
+	end
+
+	local ok, at = pcall(function() return hoverCanvas:mousePosition() end)
+
+	if not ok or type(at) ~= "table" then
+		hideTip()
+		return
+	end
+
+	local title, body, rect = hoverTarget(at)
+
+	if title == nil then
+		hideTip()
+		return
+	end
+
+	if tipCanvas == nil then
+		local okBind, bound = pcall(widget.bindCanvas, "tipCanvas")
+		if not okBind or bound == nil then
+			dbg("bindCanvas tipCanvas FAILED -- nothing can be drawn")
+			return
+		end
+		tipCanvas = bound
+	end
+
+	--  COLOUR CODES ARE NOT TEXT. `^green;` and `^reset;` are fourteen bytes of
+	--  the Machines body and zero pixels of it, in the label that measures it
+	--  and in the canvas that draws it alike.
+	local visible = string.gsub(body or "", "%^%a+;", "")
+
+	local titleH, bodyH = tipMetrics(title, visible)
+	local w = TIP_W
+	local h
+
+	if titleH == nil then
+		--  Measurement is unavailable. Take the whole canvas rather than guess.
+		h = TIP_H
+		titleH = 9
+	else
+		h = TIP_PAD * 2 + titleH + TIP_GAP + bodyH
+	end
+
+	--  LOUD WHEN IT CLIPS, because the canvas cannot be resized at runtime and
+	--  80px is therefore a hard ceiling. The first tooltip written long enough
+	--  to hit it would otherwise just lose its last line, on screen, silently.
+	if h > TIP_H then
+		dbg("TOOLTIP CLIPS: needs %d px, canvas is %d -- last line(s) lost: %s",
+			h, TIP_H, body or "")
+		h = TIP_H
+	end
+
+	--  ANCHORED TO THE WIDGET, NOT TO THE POINTER.
+	--
+	--  The box's TOP-LEFT sits on the hovered widget's TOP-RIGHT corner, so it
+	--  opens down and to the right and never covers the thing being hovered --
+	--  which a checkbox 9px on a side cannot afford.
+	--
+	--  WHY NOT THE CURSOR: the pointer moves inside a widget and the box moved
+	--  with it, and the two clamps then pinned it. Every participation tooltip
+	--  shared a bottom edge at y 240 and both right-hand ones shared a right
+	--  edge flush with the pane, which read as the UI shoving them around. It
+	--  was this arithmetic. Anchoring to the widget makes the position a
+	--  property of what is hovered, so it does not move at all while hovering.
+	--
+	--  IT FLIPS ACROSS THE WIDGET, IT DOES NOT SLIDE ALONG THE EDGE.
+	--
+	--  MEASURED: a pane DOES clip a canvas that overhangs its bounds, and all
+	--  four participation tooltips were cut -- not just the two on the right.
+	--  The pane art is 337 wide, and the left pair anchors at x 187, so the box
+	--  reached exactly 337 and lost its edge. Flush with the boundary is already
+	--  too far.
+	--
+	--  SO: right of the widget when there is room, left of it when there is not.
+	--  Sliding it back along the edge instead is what parked it on top of the
+	--  checkbox in the first place, and a 9px checkbox cannot spare the cover.
+	--
+	--  TIP_MARGIN IS A KEEP-OFF, NOT A FUDGE. Landing exactly on 337 is what
+	--  clipped, so the test has to reject the boundary rather than allow it.
+	--
+	--  IF NEITHER SIDE FITS, RIGHT WINS. That needs a box wider than the pane
+	--  and cannot happen at 150 against 337, but a silent negative x would draw
+	--  the tooltip off the left edge and look identical to this bug.
+	local x = rect[3]
+
+	if x + TIP_W > TIP_PANE_W - TIP_MARGIN then
+		local flipped = rect[1] - TIP_W
+		if flipped >= TIP_MARGIN then x = flipped end
+	end
+
+	--  The box is drawn from the canvas origin, which is BOTTOM-left, so the
+	--  canvas y that puts the box's top on the widget's top is that minus h.
+	--
+	--  THE FLOOR IS SAFE HERE in a way the old x clamp was not: the box is
+	--  always beside the widget, never over it, so pushing it up off the bottom
+	--  edge cannot hide what is being hovered.
+	local y = math.max(rect[4] - h, 0)
+
+	pcall(widget.setPosition, "tipCanvas", { x, y })
+
+	if not tipShowing then
+		tipShowing = true
+		pcall(widget.setVisible, "tipCanvas", true)
+	end
+
+	tipCanvas:clear()
+	tipCanvas:drawRect({ 0, 0, w, h }, TIP_BG)
+	tipCanvas:drawRect({ 0, 0, w, 1 }, TIP_EDGE)
+	tipCanvas:drawRect({ 0, h - 1, w, h }, TIP_EDGE)
+	tipCanvas:drawRect({ 0, 0, 1, h }, TIP_EDGE)
+	tipCanvas:drawRect({ w - 1, 0, w, h }, TIP_EDGE)
+
+	--  ANCHORED TOP AND LAID OUT DOWNWARD, WHICH MAKES AN OVERLAP STRUCTURALLY
+	--  IMPOSSIBLE RATHER THAN MERELY UNLIKELY.
+	--
+	--  MEASURED, in game: a BOTTOM-anchored wrapped block puts the bottom of the
+	--  WHOLE BLOCK at the position and grows UPWARD from it. The previous version
+	--  assumed the opposite -- first line at the position, stacking down -- and
+	--  back-offset the body by (lines - 1) lines to land its last line on the
+	--  padding. Under that assumption the title's bottom sits exactly 4px above
+	--  the body's top for every line count, so an overlap could never happen.
+	--  One happened, which is what falsifies it: the four-line Machines body ran
+	--  to y 68 against a title bottom at 45. It was overlapping before the box
+	--  was resized too; the taller canvas put the title at 66 where it read as a
+	--  near miss instead of a collision.
+	--
+	--  WHY TOP RATHER THAN CORRECTED ARITHMETIC. Bottom-anchoring can be made to
+	--  work by placing the title's bottom at the top of the body block, but that
+	--  puts the body's HEIGHT into the position of the title as well as into the
+	--  height of the box, so one bad number moves two things. Anchoring top
+	--  positions both blocks from the top edge and lets the height decide only
+	--  how tall the box is.
+	--
+	--  THAT MATTERED MORE WHEN THE HEIGHT WAS A GUESS and it is still the right
+	--  shape now that it is measured, because the fallback path still runs on an
+	--  authored number when measurement fails.
+	--
+	--  The exact case reads: body bottom lands on TIP_PAD, because h is
+	--  TIP_PAD * 2 + titleH + TIP_GAP + bodyH by construction.
+	tipCanvas:drawText(title, {
+		position = { TIP_PAD, h - TIP_PAD },
+		horizontalAnchor = "left",
+		verticalAnchor = "top"
+	}, 8, TIP_TITLE_COLOR)
+
+	tipCanvas:drawText(body or "", {
+		position = { TIP_PAD, h - TIP_PAD - titleH - TIP_GAP },
+		horizontalAnchor = "left",
+		verticalAnchor = "top",
+		wrapWidth = TIP_WRAP
+	}, 7, TIP_BODY_COLOR)
 end
 
 function renameClicked()
@@ -1104,9 +1574,18 @@ end
 --  unit does.
 function settingToggled()
 	tell("petports_setToggles", {
-		carried = widget.getChecked("setCarried"),
-		crosshairs = widget.getChecked("setCrosshairs")
+		carried = widget.getChecked("setCarried")
 	})
+end
+
+--  CLAIM MARKERS. A PORT SETTING, so it sits in the port band and writes its
+--  own message rather than riding along with the pet toggles.
+--
+--  Fire and forget, like the other two in that band: the port rewrites the
+--  mirror and the next poll repaints this from what it actually stored, so a
+--  refused toggle moves the box back on its own.
+function portCrosshairsToggled()
+	tell("petports_setCrosshairs", { enabled = widget.getChecked("portCrosshairs") })
 end
 
 function portEnabledToggled()
@@ -1139,6 +1618,17 @@ function init()
 		blipShown[i] = nil
 	end
 
+	--  ONCE, AT INIT, BOTH OF THEM. The gui table does not change and neither
+	--  does the string table, so walking sixty widgets every poll to find the
+	--  marked ones would be work with no possible new answer.
+	--
+	--  STRINGS BEFORE TABS. showTab hides most of the pane, and a hidden widget
+	--  is still a widget as far as setText is concerned -- but running the sweep
+	--  first means the log reports the whole pane's strings rather than only the
+	--  tab that happens to open first.
+	petports_applyStrings()
+	sweepTips()
+
 	showTab("tabDetails")
 	refresh(true)
 end
@@ -1151,6 +1641,10 @@ function update(dt)
 	--  live view of a live entity and has to redraw whether or not the port's
 	--  mirrored state changed.
 	paintPreview(livePetId)
+
+	--  Also outside it, and for a stronger reason: the cursor moves without the
+	--  port's state changing at all.
+	paintHover()
 end
 
 function uninit()

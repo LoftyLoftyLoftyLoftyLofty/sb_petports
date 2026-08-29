@@ -1090,6 +1090,10 @@ function init()
 
 	widget.setChecked("enabledCheckbox", self.state.enabled ~= false)
 
+	--  ABSENT MEANS ON, so a beacon placed before this field existed feeds
+	--  pets rather than silently refusing to.
+	widget.setChecked("feederCheckbox", self.state.feeder ~= false)
+
 	--  BEFORE refreshRequests, which calls addListItem, which constructs the
 	--  row buttons. Registering afterwards is one frame too late.
 	registerRowCallbacks()
@@ -1261,6 +1265,19 @@ end
 function enabledToggled()
 	self.state.enabled = widget.getChecked("enabledCheckbox")
 	dbg("enabledToggled -> %s", tostring(self.state.enabled))
+	write()
+end
+
+--  MAY UNITS EAT FROM THIS CONTAINER.
+--
+--  NOTHING READS IT YET. The fuel system is unbuilt -- treats accumulate in
+--  seven flavors and nothing consumes one -- so this stores a preference and
+--  stops there. Written now because the beacon state travels with the ITEM, and
+--  a field added later would be absent on every beacon a player has already
+--  placed. Absent reads as ON, so that costs nothing whenever it does land.
+function feederToggled()
+	self.state.feeder = widget.getChecked("feederCheckbox")
+	dbg("feederToggled -> %s", tostring(self.state.feeder))
 	write()
 end
 

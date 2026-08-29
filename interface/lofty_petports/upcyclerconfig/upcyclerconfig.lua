@@ -171,7 +171,8 @@ local function writeState()
 
 	world.sendEntityMessage(id, "petports_upcyclerWrite", {
 		rules = self.rules,
-		enabled = self.enabled
+		enabled = self.enabled,
+		feeder = self.feeder
 	})
 
 	dbg("write SENT: %s", j({ rules = self.rules, enabled = self.enabled }))
@@ -468,6 +469,22 @@ end
 function enabledToggled()
 	self.enabled = widget.getChecked("enabledCheckbox") == true
 	dbg("enabledToggled -> %s", tostring(self.enabled))
+	writeState()
+end
+
+--  MAY UNITS EAT STRAIGHT OUT OF THE OUTPUT SLOT.
+--
+--  NOTHING READS IT YET -- the fuel system is unbuilt, treats accumulate and
+--  nothing consumes one. Stored now so that the preference exists before the
+--  behaviour does.
+--
+--  DEFAULTS OFF HERE AND ON FOR THE BEACONS. See storedFeeder in
+--  petports_upcycler.lua; the short version is that grazing the machine that
+--  MAKES the treats skips the whole haul-and-store loop, so it should be a
+--  choice rather than the path of least resistance.
+function feederToggled()
+	self.feeder = widget.getChecked("feederCheckbox") == true
+	dbg("feederToggled -> %s", tostring(self.feeder))
 	writeState()
 end
 
@@ -1019,6 +1036,10 @@ local function applyState(state)
 
 	widget.setChecked("enabledCheckbox", self.enabled)
 
+	--  ABSENT READS AS OFF, matching storedFeeder on the object.
+	self.feeder = state.feeder == true
+	widget.setChecked("feederCheckbox", self.feeder)
+
 	--  Opening onto a machine with rules and nothing selected leaves the
 	--  threshold field editing nothing, which reads as the field being broken.
 	ensureSelection()
@@ -1385,6 +1406,22 @@ function createTooltip(screenPosition)
 			tooltip.title.value = "Discard charge"
 			tooltip.description.value =
 				"Throws away the flavors still queued. The reagents are not returned."
+			return tooltip
+		end
+	end
+
+	--  The feeder box. The one setting in this pane whose consequence is not
+	--  guessable from its label.
+	local okFeed, onFeed = pcall(widget.inMember, "feederCheckbox", screenPosition)
+
+	if okFeed and onFeed then
+		local tooltip = config.getParameter("tooltipLayout")
+
+		if type(tooltip) == "table" then
+			tooltip.title.value = "Pet feeder"
+			tooltip.description.value =
+				"Units may eat treats straight out of the output slot, instead of "
+				.. "waiting for them to be hauled to storage."
 			return tooltip
 		end
 	end

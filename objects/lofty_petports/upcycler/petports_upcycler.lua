@@ -59,6 +59,12 @@ end
 local RULES_KEY = "petports_upcyclerRules"
 local ENABLED_KEY = "petports_upcyclerEnabled"
 
+--  MAY UNITS EAT STRAIGHT OUT OF THE OUTPUT SLOT.
+--
+--  DEFAULTS OFF, WHICH DIVERGES FROM THE BEACONS ON PURPOSE -- see storedFeeder
+--  for the reasoning.
+local FEEDER_KEY = "petports_upcyclerFeeder"
+
 --  BANKED POINTS, MIRRORED INTO A PARAMETER SO THEY SURVIVE THE PICKAXE.
 --
 --  `storage` already survives a world reload -- it is world state, serialised
@@ -184,6 +190,32 @@ end
 
 local function storedEnabled()
 	local stored = config.getParameter(ENABLED_KEY)
+	if stored == nil then return false end
+	return stored == true
+end
+
+--  MAY UNITS FEED FROM THIS MACHINE'S OUTPUT.
+--
+--  ABSENT MEANS OFF, AND THAT IS THE OPPOSITE OF THE BEACONS. Worth stating
+--  plainly because the inconsistency is deliberate and will otherwise read as an
+--  oversight.
+--
+--  A BEACON DEFAULTS ON because a crate a player has told the network about is
+--  one they expect the network to use. An upcycler is not a crate -- the player
+--  told the network "this is a converter", never "this is a pantry".
+--
+--  AND IT IS THE FIRST-ORDER OPTIMAL PLACE TO EAT, which is the real reason.
+--  This machine MAKES the treats, so a unit that may graze it will always graze
+--  it: no drain trip, no deposit, no fetch. Defaulting it on would quietly
+--  retire the entire fuel logistics loop the moment the fuel system lands, and a
+--  player would never see the behaviour they built the crates for. Off makes
+--  grazing an optimisation somebody chooses, which is the interesting version.
+--
+--  It also matches this object's own convention: `enabled` is absent-and-off on
+--  a freshly placed machine, for the same reason -- a machine does nothing until
+--  it is told to.
+local function storedFeeder()
+	local stored = config.getParameter(FEEDER_KEY)
 	if stored == nil then return false end
 	return stored == true
 end
@@ -720,6 +752,10 @@ function init()
 			object.setConfigParameter(ENABLED_KEY, payload.enabled == true)
 		end
 
+		if payload.feeder ~= nil then
+			object.setConfigParameter(FEEDER_KEY, payload.feeder == true)
+		end
+
 		--  So the next tick re-evaluates rather than sitting on a stale verdict.
 		self.state = nil
 
@@ -734,6 +770,7 @@ function init()
 		return {
 			rules = storedRules(),
 			enabled = storedEnabled(),
+			feeder = storedFeeder(),
 			points = storage.points or 0,
 
 			--  So the pane can draw a bar without hardcoding the divisor. It is

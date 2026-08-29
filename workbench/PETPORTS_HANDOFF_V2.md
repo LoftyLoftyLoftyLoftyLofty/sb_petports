@@ -48,10 +48,10 @@ File it as that, not as the story.
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-CAVEAT ON THIS PASS: this session touched the petport pane, the petport object,
-`petportsTaskAction.lua`, `petports_contract.lua`, and the item/filter
-registration files. Paragraphs outside those areas were not re-verified and carry
-their previous session's date.
+CAVEAT ON THIS PASS: this session touched the petport pane and object, both
+beacon panes, the upcycler pane and object, `petportsTaskAction.lua`,
+`petports_contract.lua`, and the item/filter registration files. Paragraphs
+outside those areas were not re-verified and carry their previous session's date.
 
 **Core loop.** A petport places, opens, spawns a unit from a socketed item, and
 the unit's state round-trips through that item across despawn, world reload and
@@ -98,12 +98,26 @@ stamped with a token the port echoes -- see `dd.module.writetoken`.
 unit after writing its state back to the item and blocks respawn; on brings it
 back. It persists as an object parameter and survives reload. The four
 participation checkboxes gate dispatch by group -- item pickup, sorting, farming,
-machines.
+machines. Claim markers moved here from the pet tab, and now actually gate the
+markers rather than being written and never read.
+
+**Tooltips, in the petport pane only.** A ContainerPane gets no script tooltips
+from the engine at all, so this pane draws its own on two canvases -- see
+`arch.pane.hoverlayer`. Text is declared beside the widget in the pane config and
+swept at init. THE UPCYCLER STILL HAS NONE and its `createTooltip` is dead code;
+the two beacons are ScriptPanes and theirs work. See
+`todo.pane.tooltipstrings`.
+
+**Pet feeder checkboxes** on both beacons and the upcycler. Stored, mirrored, and
+READ BY NOTHING -- the fuel system does not exist yet. On by default for the
+beacons, off for the upcycler, which is deliberate: the upcycler makes the treats,
+so grazing it skips the entire haul-and-store loop.
 
 **Still not built.** Docking. The fuel system itself -- treats accumulate in seven
-flavors and nothing eats one. Vents do not cross a medium boundary. Liquid
-permissions from pet upgrades. Rename. The Stats tab is empty. Module slot
-automation and the reagent-slot automation are both untouched.
+flavors and nothing eats one, which is why three feeder checkboxes are inert.
+Vents do not cross a medium boundary. Liquid permissions from pet upgrades.
+Rename. The Stats tab is empty and the port gathers no metrics. Reagent-slot
+automation is designed but unbuilt -- see `todo.upcycler.reagentrouting`.
 
 **Art.** Bespoke: the unit body, the petport, the crosshairs, the treat COLOURS
 (see `dd.art.treatcolours`). Placeholder: the vent, the upcycler, the eight treat
@@ -2285,6 +2299,33 @@ writes the item back first, so cargo and resources survive.
 **NOT AN EARLY RETURN.** The item write-back, the pane mirror, the module effect
 push and `workUpdate`'s housekeeping all keep running while a port is off. An
 early return there is how the replant sweep once stopped running for empty ports.
+
+### The petport pane draws its own tooltips on two canvases
+`arch.pane.hoverlayer` -- see also `fact.pane.notooltips`, `fact.pane.canvasocclusion`
+
+The engine will not give a ContainerPane script tooltips, so this pane does what
+`/interface/easel/signstoregui.lua` does for its entire interface: reads the
+cursor off a canvas and draws the tooltip by hand.
+
+**TWO CANVASES, AND THE SPLIT IS FORCED.** `hoverCanvas` is full-pane at zlevel
+-5, beneath the background, never drawn on -- it only answers where the cursor is,
+and cannot occlude anything because nothing is under it. `tipCanvas` is small,
+topmost and `visible: false` until there is something to say, then moved to the
+cursor. It covers only the patch a tooltip already covers.
+
+**TOOLTIP TEXT IS DECLARED IN THE CONFIG**, as a `petportsTip` key on the widget
+it describes, and swept out of `config.getParameter("gui")` once at init. Adding
+one is a config key and no Lua. Dynamic text -- the diagnostics -- still comes
+from code, because only its existence is static.
+
+**THE BOX IS SIZED BY ESTIMATE AND IT HAS TO BE.** The canvas API cannot measure
+text. `TIP_CHAR_W` is back-fitted from a rendered tooltip: a 76-character body
+broke at 33 characters against a 140px wrap, so 4.24px each, rounded up to 4.3 so
+the error is a spare line rather than a clipped one. Colour codes are stripped
+before counting -- `^green;` and `^reset;` are fourteen bytes and zero pixels.
+
+A canvas can be moved but NOT RESIZED, so `tipCanvas` is declared at the size of
+the largest tooltip and the drawn box shrinks inside it. Anything longer clips.
 
 ## DESIGN DECISIONS
 
@@ -5074,6 +5115,51 @@ BELIEVED FROM READING, not from a log in this mod. The record-list shape is
 correct either way, which is why it was taken without waiting for the
 measurement.
 
+### A ContainerPane does not forward createTooltip to its script
+`fact.pane.notooltips` -- see also `arch.pane.hoverlayer`, `fact.pane.canvasocclusion`
+
+MEASURED ACROSS ALL FOUR PANES. The beacons open with `interactAction`
+`"ScriptPane"` and their script tooltips work. The petport and the upcycler open
+through `uiConfig`, which makes them ContainerPanes, and neither has EVER shown a
+script tooltip -- not one, for the whole life of either pane.
+
+**THE COUNTER-EXAMPLE THAT WASTED TWO FIXES.** The upcycler's rule slot does show
+a tooltip, which read as proof that the mechanism worked and the fault was ours.
+It is not a script tooltip: `ItemSlotWidget` draws item tooltips for itself, and
+that is the only kind either ContainerPane produces.
+
+**AND THERE IS NO WIDGET-LEVEL FIELD TO FALL BACK ON.** A grep of the whole asset
+tree finds tooltip text only inside `.tooltip` templates, never as a property on a
+widget. `createTooltip` is the only route the engine offers a pane script, and it
+is closed to a ContainerPane.
+
+Two wrong fixes went in before this was measured -- one guessing at the hit test,
+one adding the `tooltipLayout` the config was genuinely missing. Both were real
+defects. Neither was the reason.
+
+### A canvas on top kills every item tooltip beneath it
+`fact.pane.canvasocclusion` -- see also `arch.pane.hoverlayer`
+
+A full-pane canvas at a high zlevel gave the petport working hover text and took
+away the item tooltips on the unit socket and every module slot.
+
+**captureMouseEvents WAS ALREADY false, SO CAPTURE IS NOT WHAT DOES IT.** Being on
+top is. A canvas occludes hover detection for everything under it whether or not
+anything has been drawn on it.
+
+**A BURIED CANVAS STILL REPORTS THE CURSOR.** At zlevel -5, beneath even the
+background, `canvas:mousePosition()` returns live coordinates -- and occludes
+nothing, because nothing is under it. That is the whole basis of the hover layer.
+
+`widget.setPosition` MOVES A CANVAS, so one small canvas can serve every hover
+target instead of one canvas per widget. `config.getParameter("gui")` returns the
+whole widget table at runtime, so tooltips can be declared beside the widgets they
+describe and swept at init.
+
+This also explains the sign store: its dispenser is a separate container with a
+separate UI because its canvas covers the pane, and an item grid under that canvas
+would be dead. That is a workaround, not a design.
+
 ## DISPROVEN
 
 ### Ranking by distance under scarcity starves the far machines
@@ -5977,6 +6063,123 @@ the FIRST only. The second, which is the ORDINARY case, still does
 refusing vent, does not verify the landing against the plan, and does not count
 the hop against `MAX_REPEAT_HOPS`. Both are labelled in the log
 (`[ENTRY SITE A]` / `[ENTRY SITE B]`).
+
+### Tooltips and label strings, everywhere
+`todo.pane.tooltipstrings` -- see also `arch.pane.hoverlayer`, `fact.pane.notooltips`
+
+- **Verify tooltip behaviour is consistent across all four panes.** Only the
+  petport has the hover layer. The upcycler is the other ContainerPane and its
+  `createTooltip` -- including the "Pet feeder" one -- has never fired and is dead
+  code today. The two beacons are ScriptPanes and theirs work.
+- **Verify the upcycler's food flavor tooltips display anything at all.** They
+  are written against `createTooltip`, so on current evidence they do not.
+- **A tooltip on every checkbox.** Probable exceptions: "enable machine" and
+  "enable beacon", which say what they do.
+- **Pull labels AND tooltip strings into one centralised .config.** They are
+  currently spread across four pane configs with no way to check them together,
+  and the wording repeats between panes.
+
+### Pane art, four jobs
+`todo.art.panes`
+
+- **Deposit and restock beacons need top-left pane icons.** They have none.
+- **Upcycler and petport need proper ones** to replace their placeholders.
+- **All four panes need the diagonal shine layer on the background.**
+- **Slot targeting graphics are placeholder in every pane and disappear behind an
+  itemSlot once something is in it.** Needs a real pass, not a tweak.
+
+### Reagent routing into the upcycler
+`todo.upcycler.reagentrouting` -- see also `dd.upcycler.blips`, `todo.upcycler.slotorderdup`
+
+Checkboxes in the upcycler's filter list marking which eligible items are
+REAGENTS, ticked by default for anything the flavor manifest recognises.
+
+A delivered item that is a reagent goes to the reagent slot rather than the burner
+slot, unless the reagent slot is full, in which case it burns as normal.
+
+**NO NEW WORK GENERATOR AND NO FETCH LOGIC.** The drain path already brings the
+item; the only change is where it lands. Nothing reaches an upcycler unless the
+player already filtered it in, so anything arriving is already marked as surplus
+-- a reagent hitting the slot instead of the burner is strictly better use of it.
+
+The tick exists to EXCLUDE a reagent from that routing, which keeps the default
+right for a player who never opens the list.
+
+### Sinker locomotion -- ground pathing that will not swim
+`todo.locomotion.sinker` -- see also `dead.locomotion.pelagic`
+
+Vanilla ground monsters walk into water and keep walking. Whether that is
+reachable from this mod's setup is unknown; the pelagic attempt failed because
+water is a closed node set for a GRAVITY-DISABLED actor, and a sinker is
+gravity-enabled, so it is a different question rather than the same one answered.
+
+### Names for the chassis
+`todo.unit.names`
+
+The four locomotion classes need real names rather than their class. "Axolotter"
+for the amphibious one. This also settles what the monsterpart files are called --
+see `status.port.inventory` on `drone_placeholder`, which is free to rename now and
+expensive once there are several variants.
+
+### Finish the petport pane
+`todo.pane.statstab` -- see also `arch.pane.hoverlayer`
+
+- **The Stats tab is eight labels and `stats = nil` in the mirror.** Metrics are
+  not gathered on the port either.
+- **Decide whether the unit's HP bar belongs in the pane at all.** A unit that
+  cannot be hurt by anything the player builds may not need one.
+- **Rename is still `not built`** behind its button on the Settings tab.
+
+### Unit nameplates
+`todo.unit.nameplate` -- see also `todo.unit.names`
+
+Work out how names above monsters are driven and whether ours can carry one. Then
+a "display unit name" checkbox on the pet Settings tab, ON by default, beside the
+rename button -- the two belong together and neither means much without the other.
+
+### Petport spawn choreography
+`todo.port.choreography` -- see also `plan.art.capturepodfade`, `plan.art.doorchoreography`
+
+A unit currently appears and disappears instantly. The fade is already specified
+in `plan.art.capturepodfade` and the door in `plan.art.doorchoreography`; this is
+the note that they are one job and want doing together, since both fire on the
+same two events.
+
+### Error state on the petport itself
+`todo.port.errorindicator`
+
+Weigh animationState components for error conditions against the cost of driving
+them, and decide whether each port wants an indicator light. A player with twenty
+ports should be able to see which one is unhappy without opening twenty panes --
+the pane's diagnostic row already knows, it just cannot be seen from outside.
+
+### Adversarial platforming for the new jump code
+`todo.pathing.adversarialtest` -- see also `arch.pathing.solvelaunch`, `fact.pathing.eulertick`
+
+`solveLaunch` and the arrival brake were verified against one session's logs and a
+replay of every takeoff in them. That is not the same as a build designed to break
+them. Specifically untested: a wall-clipped arc, where the plan is wrong at both
+ends and a solver that faithfully flies it may fly it into the floor. See the
+warning in `todo.pathing.jumpmodel`.
+
+### Modules, design and liquids
+`todo.module.designpass` -- see also `arch.module.effects`, `plan.module.investmentpath`
+
+- **A design pass on what modules a pet can have.** One placeholder lamp exists;
+  the investment path names slots but not contents.
+- **Lava and poison immunity modules must also unblock those liquids in the
+  pathing deny list.** The status effect alone makes a unit survive the liquid it
+  still refuses to path through, which is the wrong half of the feature and the
+  reason the lamp was built first.
+
+### Maxwell
+`todo.unit.maidrank`
+
+A themed maid NPC who inspects a player's pets and awards maid ranks. He is called
+Maxwell. Presenting a pet with a high Tidy Score earns a maid dress cosmetic.
+
+Filed rather than dropped because it is the only thing so far that gives the Tidy
+Score a consumer -- it is currently computed, displayed, and read by nothing.
 
 ## PROCESS
 

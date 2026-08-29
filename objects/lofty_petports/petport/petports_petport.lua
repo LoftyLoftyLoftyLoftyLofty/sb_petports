@@ -161,6 +161,18 @@ end
 --  unit carried elsewhere. See the petports_setPortEnabled handler.
 local ENABLED_KEY = "petports_enabled"
 
+--  CLAIM CROSSHAIRS, AND THEY BELONG TO THE PORT RATHER THAN TO THE UNIT.
+--
+--  MOVED HERE FROM petData.toggles. Markers are spawned by crosshairRefresh off
+--  self.crosshairs, keyed on drops THIS PORT has an opinion about, and it runs
+--  whether or not anything is socketed -- so filing the switch on the pet made
+--  an empty port's markers unswitchable and tied a port-wide display choice to
+--  whichever unit happened to be plugged in.
+--
+--  ABSENT MEANS ON, matching the enabled switch and matching what every
+--  existing world already does.
+local CROSSHAIRS_KEY = "petports_crosshairs"
+
 --  GLOBAL BECAUSE ITS READERS ARE SCATTERED -- the message handler in init(),
 --  the lifecycle block in update(), and the pane mirror -- and the first of
 --  those is defined 8000 lines above the last. A `local` here would work for
@@ -173,6 +185,12 @@ local ENABLED_KEY = "petports_enabled"
 --  existing world on update. Only an explicit false disables.
 function petportEnabled()
   return config.getParameter(ENABLED_KEY, true) ~= false
+end
+
+--  Global for the same reason petportEnabled is: read from a message handler in
+--  init(), from crosshairRefresh 8000 lines below it, and from the pane mirror.
+function petportCrosshairs()
+  return config.getParameter(CROSSHAIRS_KEY, true) ~= false
 end
 
 --  Periodic flush of drifting state into the socketed item.
@@ -1178,10 +1196,11 @@ function init()
   --  because they describe the UNIT and have to travel with it when the item
   --  moves to another port.
   --
-  --  DISPLAY ONLY, WHICH IS NOW THE WHOLE SET. Two more used to be written here
-  --  and both are gone: `bubbles` was never specified and nothing read it, and
-  --  `sleep` duplicated `petports_allowSleep`, which is a MONSTERTYPE parameter
-  --  -- a property of the chassis that this had no business shadowing.
+  --  DISPLAY ONLY, AND DOWN TO ONE FIELD. Three have left this table: `bubbles`
+  --  was never specified and nothing read it, `sleep` duplicated
+  --  `petports_allowSleep` (a MONSTERTYPE parameter, a property of the chassis
+  --  this had no business shadowing), and `crosshairs` moved to the PORT -- see
+  --  CROSSHAIRS_KEY.
   --
   --  WRITTEN WHOLESALE RATHER THAN MERGED, deliberately, which is also what
   --  retires the two dead fields from an already-lived-in item: the first
@@ -1191,8 +1210,7 @@ function init()
     if self.petData == nil or type(payload) ~= "table" then return false end
 
     self.petData.toggles = {
-      carried = payload.carried == true,
-      crosshairs = payload.crosshairs == true
+      carried = payload.carried == true
     }
     self.dirty = true
     self.paneSignature = nil
@@ -1244,6 +1262,28 @@ function init()
 
     sb.logInfo("PETPORT %s port %s by player", stationUniqueId(),
       enabled and "ENABLED" or "DISABLED")
+    return true
+  end))
+
+  --  CLAIM CROSSHAIRS. Same storage and same defaulting as the enabled switch.
+  --
+  --  NOTHING IS RETIRED FROM IN HERE. crosshairRefresh clears the markers on its
+  --  next pass, so this writes the flag and the display follows -- one place
+  --  that decides whether a marker should exist, which also covers a world
+  --  loading with a port already switched off.
+  message.setHandler("petports_setCrosshairs", simpleHandler(function(payload)
+    if type(payload) ~= "table" then return false end
+
+    local on = payload.enabled == true
+    object.setConfigParameter(CROSSHAIRS_KEY, on)
+    self.paneSignature = nil
+
+    --  ZEROED SO THE MARKERS APPEAR PROMPTLY on a switch-on, rather than on
+    --  whatever was left of CROSSHAIR_INTERVAL.
+    self.crosshairTimer = 0
+
+    sb.logInfo("PETPORT %s crosshairs %s by player", stationUniqueId(),
+      on and "ON" or "OFF")
     return true
   end))
 
@@ -2402,6 +2442,51 @@ local PANE_FUEL_BLIPS = 20
 --  informational one.
 local PANE_DIAG_LIMIT = 4
 
+--  IS THE UNIT A MACHINE OR AN ANIMAL? The fuel bar is labelled from this and
+--  nothing else reads it yet.
+--
+--  bodyMaterialKind IS A VANILLA FIELD AND EVERY MONSTERTYPE ALREADY HAS ONE --
+--  it is what picks a hit sound and a damage effect -- so nothing new is
+--  authored to make this work and a modded pet is classified correctly whether
+--  or not its author has ever heard of this pane. All four chassis here declare
+--  "robotic"; vanilla creatures declare "organic".
+--
+--  CACHED PER TYPE, and checked at both levels for the same reason
+--  animalHarvestable is: whether root.monsterParameters returns baseParameters
+--  flattened or nested is not documented, and looking in both costs one index.
+--
+--  ANYTHING THAT IS NOT "robotic" IS ORGANIC, rather than the reverse. An
+--  unrecognised or absent value should land on the biological wording, because
+--  the underlying resource genuinely is vanilla's `hunger` -- see dd.fuel.label.
+local bodyKindCache = {}
+
+local function paneBodyKind()
+  local monsterType = self.petData and self.petData.monsterType
+  if monsterType == nil then return nil end
+
+  local key = tostring(monsterType)
+  if bodyKindCache[key] ~= nil then return bodyKindCache[key] end
+
+  local kind = "organic"
+  local ok, params = pcall(root.monsterParameters, key)
+
+  if ok and type(params) == "table" then
+    local base = type(params.baseParameters) == "table" and params.baseParameters or {}
+    local declared = params.bodyMaterialKind or base.bodyMaterialKind
+
+    if declared == "robotic" then kind = "robotic" end
+
+    sb.logInfo("PETPORT %s monster type %s: bodyMaterialKind %s -> %s fuel wording",
+      stationUniqueId(), key, tostring(declared), kind)
+  else
+    sb.logInfo("PETPORT %s monster type %s: root.monsterParameters gave nothing, fuel wording defaults to organic",
+      stationUniqueId(), key)
+  end
+
+  bodyKindCache[key] = kind
+  return kind
+end
+
 local function paneFuelBlips()
   local resources = self.petData and self.petData.storage and self.petData.storage.petResources
   if type(resources) ~= "table" then return PANE_FUEL_BLIPS end
@@ -2783,19 +2868,30 @@ function mirrorPaneState(dt)
   --  and an empty port that omitted it would have the pane paint all four boxes
   --  from their config defaults and show ticked for groups that are off.
   local participation = petportParticipation()
+  local crosshairs = petportCrosshairs()
 
   local state
   if self.petData == nil then
-    state = { hasUnit = false, enabled = enabled, participation = participation }
+    state = {
+      hasUnit = false,
+      enabled = enabled,
+      participation = participation,
+      crosshairs = crosshairs
+    }
   else
     state = {
       hasUnit = true,
       enabled = enabled,
       participation = participation,
+      crosshairs = crosshairs,
       petName = self.petData.petName or paneSpecies() or "Utility Unit",
       species = paneSpecies(),
       serial = paneSerial(),
       fuelBlips = paneFuelBlips(),
+
+      --  "Fuel" over a drone, "Hunger" over an animal. The pane maps this to a
+      --  string key; the port does not know the wording and should not.
+      bodyKind = paneBodyKind(),
       cargo = paneCargo(),
       task = self.task and self.task.type or "idle",
       diagnostics = paneDiagnostics(),
@@ -8880,6 +8976,23 @@ local CROSSHAIR_IMMEDIATE = {
 
 local function crosshairRefresh(dt)
   self.crosshairs = self.crosshairs or {}
+
+  --  SWITCHED OFF: RETIRE WHAT IS OUT THERE, THEN DO NOTHING.
+  --
+  --  ABOVE THE TIMER, so a switch-off takes effect on the next tick rather than
+  --  up to CROSSHAIR_INTERVAL later. A player unticking a box wants the markers
+  --  gone, not gone shortly.
+  --
+  --  SELF-LIMITING WITHOUT A FLAG: crosshairClear empties self.crosshairs, so
+  --  the `next` test is false on every tick after the first and this costs one
+  --  table lookup while the port stays off.
+  if not petportCrosshairs() then
+    if next(self.crosshairs) ~= nil then
+      sb.logInfo("PETPORT %s retiring crosshairs: switched off", stationUniqueId())
+      crosshairClear()
+    end
+    return
+  end
 
   self.crosshairTimer = (self.crosshairTimer or 0) - dt
   if self.crosshairTimer > 0 then return end
