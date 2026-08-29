@@ -28,7 +28,7 @@ local DEBUG = true
 --  Bump on every change to this file. A pane has no visible version and a stale
 --  copy is indistinguishable from an unfixed one -- which cost a cycle on the
 --  upcycler before the stamp existed.
-local PANE_BUILD_STAMP = "2026-08-29c module write token, no eaten modules"
+local PANE_BUILD_STAMP = "2026-08-29e pickup/sorting swapped, relabelled"
 
 local PANE_STATE_KEY = "petports_paneState"
 
@@ -89,6 +89,52 @@ local DIAG_TINT = {
 }
 
 local TAB_WIDGETS = { "tabDetails", "tabSettings", "tabStats" }
+
+--  THE FOUR PARTICIPATION BOXES, AND THE ONE PLACE THEIR NAMES ARE LISTED.
+--
+--  Ordered as they are laid out -- hauling, sorting / farming, machines -- so
+--  reading this is reading the pane.
+local GROUPS = { "hauling", "sorting", "farming", "machines" }
+
+--  Widget name per group. Derived rather than tabulated would mean
+--  "group" .. "hauling" and a capitalisation rule; two of these are wanted as
+--  strings anyway, for the tooltip lookup.
+local GROUP_WIDGET = {
+	hauling = "groupHauling",
+	sorting = "groupSorting",
+	farming = "groupFarming",
+	machines = "groupMachines"
+}
+
+--  WHAT EACH BOX ACTUALLY GATES, IN THE PLAYER'S WORDS.
+--
+--  ^green; MARKS THE VERB, AND THE ^reset; AFTER IT IS NOT OPTIONAL. Starbound
+--  colour codes run until they are reset, so a missing one tints the remainder
+--  of the tooltip and, depending on where the box ends, whatever is drawn after
+--  it.
+--
+--  DESCRIBES THE BEHAVIOUR, NOT THE GENERATORS. "Sorting" is four work
+--  generators -- restock in both directions, tidying and compaction -- and
+--  naming them would be true and useless; what a player sees is items moving
+--  from one crate to another.
+--
+--  THE KEY `hauling` READS AS "Item Pickup" IN THE PANE, and the mismatch is
+--  deliberate. The key is what a stored setting names and is frozen; the label
+--  is free. See petportParticipates in petports_petport.lua, which carries the
+--  same note and the reason renaming the key would quietly re-enable the group
+--  on every port already configured.
+--
+--  NOT WHAT THESE SAY, DELIBERATELY: that deposit and recall are ungated. A
+--  player who unticks everything still sees a unit carry its load to a crate
+--  and walk home, and explaining why in a tooltip would cost four lines to
+--  pre-empt a question nobody has yet asked. It is in the port's comments where
+--  the next person to change this will find it.
+local GROUP_TOOLTIP = {
+	hauling = "This pet will ^green;pick up unattended items^reset; within network coverage.",
+	sorting = "This pet will ^green;move items^reset; between storage containers within network coverage.",
+	farming = "This pet will ^green;automatically water and replant crops^reset; within network coverage.",
+	machines = "This pet will automatically ^green;deliver requested items to machines^reset; (such as Upcyclers) within network coverage."
+}
 
 --  Widgets owned by each tab. Membership lives here rather than in the config
 --  so showTab has exactly one list to be wrong about.
@@ -773,6 +819,14 @@ local function refresh(force)
 	widget.setChecked("portEnabled", state.enabled ~= false)
 	widget.setText("portNetworkLabel", "id: " .. tostring(state.network or "--"))
 
+	--  ABSENT MEANS PARTICIPATING, matching the port's own reader. A mirror from
+	--  a port that predates this field must not paint four empty boxes and tell
+	--  the player their unit has been opted out of everything.
+	local participation = state.participation or {}
+	for _, group in ipairs(GROUPS) do
+		widget.setChecked(GROUP_WIDGET[group], participation[group] ~= false)
+	end
+
 	if not hasUnit then
 		livePetId = nil
 		paneModules = {}
@@ -1012,6 +1066,20 @@ function createTooltip(screenPosition)
 		end
 	end
 
+	--  THE PARTICIPATION BOXES. Matched on substring for the same reason the
+	--  diagnostics are: getChildAt hands back a full widget PATH, not a leaf
+	--  name.
+	--
+	--  MATCHED AFTER THE DIAGNOSTICS AND WITH NO OVERLAP, since no group widget
+	--  name contains "diag". If a fifth group is ever added, the thing to check
+	--  is that its name does not contain another widget's -- "groupFarm" inside
+	--  "groupFarming" would resolve to whichever is tested first.
+	for _, group in ipairs(GROUPS) do
+		if string.find(hovered, GROUP_WIDGET[group], 1, true) then
+			return GROUP_TOOLTIP[group]
+		end
+	end
+
 	return nil
 end
 
@@ -1045,13 +1113,20 @@ function portEnabledToggled()
 	tell("petports_setPortEnabled", { enabled = widget.getChecked("portEnabled") })
 end
 
+--  THE WHOLE SET, NOT THE ONE THAT MOVED. The button is checkable, so the
+--  click has already flipped it by the time this runs and reading all four back
+--  is both simpler and self-correcting -- a box that somehow drifted from the
+--  port is brought back into line by the next click on any of them.
+--
+--  FIRE AND FORGET. The port rewrites the mirror and the next poll repaints
+--  these from what it actually stored, so a refused toggle moves the box back
+--  on its own. Nothing here guesses at an outcome.
 function groupToggled()
-	tell("petports_setParticipation", {
-		sorting = widget.getChecked("groupSorting"),
-		farming = widget.getChecked("groupFarming"),
-		machines = widget.getChecked("groupMachines"),
-		hauling = widget.getChecked("groupHauling")
-	})
+	local set = {}
+	for _, group in ipairs(GROUPS) do
+		set[group] = widget.getChecked(GROUP_WIDGET[group])
+	end
+	tell("petports_setParticipation", set)
 end
 
 --  ---------------------------------------------------------------------------

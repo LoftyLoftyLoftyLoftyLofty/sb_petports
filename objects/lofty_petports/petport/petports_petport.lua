@@ -87,6 +87,73 @@ local HEALTH_MOVE = 1.0
 local HEALTH_HOME_SLACK = 5.0
 local RESPAWN_GRACE = 1.0
 
+--  WHICH LOOPS THIS PORT TAKES PART IN.
+--
+--  A PORT PARAMETER LIKE ENABLED, AND FOR THE SAME REASONS: it describes the
+--  port, survives the item being taken out, and does not travel with a unit
+--  carried elsewhere.
+--
+--  BY GROUP, NOT BY TASK. There are fourteen work generators and nobody thinks
+--  in generators. Four boxes is what a player can hold in their head, and the
+--  grouping is by what they SEE happening rather than by dispatch structure.
+local PARTICIPATION_KEY = "petports_participation"
+
+--  THE FOUR GROUPS, AND WHICH GENERATORS EACH ONE GATES.
+--
+--      hauling    collection
+--      sorting    restockFetch, restockDeliver, tidy, compact
+--      farming    replant, water, harvest, animal, withdraw, withdrawWater
+--      machines   drain, fuel
+--
+--  THE LINE BETWEEN THE FIRST TWO IS INGRESS. `hauling` is how a thing ENTERS
+--  the network -- loose items picked up off the ground -- and `sorting` is
+--  everything done to a thing already inside it: restocked, tidied, compacted.
+--  That split is why deposit belongs to neither. It is the hinge between them,
+--  and it is also the unload path, which must never be switchable off.
+--
+--  THE KEY IS `hauling` AND THE PANE LABELS IT "Item Pickup". Deliberate, and
+--  the same convention the filter manifest runs on, where a subgroup with id
+--  "unit" reads "Pets": the ID IS FROZEN because it is what a stored setting
+--  names, and the LABEL is free because nothing persists it. Renaming the key
+--  would silently opt every configured port back into a group it had switched
+--  off, since an absent key reads as participating.
+--
+--  TWO GENERATORS ARE IN NO GROUP AND MUST STAY THAT WAY.
+--
+--  returnWork is the leash. A unit that cannot be recalled is a unit that
+--  wanders out of coverage and stays there.
+--
+--  depositWork IS THE UNLOAD PATH, AND GATING IT BUILDS A DEADLOCK. findWork
+--  returns outright when a unit holds cargo with no dispatchable deposit
+--  target -- that guard is what stops a unit hoarding -- so a switched-off
+--  deposit means a unit which fetched a seed, planted it and kept the
+--  remainder is stuck holding it forever, blocked from every other job
+--  including the ones whose boxes are still ticked. A unit must always be able
+--  to put down what it is carrying.
+--
+--  ABSENT MEANS PARTICIPATING. Every port placed before this existed has no
+--  parameter, and reading that as "opted out" would switch off every port in
+--  every existing world. Only an explicit false denies.
+--
+--  GLOBAL for the same reason petportEnabled is: its readers are the message
+--  handler in init(), findWork 7000 lines below it, and the pane mirror.
+function petportParticipates(group)
+  local set = config.getParameter(PARTICIPATION_KEY, nil)
+  if type(set) ~= "table" then return true end
+  return set[group] ~= false
+end
+
+--  THE WHOLE SET, FOR THE MIRROR. Built from the same reader so the pane cannot
+--  disagree with dispatch about what is switched on.
+function petportParticipation()
+  return {
+    hauling = petportParticipates("hauling"),
+    sorting = petportParticipates("sorting"),
+    farming = petportParticipates("farming"),
+    machines = petportParticipates("machines")
+  }
+end
+
 --  THE PORT'S OWN OFF SWITCH.
 --
 --  An OBJECT parameter rather than anything on petData: it describes the port,
@@ -1180,10 +1247,37 @@ function init()
     return true
   end))
 
+  --  PARTICIPATION. Same storage and same defaulting as the enabled switch, and
+  --  the same division of labour: this writes, dispatch reads.
+  --
+  --  WRITTEN WHOLESALE, so a group the pane stops sending is a group that
+  --  reverts to participating rather than one that silently keeps its last
+  --  value with nothing left to change it.
+  --
+  --  A TASK ALREADY UNDER WAY IS LEFT ALONE, DELIBERATELY. These gate DISPATCH;
+  --  cancelling in flight would strand a claim and drop a unit mid-errand,
+  --  possibly holding cargo, to save it a few seconds of walking. The unit
+  --  finishes and is simply not given another of that kind.
   message.setHandler("petports_setParticipation", simpleHandler(function(payload)
-    sb.logInfo("PETPORT %s participation requested: %s -- not built",
-      stationUniqueId(), sb.printJson(payload))
-    return false
+    if type(payload) ~= "table" then return false end
+
+    local set = {
+      hauling = payload.hauling ~= false,
+      sorting = payload.sorting ~= false,
+      farming = payload.farming ~= false,
+      machines = payload.machines ~= false
+    }
+
+    object.setConfigParameter(PARTICIPATION_KEY, set)
+    self.paneSignature = nil
+
+    --  ZEROED SO AN OPT-IN IS PROMPT, matching the enabled switch. A port that
+    --  has just been given a loop back should look for work now rather than on
+    --  whatever was left of its work timer.
+    self.workTimer = 0
+
+    sb.logInfo("PETPORT %s participation: %s", stationUniqueId(), sb.printJson(set))
+    return true
   end))
 
   self.workTimer = 0
@@ -2684,13 +2778,20 @@ function mirrorPaneState(dt)
   --  its config default and shows ON for a port that is off.
   local enabled = petportEnabled()
 
+  --  PORT-LEVEL, SO IT IS ON BOTH BRANCHES for the same reason `enabled` is:
+  --  which loops a port takes part in means something with nothing socketed,
+  --  and an empty port that omitted it would have the pane paint all four boxes
+  --  from their config defaults and show ticked for groups that are off.
+  local participation = petportParticipation()
+
   local state
   if self.petData == nil then
-    state = { hasUnit = false, enabled = enabled }
+    state = { hasUnit = false, enabled = enabled, participation = participation }
   else
     state = {
       hasUnit = true,
       enabled = enabled,
+      participation = participation,
       petName = self.petData.petName or paneSpecies() or "Utility Unit",
       species = paneSpecies(),
       serial = paneSerial(),
@@ -7978,7 +8079,24 @@ local function compactWork()
 end
 
 local function findWork()
+  --  PARTICIPATION, READ ONCE. Four config reads rather than fourteen, and
+  --  every branch below reasons about the same snapshot -- a set that changed
+  --  halfway down this function would be a job dispatched under one policy and
+  --  rejected under another.
+  --
+  --  THESE GATE THE CALL, NOT THE RESULT. A generator that is not going to be
+  --  dispatched should not be run: several scan containers or the world, and
+  --  paying for that to discard the answer is the kind of cost that only shows
+  --  up on a large base.
+  local doHauling = petportParticipates("hauling")
+  local doSorting = petportParticipates("sorting")
+  local doFarming = petportParticipates("farming")
+  local doMachines = petportParticipates("machines")
+
   --  Before anything else: a unit that has strayed cannot reach work anyway.
+  --
+  --  UNGATED, AND IT MUST STAY UNGATED. This is the leash. A unit that cannot
+  --  be recalled wanders out of coverage and stays there.
   local recall = returnWork()
   if dispatchable(recall) ~= nil then return recall end
 
@@ -7995,13 +8113,15 @@ local function findWork()
   --  seed, deposit it, withdraw it again, roughly three times a second, with
   --  nothing in the log looking like an error because every individual task
   --  succeeded.
-  local putBack, noPutBack = replantWork()
+  local putBack, noPutBack
+  if doFarming then putBack, noPutBack = replantWork() end
   if dispatchable(putBack) ~= nil then return putBack end
 
   --  WATER SITS WITH REPLANT, ABOVE DEPOSIT, and for exactly the same reason:
   --  a unit carrying liquid that matches dry soil is mid-job, and deposit fires
   --  on ANY cargo.
-  local wet, noWet = waterWork()
+  local wet, noWet
+  if doFarming then wet, noWet = waterWork() end
   if dispatchable(wet) ~= nil then return wet end
 
   --  RESTOCK DELIVERY SITS HERE FOR THE THIRD TIME OVER. A unit holding a stack
@@ -8011,7 +8131,8 @@ local function findWork()
   --  again, with every individual task succeeding and nothing in the log
   --  looking wrong -- which is precisely what replantWork's header records
   --  happening when it was written on the wrong side of this line.
-  local restock = restockDeliverWork()
+  local restock
+  if doSorting then restock = restockDeliverWork() end
   if dispatchable(restock) ~= nil then return restock end
 
   local drop, noDrop = depositWork()
@@ -8063,7 +8184,7 @@ local function findWork()
 		--  standing next to nine hundred more. Topping up on the way to a crate
 		--  is a better feature and a much bigger one -- it needs a detour rule
 		--  and can ping-pong -- so it is not smuggled in here.
-		local topUp = collectionWork(true)
+		local topUp = doHauling and collectionWork(true) or nil
 
 		if topUp ~= nil then
 			sb.logInfo("PETPORT %s stalled with cargo -- topping up %s instead of idling",
@@ -8076,7 +8197,8 @@ local function findWork()
 				.. " stack(s) with no dispatchable deposit target")
 	end
 
-  local work, why = collectionWork()
+  local work, why
+  if doHauling then work, why = collectionWork() end
   if dispatchable(work) ~= nil then return work end
 
   --  HARVEST SITS BELOW COLLECT, and the reason is perishability. An item drop
@@ -8087,48 +8209,56 @@ local function findWork()
   --  It also produces a rhythm that reads well: harvest, drops appear, collect
   --  them, deposit runs because deposit outranks collect, come back, harvest
   --  the next one.
-  local crop, noCrop = harvestWork()
+  local crop, noCrop
+  if doFarming then crop, noCrop = harvestWork() end
   if dispatchable(crop) ~= nil then return crop end
 
   --  BESIDE CROP HARVESTING, below collection, for the same reason: an animal
   --  that is ready stays ready, where a drop on the ground is on a despawn
   --  timer. Nothing is lost by clearing the ground first.
-  local beast, noBeast = animalWork()
+  local beast, noBeast
+  if doFarming then beast, noBeast = animalWork() end
   if dispatchable(beast) ~= nil then return beast end
 
   --  Fetching is the lowest-priority thing a unit can do: it is the only work
   --  that MANUFACTURES cargo rather than clearing something. See withdrawWork.
-  local fetch, noFetch = withdrawWork()
+  local fetch, noFetch
+  if doFarming then fetch, noFetch = withdrawWork() end
   if dispatchable(fetch) ~= nil then return fetch end
 
-  local fetchWater, noFetchWater = withdrawWaterWork()
+  local fetchWater, noFetchWater
+  if doFarming then fetchWater, noFetchWater = withdrawWaterWork() end
   if dispatchable(fetchWater) ~= nil then return fetchWater end
 
   --  RESTOCKING SITS ABOVE TIDYING AND BELOW EVERYTHING ELSE. It manufactures
   --  cargo, like fetching a seed does, so it goes near the bottom -- but a
   --  player who asked for 2000 hazard blocks asked for something, where tidying
   --  is the network's own housekeeping and nobody requested it.
-  local stock, noStock = restockFetchWork()
+  local stock, noStock
+  if doSorting then stock, noStock = restockFetchWork() end
   if dispatchable(stock) ~= nil then return stock end
 
   --  FUEL SITS ABOVE TIDYING because it UNBLOCKS something. A machine whose
   --  output slot is full stops converting, so collecting from it restarts work
   --  that is otherwise halted -- where tidying is purely cosmetic and nothing
   --  waits on it.
-  local fuel, noFuel = fuelWork()
+  local fuel, noFuel
+  if doMachines then fuel, noFuel = fuelWork() end
   if dispatchable(fuel) ~= nil then return fuel end
 
   --  BELOW EVERYTHING, INCLUDING FETCHING. Tidying is the only work that is
   --  purely cosmetic from the network's point of view -- nothing is lost, no
   --  timer is running, and every other job represents something that either
   --  perishes or is already half done.
-  local tidy, noTidy = tidyWork()
+  local tidy, noTidy
+  if doSorting then tidy, noTidy = tidyWork() end
   if dispatchable(tidy) ~= nil then return tidy end
 
   --  THE VERY BOTTOM. Tidying moves something that is in the wrong box;
   --  compaction reshapes something that is already in the right one. If there
   --  is any other job in the network at all, it outranks this.
-  local squash, noSquash = compactWork()
+  local squash, noSquash
+  if doSorting then squash, noSquash = compactWork() end
   if dispatchable(squash) ~= nil then return squash end
 
   --  BELOW THE VERY BOTTOM. Draining is the only IRREVERSIBLE work in the mod:
@@ -8138,7 +8268,8 @@ local function findWork()
   --
   --  Nothing is waiting on it either. The surplus has been sitting there and
   --  will keep sitting there.
-  local drain, noDrain = drainWork()
+  local drain, noDrain
+  if doMachines then drain, noDrain = drainWork() end
   if dispatchable(drain) ~= nil then return drain end
 
 	--  The old noDrop fallback lived here and is now unreachable: noDrop is only
@@ -8154,10 +8285,40 @@ local function findWork()
     if dispatchable(diag) ~= nil then return diag end
   end
 
+  --  A SWITCHED-OFF GROUP IS A REASON, AND IT HAS TO BE SAID OUT LOUD.
+  --
+  --  The composite below is assembled entirely from the `no*` reasons, and
+  --  every one of those is nil for a group whose generator never ran. So
+  --  without this, a port with farming unticked reports the same thing as a
+  --  port that cannot see the farm at all -- and the `noCrop ~= nil` gate would
+  --  drop the composite entirely and return a bare nil reason, which reject()
+  --  then logs as nothing useful.
+  --
+  --  This is the diagnosis path for "why is my pet standing still", which is
+  --  the question this whole mod's logging exists to answer. An opt-out is the
+  --  most likely answer once these boxes exist and the easiest to forget.
+  local off = {}
+  if not doHauling then table.insert(off, "hauling") end
+  if not doSorting then table.insert(off, "sorting") end
+  if not doFarming then table.insert(off, "farming") end
+  if not doMachines then table.insert(off, "machines") end
+
+  local optedOut = nil
+  if #off > 0 then
+    optedOut = "port does not participate in " .. table.concat(off, ", ")
+  end
+
+  local function withOptOut(reason)
+    if optedOut == nil then return reason end
+    if reason == nil then return optedOut end
+    return reason .. "; " .. optedOut
+  end
+
   --  Both reasons, because "no drops in network coverage" alone reads as though
   --  the port never looked at the farm.
   if noCrop ~= nil then
-    return nil, tostring(why) .. "; " .. tostring(noCrop)
+    return nil, withOptOut(tostring(why or "collection not run")
+      .. "; " .. tostring(noCrop)
       .. "; " .. tostring(noFetch or noPutBack or "no replant work")
       .. "; " .. tostring(noWet or noFetchWater or "no watering work")
       .. "; " .. tostring(noBeast or "no animal work")
@@ -8165,10 +8326,10 @@ local function findWork()
       .. "; " .. tostring(noFuel or "no fuel to collect")
       .. "; " .. tostring(noTidy or "no tidying work")
       .. "; " .. tostring(noSquash or "no compaction work")
-      .. "; " .. tostring(noDrain or "no draining work")
+      .. "; " .. tostring(noDrain or "no draining work"))
   end
 
-  return nil, why
+  return nil, withOptOut(why)
 end
 
 --  Every rejection gets a reason. These failures are all silent-nil shaped -- a
