@@ -70,6 +70,35 @@ function petports_string(key)
 	return node
 end
 
+--  THE SAME LOOKUP WITH THE FALLBACK ALREADY APPLIED, which is what a pane
+--  wants almost every time.
+--
+--  IT EXISTS SO PANES NEVER NAME PETPORTS_STRING_MISSING. A constant read
+--  across a file boundary is exactly the shape petports_paneheck.py flags as a
+--  possible nil global -- correctly, since that is how it fails when a require
+--  is missing -- and four panes writing `or PETPORTS_STRING_MISSING` would bury
+--  a real finding in noise. One definition, and nothing outside this file has
+--  to know its name.
+function petports_stringOr(key)
+	local value = petports_string(key)
+	if type(value) == "string" then return value end
+	return PETPORTS_STRING_MISSING
+end
+
+--  A FORMAT STRING FROM THE TABLE, FILLED IN.
+--
+--  Runtime text is assembled from a PATTERN rather than by concatenation, so
+--  "Allow" .. " " .. name does not bake English word order into every pane. A
+--  missing key, a non-string, or a pattern whose specifiers do not match the
+--  arguments all land on the dash rather than throwing.
+function petports_format(key, ...)
+	local pattern = petports_string(key)
+	if type(pattern) ~= "string" then return PETPORTS_STRING_MISSING end
+
+	local ok, text = pcall(string.format, pattern, ...)
+	return ok and text or PETPORTS_STRING_MISSING
+end
+
 --  SWEEPS THE PANE'S OWN gui TABLE AND APPLIES EVERY petportsString IT FINDS.
 --
 --  ONE PASS, AT INIT, and no per-frame cost: these strings cannot change while

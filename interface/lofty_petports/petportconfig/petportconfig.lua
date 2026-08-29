@@ -34,7 +34,7 @@ local DEBUG = true
 --  Bump on every change to this file. A pane has no visible version and a stale
 --  copy is indistinguishable from an unfixed one -- which cost a cycle on the
 --  upcycler before the stamp existed.
-local PANE_BUILD_STAMP = "2026-08-29s claim markers to the checkbox column"
+local PANE_BUILD_STAMP = "2026-08-29t empty state cleared, dupe window closed"
 
 local PANE_STATE_KEY = "petports_paneState"
 
@@ -857,20 +857,62 @@ local lastSignature = nil
 --  spawned. update paints from this; refresh only sets it.
 local livePetId = nil
 
+--  EVERYTHING THE PANE SHOWS ABOUT A UNIT, PUT BACK TO EMPTY.
+--
+--  THERE WERE TWO OF THESE AND NEITHER WAS COMPLETE. refresh had one reset for
+--  `state == nil` and a second for `hasUnit == false`, and they cleared
+--  different things: the first painted the fuel bar down and blanked the task
+--  line, the second did not, and NEITHER touched the cargo slot, the
+--  diagnostics, the serial, the flavor, the stats lines or the module slots. A
+--  port emptied while its pane was open kept showing the departed unit's
+--  readout.
+--
+--  THE MODULE SLOTS ARE THE PART THAT MATTERED. paintModuleSlots leaves a
+--  hidden slot's CONTENTS alone on purpose -- its comment says paneModules is
+--  the authority and gets rewritten before the slot is shown again -- and that
+--  is true on every path except this one, which returned before reaching it.
+--
+--  CLEARED, NOT JUST HIDDEN. A hidden slot holding a real item descriptor is
+--  one tab switch away from being a slot the player can click.
+local function showEmpty()
+	livePetId = nil
+	paneModules = {}
+	paneModuleSlotCount = 0
+	moduleWriteToken = nil
+
+	widget.setText("petName", petports_stringOr("petport.nounit"))
+	widget.setText("petSpecies", "")
+	widget.setText("taskLabel", "")
+	widget.setText("diagLabel", "")
+	widget.setText("detailsSerial", "")
+	widget.setText("detailsFlavorValue", "--")
+
+	for i = 1, DIAG_SLOTS do
+		diagText[i] = nil
+		widget.setVisible("diag" .. i, false)
+	end
+
+	for i = 1, STATS_LINES do
+		widget.setText("statsLine" .. i, "")
+	end
+
+	for i = 1, MODULE_SLOTS do
+		widget.setItemSlotItem("moduleSlot" .. i, nil)
+		widget.setVisible("moduleSlot" .. i, false)
+	end
+
+	paintFuel(0)
+	paintCargo(nil)
+
+	setVisibleAll(PET_COLUMN, false)
+	setVisibleAll(TAB_MEMBERS[activeTab], false)
+end
+
 local function refresh(force)
 	local state = readState()
 
 	if state == nil then
-		livePetId = nil
-		paneModules = {}
-		paneModuleSlotCount = 0
-		moduleWriteToken = nil
-		widget.setText("petName", "No unit")
-		widget.setText("petSpecies", "")
-		widget.setText("taskLabel", "")
-		setVisibleAll(PET_COLUMN, false)
-		setVisibleAll(TAB_MEMBERS[activeTab], false)
-		paintFuel(0)
+		showEmpty()
 		return
 	end
 
@@ -915,12 +957,7 @@ local function refresh(force)
 	end
 
 	if not hasUnit then
-		livePetId = nil
-		paneModules = {}
-		paneModuleSlotCount = 0
-		moduleWriteToken = nil
-		widget.setText("petName", "No unit")
-		widget.setText("petSpecies", "")
+		showEmpty()
 		return
 	end
 

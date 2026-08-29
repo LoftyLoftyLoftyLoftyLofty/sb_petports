@@ -60,7 +60,12 @@ local DEBUG = false
 --  runs, so a bare sb.logInfo beside this local raises "attempt to index
 --  global 'sb'" and kills the script before a single function in it is
 --  defined. init() logs it.
-local BUILD_STAMP = "2026-08-25r restock pane, row hover"
+--  EVERY VISIBLE STRING COMES FROM THE SHARED TABLE. This pane's config names a
+--  key beside each label and declares "--" as its value; a key that does not
+--  resolve leaves the dash showing. See petports_strings.config.
+require "/scripts/lofty_petports/petports_strings.lua"
+
+local BUILD_STAMP = "2026-08-29a strings from the shared table"
 
 --  Absolute ceiling on a quota, AND IT MATCHES THE PANE'S REGEX RATHER THAN
 --  BEING CHOSEN INDEPENDENTLY. The textboxes filter input with \d{0,5}, so five
@@ -447,14 +452,14 @@ local function renderSummary()
 	--  not close when the beacon stops answering, so this is the only thing
 	--  telling a player their change has not landed yet.
 	if self.pendingWrite then
-		widget.setText("summary", "Waiting for the beacon - change not saved yet.")
+		widget.setText("summary", petports_stringOr("restock.unsaved"))
 		return
 	end
 
 	local count = #self.state.requests
 
 	if count == 0 then
-		widget.setText("summary", "Click the slot holding an item to add one.")
+		widget.setText("summary", petports_stringOr("restock.empty"))
 		return
 	end
 
@@ -544,12 +549,12 @@ local function renderSlot()
 	end
 
 	if count == 0 then
-		widget.setText("requestName", "Nothing requested")
+		widget.setText("requestName", petports_stringOr("restock.none"))
 	else
-		widget.setText("requestName", string.format("%s requested", tostring(count)))
+		widget.setText("requestName", petports_format("restock.count", tostring(count)))
 	end
 
-	widget.setText("requestHint", "Click holding an item to add")
+	widget.setText("requestHint", petports_stringOr("restock.hint"))
 end
 
 --  Write every row's label, marking the selected one.
@@ -996,13 +1001,17 @@ local function lockWithNotice()
 	widget.setVisible("noticeLineOne", true)
 	widget.setVisible("noticeLineTwo", true)
 
-	widget.setText("noticeTitle", "Cannot configure here")
+	widget.setText("noticeTitle", petports_stringOr("restock.blockedtitle"))
 	widget.setText("noticeLineOne", truncate(tostring(message[1] or "")))
 	widget.setText("noticeLineTwo", truncate(tostring(message[2] or "")))
 end
 
 function init()
 	sb.logInfo("PETPORTS restockconfig build: %s", BUILD_STAMP)
+
+	--  ONCE, AT INIT. The gui table and the string table are both fixed for the
+	--  life of the pane, so there is nothing a later pass could find.
+	petports_applyStrings()
 
 	self.holdTimer = 0
 	self.fieldsUsable = true

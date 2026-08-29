@@ -322,6 +322,73 @@ local crosshairClear
 local stackSizeOf
 local stackSizeFor
 
+--  FORWARD-DECLARED, AND IT JOINED THIS LIST THE HARD WAY.
+--
+--  socketedItem is defined with the item/pet helpers, ~550 lines below the
+--  message handlers -- and the petports_setModules handler now asks it whether
+--  anything is still in the socket. A handler registered in init closes over a
+--  name that is not yet a local, so the reference compiled as a GLOBAL lookup
+--  and threw `attempt to call a nil value (global 'socketedItem')` the first
+--  time a module slot was clicked.
+--
+--  NOTHING STATIC CAUGHT IT because there is nothing wrong with the line in
+--  isolation, and the position check that should have caught it was made
+--  against the wrong caller: the mirror's call sits below the definition and
+--  passes, the handler's does not.
+local socketedItem
+
+--------------------------------------------------------------------------------
+--  CARGO TRACE -- TEMPORARY, AND IT SHOULD COME OUT.
+--------------------------------------------------------------------------------
+--
+--  Cargo is written into the socketed item on every pickup and read back out on
+--  every socket, and a save dump has PROVEN the item carries it correctly:
+--  100 snowflakes, serialised under parameters.petData.cargo, survived an
+--  unsocket and a full game shutdown. So the write path is sound and the loss
+--  is somewhere between reading that item and the next time the cargo is used.
+--
+--  EVERY SITE THAT READS, WRITES OR DROPS CARGO REPORTS HERE, so one socket
+--  cycle produces an ordered trace instead of a guess. Turn CARGO_TRACE off
+--  when this is closed; none of these sites are hot, but they are noise.
+--
+--  IT DISTINGUISHES AN EMPTY ARRAY FROM A JSON OBJECT, deliberately. A Lua
+--  table with a hole serialises as an object rather than an array, and an
+--  object is invisible to ipairs -- which is how a full cargo list could read
+--  as empty everywhere downstream without anything ever throwing. If that is
+--  what is happening, this line says so in words rather than printing "{}".
+local CARGO_TRACE = true
+
+local function cargoSummary(cargo)
+  if cargo == nil then return "nil" end
+  if type(cargo) ~= "table" then return "NOT A TABLE (" .. type(cargo) .. ")" end
+
+  local parts = {}
+  for _, stack in ipairs(cargo) do
+    table.insert(parts, string.format("%s x%s",
+      tostring(stack and stack.name), tostring(stack and stack.count)))
+  end
+
+  if #parts > 0 then
+    return string.format("%d stack(s): %s", #parts, table.concat(parts, ", "))
+  end
+
+  local keys = 0
+  for _ in pairs(cargo) do keys = keys + 1 end
+
+  if keys > 0 then
+    return string.format("EMPTY TO ipairs BUT HAS %d KEY(S) -- json object, not array", keys)
+  end
+  return "empty"
+end
+
+local function cargoTrace(where, cargo)
+  if not CARGO_TRACE then return end
+  local ok, text = pcall(string.format, "PETPORT CARGO | %-22s | %s",
+    tostring(where), cargoSummary(cargo))
+  sb.logInfo("%s", ok and text or ("PETPORT CARGO | bad trace at " .. tostring(where)))
+end
+
+
 --  THE RESTOCK REQUESTS, written by the restock beacon's pane.
 --
 --  An ARRAY of { item, min, max }. One crate can name as many items as the
@@ -1087,6 +1154,16 @@ function init()
   --  See the MODULES section for why the payload is a list of records rather
   --  than an array indexed by slot.
   message.setHandler("petports_setModules", simpleHandler(function(payload)
+    --  THE CONTAINER IS CHECKED, NOT JUST petData. petData survives an unsocket
+    --  until workUpdate next runs -- up to WORK_INTERVAL -- and a module write
+    --  accepted in that gap would be stored against a unit that has already
+    --  left, on top of the copy that left with it. See mirrorPaneState.
+    --
+    --  THIS CANNOT UNDO THE PANE'S HALF OF THE SWAP and is not meant to. The
+    --  window is closed by mirroring the empty socket promptly; this is the
+    --  backstop for a message already in flight when it closed.
+    if socketedItem() == nil then return false end
+
     if self.petData == nil or type(payload) ~= "table" then return false end
 
     --  STAMPED BEFORE ANYTHING IS VALIDATED, AND THAT ORDER IS THE POINT.
@@ -1642,7 +1719,10 @@ end
 --------------------------------------------------------------------------------
 
 --  The socketed item, or nil. Slot 0 because slotCount is 1.
-local function socketedItem()
+--
+--  ASSIGNED, NOT DECLARED. It is forward-declared with the constants so the
+--  message handlers above can reach it -- see the note there.
+socketedItem = function()
   local item = world.containerItemAt(entity.id(), 0)
   if item == nil or item.name == nil then return nil end
   return item
@@ -1670,11 +1750,16 @@ local function petDataFrom(item)
   end
   if data.monsterType == nil then return nil end
 
+  --  THE FIRST POINT CARGO COULD BE LOST: what the item actually handed over,
+  --  after the base config merge, before anything else touches it.
+  cargoTrace("petDataFrom: off item", data.cargo)
+
   trace("read from item", data)
   return data
 end
 
 function spawnPet()
+  cargoTrace("spawnPet: entry", self.petData and self.petData.cargo)
   if self.petData == nil or self.petData.monsterType == nil then return end
   if self.petId ~= nil and world.entityExists(self.petId) then return end
 
@@ -1779,10 +1864,14 @@ function saveAndDespawn(skipWrite)
     local ok, state = pcall(world.callScriptedEntity, self.petId, "petports_store")
     trace("petStore returned", ok and state or nil)
 
+    cargoTrace("saveAndDespawn: before store merge", self.petData and self.petData.cargo)
+
     if ok and state and self.petData then
       self.petData.status = state.status or self.petData.status
       self.petData.storage = state.storage or self.petData.storage
     end
+
+    cargoTrace("saveAndDespawn: after store merge", self.petData and self.petData.cargo)
 
     --  Defined in petports_contract.lua on the monster side. Note a
     --  bare callScriptedEntity to an UNDEFINED function returns nil silently --
@@ -2336,6 +2425,8 @@ function receiveCargo(item)
     return
   end
 
+  cargoTrace("receiveCargo: before", self.petData.cargo)
+
   self.petData.cargo = self.petData.cargo or {}
 
   --  MERGE INTO AN EXISTING STACK where the descriptor matches. Fifty pickups
@@ -2375,9 +2466,21 @@ end
 --  Persist the live pet state into the socketed item, so the unit travels with
 --  the item rather than living in the petport.
 function writeBackToItem()
-  if self.petData == nil then return end
+  --  BOTH REFUSALS WERE SILENT, and the second one fires at exactly the moment
+  --  under investigation: the item has left the container, so the write that
+  --  would have persisted the cargo cannot land.
+  if self.petData == nil then
+    cargoTrace("writeBack: REFUSED, no petData", nil)
+    return
+  end
+
   local item = socketedItem()
-  if item == nil then return end
+  if item == nil then
+    cargoTrace("writeBack: REFUSED, nothing socketed", self.petData.cargo)
+    return
+  end
+
+  cargoTrace("writeBack: serialising", self.petData.cargo)
 
   item.parameters = item.parameters or {}
   item.parameters.petData = self.petData
@@ -2853,6 +2956,32 @@ local function paneSerial()
 end
 
 function mirrorPaneState(dt)
+  --  THE CONTAINER IS THE AUTHORITY FOR "IS ANYTHING SOCKETED", NOT self.petData.
+  --
+  --  self.petData IS CLEARED IN workUpdate, WHICH RUNS ON WORK_INTERVAL -- one
+  --  full second. For that second after the player pulls the item out, petData
+  --  still holds a departed unit and this function mirrored it as live: name,
+  --  portrait, fuel, and the whole module set, with the pane's slots clickable
+  --  the entire time.
+  --
+  --  THAT WAS A DUPLICATION WINDOW, not a cosmetic lag. The module items travel
+  --  inside the pet item's parameters, so they leave with it. A click on a
+  --  module slot inside the window hands the player a SECOND copy out of a
+  --  stale pane, and petports_setModules cannot undo it -- the pane has already
+  --  moved the item to the cursor by the time the port sees the message.
+  --
+  --  Reading the container costs one call per mirror write and cannot lag,
+  --  because it is the same thing the player just changed.
+  local socketed = socketedItem() ~= nil
+
+  --  A CHANGE HERE BYPASSES THE TIMER. Waiting out the remaining fraction of an
+  --  interval would leave the window open for exactly as long as this is meant
+  --  to close it.
+  if socketed ~= self.paneSocketed then
+    self.paneSocketed = socketed
+    self.paneTimer = 0
+  end
+
   self.paneTimer = (self.paneTimer or 0) - (dt or 0)
   if self.paneTimer > 0 then return end
   self.paneTimer = PANE_MIRROR_INTERVAL
@@ -2870,8 +2999,11 @@ function mirrorPaneState(dt)
   local participation = petportParticipation()
   local crosshairs = petportCrosshairs()
 
+  --  EMPTY IF EITHER SAYS SO. `socketed` closes the window described above;
+  --  petData still matters because a socketed item that is not a valid pet
+  --  never produces one.
   local state
-  if self.petData == nil then
+  if self.petData == nil or not socketed then
     state = {
       hasUnit = false,
       enabled = enabled,
@@ -4824,6 +4956,7 @@ function depositCargo(containerId)
     end
   end
 
+  cargoTrace("deposit: cargo replaced", remaining)
   self.petData.cargo = remaining
 
   if #remaining > 0 then
@@ -4976,6 +5109,7 @@ function depositCargoToMachine(machineId, workId)
     end
   end
 
+  cargoTrace("deposit: cargo replaced", remaining)
   self.petData.cargo = remaining
 
   if moved == 0 then
@@ -5074,6 +5208,7 @@ function depositCargoOnly(containerId, name)
       stationUniqueId(), sb.printJson(containerId), tostring(name))
   end
 
+  cargoTrace("deposit: cargo replaced", remaining)
   self.petData.cargo = remaining
 
   --  Same as an ordinary deposit: the unit is already here, and a delivery
@@ -9293,12 +9428,34 @@ function update(dt)
   --  timer that has already fired. It gates itself on REPLANT_SWEEP_INTERVAL.
   sweepReplants(dt)
 
+  --  ABOVE EVERY EARLY RETURN IN THIS FUNCTION, AND THAT IS THE ONLY PLACE IT
+  --  CAN GO.
+  --
+  --  THIS IS THE THIRD TIME an early return in update() has silently disabled
+  --  something below it -- claims and unit position were the first two, and
+  --  both were fixed by duplicating a call into the no-item branch. This one is
+  --  hoisted instead, because a pane needs telling on EVERY path, not just that
+  --  one: switched off, not a pet item, malformed item.
+  --
+  --  WHAT IT COST: an unsocketed port never rewrote the mirror at all, so the
+  --  pane went on reading the blob from while the unit was still socketed --
+  --  name, portrait, fuel, and a full module set with clickable slots, forever
+  --  rather than for the one second I attributed it to. That is the module
+  --  duplication path.
+  --
+  --  IT MUST NOT DEPEND ON self.petData BEING CURRENT, because at this point in
+  --  the tick it is not: petData is cleared further down, in the branch below.
+  --  mirrorPaneState asks the container instead, which is why that check exists
+  --  and why it has to stay.
+  mirrorPaneState(dt)
+
   local item = socketedItem()
 
   if item == nil then
     --  Item removed: put the unit away.
     if self.petId ~= nil then
       saveAndDespawn()
+      cargoTrace("unsocket: discarding petData", self.petData and self.petData.cargo)
       self.petData = nil
     end
     setHullAnimationStateIntent("close")
@@ -9344,6 +9501,7 @@ function update(dt)
 
   if self.petData == nil then
     self.petData = petDataFrom(item)
+    cargoTrace("socket: petData built", self.petData and self.petData.cargo)
     if self.petData == nil then
       --  Not a pet item, or a malformed one. Do nothing rather than spawning
       --  something unintended.
@@ -9485,15 +9643,24 @@ function update(dt)
     self.writeTimer = WRITE_INTERVAL
   end
 
-  --  ABOVE workUpdate, DELIBERATELY. workUpdate is the last line of update and
-  --  the petport's no-item return sits inside it -- which is exactly how the
-  --  replant sweep ended up never running for an empty port. A pane opened on
-  --  an empty port still has to be told it is empty.
-  mirrorPaneState(dt)
+  --  mirrorPaneState USED TO BE HERE, and the comment justifying the position
+  --  was wrong about where the hazard was. It said the no-item return "sits
+  --  inside workUpdate", so sitting above workUpdate was enough. It does not --
+  --  it is in update() itself, ~190 lines above this point -- so an empty port
+  --  returned before ever reaching the mirror and the pane kept reading the
+  --  last blob written while a unit was still socketed. Moved to the top of
+  --  update; see the note there.
 
-  --  ABOVE workUpdate FOR THE SAME REASON, and it is not a hypothetical here:
-  --  a unit whose modules were removed to empty must still be told, and a port
-  --  that returns early would leave a lamp burning on a unit carrying nothing.
+  --  ABOVE workUpdate, and it is not a hypothetical: a unit whose modules were
+  --  removed to empty must still be told, or a port that returned early would
+  --  leave a lamp burning on a unit carrying nothing.
+  --
+  --  IT IS STILL BELOW THE TWO EARLY RETURNS IN update(), and that is checked
+  --  rather than assumed: both of them are paths with no unit at all -- nothing
+  --  socketed, or something socketed that is not a pet -- so there is no unit
+  --  to push effects to and nothing to leave burning. If a third early return
+  --  is ever added on a path that DOES have a unit, this has to move up with
+  --  the mirror. See the note beside mirrorPaneState.
   --
   --  UNGATED BY ANY TIMER. The signature compare inside is the gate, and it is
   --  a string equality against a value that changes only when the module set or

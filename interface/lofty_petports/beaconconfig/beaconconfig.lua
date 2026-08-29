@@ -19,6 +19,11 @@
 
 require "/scripts/lofty_petports/petports_filters.lua"
 
+--  EVERY VISIBLE STRING COMES FROM THE SHARED TABLE. This pane's config names a
+--  key beside each label and declares "--" as its value; a key that does not
+--  resolve leaves the dash showing. See petports_strings.config.
+require "/scripts/lofty_petports/petports_strings.lua"
+
 --  How often the liveness poll runs. Vanilla's transponder does this every
 --  tick, but that pane is a full deploy sequence where a missed item swap loses
 --  a station. This one only needs to notice within a moment.
@@ -49,7 +54,7 @@ local DEBUG = false
 --  and kills the script before a single function in it is defined. That is
 --  exactly how the monster taskAction was broken for three launches. init()
 --  logs it instead.
-local BUILD_STAMP = "2026-08-25k rule row hover"
+local BUILD_STAMP = "2026-08-29a strings from the shared table"
 
 --  FORMATTED HERE, NOT BY sb.logInfo.
 --
@@ -480,15 +485,27 @@ end
 --
 --  The label above the grid carries the rule's verb, because "Allow Weapons"
 --  and "Deny Weapons" tick identically and the tiles cannot show which.
+--  "Allow Weapons", OR "Deny Weapons -- nothing to narrow".
+--
+--  ASSEMBLED FROM A FORMAT STRING, NOT FROM CONCATENATION. Gluing a verb to a
+--  name with a space bakes English word order into the pane; "%s %s" lets a
+--  translator move the pieces, and the verbs are their own keys because they
+--  are words rather than code.
+local function narrowLabel(rule, group, nothingToNarrow)
+	local verb = petports_stringOr((rule.action == "deny")
+		and "beacon.verb.deny" or "beacon.verb.allow")
+
+	return petports_format(nothingToNarrow
+		and "beacon.narrownothing" or "beacon.narrow", verb, group.label or group.id)
+end
+
 local function showPanelFor(rule)
 	--  ALREADY SHOWING THIS RULE. The tiles are correct -- the player's own click
 	--  is what changed them -- so only the label can need updating, and that is
 	--  the case where the rule's action flipped under an unchanged selection.
 	if rule ~= nil and shownRuleIndex ~= nil and shownRuleIndex == self.selected
 	   and shownGroup ~= nil and shownGroup.id == rule.group then
-		local verb = (rule.action == "deny") and "Deny" or "Allow"
-		widget.setText("subgroupsLabel", string.format("%s %s", verb,
-			shownGroup.label or shownGroup.id))
+		widget.setText("subgroupsLabel", narrowLabel(rule, shownGroup, false))
 		return
 	end
 
@@ -496,21 +513,17 @@ local function showPanelFor(rule)
 	shownRuleIndex = showing and self.selected or nil
 
 	if showing then
-		local verb = (rule.action == "deny") and "Deny" or "Allow"
-		local name = shownGroup.label or shownGroup.id
-
 		--  A GROUP WITH NOTHING TO NARROW SAYS SO. Unsorted has no subgroups by
 		--  design -- an item either has a home elsewhere or it does not -- and an
 		--  empty grid under a normal label reads as a bug rather than as an
 		--  absence of choice.
 		if #shownSubgroups == 0 then
-			widget.setText("subgroupsLabel",
-				string.format("%s %s -- nothing to narrow", verb, name))
+			widget.setText("subgroupsLabel", narrowLabel(rule, shownGroup, true))
 		else
-			widget.setText("subgroupsLabel", string.format("%s %s", verb, name))
+			widget.setText("subgroupsLabel", narrowLabel(rule, shownGroup, false))
 		end
 	else
-		widget.setText("subgroupsLabel", "Select a rule to narrow it")
+		widget.setText("subgroupsLabel", petports_stringOr("beacon.subgroups"))
 	end
 end
 
@@ -754,6 +767,10 @@ end
 function init()
 	sb.logInfo("PETPORTS beaconconfig build: %s", BUILD_STAMP)
 
+	--  ONCE, AT INIT. The gui table and the string table are both fixed for the
+	--  life of the pane, so there is nothing a later pass could find.
+	petports_applyStrings()
+
 	self.holdTimer = 0
 	self.selected = nil
 
@@ -952,9 +969,8 @@ function createTooltip(screenPosition)
 			local okChecked, value = pcall(widget.getChecked, path)
 			if okChecked then on = value end
 			
-			tooltip.description.value = on
-				and "Included in this rule."
-				or "Excluded from this rule."
+			tooltip.description.value = petports_stringOr(on
+				and "beacon.tip.included" or "beacon.tip.excluded")
 			
 			return tooltip
 		end
