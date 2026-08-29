@@ -3,6 +3,11 @@ require "/scripts/messageutil.lua"
 require "/scripts/lofty_petports/petports_work.lua"
 require "/scripts/lofty_petports/petports_filters.lua"
 
+--  FOR ONE QUESTION ONLY: is this item name a reagent? Reagent routing needs
+--  the manifest's answer so that an item a MOD adds to a flavor is routed
+--  without anyone re-ticking anything -- see the note on MACHINE_SLOT_REAGENT.
+require "/scripts/lofty_petports/petports_flavors.lua"
+
 --  M.A.U.S. PETPORT
 --
 --  A one-slot container. Socket a petports_unit item and the unit it
@@ -2024,7 +2029,15 @@ local function machineAt(id)
       if type(rule) == "table" and type(rule.item) == "string" and rule.item ~= "" then
         table.insert(machine.rules, {
           item = rule.item,
-          max = tonumber(rule.max) or 0
+          max = tonumber(rule.max) or 0,
+
+          --  ABSENT MEANS "ASK THE MANIFEST", AND ONLY false EXCLUDES.
+          --
+          --  Stored as an exclusion rather than an inclusion, the same way the
+          --  filter rules are: a rule written before this feature existed, or
+          --  one whose item a mod later adds to a flavor, then routes as a
+          --  reagent by default instead of needing the player to find it.
+          reagent = rule.reagent
         })
       end
     end
@@ -3931,6 +3944,12 @@ local claimFree
 --  exists to reconcile. Nothing here goes through those keys.
 local MACHINE_SLOT_INPUT = 0
 
+--  THE REAGENT SLOT, AND YES THIS IS THE THIRD COPY OF A NUMBER THAT LIVES IN
+--  petports_upcycler.lua. Deliberate for now -- see todo.upcycler.slotorderdup.
+--  If a SLOT_ constant moves over there, this moves with it, and the failure is
+--  a unit posting surplus into whatever the slot became.
+local MACHINE_SLOT_REAGENT = 1
+
 --  DO NOT WALK ACROSS A BASE TO DELIVER TWENTY BLOCKS.
 --
 --  Measured: with a machine consuming 5 items a second and a round trip of
@@ -5082,8 +5101,47 @@ function depositCargoToMachine(machineId, workId)
         parameters = stack.parameters
       }
 
-      local leftover = world.containerPutItemsAt(machineId, offer,
-        MACHINE_SLOT_INPUT)
+      --  A REAGENT GOES TO THE REAGENT SLOT, AND FALLS BACK TO THE BURNER.
+      --
+      --  NO NEW WORK GENERATOR AND NO FETCH LOGIC. The drain path already
+      --  brought this item; the only thing that changes is which slot it lands
+      --  in. Nothing reaches an upcycler unless the player filtered it in, so
+      --  anything arriving is already surplus by their own definition -- and
+      --  flavoring it is strictly better use of it than burning it.
+      --
+      --  THE FALLBACK IS THE WHOLE SAFETY STORY. A full reagent slot, or one
+      --  holding a different reagent, simply refuses; whatever it would not
+      --  take goes to the burner in the same trip. There is no state where the
+      --  unit walks away still holding something the machine wanted.
+      local routeToReagent = rule.reagent ~= false
+        and petports_reagentFor(stack.name) ~= nil
+
+      local leftover
+
+      if routeToReagent then
+        leftover = world.containerPutItemsAt(machineId, offer,
+          MACHINE_SLOT_REAGENT)
+
+        local refused = (type(leftover) == "table" and leftover.count or 0)
+
+        sb.logInfo("PETPORT %s reagent route: %s of %s %s into the reagent slot, %s refused",
+          stationUniqueId(), sb.printJson(surplus - refused),
+          sb.printJson(surplus), tostring(stack.name), sb.printJson(refused))
+
+        --  WHAT THE REAGENT SLOT WOULD NOT TAKE, OFFERED TO THE BURNER. Built
+        --  from the refusal rather than reusing `offer`, or a partial
+        --  acceptance would be posted twice.
+        if refused > 0 then
+          leftover = world.containerPutItemsAt(machineId, {
+            name = stack.name,
+            count = refused,
+            parameters = stack.parameters
+          }, MACHINE_SLOT_INPUT)
+        end
+      else
+        leftover = world.containerPutItemsAt(machineId, offer,
+          MACHINE_SLOT_INPUT)
+      end
 
       local unplaced = (type(leftover) == "table" and leftover.count or 0)
       local placed = surplus - unplaced

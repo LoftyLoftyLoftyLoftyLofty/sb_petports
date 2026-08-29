@@ -32,7 +32,7 @@ require "/scripts/lofty_petports/petports_flavors.lua"
 local DEBUG = true
 
 --  Bump on every change to this file. See the log line in init().
-local PANE_BUILD_STAMP = "2026-08-28a blip visibility unlatched"
+local PANE_BUILD_STAMP = "2026-08-29e charge beside the reagent slot"
 
 --  sb.logInfo accepts %s and nothing else. Pre-format through string.format,
 --  which has no such limit, and hand the logger one string.
@@ -93,9 +93,28 @@ local BLIP_EMPTY = "2a2a2aff"
 --  the progress poll, which is every tick the pane is open.
 local blipShown = {}
 
-local ROW_ART = "/interface/lofty_petports/shared/row_144.png"
-local ROW_ART_ALT = "/interface/lofty_petports/shared/row_144_alt.png"
-local ROW_ART_SELECTED = "/interface/lofty_petports/shared/row_144_selected.png"
+--  TWO WIDTHS, BECAUSE THE TWO LISTS ARE NOT THE SAME WIDTH.
+--
+--  MEASURED across every list in the mod: a scroll area leaves 8px for its
+--  scrollbar (restock's requests and the deposit beacon's rules both do). The
+--  rules list here was leaving 28 -- its rows were 144 wide inside a 172-wide
+--  area -- which is the gap between the row art and the scrollbar. 164 puts it
+--  on the same 8px convention as everything else.
+--
+--  THE ART IS COLUMN-IDENTICAL, so row_164 is the same gradient as row_144
+--  rather than a stretch of it. Verified: every column in the source is the
+--  same pixels, which is why widening is exact.
+--
+--  BOTH LISTS ARE ON THE CONVENTION NOW. Flavors is 148 in a 156-wide area;
+--  rules is 164 in 172. Neither number is arbitrary -- each is its own scroll
+--  area minus the 8px every other list in the mod leaves for its scrollbar.
+local RULE_ROW_ART = "/interface/lofty_petports/shared/row_164.png"
+local RULE_ROW_ART_ALT = "/interface/lofty_petports/shared/row_164_alt.png"
+local RULE_ROW_ART_SELECTED = "/interface/lofty_petports/shared/row_164_selected.png"
+
+local FLAVOR_ROW_ART = "/interface/lofty_petports/shared/row_148.png"
+local FLAVOR_ROW_ART_ALT = "/interface/lofty_petports/shared/row_148_alt.png"
+local FLAVOR_ROW_ART_SELECTED = "/interface/lofty_petports/shared/row_148_selected.png"
 
 --  Where the polymorphic display-name overrides live. Shared with the restock
 --  pane on purpose: an item that needs a family name in one list needs the same
@@ -271,12 +290,12 @@ end
 --  driven from here, the same way the flavors list does it.
 local function paintRuleRows()
 	for index, path in pairs(self.rowPaths or {}) do
-		local art = ROW_ART_ALT
+		local art = RULE_ROW_ART_ALT
 
 		if index == self.selectedIndex then
-			art = ROW_ART_SELECTED
+			art = RULE_ROW_ART_SELECTED
 		elseif index % 2 == 1 then
-			art = ROW_ART
+			art = RULE_ROW_ART
 		end
 
 		pcall(widget.setImage, path .. ".rowBG", art)
@@ -323,9 +342,18 @@ local function refreshRules()
 		--  own setData or its callback cannot tell where it came from.
 		widget.setData(path, index)
 		widget.setData(path .. ".rowRemove", index)
+		widget.setData(path .. ".rowReagent", index)
 
 		widget.setText(path .. ".ruleText",
 			string.format("%s  >  %s", labelFor(rule.item), tostring(rule.max)))
+
+		--  THE BOX IS ONLY LIVE FOR A REAGENT, and its state is the rule's
+		--  stored exclusion resolved against the manifest: absent means route,
+		--  false means burn. See ruleReagentToggled for why only the untick is
+		--  ever written down.
+		local isReagent = petports_reagentFor(rule.item) ~= nil
+		widget.setButtonEnabled(path .. ".rowReagent", isReagent)
+		widget.setChecked(path .. ".rowReagent", isReagent and rule.reagent ~= false)
 	end
 
 	if self.selectedIndex ~= nil and self.rowNames[self.selectedIndex] ~= nil then
@@ -1081,18 +1109,6 @@ local flavorRowPath = {}
 local flavorRowIndex = {}
 local selectedRow = nil
 
---  Cell widget path -> { name = , weight = }, for the reagent tooltips.
---
---  DECLARED HERE, and it was an implicit GLOBAL until now. A rewrite of this
---  block dropped the `local` and nothing complained, because a global works --
---  right up until another script in the same environment picks the same name.
-local reagentCell = {}
-
---  Row button path -> flavor, for the flavor-row tooltips. Same mechanism:
---  createTooltip is handed a SCREEN POSITION and has to work out what is under
---  it, so anything with hover text has to be findable by path.
-local flavorRowTip = {}
-
 --  Which flavor the grid currently holds, so re-clicking the selected row does
 --  not rebuild 78 cells to arrive at the same 78 cells.
 local shownReagentFlavor = nil
@@ -1105,9 +1121,10 @@ local shownReagentFlavor = nil
 --  flavor selection -- a bug that only shows up when a player edits a rule and
 --  then opens the flavors tab. One flag per list.
 --
---  DECLARED HERE, and it was an implicit global until now for the same reason
---  reagentCell was: a rewrite of this block dropped the `local` and nothing
---  complained, because a global works right up until it does not.
+--  DECLARED HERE, and it was an implicit global until now. A rewrite of this
+--  block dropped the `local` and nothing complained, because a global works
+--  right up until it does not -- and one of the tooltip tables that has since
+--  been deleted carried the same fault at the same time.
 local rebuildingFlavors = false
 
 local FLAVOR_WIDGETS = { "flavorsScroll", "reagentsLabel", "reagentsScroll" }
@@ -1132,12 +1149,12 @@ end
 --  shape, as the beacon pane's rule rows.
 local function paintFlavorRows()
 	for rowId, path in pairs(flavorRowPath) do
-		local art = ROW_ART_ALT
+		local art = FLAVOR_ROW_ART_ALT
 
 		if rowId == selectedRow then
-			art = ROW_ART_SELECTED
+			art = FLAVOR_ROW_ART_SELECTED
 		elseif (flavorRowIndex[rowId] or 0) % 2 == 1 then
-			art = ROW_ART
+			art = FLAVOR_ROW_ART
 		end
 
 		pcall(widget.setImage, path .. ".rowBG", art)
@@ -1175,8 +1192,6 @@ local function refreshReagents(flavor)
 	widget.clearListItems(REAGENTS_LIST)
 	rebuildingFlavors = false
 
-	reagentCell = {}
-
 	if flavor == nil then
 		widget.setText("reagentsLabel", "Select a flavor")
 		return
@@ -1191,8 +1206,6 @@ local function refreshReagents(flavor)
 	for _, entry in ipairs(reagents) do
 		local rowId = widget.addListItem(REAGENTS_LIST)
 		local path = string.format("%s.%s", REAGENTS_LIST, rowId)
-
-		reagentCell[path .. ".icon"] = entry
 
 		--  COUNT 1, ALWAYS, AND NEVER THE WEIGHT. An itemslot draws a stack
 		--  number for anything above one, and a number beside an item reads as
@@ -1227,7 +1240,6 @@ local function refreshFlavors()
 	flavorByRow = {}
 	flavorRowPath = {}
 	flavorRowIndex = {}
-	flavorRowTip = {}
 	selectedRow = nil
 
 	--  The grid belongs to a row that is about to stop existing.
@@ -1297,10 +1309,6 @@ local function refreshFlavors()
 				end
 			end
 
-			--  THE WHOLE ROW IS THE TOOLTIP TARGET, tested against rowButton
-			--  rather than the icon: the icon is mouseTransparent, and the
-			--  button spans the row so hovering anywhere on it answers.
-			flavorRowTip[path .. ".rowButton"] = flavor
 		end)
 
 		if not ok then
@@ -1380,90 +1388,60 @@ local function selectFlavorRow(rowId, from)
 	refreshReagents(flavor)
 end
 
+--  REAGENT ROUTING, TOGGLED PER RULE.
+--
+--  STORES AN EXCLUSION, NOT AN INCLUSION. Ticked writes nothing at all -- the
+--  field is removed -- so the rule keeps deferring to the flavor manifest and an
+--  item a mod later adds to a flavor starts routing without the player touching
+--  anything. Only an untick is recorded, as `reagent = false`.
+--
+--  THAT IS THE SAME SHAPE THE FILTER RULES USE and it is the reason the default
+--  stays right for someone who never opens this list.
+--  A LOCAL, REGISTERED ON THE LIST -- not a pane global. A row widget naming a
+--  scriptWidgetCallbacks entry throws at construction; see the header.
+local function ruleReagentToggled(_, index)
+	index = tonumber(index)
+	local rule = index and self.rules[index]
+
+	if rule == nil then
+		dbg("reagent toggle ignored: no rule at index %s", tostring(index))
+		return
+	end
+
+	local path = self.rowPaths[index]
+	local checked = path ~= nil and widget.getChecked(path .. ".rowReagent") or false
+
+	if checked then
+		rule.reagent = nil
+	else
+		rule.reagent = false
+	end
+
+	dbg("reagent routing for %s -> %s", tostring(rule.item),
+		checked and "reagent slot" or "burner only")
+
+	writeState()
+end
+
 local function flavorRowClicked(_, rowId)
 	selectFlavorRow(rowId, "row")
 end
 
 
---  Hover text for the reagent cells.
+--  NO createTooltip HERE, AND THAT IS NOT AN OVERSIGHT.
 --
---  Handed a SCREEN POSITION, so every cell has to be tested with
---  widget.inMember -- there is no "what is under the cursor" call. Same
---  mechanism the beacon pane uses for its subgroup tiles.
+--  This is a ContainerPane -- it opens through uiConfig -- and the engine does
+--  not forward createTooltip to a ContainerPane's script at all. The one that
+--  used to live here was never called once: not for the discard button, not for
+--  the feeder checkbox, not for the flavor rows, not for the reagent cells. It
+--  read as working code for weeks. See the petport pane for the hover-canvas
+--  layer that does work, if this pane ever needs one.
 --
---  THE TOOLTIP IS WHERE THE BLIP CONVENTION GETS TAUGHT. Blips are the
---  at-a-glance read; this is where somebody who has not worked out what they
---  mean finds out in words.
-function createTooltip(screenPosition)
-	--  The discard button. Says what it costs BEFORE it is pressed, which is the
-	--  whole reason it has no confirm step.
-	local okClear, onClear = pcall(widget.inMember, "btnClearCharge", screenPosition)
-
-	if okClear and onClear then
-		local tooltip = config.getParameter("tooltipLayout")
-
-		if type(tooltip) == "table" then
-			tooltip.title.value = "Discard charge"
-			tooltip.description.value =
-				"Throws away the flavors still queued. The reagents are not returned."
-			return tooltip
-		end
-	end
-
-	--  The feeder box. The one setting in this pane whose consequence is not
-	--  guessable from its label.
-	local okFeed, onFeed = pcall(widget.inMember, "feederCheckbox", screenPosition)
-
-	if okFeed and onFeed then
-		local tooltip = config.getParameter("tooltipLayout")
-
-		if type(tooltip) == "table" then
-			tooltip.title.value = "Pet feeder"
-			tooltip.description.value =
-				"Units may eat treats straight out of the output slot, instead of "
-				.. "waiting for them to be hauled to storage."
-			return tooltip
-		end
-	end
-
-	--  Flavor rows first -- a smaller table, and the two can never overlap.
-	for path, flavor in pairs(flavorRowTip) do
-		local ok, inside = pcall(widget.inMember, path, screenPosition)
-
-		if ok and inside then
-			local tooltip = config.getParameter("tooltipLayout")
-			if type(tooltip) ~= "table" then return nil end
-
-			tooltip.title.value = flavor.label or flavor.id
-			tooltip.description.value = string.format("%s make this.",
-				plural(#petports_flavorReagents(flavor.id), "reagent"))
-
-			return tooltip
-		end
-	end
-
-	for path, entry in pairs(reagentCell) do
-		local ok, inside = pcall(widget.inMember, path, screenPosition)
-
-		if ok and inside then
-			local tooltip = config.getParameter("tooltipLayout")
-			if type(tooltip) ~= "table" then return nil end
-
-			local name = entry.name
-			local okCfg, resolved = pcall(root.itemConfig, { name = entry.name, count = 1 })
-
-			if okCfg and type(resolved) == "table" and type(resolved.config) == "table" then
-				name = resolved.config.shortdescription or name
-			end
-
-			tooltip.title.value = name
-			tooltip.description.value =
-				string.format("Flavors %s.", plural(entry.weight, "treat"))
-
-			return tooltip
-		end
-	end
-end
+--  THE FLAVOR-ROW AND REAGENT-CELL TOOLTIPS ARE NOT COMING BACK. The full
+--  reagent list is on screen, which is what those two would have explained.
+--  `reagentCell` and `flavorRowTip` went with them -- they existed only to
+--  resolve a screen position back to what was under it, which is a question
+--  nothing asks any more.
 
 function init()
 	--  WHICH BUILD OF THIS PANE IS RUNNING.
@@ -1532,6 +1510,7 @@ function init()
 	--  names at construction time, so a row built before this line throws and
 	--  takes the pane down with it.
 	widget.registerMemberCallback(RULES_LIST, "ruleRowRemove", ruleRowRemove)
+	widget.registerMemberCallback(RULES_LIST, "ruleReagentToggled", ruleReagentToggled)
 	widget.registerMemberCallback(FLAVORS_LIST, "flavorRowClicked", flavorRowClicked)
 
 	--  Cleared here and then owned by refreshSampleSlot, which applyState reaches
