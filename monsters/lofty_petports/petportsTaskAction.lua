@@ -131,7 +131,7 @@ local TASK_DEBUG = true
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-08-28c standableNear ranks by distance"
+local BUILD_STAMP = "2026-08-29c stop on arrival instead of sliding off"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -340,6 +340,79 @@ local JUMP_VELOCITY_MARGIN = 1.02
 --  asks for something absurd is a broken path, and it should fail visibly
 --  rather than fling the unit across the room.
 local JUMP_VELOCITY_CAP = 1.25
+
+--  HOW FAR ABOVE THE LANDING THE ARC MUST TOP OUT.
+--
+--  An arc whose apex is exactly the landing height arrives with zero vertical
+--  velocity, which is the marginal case: any rounding, any friction, and the
+--  unit falls short of the ledge and hits its face instead. This buys enough
+--  height that the unit is genuinely coming DOWN onto the surface.
+--
+--  0.5 MATCHES PLAN_SURFACE_TOLERANCE, deliberately. That is the distance at
+--  which the rest of this file already decides a unit is on the wrong surface,
+--  so aiming to arrive inside it means a landing this solver produces is one the
+--  landing checks will accept.
+local JUMP_ARC_CLEARANCE = 0.5
+
+--  THE ENGINE'S PHYSICS TICK, AND THE REASON THE SOLVER HAS TO KNOW IT.
+--
+--  The movement controller integrates with EXPLICIT EULER -- it advances
+--  position using the velocity from BEFORE gravity is applied that tick -- so a
+--  real trajectory sits above the ideal parabola by
+--
+--      y_discrete - y_continuous = g * dt * t / 2
+--
+--  which at g 120 and dt 1/60 is exactly t tiles. Half a tile at half a second
+--  of airtime, and it grows with every jump that hangs longer.
+--
+--  MEASURED, NOT ASSUMED. Fitted over every ballistic in-flight sample in one
+--  session's log, using each tick's own vertical velocity as the clock, per
+--  flight:
+--
+--      8 of 9 flights, slope 1.0000, sd 0.0024
+--
+--  The ninth was a ceiling contact, where vy is no longer a clock. dt = 1/60 to
+--  a quarter of one percent.
+--
+--  THIS IS WHAT MADE THE FIRST ENDPOINT SOLVER MISS. It solved the continuous
+--  parabola exactly and correctly, and the unit still arrived half a tile high
+--  at its landing, clipped the ledge lip and fell back -- five identical laps.
+--  The solve was right about the physics it modelled and the engine was running
+--  different physics.
+--
+--  NOT AVAILABLE FROM ANY API, hence a constant. script.updateDt() is the SCRIPT
+--  delta and is unrelated -- the controller integrates on the engine tick no
+--  matter how often this script runs.
+local PHYSICS_DT = 1 / 60
+
+--  HOW CLOSE TO THE LANDING'S COLUMN COUNTS AS ARRIVING.
+--
+--  SIZED BY THE MOVER'S CADENCE, NOT BY TASTE. This action runs at script delta
+--  5, so the arc mover sees one tick in five and the unit moves up to
+--  0.67 tiles between looks at walkSpeed 8. A reach much under that can be
+--  stepped straight over; much beyond it starts braking mid-arc.
+local LAND_BRAKE_REACH = 0.5
+
+--  And how far ABOVE the landing still counts, so a pass-over five tiles up on
+--  the way to something else is not mistaken for an arrival.
+local LAND_BRAKE_CEILING = 1.0
+
+--  How high a launch of v0 actually gets, on the engine's integrator.
+--
+--  Apex is at t = v0/g, and substituting into the discrete trajectory gives
+--  v0^2/(2g) + v0*dt/2 -- the continuous answer plus a term that is small but
+--  is the whole difference between landing on a ledge and clipping its edge.
+local function discreteRise(v0, gravity)
+  return ((v0 * v0) / (2 * gravity)) + ((v0 * PHYSICS_DT) / 2)
+end
+
+--  The inverse: the launch that actually reaches a given height.
+--
+--  Solving v0^2/(2g) + v0*dt/2 = rise for v0, positive root.
+local function discreteLaunchForRise(rise, gravity)
+  local half = PHYSICS_DT / 2
+  return gravity * (math.sqrt((half * half) + ((2 * rise) / gravity)) - half)
+end
 
 --  NET DISPLACEMENT WATCHDOG.
 --
@@ -981,54 +1054,162 @@ local function plannedApex(pather)
   return highest
 end
 
---  LAUNCH HARD ENOUGH TO REACH WHAT THE PLAN ASKS FOR.
+--  WHERE THE PLANNED ARC IS MEANT TO PUT THE UNIT DOWN.
 --
---  The planner over-estimates how high this unit jumps. Measured across the
---  four takeoffs of one chute run, sorted by the rise each one needs:
---
---      704.375 -> 711.375   7.0 tiles   ok
---      711.375 -> 719.375   8.0 tiles   ok
---      719.375 -> 728.375   9.0 tiles   FAILS
---
---  Physics allows 45^2 / (2 * 120) = 8.4375. The planner emitted a jump needing
---  9.0, which means it is solving with g near 112.5 against a world running
---  120. The unit apexed at 728.125, a quarter tile under the ledge, hit the
---  vertical face of it -- x velocity went from -12 to -0.003 in one tick -- and
---  dropped three tiles.
---
---  SCALING jumpSpeed DOES NOT FIX THIS. Planner and movement controller both
---  read airJumpProfile.jumpSpeed, so lowering it shrinks both and the
---  percentage error survives; every jump just fails at a proportionally lower
---  ledge.
---
---  So instead of arguing with the planner about physics, satisfy its answer:
---  work out the velocity that genuinely reaches the arc's highest planned point
---  and launch with that.
---
---  IT ONLY EVER RAISES, NEVER LOWERS, and only when the plan demands more than
---  the nominal jump delivers. The 8.0-tile jump needs 43.8 and keeps its 45
---  unchanged; the 9.0-tile one needs 46.5 and gets it. So arcs that already
---  worked are untouched, which is the property that matters -- launching WEAKER
---  than planned is what produced ceiling collisions earlier, and this cannot do
---  that.
-local function launchVelocity(pather, edge, source)
-  local planned = edge.jumpVelocity[2]
+--  Walks forward from the Jump edge through its Arc edges and returns the first
+--  NON-Arc edge's target -- the Land the whole arc exists to reach. Same walk
+--  plannedApex does, kept separate because the apex and the landing are
+--  different questions and the pathological case is precisely when they are the
+--  same point.
+local function plannedLanding(pather)
+  local finder = pather.finder
+  local edges = finder and finder.edges
+  local index = finder and finder.currentEdgeIndex
+  if edges == nil or index == nil then return nil end
 
-  local apex = plannedApex(pather)
-  if apex == nil then return planned, nil end
+  for i = index + 1, math.min(index + MAX_JUMP_LOOKAHEAD, #edges) do
+    local edge = edges[i]
+    if edge == nil then return nil end
 
-  local rise = apex - source[2]
-  if rise <= 0 then return planned, nil end
+    if edge.action ~= "Arc" then
+      return edge.target and edge.target.position
+    end
+  end
+
+  return nil
+end
+
+--  FLY THE PLAN'S ENDPOINT, NOT THE PLAN'S STATED VELOCITY.
+--
+--  SUPERSEDES a raise-only correction that could not fix the failure that
+--  actually loops. That version compared the planned apex against what the
+--  planned launch physically delivers, raised the launch when the plan wanted
+--  MORE rise than the jump gives, and deliberately never lowered it -- on the
+--  reasoning that launching weaker than planned is what caused ceiling
+--  collisions.
+--
+--  MEASURED, ONE SESSION, PERFECT CORRELATION: every unexecutable takeoff in the
+--  log -- 14 of them -- was the opposite case. A Jump edge carrying [12,45]
+--  whose own arc waypoints top out at the landing height, 3 tiles up. A 45
+--  launch crosses that height at t=0.074s STILL RISING AT vy 36, carries on to
+--  8.44 tiles, and comes down 3.66 tiles past the target and 3 tiles below it.
+--  The unit then walks back to the same tile and does it again: ten identical
+--  replans, srcDist 4.72912 every time.
+--
+--  THE PLANNER PUT A LAND ON THE ASCENDING CROSSING. Its arc is not wrong about
+--  physics -- it is a correct 45 trajectory -- it just stops where that
+--  trajectory first passes the target height and calls that a landing. The
+--  launch velocity is the part of the edge that cannot be honoured; the TARGET
+--  is right, and is what this solves for.
+--
+--  TWO BRANCHES, AND THE FIRST IS PREFERRED.
+--
+--  KEEP THE PLANNER'S vx. It comes from {0, +-walkSpeed, +-runSpeed} and is the
+--  horizontal reach the plan was counting on, so the arrival time is fixed and
+--  only vy is free. Solving it is one line, and it is the branch that a normal
+--  working jump takes -- a flat hop keeps its 12 and simply stops launching at
+--  full height.
+--
+--  LOWER vx when no vy can arrive descending at that speed. For a target 1 tile
+--  right and 3 up, vx 12 crosses the target's column in 0.083s, far too soon to
+--  have risen and fallen; the geometry is impossible, not merely badly tuned.
+--  Then the apex is pinned just above the landing and vx falls out of the
+--  airtime.
+--
+--  ARRIVING DESCENDING IS THE WHOLE INVARIANT. Both branches guarantee it, and
+--  it is what makes a Land edge mean what it says.
+--
+--  NEVER MORE HORIZONTAL REACH THAN PLANNED, and a raise in vy is still capped
+--  at JUMP_VELOCITY_CAP, so this cannot turn a planned hop into a launch across
+--  the room.
+--
+--  THE CEILING WORRY IS BOUNDED. This exceeds the plan's own apex by at most
+--  JUMP_ARC_CLEARANCE, and only in the pathological case -- where the plan's
+--  apex was the landing itself and the real trajectory was going five tiles
+--  higher anyway. Every other case comes out at or below what the plan drew.
+local function solveLaunch(pather, edge, source)
+  local plannedVx = edge.jumpVelocity[1]
+  local plannedVy = edge.jumpVelocity[2]
+
+  local landing = plannedLanding(pather)
+  if landing == nil then return plannedVx, plannedVy, nil end
 
   local parameters = mcontroller.baseParameters()
   local gravity = world.gravity(source) * (parameters.gravityMultiplier or 1.0)
-  if gravity <= 0 then return planned, nil end
+  if gravity <= 0 then return plannedVx, plannedVy, nil end
 
-  local needed = math.sqrt(2 * gravity * rise) * JUMP_VELOCITY_MARGIN
-  if needed <= planned then return planned, nil end
+  local dx = landing[1] - source[1]
+  local dy = landing[2] - source[2]
 
-  local capped = math.min(needed, planned * JUMP_VELOCITY_CAP)
-  return capped, { rise = rise, gravity = gravity, needed = needed, apex = apex }
+  local apex = plannedApex(pather)
+  local planRise = apex and (apex - source[2]) or 0
+
+  local vx, vy, time, branch
+
+  --  ---- branch 1: keep the planner's horizontal velocity -------------------
+  --
+  --  Guarded on the sign matching as well as on being non-zero: a plan whose vx
+  --  points away from its own landing is malformed, and dividing by it would
+  --  produce a negative time.
+  if plannedVx ~= 0 and dx ~= 0 and ((dx > 0) == (plannedVx > 0)) then
+    local t = math.abs(dx) / math.abs(plannedVx)
+
+    --  DESCENDING AT THE TARGET, on the DISCRETE trajectory: the continuous
+    --  form of this test is dy < g*t^2/2, and the integrator's extra lift makes
+    --  the real bound g*t*(t + dt)/2.
+    if dy < 0.5 * gravity * t * (t + PHYSICS_DT) then
+      --  Solving  v0*t - g*t*(t - dt)/2 = dy  for v0. The continuous version of
+      --  this line read `+ 0.5 * gravity * t` and launched the unit t tiles too
+      --  high at the landing -- half a tile on a half-second hop, which is
+      --  exactly enough to clear a ledge instead of landing on it.
+      local candidate = (dy / t) + (0.5 * gravity * (t - PHYSICS_DT))
+
+      --  And the apex it implies must still clear the landing, or the arrival
+      --  is descending by a hair and lands on the lip.
+      if discreteRise(candidate, gravity) >= dy + JUMP_ARC_CLEARANCE then
+        vx, vy, time, branch = plannedVx, candidate, t, "kept vx"
+      end
+    end
+  end
+
+  --  ---- branch 2: pin the apex, solve for vx -------------------------------
+  if branch == nil then
+    local rise = math.max(planRise, dy + JUMP_ARC_CLEARANCE)
+    if rise <= 0 then return plannedVx, plannedVy, nil end
+
+    vy = discreteLaunchForRise(rise, gravity) * JUMP_VELOCITY_MARGIN
+
+    --  Descending root of  v0*t - g*t*(t - dt)/2 = dy, which rearranges to
+    --  g/2 * t^2 - (v0 + g*dt/2) * t + dy = 0.
+    local b = vy + ((gravity * PHYSICS_DT) / 2)
+    local disc = (b * b) - (2 * gravity * dy)
+    if disc < 0 then return plannedVx, plannedVy, nil end
+
+    time = (b + math.sqrt(disc)) / gravity
+    if time <= 0 then return plannedVx, plannedVy, nil end
+
+    vx = dx / time
+    branch = "lowered vx"
+  end
+
+  --  Never out-reach the planner horizontally, and keep the old cap on a raise.
+  if plannedVx ~= 0 and math.abs(vx) > math.abs(plannedVx) then
+    vx = math.abs(plannedVx) * (vx > 0 and 1 or -1)
+  end
+  if plannedVy > 0 then
+    vy = math.min(vy, plannedVy * JUMP_VELOCITY_CAP)
+  end
+
+  return vx, vy, {
+    branch = branch,
+    landing = landing,
+    dx = dx,
+    dy = dy,
+    time = time,
+    apex = discreteRise(vy, gravity),
+    planApex = planRise,
+    gravity = gravity
+  }
 end
 
 --  REPLACEMENT timedDrop AND keepDropping.
@@ -1750,12 +1931,23 @@ function petportsJumpMover(pather)
 
     --  THE ONE NUMBER THAT MATTERS, stated rather than left to subtraction.
     --
-    --  launchVelocity only ever RAISES, so a planner apex ABOVE physics is
-    --  corrected and harmless. A planner apex BELOW physics is not correctable
-    --  at all: the actor cannot jump softer, so it flies past its own plan by
-    --  the difference and lands somewhere the plan never described. Measured at
-    --  2.6 tiles in a shaft and 7.5 tiles in a platform cage, both times with
-    --  the arc's velocity dying on contact with a side wall.
+    --  A planner apex BELOW the physics apex means the plan's Land sits on the
+    --  ASCENDING crossing: the trajectory it drew is a correct one for the
+    --  velocity it specifies, it just stops the first time that trajectory
+    --  passes the target height, while the unit is still going up hard.
+    --
+    --  THIS USED TO BE FATAL AND IS NOW DIAGNOSTIC. The note here said the case
+    --  was "not correctable at all: the actor cannot jump softer". The actor
+    --  cannot, but petportsJumpMover does not ask it to -- it sets velocity
+    --  outright, and solveLaunch now flies the plan's LANDING rather than the
+    --  plan's stated velocity, which lowers the launch until the arrival is on
+    --  the way down. So this line no longer predicts a failure; it names the
+    --  plans that are being corrected, and the `launch lowered vx` line that
+    --  follows says what they were corrected to.
+    --
+    --  KEPT, AND WORTH KEEPING, because the frequency is the signal. This firing
+    --  constantly means A* is routinely emitting ascending Lands, which is worth
+    --  knowing even when every one of them is handled.
     local plannedTop = plannedApex(pather)
     if plannedTop ~= nil and nominalRise ~= nil then
       local physicsTop = source[2] + nominalRise
@@ -1763,12 +1955,11 @@ function petportsJumpMover(pather)
 
       if overshoot > PLAN_SURFACE_TOLERANCE then
         sb.logInfo("UNIT ARCPLAN VERDICT: planner apex %s is %s tiles BELOW what a %s jump delivers (%s). "
-          .. "This jump is UNEXECUTABLE as planned and will overshoot -- launchVelocity cannot lower it.",
+          .. "The plan's Land is on the ASCENDING crossing -- solveLaunch will lower the launch to arrive descending.",
           sb.printJson(plannedTop), sb.printJson(overshoot),
           sb.printJson(edge.jumpVelocity[2]), sb.printJson(physicsTop))
       else
-        sb.logInfo("UNIT ARCPLAN VERDICT: planner apex %s vs physics %s, difference %s -- within reach, "
-          .. "launchVelocity will raise if needed",
+        sb.logInfo("UNIT ARCPLAN VERDICT: planner apex %s vs physics %s, difference %s -- plan is self-consistent",
           sb.printJson(plannedTop), sb.printJson(physicsTop), sb.printJson(overshoot))
       end
     end
@@ -1796,17 +1987,53 @@ function petportsJumpMover(pather)
     pather.controlParameters.liquidImpedance = 0
     pather.controlParameters.groundFriction = 0
 
-    local vy, correction = launchVelocity(pather, edge, source)
+    local vx, vy, solved = solveLaunch(pather, edge, source)
 
-    if correction ~= nil then
-      sb.logInfo("UNIT jump under-powered by the plan: needs %s tiles of rise, planned %s gives %s, launching at %s (g %s, capped %s)",
-        sb.printJson(correction.rise), sb.printJson(edge.jumpVelocity[2]),
-        sb.printJson((edge.jumpVelocity[2] * edge.jumpVelocity[2]) / (2 * correction.gravity)),
-        sb.printJson(vy), sb.printJson(correction.gravity),
-        tostring(vy < correction.needed))
+    if solved ~= nil then
+      --  ALWAYS LOGGED, one line per takeoff. This is the only place the
+      --  difference between what the plan SAID and what the unit is about to do
+      --  appears, and a jump that still misses cannot be diagnosed without it.
+      sb.logInfo("UNIT launch %s: plan [%s,%s] -> [%s,%s], landing %s (dx %s dy %s), "
+        .. "apex %s vs plan %s, airtime %s",
+        tostring(solved.branch),
+        sb.printJson(edge.jumpVelocity[1]), sb.printJson(edge.jumpVelocity[2]),
+        sb.printJson(vx), sb.printJson(vy),
+        sb.printJson(solved.landing), sb.printJson(solved.dx), sb.printJson(solved.dy),
+        sb.printJson(solved.apex), sb.printJson(solved.planApex),
+        sb.printJson(solved.time))
+    else
+      sb.logInfo("UNIT launch UNSOLVED -- flying the plan's own [%s,%s]",
+        sb.printJson(vx), sb.printJson(vy))
     end
 
-    mcontroller.setVelocity({edge.jumpVelocity[1], vy})
+    mcontroller.setVelocity({vx, vy})
+
+    --  THE LAUNCHED vx, NOT THE PLANNED ONE. deltaX is what the movers read for
+    --  direction and magnitude after takeoff, and leaving it at a value the unit
+    --  is not travelling at is the same class of disagreement this function
+    --  exists to remove.
+    pather.deltaX = vx
+
+    --  AND THE ARC MOVER HAS TO BE TOLD, OR IT UNDOES THIS ON THE FIRST
+    --  AIRBORNE TICK.
+    --
+    --  petportsArcMover drives horizontal velocity toward the ARC EDGE'S OWN
+    --  source.velocity every tick it is in flight -- which is the planner's
+    --  velocity, the one this function just decided is unflyable. A launch of
+    --  2.86 would be pushed straight back to 12 and the unit would sail past
+    --  its landing exactly as before, with the launch line in the log claiming
+    --  it had been corrected.
+    --
+    --  plannedVx IS CARRIED so the substitution can verify the arc it is being
+    --  applied to belongs to this jump. It is cleared when the arc ends.
+    pather.petportsLaunch = { vx = vx, plannedVx = edge.jumpVelocity[1] }
+
+    --  A NEW JUMP IS NOT A LANDING. Cleared here as well as when an arc ends,
+    --  because an arc that terminates some other way -- the skip logic reaching
+    --  a Land, a replan mid-flight -- would otherwise leave this set and brake
+    --  the next takeoff to a standstill in the air.
+    pather.petportsLanding = nil
+
     pather.jumpTimer = nil
     pather:advancePath()
   else
@@ -1921,6 +2148,14 @@ function petportsArcMover(pather)
         sb.printJson(here), tostring(nextEdge.action))
 
       pather.arcDelta = nil
+
+      --  THE ARC IS OVER, so the launch record it belonged to must not survive
+      --  into the next one. A stale record plus a coincidentally equal planned
+      --  vx is the one way the gate in the airborne branch could be fooled.
+      pather.petportsLaunch = nil
+      pather.petportsArcSubstituted = nil
+      pather.petportsLanding = nil
+
       pather:advancePath()
       return "running"
     end
@@ -1954,6 +2189,57 @@ function petportsArcMover(pather)
       sb.printJson(here), sb.printJson(vel))
   end
 
+  --  ARRIVED: STOP, DO NOT KEEP FLYING.
+  --
+  --  MEASURED, AND IT IS THE WHOLE OF THE REMAINING LOOP. With the launch solved
+  --  on the engine's own integrator the unit now reaches its landing exactly --
+  --
+  --      ARC tick: edge 40 of 43 at [2493,1155.8] vel [8,-25]
+  --
+  --  which is the Land target to the decimal, descending. And then it slides
+  --  straight off the ledge and falls three tiles back to where it started. Five
+  --  identical laps.
+  --
+  --  BECAUSE THIS MOVER IS STILL FLYING IT. The Land is edge 42 and the unit is
+  --  on edge 41, an Arc -- so moveLand, whose whole body is vanilla's
+  --  controlApproachXVelocity(0, groundForce), never gets a tick. What runs
+  --  instead is the code below, which drives x toward the FLIGHT velocity and
+  --  sets groundFriction to 0. The unit touches down at 8 tiles per second on a
+  --  frictionless surface with the throttle open and is gone in five ticks.
+  --  `ARCMOVER grounded` appears zero times in the entire log.
+  --
+  --  ZEROED OUTRIGHT RATHER THAN BRAKED, on the first tick that sees the
+  --  arrival. groundForce is not declared on any chassis, so its value is an
+  --  engine default this code cannot verify -- and at script delta 5 the brake
+  --  gets ONE look before the unit is two thirds of a tile past. A brake that
+  --  might be too weak is the failure being fixed, so it is not the mechanism to
+  --  fix it with. Approaching 0 afterwards keeps it there.
+  --
+  --  THE PLAN AGREES: the Land edge is a zero-length marker whose dst velocity
+  --  is null. Stopping is what a Land MEANS.
+  local landing = plannedLanding(pather)
+
+  if landing ~= nil and not pather.petportsLanding and vel[2] < 0
+    and math.abs(here[1] - landing[1]) <= LAND_BRAKE_REACH
+    and here[2] <= landing[2] + LAND_BRAKE_CEILING then
+
+    pather.petportsLanding = true
+    mcontroller.setVelocity({ 0, vel[2] })
+
+    sb.logInfo("UNIT ARCMOVER arrived at landing %s from %s vel %s -- killing horizontal "
+      .. "velocity so the unit does not slide off it",
+      sb.printJson(landing), sb.printJson(here), sb.printJson(vel))
+  end
+
+  if pather.petportsLanding then
+    --  AHEAD OF THE FRICTION ASSIGNMENTS BELOW, WHICH IS THE POINT. Those run
+    --  every airborne tick and are what make the surface slippery. Returning
+    --  from here leaves groundFriction at the chassis value, so the unit has
+    --  something to stop against as well as nothing pushing it.
+    mcontroller.controlApproachXVelocity(0, mcontroller.baseParameters().groundForce)
+    return "running"
+  end
+
   pather.petportsArcGrounded = nil
   pather.arcDelta = nil
 
@@ -1964,7 +2250,33 @@ function petportsArcMover(pather)
   pather.controlParameters.groundFriction = 0
 
   local velocity = pather.edge.source.velocity or pather.edge.target.velocity or {0, 0}
-  mcontroller.controlApproachXVelocity(velocity[1], mcontroller.baseParameters().groundForce)
+
+  --  STEER TOWARD WHAT WE ACTUALLY LAUNCHED AT, NOT WHAT THE PLAN ASKED FOR.
+  --
+  --  See solveLaunch: when a plan's Land sits on the ascending crossing, the
+  --  launch is lowered so the unit arrives descending. Every arc edge of that
+  --  jump still carries the planner's original velocity, so approaching
+  --  velocity[1] here would restore the horizontal speed the correction just
+  --  removed -- silently, mid-flight, with the takeoff line still reporting the
+  --  corrected value.
+  --
+  --  GATED ON THE PLANNED VELOCITY MATCHING, so a stale record cannot be applied
+  --  to an arc belonging to some other jump -- or to a FALLING arc entered with
+  --  no takeoff at all, which has no launch of its own to honour.
+  local wantVx = velocity[1]
+  local launch = pather.petportsLaunch
+
+  if launch ~= nil and launch.plannedVx == velocity[1] then
+    wantVx = launch.vx
+
+    if not pather.petportsArcSubstituted then
+      pather.petportsArcSubstituted = true
+      sb.logInfo("UNIT ARCMOVER steering to the LAUNCHED vx %s rather than the planned %s",
+        sb.printJson(wantVx), sb.printJson(velocity[1]))
+    end
+  end
+
+  mcontroller.controlApproachXVelocity(wantVx, mcontroller.baseParameters().groundForce)
 
   if mcontroller.liquidMovement() then
     if velocity[2] ~= 0 then

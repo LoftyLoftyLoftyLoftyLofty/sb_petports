@@ -1280,9 +1280,43 @@ function petports_learnRoute(fromKey, toKey, reachable, portUniqueId)
   end
 end
 
---  The path options a unit actually walks with.
+--  The path options a unit actually walks with. See petports_pathOptions
+--  below; the escalating small jump it reads is defined first.
+
+--------------------------------------------------------------------------------
+--  THE SMALL JUMP
+--------------------------------------------------------------------------------
 --
---  SHARED WITH THE PROBE ON PURPOSE. A probe that searches with different
+--  AN ESCALATING MULTIPLIER WAS TRIED HERE AND REMOVED. Recording it because the
+--  idea is an obvious one to have twice.
+--
+--  The theory was that no fixed smallJumpMultiplier suits all terrain, so each
+--  jump-attributable replan would add 0.1 and a fresh pather would offer A* a
+--  second jump height it had not tried. Measured over one session's log, it was
+--  wrong twice over:
+--
+--  1  IT COULD NOT REACH THE FAILING JUMPS. Every unexecutable takeoff in that
+--     log -- 14 of them, a perfect correlation -- launched at [12,45], the FULL
+--     jump. smallJumpMultiplier scales only the SECOND height, so no value of it
+--     touches those at all. Worse, escalating toward 1.0 converges the small
+--     jump ONTO 45 and removes the 31.82 option, which succeeded every time it
+--     was used.
+--
+--  2  IT NEVER FIRED WHERE THE LOOPS WERE. All three observed loops replanned
+--     through the airborne-edge stall, not the arc-landing handler where the
+--     hooks were. The two times it did fire, neither was a jump: one was a Land
+--     edge 0.57 tiles out against a 0.5 tolerance, the other a body-clearance
+--     failure on a one-edge walk plan.
+--
+--  THE ACTUAL FAULT WAS IN THE PLAN, NOT THE OPTIONS. A* emitted a Jump edge
+--  whose own arc waypoints top out at the target height while the launch it
+--  prescribes is still rising at vy 36 -- a Land placed on the ASCENDING
+--  crossing. See petportsJumpMover.
+--
+--  A CONSTANT, THEREFORE, AND PARAMETERISED so a chassis can retune it from the
+--  monstertype without editing this file.
+
+--  SEARCH OPTIONS, SHARED BY THE REAL PATHER AND THE PROBE. A probe that uses
 --  options than the real pather does not predict real behaviour -- and because
 --  its answers are CACHED and pushed to the port, a mismatch poisons routing
 --  for every future unit until something invalidates it.
@@ -1422,6 +1456,14 @@ function petports_pathOptions()
     --
     --  Parameterised like the search costs below so the value can be retuned
     --  from the monstertype without editing this file.
+    --
+    --  CHANGING IT NEEDS A NEW PATHER, NOT A RESET. PathFinder holds the options
+    --  table it was constructed with, and PathFinder:reset() clears edges,
+    --  hasPath and the cursor -- not the options. So every replan that goes
+    --  through reset() re-searches with the value that just failed, and from the
+    --  same position produces the same plan. Only freshPather picks up a change.
+    --  Measured: three loops of byte-identical replans, ten iterations of one of
+    --  them.
     smallJumpMultiplier = config.getParameter("petports_smallJumpMultiplier", 0.70711),
     jumpDropXMultiplier = 0.125,
     enableWalkSpeedJumps = true,

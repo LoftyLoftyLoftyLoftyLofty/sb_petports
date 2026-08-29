@@ -42,16 +42,16 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-08-28
+### What is built, as of 2026-08-29
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-CAVEAT ON THIS PASS: the 2026-08-28 pathing session touched only
-`petportsTaskAction.lua`, so only the pathing paragraph was rewritten and the
-rest was left standing rather than re-verified. Treat the other paragraphs as
-carrying their previous session's date.
+CAVEAT ON THIS PASS: this session touched the petport pane, the petport object,
+`petportsTaskAction.lua`, `petports_contract.lua`, and the item/filter
+registration files. Paragraphs outside those areas were not re-verified and carry
+their previous session's date.
 
 **Core loop.** A petport places, opens, spawns a unit from a socketed item, and
 the unit's state round-trips through that item across despawn, world reload and
@@ -80,50 +80,63 @@ it.
 **Crosshair markers.** Every drop the network has an opinion about carries one,
 colour-coded by claim state, one marker per item.
 
-**The petport pane -- NEW THIS SESSION, and the read path is complete.** 337x335
-ContainerPane with a script. Portrait, name, species-when-renamed, 20-blip fuel
-bar, cargo slot with Take, current task, recency-gated diagnostic icons with
-tooltips, three tabs. Reads one mirrored object parameter; writes by message.
+**The petport pane.** 337x335 ContainerPane with a script. Portrait, name,
+species-when-renamed, 20-blip fuel bar, cargo slot with Take, current task,
+recency-gated diagnostic icons with tooltips, three tabs. Reads one mirrored
+object parameter; writes by message.
 
-**Still not built.** Docking. The participate/network-ID interface. The fuel
-system itself -- treats accumulate in seven flavors and nothing eats one. Vents
-do not cross a medium boundary. Liquid permissions from pet upgrades. Module
-items do not exist, so the pane's module slots refuse everything but removal.
-The Stats tab is empty.
+**Modules -- NEW THIS SESSION, working end to end.** Five itemslots, shown
+against a slot count the unit has earned. A module socketed into a slot grants
+its declared status effects to the unit for as long as it stays there; pulling it
+out drops them. One module exists, `petports_module_light`, a placeholder green
+diamond granting a centred point light. Effects are pushed with
+`status.setPersistentEffects` under one category, so removal needs no path of its
+own. The swap is performed in the pane, synchronously, mech-assembly style, and
+stamped with a token the port echoes -- see `dd.module.writetoken`.
+
+**The port band -- NEW THIS SESSION.** The enabled switch works: off despawns the
+unit after writing its state back to the item and blocks respawn; on brings it
+back. It persists as an object parameter and survives reload. The four
+participation checkboxes gate dispatch by group -- item pickup, sorting, farming,
+machines.
+
+**Still not built.** Docking. The fuel system itself -- treats accumulate in seven
+flavors and nothing eats one. Vents do not cross a medium boundary. Liquid
+permissions from pet upgrades. Rename. The Stats tab is empty. Module slot
+automation and the reagent-slot automation are both untouched.
 
 **Art.** Bespoke: the unit body, the petport, the crosshairs, the treat COLOURS
 (see `dd.art.treatcolours`). Placeholder: the vent, the upcycler, the eight treat
-sprites, the four chassis colour strips, all petport pane art. The unit has
-frames for `run` and nothing else, so every animation state resolves to the same
-eight frames.
+sprites, the four chassis colour strips, all petport pane art, the module icon.
+The unit has frames for `run` and nothing else, so every animation state resolves
+to the same eight frames.
 
 **The monsterpart is still named `drone_placeholder`**, file and `name` field.
 Renaming is free while there is one variant and expensive once there are
 several, since which monsterpart a unit wears follows from its seed over the
 matching set.
 
-**Pathing -- FOUR FIXES THIS SESSION, ALL VERIFIED AGAINST LOGS.**
+**Pathing -- THE JUMP LOOP IS FIXED, AND IT TOOK THREE DISTINCT CORRECTIONS.**
+A unit trying to water a plot looped on the same missed jump, five to ten
+identical laps at a time, across three sessions. The three faults were stacked
+and each one hid the next.
 
-*The crate perch.* A unit landing on the corner of a crate, body genuinely on
-the ground and search NODE hanging over the void, looped forever -- 297 refused
-plans over 92 seconds, ending in a re-home. The origin is now checked before
-anything asks the pathfinder a question and the unit is nudged onto a node the
-search can begin from. One nudge, one tick, task completed.
+*The plan's Land can sit on the ASCENDING crossing.* A* emits a Jump edge whose
+own arc waypoints top out at the target height while the launch it prescribes is
+still rising hard. `solveLaunch` now flies the plan's LANDING rather than its
+stated velocity. See `arch.pathing.solvelaunch`.
 
-*The resolver.* `standableNear` returned the first column that resolved rather
-than the nearest spot, and sent a waterer 5.7 tiles down into the sea when the
-crop's own column was blocked by a cliff. It now ranks by true distance.
+*The engine integrates with explicit Euler at 1/60.* The first solver was exactly
+right about continuous physics and the engine runs something else, so the unit
+arrived a half tile high and clipped the ledge. See `fact.pathing.eulertick`.
 
-*The jump model, and this is the big one.* `smallJumpMultiplier` was pinned at
-1.0, which meant A* was offered ONE jump height -- the maximum -- for the entire
-life of the mod. Every planned jump was an 8.44-tile launch. At 0.5 it gains a
-2.1-tile hop and dramatic overshoots became measured hops across the board. A
-share of what this file catalogues as MOVER defects was downstream of this.
+*The arc mover flew the unit off its own landing.* It drives x toward the flight
+velocity and zeroes `groundFriction` every airborne tick, so a unit that arrived
+perfectly slid off a one-tile ledge in five ticks. It now stops on arrival. See
+`fact.pathing.arcmoverthrottle`.
 
-*Why the coffee route dove into the sea.* Not a cost bug. The pathfinder cannot
-generate a walk-up edge for a one-tile SQUARE step (`slopeUp` needs a diagonal
-polygon side), so the step was jump-only, and the only jump available was 8.44
-tiles. Dropping into the water was the ONLY route, not a stupid one.
+`smallJumpMultiplier` is 0.70711, vanilla's half-height. An escalating version was
+built and removed -- see `dead.pathing.jumpescalation`.
 
 **Debug flags, all ON, all wanting review before release.** `TASK_DEBUG`,
 `VENT_DEBUG`, `DEBUG` in the petport and upcycler panes, `FLY_POINT_DEBUG`,
@@ -1094,6 +1107,21 @@ not clamp it, because mech parts cannot stack.
 
 The gate is mechassembly's: `not item or <valid for this slot>`. An empty cursor
 always succeeds, so removal is never blocked; a full one has to pass.
+
+**THE SWAP IS PERFORMED IN THE PANE, SYNCHRONOUSLY, AND THE PORT ONLY COMMITS.**
+A message round trip cannot be made atomic: take the cursor first and a refusal
+destroys the item, commit on the port first and a dropped reply duplicates it.
+Vanilla never faces the choice because mechassemblygui does not cross the boundary
+mid-move. Neither do we -- the pane reads the cursor, writes the old occupant back
+to it, repaints, and only then reports the finished set.
+
+That is safe only because both sides ask `root.itemHasTag` about the same item
+rather than consulting two hand-written rules, so they cannot disagree about what
+a module is. The port's handler is a backstop against a malformed payload, not
+the decision.
+
+**STORED AS A LIST OF RECORDS**, `{ slot = n, item = ... }`, not an array indexed
+by slot -- see `fact.tooling.sparsejson`.
 
 ### Networks — geography first, ID second
 `arch.network.membership` -- see also `arch.network.registry`, `arch.port.coverage`
@@ -2174,6 +2202,90 @@ from downstream. Sorter crates depend on it: upstream is where a unit collects,
 downstream is where it delivers. Vents ignore it deliberately — one wire links a
 pair both ways. Which one an object uses should be stated in its header.
 
+### A jump flies the plan's LANDING, not the plan's stated velocity
+`arch.pathing.solvelaunch` -- see also `fact.pathing.eulertick`, `fact.pathing.arcmoverthrottle`, `dead.pathing.jumpescalation`
+
+**A* PUTS A Land ON THE ASCENDING CROSSING.** It emits a Jump edge carrying a
+velocity, then draws an arc that stops the first time that trajectory passes the
+target height -- while the unit is still going up hard. Measured: `[12,45]`
+against a landing three tiles up, crossed at t=0.074s still rising at `vy` 36,
+carrying on to 8.44 tiles and coming down 3.66 tiles past the target.
+
+The arc is not wrong about physics. The LAUNCH VELOCITY is the part of the edge
+that cannot be honoured, and the TARGET is right -- so `solveLaunch` solves for a
+launch that arrives at the plan's landing on the DESCENDING branch.
+
+    branch 1   KEEP the planner's vx and solve vy.
+               Its vx comes from {0, +-walkSpeed, +-runSpeed} and is the reach
+               the plan counted on, so arrival time is fixed and only vy is free.
+               This is what a normal working jump takes.
+
+    branch 2   LOWER vx, pinning the apex just above the landing.
+               For a target one tile right and three up, vx 12 crosses the
+               column in 0.083s -- far too soon to have risen and fallen. That
+               geometry is impossible, not badly tuned.
+
+Both guarantee arriving descending, which is what makes a Land mean what it says.
+Never more horizontal reach than planned; raises still capped.
+
+**SOLVED ON THE DISCRETE TRAJECTORY**, per `fact.pathing.eulertick`. The first
+version solved the continuous parabola exactly and the unit still arrived half a
+tile high and clipped the ledge.
+
+**THE ARC MOVER HAS TO BE TOLD**, twice over. It steers toward the arc edge's own
+velocity, so a lowered launch is pushed straight back up to the planned value on
+the first airborne tick unless it is handed the launched value -- gated on the
+planned velocity matching, so a stale record cannot be applied to another jump.
+And it stops the unit on arrival rather than flying it off the landing, per
+`fact.pathing.arcmoverthrottle`.
+
+`LAND_BRAKE_REACH` is sized by the MOVER'S CADENCE, not by taste: 0.5 tiles
+against 0.67 of travel per look at script delta 5. If the action's delta changes,
+that constant moves with it.
+
+### Module effects are pushed as a whole set under one category
+`arch.module.effects` -- see also `arch.module.slots`
+
+A module item declares `petports_moduleEffects`, a list. The port unions the
+lists across every socketed slot, deduplicates, sorts, and pushes the result to
+the unit, which applies it with `status.setPersistentEffects` under a category of
+its own.
+
+**setPersistentEffects REPLACES THE CATEGORY WHOLESALE**, which is the entire
+reason there is no removal path and no diffing. Everything sent is applied,
+anything no longer sent is gone. An add/remove protocol would have to stay in
+step with `petData` across respawn, world reload, and the unit being carried to
+another port -- three places to silently fall behind.
+
+**PUSHED ON A SIGNATURE THAT INCLUDES THE ENTITY ID**, the same shape as
+`ventSignature`, rather than on a dirty flag. A flag has to be set by every site
+that mutates modules and is wrong the moment one forgets -- and a respawned unit
+is not a mutation at all, so a flag would not cover it.
+
+Sorted before hashing so two modules swapped between slots do not spell the same
+set two ways and push a redundant update.
+
+**A STATUS EFFECT RATHER THAN A FLAG THE UNIT'S SCRIPTS READ**, mirroring vanilla
+augments: the behaviour is carried by an asset that can be authored, patched or
+disabled without touching this mod's Lua.
+
+### The port owns an enabled switch and four participation groups
+`arch.port.switches` -- see also `dd.port.participationgroups`
+
+Both are OBJECT parameters, not `petData`: they describe the PORT, survive the
+item being taken out and put back, and do not travel with a unit carried
+elsewhere. Both default to on when ABSENT, so no port in an existing world
+switches itself off on update.
+
+**THE HANDLERS ONLY WRITE. `update` RECONCILES.** One place decides whether a unit
+should exist, which also covers the cases no handler sees: a world loading with a
+port already off, and an item socketed into a port that is already off. Disabling
+writes the item back first, so cargo and resources survive.
+
+**NOT AN EARLY RETURN.** The item write-back, the pane mirror, the module effect
+push and `workUpdate`'s housekeeping all keep running while a port is off. An
+early return there is how the replant sweep once stopped running for empty ports.
+
 ## DESIGN DECISIONS
 
 ### Treat colours survive colour blindness and the sprites do not matter
@@ -2675,20 +2787,27 @@ The four tiers, in `petports_flavors.config`:
     2   farmed or gathered on purpose -- most produce
     1   incidental -- picked up while doing something else, uncounted
 
-### Module slot count is authored on the item, with rarity as convention
+### Module slot count is authored, with rarity as the fallback
 `dd.module.slotsbyrarity` -- see also `arch.module.slots`
 
-Common 0, Uncommon 1, Rare 2, Legendary 3 -- as a CONVENTION for authoring, not
-as a rule the code derives.
+Common 1, Uncommon 2, Rare 3, Legendary 4, Essential 5. `petports_moduleSlots` is
+read from item parameters first, then item config, and the table is consulted
+only when nothing is authored. Clamped to five, which is what the pane declares.
 
-**DERIVING IT FROM RARITY WOULD BREAK ON THE FIRST INTERESTING MODDED PET.** The
-normally-unobtainable Essential tier is exactly where someone will bracket a
-special pet, and a derivation gives them no way to author around it. So
-`petports_moduleSlots` is read from the item, and rarity is what a well-behaved
-author picks it to match.
+**SUPERSEDES** the earlier numbers (one lower across the board, no Essential) and
+the earlier position that rarity must never be derived from. That position was
+taken because a modded pet bracketed into the normally-unobtainable Essential
+tier would have no way to author around a derivation. The ordering answers it:
+the authored field is read FIRST, so authoring IS the way around it, and Essential
+is in the table so the underived case lands somewhere sensible instead of at zero.
 
-Reading it through `petData` as well as the item config leaves room for an
-upgrade path to add a slot later without a new item file.
+**ONE SLOT AT THE BOTTOM, NOT ZERO.** A Common pet with no slots renders the
+Modules region of the pane empty, which reads as a broken pane rather than as an
+unupgraded unit.
+
+Units this mod ships state their count explicitly even where it matches the
+derivation, so that retuning a unit's rarity stays a decision about how it drops
+rather than a silent grant of another slot.
 
 ### Diagnostics are icons with tooltips, not a wrapped label
 `dd.pane.diagicons` -- see also `fact.pane.labelgrows`
@@ -3051,6 +3170,69 @@ The same log confirmed the bidirectional property holds: from one wire, 17 found
 Consequence worth knowing: those nodes cannot also carry an on/off level. A vent
 a switch can close would need a second input node declared for it.
 
+### Four participation groups, and two generators belong to none
+`dd.port.participationgroups` -- see also `arch.port.switches`
+
+Fourteen work generators, four checkboxes. Nobody thinks in generators, and nine
+or fourteen boxes do not fit the band. Grouped by what a player SEES happening:
+
+    hauling    collection                      labelled "Item Pickup"
+    sorting    restockFetch, restockDeliver, tidy, compact
+    farming    replant, water, harvest, animal, withdraw, withdrawWater
+    machines   drain, fuel
+
+**THE LINE BETWEEN THE FIRST TWO IS INGRESS.** `hauling` is how a thing ENTERS the
+network; `sorting` is everything done to a thing already inside it.
+
+**depositWork IS IN NO GROUP, AND GATING IT BUILDS A DEADLOCK.** `findWork`
+returns outright when a unit holds cargo with no dispatchable deposit target --
+that guard is what stops a unit hoarding -- so a switched-off deposit strands a
+unit that fetched a seed, planted it and kept the remainder, blocked from every
+other job including ones whose boxes are still ticked. A unit must always be able
+to put down what it is carrying. `returnWork` is exempt for the same class of
+reason: it is the leash.
+
+**THE STORED KEY IS `hauling` WHILE THE LABEL READS "Item Pickup".** Ids are
+frozen because a stored setting names them; labels are free. Same split the filter
+manifest uses, where a subgroup with id `unit` reads "Pets". Renaming the key
+would silently opt every configured port back into a group it had switched off,
+because an absent key reads as participating.
+
+**A SWITCHED-OFF GROUP IS A REASON IN THE REJECT MESSAGE.** The composite is
+assembled from the `no*` reasons, every one of which is nil for a generator that
+never ran -- so without this, an opted-out port logs identically to a port that
+cannot see the farm. "Why is my pet standing still" is the question this mod's
+logging exists to answer, and an unticked box is the easiest answer to forget.
+
+The gates guard the CALL, not the result: several generators scan containers or
+the world, and paying for that to discard the answer is a cost that only shows on
+a large base. A task already in flight is left to finish.
+
+### A pane write that is in flight must not be repainted from the mirror
+`dd.module.writetoken` -- see also `arch.module.slots`, `arch.pane.petport`
+
+**THE BUG THIS EXISTS FOR ATE A MODULE.** The pane's module table is both the
+display state AND the source of the wire payload. Repainting it from the mirror
+means an unrelated change -- a unit picking up cargo, which moves the same
+mirrored blob -- can restore the PRE-SWAP module set while the module is already
+out of the cursor. The next click then sends a payload that does not mention it,
+the port replaces the whole set with that, and `previous` reads nil so nothing is
+handed back to the player either. It exists nowhere.
+
+So the pane stamps every module write, the port records the stamp BEFORE it
+validates anything, and the pane treats the mirror's module set as authoritative
+only once its own stamp returns.
+
+**STAMPING BEFORE VALIDATION IS WHAT MAKES IT SAFE.** A refusal echoes too, so the
+pane stops waiting and repaints from truth instead of sitting forever showing a
+phantom. The handler also clears the mirror signature unconditionally, because an
+unchanged blob would otherwise be swallowed by the mirror's own change gate and
+the echo would never be sent.
+
+A token rather than a timeout: a deadline has to guess how long a commit takes
+and is wrong on a loaded server. Only modules are held back -- everything else in
+a mid-flight mirror is painted normally, because nothing else is in flight.
+
 ## DESIGN INTENT -- PLANNED
 
 ### The drone is always running
@@ -3151,10 +3333,14 @@ Late-project work. It is polish, it will read as unfinished right up until it is
 done, and it should follow the systems it describes rather than chase them.
 
 ### The investment path — a pet is a project, not a purchase
-`plan.module.investmentpath`
+`plan.module.investmentpath` -- see also `arch.module.effects`, `dd.module.slotsbyrarity`
 
-PLANNED, NOT BUILT. Acquiring a unit should be the start of its development
-rather than the end.
+**THE MECHANISM IS BUILT; THE CONTENT AND THE GATING ARE NOT.** Modules socket,
+persist, and grant status effects -- see `arch.module.effects`. What follows is
+still planned: task gating, the upgrade ladder, and every module but the
+placeholder lamp.
+
+Acquiring a unit should be the start of its development rather than the end.
 
 **1. Most tasks are gated behind installed MODULES.** "Go milk that Mooshi"
 requires a Livestock Harvest Module. Dispatch eligibility per task type is
@@ -3190,20 +3376,21 @@ do everything the moment it exists has no shape. Choosing which units get which
 modules is the management decision the whole design is trying to create, and it
 only exists if a unit cannot have all of them at once.
 
-### Network control — the two things still missing at the top
-`plan.network.control`
+### Network control — filter beacons
+`plan.network.control` -- see also `arch.port.switches`, `dd.port.participationgroups`
 
-Both were specified earlier and neither is built. Recorded here because they are
-what makes a LARGE deployment governable, and everything above assumes large
+What makes a LARGE deployment governable, and everything above assumes large
 deployments.
 
-**1. Per-task participation, per network.** A petport on a non-default network
-needs checkboxes for which tasks it takes part in -- automatic watering being
-the obvious first one a player will want to switch off. Without this, joining a
-network is all-or-nothing, and the only way to opt a port out of one behaviour
-is to opt it out of everything.
+**PER-TASK PARTICIPATION IS BUILT** and has graduated to `arch.port.switches`.
+Four groups rather than the per-task checkboxes described here, because fourteen
+work generators do not fit a pane band and nobody thinks in generators. Watering
+-- named here as the obvious first thing a player switches off -- is inside the
+farming group and cannot be switched off on its own. If that turns out to matter,
+splitting farming is the change, not per-task boxes.
 
-**2. Filter beacons, in two families.** Filters apply IN ORDER, using the
+**FILTER BEACONS, IN TWO FAMILIES, ARE STILL OUTSTANDING.** Filters apply IN
+ORDER, using the
 container's own slot order as the syntax:
 
   - **Item filters** -- allow and deny lists over item descriptors, the original
@@ -4412,11 +4599,15 @@ CONTROL, and `petportsJumpMover` does not use it:
 
     mcontroller.setVelocity({edge.jumpVelocity[1], vy})
 
-Launch velocity is set directly and always has been -- that is how
-`launchVelocity` raises it. It can lower it just as easily. **Only ever raising
-is a POLICY, not a constraint**, and the policy is still right (launching weaker
-than planned is what produced ceiling collisions), but do not reason as though
-the engine forbids the other direction.
+Launch velocity is set directly and always has been. It can be lowered just as
+easily as raised. **Only ever raising was a POLICY, not a constraint** --
+
+**AND THE POLICY IS GONE.** `solveLaunch` lowers the launch whenever the plan's
+Land sits on the ascending crossing, which was 14 of 14 unexecutable takeoffs in
+one log. See `arch.pathing.solvelaunch`. The ceiling-collision worry that
+justified the policy is bounded rather than argued away: the solver never exceeds
+the plan's own apex by more than `JUMP_ARC_CLEARANCE`, and only in the
+pathological case, where the real trajectory was going five tiles higher anyway.
 
 Checked against the cage anyway and it does not help there: matching the
 planner's apex would launch at ~15.3, rise a tile, and land back on the rung it
@@ -4809,6 +5000,80 @@ forward-declare it.
 A `goto continue` idiom is a parse error at load. Use a positive condition
 wrapping the block instead. Scan for `goto` and `::label::` before shipping.
 
+### PathFinder:reset() keeps the options it was built with
+`fact.pathing.resetkeepsoptions` -- see also `dead.pathing.replannotaloop`
+
+`reset()` clears `edges`, `hasPath` and the cursor. It does NOT clear the
+`pathOptions` table the finder was constructed with, and it does not clear
+`aStar` either.
+
+**SO A REPLAN THAT GOES THROUGH reset() RE-SEARCHES WITH EVERY VALUE THAT JUST
+FAILED**, and from an unchanged position it produces an identical plan. Only
+`freshPather` picks up a changed option, because only that constructs a new
+finder.
+
+This is why an escalating `smallJumpMultiplier` had to rebuild the pather rather
+than reset it, and it is half of why the arc replan loops were byte-identical.
+
+### The movement controller integrates with explicit Euler at 1/60
+`fact.pathing.eulertick` -- see also `arch.pathing.solvelaunch`
+
+Position is advanced using the velocity from BEFORE gravity is applied that tick,
+so a real trajectory sits ABOVE the ideal parabola:
+
+    y_discrete - y_continuous = g * dt * t / 2
+
+At `g` 120 and `dt` 1/60 that is exactly `t` tiles. Half a tile at half a second
+of airtime, and it grows with hang time.
+
+**MEASURED, NOT ASSUMED.** Fitted per flight over every ballistic in-flight
+sample in one session's log, using each tick's own vertical velocity as the
+clock: **8 of 9 flights, slope 1.0000, sd 0.0024.** The ninth was a ceiling
+contact, where `vy` stops being a clock and the fit is meaningless.
+
+**dt IS NOT AVAILABLE FROM ANY API.** `script.updateDt()` is the SCRIPT delta and
+is unrelated -- the controller integrates on the engine tick no matter how often
+a script runs. It is a constant in `petportsTaskAction.lua` with the measurement
+beside it.
+
+Anything solving a trajectory has to use the discrete form. A solver that is
+exactly right about continuous physics is wrong on the ground by `t` tiles, which
+is the difference between landing on a ledge and clipping its lip.
+
+### The arc mover flies the unit off its own landing
+`fact.pathing.arcmoverthrottle` -- see also `arch.pathing.solvelaunch`
+
+Vanilla's `moveArc` airborne branch does two things every tick that are correct
+in flight and catastrophic on contact: it sets `groundFriction` to 0, and it
+drives horizontal velocity toward the arc edge's own `source.velocity`.
+
+A Land is a separate edge. A unit touching down while still holding an Arc edge
+therefore lands **at full flight speed on a frictionless surface with the
+throttle open**, and `moveLand` -- whose entire body is
+`controlApproachXVelocity(0, groundForce)` -- never gets a tick to brake it.
+
+Measured: a unit arriving exactly on a one-tile ledge slid off it and fell three
+tiles back, five identical laps. `ARCMOVER grounded` appeared ZERO times in the
+whole log, so the mover never saw itself land at all.
+
+At script delta 5 the mover gets one look every five physics ticks -- 0.67 tiles
+of travel at walkSpeed 8. Any correction here has one shot.
+
+### A Lua table with a hole becomes a Json object, not an array
+`fact.tooling.sparsejson` -- see also `arch.module.slots`
+
+A table with keys 1 and 3 and nothing at 2 is not contiguous, so the engine
+converts it to an OBJECT with the STRING keys "1" and "3". Read back, `t[3]` with
+a NUMBER key misses.
+
+**WHICH SILENTLY DELETES ANYTHING SPARSE THAT CROSSES A JSON BOUNDARY** -- item
+parameters, object parameters, the pane mirror. Store sparse collections as a
+contiguous list of records carrying their own index instead.
+
+BELIEVED FROM READING, not from a log in this mod. The record-list shape is
+correct either way, which is why it was taken without waiting for the
+measurement.
+
 ## DISPROVEN
 
 ### Ranking by distance under scarcity starves the far machines
@@ -5049,6 +5314,50 @@ mod author's "I have 84 of them in a stack" refuted it in one line.
 **The rule both point at:** when a log and a hypothesis disagree, the log has
 already answered. Grep the quiet intervals as well as the noisy ones — an absence
 of dispatches is data.
+
+### Escalating the small jump multiplier on failure
+`dead.pathing.jumpescalation` -- see also `arch.pathing.solvelaunch`, `fact.pathing.resetkeepsoptions`
+
+The theory: no fixed `smallJumpMultiplier` suits all terrain, so each
+jump-attributable replan should add 0.1 and a rebuilt pather would offer A* a
+second jump height it had not tried. Reset on arrival. It was built, measured
+over one session, and removed.
+
+**IT COULD NOT REACH THE FAILING JUMPS.** Every unexecutable takeoff in that log
+-- 14 of them, a perfect correlation -- launched at the FULL jump, `[12,45]`.
+`smallJumpMultiplier` scales only the SECOND height. No value of it touches those
+at all, and escalating toward 1.0 converges the small jump ONTO the full one,
+removing the 31.82 option that succeeded every time it was used.
+
+**IT NEVER FIRED WHERE THE LOOPS WERE.** All three observed loops replanned
+through the airborne-edge stall, not the arc-landing handler where the hooks
+were. The two times it did fire, neither was a jump: one was a Land edge 0.57
+tiles out against a 0.5 tolerance, the other a body-clearance failure on a
+one-edge walk plan. Two firings, two misattributions, zero real catches.
+
+**THE FAULT WAS IN THE PLAN, NOT THE OPTIONS.** See `arch.pathing.solvelaunch`.
+
+It also cost a deliberate probe/walk divergence -- the probe had to be pinned to
+the base multiplier to keep a transient recovery state out of the shared route
+cache -- which was a real price against a documented invariant, paid for a
+benefit that never existed.
+
+### A replan cannot loop, because the search starts from where the unit is
+`dead.pathing.replannotaloop` -- see also `fact.pathing.resetkeepsoptions`
+
+The claim, written into the arc replan sites: `PathFinder:find` always searches
+from `mcontroller.position()`, so A* cannot keep handing back a route for a
+surface the unit is not on, and refusing a plan therefore costs one search and
+never repeats for the same reason.
+
+**IT HOLDS ONLY IF THE UNIT ENDS UP SOMEWHERE NEW.** A unit that fails a jump the
+same way every time lands in the same place, walks back to the same tile, and
+asks the same question from the same position. Measured: ten consecutive
+replans, `srcDist 4.72912` to five decimals every one, and two more loops beside
+it.
+
+Same position plus unchanged options -- see `fact.pathing.resetkeepsoptions` --
+is the same plan. The search origin is not the loop-breaker it was taken for.
 
 ## REFERENCE
 
@@ -5423,9 +5732,19 @@ plan. In a platform cage the same signature produced a 7.45-tile error:
     jump delivers (1033.24). This jump is UNEXECUTABLE as planned and will
     overshoot -- launchVelocity cannot lower it.
 
-`launchVelocity` only ever raises, so an over-optimistic planner apex is
-corrected and a cancelled one is not. Every normal jump in a clean log reads
--0.5 to -0.9 (the familiar over-estimate); only wall-clipped arcs go positive.
+**THAT VERDICT TEXT IS OLD AND SO IS ITS CONCLUSION.** `launchVelocity` is gone;
+`solveLaunch` lowers the launch to arrive descending at the plan's landing, and
+the message now says so. Every normal jump in a clean log reads -0.5 to -0.9 (the
+familiar over-estimate); only wall-clipped arcs go positive.
+
+**WHICH MEANS THE CAGE CASE NOW GETS AN AUTOMATIC CORRECTION IT WAS NEVER
+MEASURED WITH, AND IT MAY BE WORSE.** The note below this one predicted exactly
+what the solver now does -- match the planner's apex, launch at ~15.3, rise a
+tile -- and predicted it lands back on the rung it left, because the plan's
+DESCENT through a platform is unexecutable too. That prediction is untested
+against the current build. **RE-MEASURE A WALL-CLIPPED ARC BEFORE TRUSTING
+ANYTHING HERE.** A cancelled arc is a plan that is wrong at both ends, and a
+solver that faithfully flies a wrong plan flies it into the floor.
 
 **SURVIVABLE, NOT SOLVED.** The overshoot recovery lands the unit somewhere
 real and replans, so this no longer loops -- it costs a wasted arc and a search
@@ -5444,7 +5763,13 @@ Read the result off the `ARCPLAN VERDICT` line -- planner apex should rise to
 meet physics apex. **Run it alone**, not stacked on a behavioural change.
 
 ### moveLand is still vanilla's, and it is four lines
-`todo.pathing.moveland`
+`todo.pathing.moveland` -- see also `fact.pathing.arcmoverthrottle`
+
+**PARTLY OVERTAKEN, NOT FIXED.** The arc mover now stops the unit on arrival, so
+the specific failure that kept reaching this -- landing at flight speed and
+sliding off -- no longer depends on `moveLand` getting a tick. The three defects
+below are still in the function and still reachable by any path that arrives on
+a Land edge without an arc in front of it.
 
     function PathMover:moveLand()
       if (onGround or (liquidMovement and abs(delta[2]) < 1)) and abs(delta[1]) < 1 then
@@ -5598,6 +5923,24 @@ matching when someone rewords a log line.
   which have no entry in the list.
 - Vent residency scales with vent count -- each linked vent spawns a stagehand
   holding a 12-tile region resident forever, plus the port's.
+- **The module refusal window loses the item.** The pane performs the swap
+  locally, so a payload the port rejects is already out of the player's cursor.
+  Both sides ask `root.itemHasTag` about the same item and cannot disagree, so
+  reaching it needs an item's tags to change mid-session -- but the port now
+  forces a repaint on refusal so the loss is at least VISIBLE rather than a
+  phantom that survives until the pane closes.
+- **The port switches have the same in-flight race as modules, without the
+  teeth.** `portEnabled` and the four participation boxes are painted from the
+  mirror every poll, so a toggle followed by a stale mirror flickers the box back
+  and then forward within half a second. Self-correcting, no item involved, no
+  token. Give them one if the flicker ever annoys.
+- **Settings toggles are write-only and unmirrored.** `setCarried` and
+  `setCrosshairs` hold whatever was last clicked and reset to their config
+  defaults when the pane reopens. Nothing reads them yet, so nothing is wrong --
+  but they need mirroring before they mean anything.
+- **Group tooltips live on the 9px checkbox, not the label.** The four
+  `group*Label` widgets stay `mouseTransparent`, so hovering the word does
+  nothing. Dropping that flag on those four makes the label hoverable.
 - Coverage is 64 now. **Area is what costs, so 32 -> 64 is 4x**, and `gatherVents`
   inflates by a further COVERAGE_SIZE per side -- 96x96 to 192x192. An existing
   residency stagehand keeps the size it was born with until its port respawns it,
