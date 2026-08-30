@@ -1,0 +1,54 @@
+//  PETPORTS -- UNIT DEMATERIALISE
+//
+//  Applied by petports_despawn on the monster side. THIS EFFECT IS WHAT KILLS
+//  THE UNIT: killOnFinish drives status.setResource("health", 0) at the end of
+//  the ramp, replacing the instant kill petports_despawn used to do inline.
+//
+//  WHICH MEANS DESPAWN NOW TAKES A SECOND. Anything on the port side that
+//  assumed the unit was gone the moment petports_despawn returned has to wait
+//  on world.entityExists instead -- notably the hull door, which stays open
+//  while a unit is still instantiated.
+//
+//  fadeMax 1.0, not vanilla's 0.8. Vanilla only ever blends 80% toward black
+//  because it pops the alpha to zero immediately afterwards and the last 20%
+//  would never be seen; ours actually ramps the alpha, so a partial blend would
+//  leave the unit's own colours faintly visible as it goes.
+
+{
+	"name" : "petports_unitfadeout",
+
+	"effectConfig" : {
+		"grow" : false,
+		"killOnFinish" : true,
+
+		"fadeColorDuration" : 0.1,
+		"shrinkDuration" : 0.2,
+		"shrinkSize" : 0.25,
+		//  TWO, NOT VANILLA'S THREE. Measured in game: at 3 the halo reads as a
+		//  blur ring wider than the unit's own silhouette. monsterrelocate can
+		//  afford 3 because it is applied to arbitrary monsters, many far
+		//  larger than ours -- a 1.35-tile chassis is at the small end of what
+		//  that number was chosen for.
+		"borderWidth" : 2
+	},
+
+	//  ONE PHYSICS TICK, NOT FIVE. Vanilla's monsterrelocate declares this and
+	//  it is not decoration: the whole ramp is 0.3s, so at the default effect
+	//  delta it would get a handful of updates and read as a stepped pop rather
+	//  than a transition. The first build of this effect omitted it.
+	"scriptDelta" : 1,
+
+	//  THE CEILING, NOT THE RAMP. The ramp is the two durations above and totals
+	//  0.3s; this is the outer bound the engine holds the effect for and must be
+	//  comfortably longer, or the effect is removed mid-fade and uninit clears
+	//  the directives early. Vanilla uses 5 against its own 0.3s.
+	"defaultDuration" : 5.0,
+
+	//  SOUNDS ONLY -- see the header of the file. An effect's animator is its
+	//  own, so this is what animator.playSound in the script reaches.
+	"animationConfig" : "petports_unitfade.animation",
+
+	"scripts" : [
+		"petports_unitfade.lua"
+	]
+}

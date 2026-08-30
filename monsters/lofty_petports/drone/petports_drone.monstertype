@@ -228,7 +228,17 @@
     "touchDamage" : { "poly" : [], "damage" : 0, "teamType" : "ghostly", "damageSourceKind" : "default" },
 
     "statusSettings" : {
-      "statusProperties" : { "targetMaterialKind" : "robotic" },
+      //  THE MATERIALISE / DEMATERIALISE COLOUR, read by
+      //  petports_unitfade.lua off the parent's status controller. A status
+      //  property rather than a spawn parameter or a message: it is already on
+      //  the controller before the effect is ever applied, so the effect script
+      //  stays generic and each chassis can differ with no code.
+      //
+      //  TEST VALUE. ff00ff is deliberately unmissable so the first in-game
+      //  check cannot confuse "the fade works" with "the colour is wrong".
+      //  Six hex digits, no alpha -- the directive is fade=RRGGBB=amount and
+      //  alpha is carried separately by ?multiply.
+      "statusProperties" : { "targetMaterialKind" : "robotic", "petports_fadeColor" : "ef91a9" },
 
       "appliesEnvironmentStatusEffects" : false,
       "appliesWeatherStatusEffects" : false,

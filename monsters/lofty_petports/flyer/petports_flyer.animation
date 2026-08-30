@@ -123,7 +123,7 @@
             "sleep"     : { "properties" : { "image" : "<partImage>:run.<frame>" } },
             "sound"     : { "properties" : { "image" : "<partImage>:run.<frame>" } },
             "blink"     : { "properties" : { "image" : "<partImage>:run.<frame>" } },
-            "invisible" : { "properties" : { "image" : "<partImage>:run.<frame>" } }
+            "invisible" : { "properties" : { "image" : "/monsters/lofty_petports/shared/spinner/spinner.png:blank" } }
           }
         }
       },
@@ -159,7 +159,7 @@
             "sleep"     : { "properties" : { "image" : "<partImage>:run.<frame>" } },
             "sound"     : { "properties" : { "image" : "<partImage>:run.<frame>" } },
             "blink"     : { "properties" : { "image" : "<partImage>:run.<frame>" } },
-            "invisible" : { "properties" : { "image" : "<partImage>:run.<frame>" } }
+            "invisible" : { "properties" : { "image" : "/monsters/lofty_petports/shared/spinner/spinner.png:blank" } }
           }
         }
       },

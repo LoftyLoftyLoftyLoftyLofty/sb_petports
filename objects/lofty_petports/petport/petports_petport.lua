@@ -113,6 +113,22 @@ HEALTH_MOVE = 1.0
 HEALTH_HOME_SLACK = 5.0
 RESPAWN_GRACE = 1.0
 
+--  HOW OFTEN TO LOOK WHILE THE HULL DOOR IS STILL MOVING.
+--
+--  SEPARATE FROM RESPAWN_GRACE BECAUSE THEY ANSWER DIFFERENT QUESTIONS.
+--  RESPAWN_GRACE is a BACKOFF -- it exists so a port that cannot spawn does not
+--  retry in a tight loop. "The door has not finished opening" is not a failure
+--  and needs no backoff; it is a wait of known, short duration.
+--
+--  MEASURED AS A PALPABLE DELAY. Spending a full second on it meant the door
+--  visibly finished and then the port sat there, because a ten-frame transition
+--  lands somewhere inside the grace window and the remainder is dead time.
+--
+--  ZERO MEANS EVERY UPDATE TICK, which is affordable only because the door
+--  check is now the FIRST thing in the block and nothing expensive runs on a
+--  tick that fails it -- see the restructure below.
+DOOR_POLL = 0.0
+
 --  WHICH LOOPS THIS PORT TAKES PART IN.
 --
 --  A PORT PARAMETER LIKE ENABLED, AND FOR THE SAME REASONS: it describes the
@@ -1129,8 +1145,24 @@ local function abandonTask(reason)
   self.task = nil
 end
 
+--  BUILD STAMP.
+--
+--  THE LARGEST FILE IN THE MOD AND THE ONE MOST OFTEN EDITED, and until now the
+--  only way to tell a stale copy from a wrong one was to guess. The upcycler
+--  object's missing stamp already cost a full test round; this is the same
+--  silent failure with more surface area.
+local PETPORT_BUILD_STAMP = "2026-08-30a door waits for the unit to fade"
+
 function init()
+  sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
+
   self.petId = nil
+
+  --  Held between petports_despawn and the unit actually leaving the world, so
+  --  the hull door does not close over a dematerialising unit. Cleared by the
+  --  entityExists poll in the main update.
+  self.fadingPetId = nil
+
   self.petUniqueId = nil
   self.petData = nil
   self.statusTimer = 0
@@ -1956,6 +1988,19 @@ function spawnPet()
     parameters.seed = self.petData.seed
   end
 
+  --  MATERIALISE ON ARRIVAL, AS A SPAWN PARAMETER AND NOT AS A CALL.
+  --
+  --  This was a callScriptedEntity after spawnMonster, and the unit rendered
+  --  once at full size before it landed. A round trip is always at least a tick
+  --  late; a spawn parameter is read inside the monster's own init, which is
+  --  what vanilla's relocator does with `wasRelocated`. See the init wrapper in
+  --  petports_contract.lua.
+  --
+  --  TOP LEVEL, NOT UNDER initialStorage -- see the note above about what
+  --  actually reaches world.spawnMonster, and fact.unit.initialstorage for why
+  --  the storage table is not a route for this.
+  parameters.petports_materialise = true
+
   trace("spawning with initialStorage", parameters.initialStorage)
 
   self.petId = world.spawnMonster(self.petData.monsterType, spawnPosition, parameters)
@@ -1997,6 +2042,11 @@ function saveAndDespawn(skipWrite)
     --  it does not raise -- which is how the socket-cycle unit leak went
     --  unnoticed before that script existed.
     world.callScriptedEntity(self.petId, "petports_despawn")
+
+    --  HELD PAST self.petId. The unit is no longer ours to command -- it is
+    --  stunned, suppressed and dying on its own clock -- but it is still in the
+    --  world, and the door above must not close over it.
+    self.fadingPetId = self.petId
   end
   --  No-op when the unit is being put away because the ITEM was removed -- it
   --  has already left the container. Still worth calling: this path also runs
@@ -9990,7 +10040,21 @@ function update(dt)
   --  THE DOOR NOW MEANS "OPEN FOR BUSINESS" RATHER THAN "SOMETHING IS
   --  SOCKETED", which is a small widening of what it said before. A switched-off
   --  port with an item in it reads as closed, which is what it is.
-  setHullAnimationStateIntent(enabled and "open" or "close")
+  --  AND IT STAYS OPEN WHILE A UNIT STILL EXISTS. petports_despawn now runs a
+  --  one-second dematerialise rather than killing on the spot, so a port that
+  --  closed the moment it asked would drop its door over a unit still fading in
+  --  the doorway. self.fadingPetId outlives self.petId for exactly that window.
+  --
+  --  POLLED ON entityExists RATHER THAN TIMED. A fade that is interrupted --
+  --  the unit killed some other way, the effect removed, the chunk unloaded --
+  --  ends early, and a timer would hold the door open past it. The entity going
+  --  away is the real signal and the only one that cannot disagree.
+  if self.fadingPetId ~= nil and not world.entityExists(self.fadingPetId) then
+    self.fadingPetId = nil
+  end
+
+  local unitPresent = self.petId ~= nil or self.fadingPetId ~= nil
+  setHullAnimationStateIntent((enabled or unitPresent) and "open" or "close")
 
   if not enabled then
     if self.petId ~= nil then
@@ -10042,35 +10106,55 @@ function update(dt)
         self.petId = nil
       end
 
-      --  DO NOT RESPAWN INTO AN ENVIRONMENT THAT JUST RETIRED THIS UNIT.
+      --  THE DOOR HAS TO FINISH OPENING FIRST, AND IT IS CHECKED FIRST.
       --
-      --  Without this the port would spawn on RESPAWN_GRACE, environmentCheck
-      --  would retire it up to five seconds later, and the pair would loop
-      --  forever -- a flicker rather than a fix, and one that writes the item
-      --  back on every cycle.
+      --  "opening" is a ten-frame transition into "open", so testing for the
+      --  terminal state is what sequences the two -- a unit materialising
+      --  behind a shut hatch is the abruptness this whole change exists to
+      --  remove. A port whose door never reaches "open" simply never spawns,
+      --  which is correct: that is a port that is closed.
       --
-      --  envUnsuitable is CLEARED BY environmentCheck ITSELF once the footprint
-      --  suits the chassis again, so a port that floods and later drains brings
-      --  its unit back with no player action. It cannot clear itself while no
-      --  unit exists to be asked, so the re-measure below is what reopens it.
-      if self.envUnsuitable ~= nil then
-        local wet, dry = portMedia()
+      --  ORDER MATTERS FOR COST. This used to sit BELOW the environment
+      --  re-measure and share RESPAWN_GRACE with it, which meant a door that
+      --  finished mid-window left the port idle for the remainder -- the
+      --  palpable pause between the hatch opening and the unit appearing.
+      --  Checking it first lets a not-yet-open door cost one string compare and
+      --  come straight back, while portMedia() still only runs on the slow
+      --  timer.
+      if animator.animationState("hullState") ~= "open" then
+        self.spawnTimer = DOOR_POLL
+      else
+        --  DO NOT RESPAWN INTO AN ENVIRONMENT THAT JUST RETIRED THIS UNIT.
+        --
+        --  Without this the port would spawn on RESPAWN_GRACE, environmentCheck
+        --  would retire it up to five seconds later, and the pair would loop
+        --  forever -- a flicker rather than a fix, and one that writes the item
+        --  back on every cycle.
+        --
+        --  envUnsuitable is CLEARED BY environmentCheck ITSELF once the
+        --  footprint suits the chassis again, so a port that floods and later
+        --  drains brings its unit back with no player action. It cannot clear
+        --  itself while no unit exists to be asked, so the re-measure below is
+        --  what reopens it.
+        if self.envUnsuitable ~= nil then
+          local wet, dry = portMedia()
 
-        if wet ~= self.envWet or dry ~= self.envDry then
-          self.envWet, self.envDry = wet, dry
-          self.envUnsuitable = nil
+          if wet ~= self.envWet or dry ~= self.envDry then
+            self.envWet, self.envDry = wet, dry
+            self.envUnsuitable = nil
 
-          sb.logInfo("PETPORT %s environment changed (wet %s, dry %s) -- allowing a "
-            .. "respawn attempt for the socketed unit",
-            stationUniqueId(), tostring(wet), tostring(dry))
+            sb.logInfo("PETPORT %s environment changed (wet %s, dry %s) -- allowing a "
+              .. "respawn attempt for the socketed unit",
+              stationUniqueId(), tostring(wet), tostring(dry))
+          end
         end
-      end
 
-      if self.envUnsuitable == nil then
-        spawnPet()
-      end
+        if self.envUnsuitable == nil then
+          spawnPet()
+        end
 
-      self.spawnTimer = RESPAWN_GRACE
+        self.spawnTimer = RESPAWN_GRACE
+      end
     end
   end
 

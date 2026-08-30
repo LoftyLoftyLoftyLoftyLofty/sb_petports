@@ -42,171 +42,179 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-08-30 (pathing session)
+### What is built, as of 2026-08-30 (pathing, panes and choreography)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-CAVEAT ON THIS PASS: this session touched ONE FILE, `petportsTaskAction.lua`,
-and one behaviour inside it -- the arc mover's horizontal steering. Everything
-else carries its previous session's date and was not re-verified. The upcycler,
-the panes and the classifier are exactly as the overnight pass left them.
+A LONG SESSION ACROSS FOUR AREAS -- the arc mover, the last pane migration, the
+beacon icons, and spawn/despawn choreography. Anything below dated earlier than
+today was not re-verified and carries its previous session's confidence.
+
+---
 
 **THE ARC MOVER NO LONGER THROTTLES A JUMP TO THE PLANNER'S MIND-CHANGE.** A*
 changes its own vx partway through nearly every arc it draws -- 12 to 1 at the
-apex, and it stays there for the whole descent. The mover steered toward that,
-so a unit launched at 7.96 was braked to 1 in a single look with a quarter
-second of falling left, crossed its landing altitude 1.83 tiles short, and fell
-twelve tiles. The launched velocity now holds for the entire arc. See
-`fact.pathing.plannervxdrop` for the frequency, `fact.pathing.arcmoverthrottle`
-for the mechanism, and `arch.pathing.solvelaunch` for what supersedes what.
+apex, held for the whole descent. The mover steered toward that, so a unit
+launched at 7.96 was braked to 1 in a single look with a quarter second of
+falling left, crossed its landing altitude 1.83 tiles short and fell twelve
+tiles. The launched velocity now holds for the entire arc, with the record's
+LIFETIME as the ownership guarantee. See `fact.pathing.plannervxdrop`,
+`fact.pathing.arcmoverthrottle`, `arch.pathing.solvelaunch`.
 
-**IT HAD BEEN HAPPENING ON ALMOST EVERY JUMP SINCE THE MOVER WAS WRITTEN.** On
-solid terrain it cost a fraction of a tile near the ground and a solid surface
-forgives that, so nothing ever reported it. Platforms forgive nothing, and the
-same jump failed three times running in the same place.
+IT HAD BEEN HAPPENING ON ALMOST EVERY JUMP SINCE THE MOVER WAS WRITTEN, and
+solid terrain absorbed it every time. VERIFIED across three courses -- blocks,
+3-wide platforms, a single-wide death course -- plus tight tunnels and air
+pockets. Every jump landed, worst error 0.49 tiles, zero stale-record warnings.
 
-**THE CONTROL THAT SETTLED IT WAS AN ACCIDENT AND IS WORTH KNOWING.** A fourth
-attempt at the same jump had its task fail on vents at the apex; the pather was
-discarded mid-flight, nothing called the mover, and the unit flew pure
-ballistics onto its planned landing. Guided it missed by 1.83 tiles. Unguided
-it hit. `solveLaunch` had been right the whole time.
+WHAT IS LEFT IN THE JUMP PATH is the arrival brake (`todo.pathing.brakefloor`,
+priority 2) and branch 1's ceiling overshoot, corrected in place in
+`arch.pathing.solvelaunch` and deliberately not changed.
 
-**VERIFIED IN GAME ACROSS THREE COURSES.** Blocks, 3-wide platforms, and a
-single-wide death course: every jump landed, worst error 0.49 tiles, one launch
-record cleared per jump, zero stale-record warnings. Tight tunnels and air
-pockets re-tested and passing.
+---
 
-**WHAT IS LEFT IN THE JUMP PATH IS THE ARRIVAL BRAKE, NOT THE LAUNCH.** Its
-gate has no floor and it gets one airborne look at a window half a tile wide.
-It missed three of eight jumps and, when it fires, can fire half a tile short.
-Residual is +-0.33 to +0.49 and currently harmless only because a 1.6-wide body
-braked half a tile short still overlaps the node's tile. See
-`todo.pathing.brakefloor`.
+**SPAWN AND DESPAWN ARE CHOREOGRAPHED.** A unit materialises out of a coloured
+dot and dematerialises back into one, modelled on vanilla's `monsterrelocate` --
+the only transition in the game whose look lives in the DIRECTIVE STRING rather
+than in particles, bespoke art or motion. `?fade` to the chassis colour, that
+blend morphing to white while `?scalenearest` collapses the unit, and a `?border`
+holding the colour throughout. Two effects over one script in
+`stats/effects/lofty_petports/`, direction picked by a `grow` flag.
 
-**BRANCH 1 OF `solveLaunch` CAN FLY FOUR TILES ABOVE THE PLAN'S OWN APEX**, and
-the architecture entry used to say it could not. Corrected in place this session
-rather than filed beside, per `proc.pathing.supersede`. Left as-is deliberately;
-it is what buys a descending arrival. THE THING TO WATCH is that this puts the
-unit through space the planner validated for a lower arc, which open ground does
-not care about and a ceiling will.
+THE SEQUENCE IS NOW ORDERED. The hull door opens, and only on reaching the
+terminal `open` state does the unit spawn -- polled every tick while the door
+moves rather than on `RESPAWN_GRACE`, which read as a palpable pause. On the way
+out the door stays open until the unit is actually gone from the world, tracked
+by `self.fadingPetId` past `self.petId` and polled on `world.entityExists`
+rather than a timer.
+
+`petports_despawn` NO LONGER KILLS INLINE -- the dematerialise effect does, at
+the end of its ramp. Anything that assumed the unit was gone the moment that
+function returned must now poll.
+
+THE ONE-TICK POP TOOK THREE ATTEMPTS, recorded in `fact.unit.spawnrender`. A
+`callScriptedEntity` is always a tick late; a spawn parameter read in the
+monster's own init is better, but `addEphemeralEffect` hands off to the status
+controller and is not synchronous with the render; `animator.setAnimationState`
+is. The unit is hidden synchronously in a WRAPPED init and groundPet's next
+update self-heals it.
+
+THAT HIDE BORROWS THE SPINNER SHEET'S BLANK FRAME, a landmine with three
+dependants -- see `todo.art.invisibleframe`. It also fixed two OLDER silent bugs:
+`invisible` was aliased to the run strip, so units sleeping inside a target and
+units in vent transit had never actually been hidden.
+
+Colour is `petports_fadeColor`, a status property on each of the four
+monstertypes, currently the test value `ff00ff`. Sound is the capture pod's, on
+an effect-owned animation holding nothing but sounds.
+
+SCALE IS A DIRECTIVE, not a transformation group -- no animation edits and no
+wrapper around groundPet's update for the visual. Four candidates were read and
+rejected on the way here (capture, despawn, mech deploy, morphball) and each is
+recorded with why.
+
+---
+
+**ALL FOUR PANES ARE ON THE SHARED STRING TABLE.** The upcycler was the last and
+is now migrated: 14 config literals plus roughly 26 runtime ones the backlog had
+compressed into "its runtime status line", including the whole ten-cause warning
+table. `Replace Me` is gone. `plural(count, word)` is gone -- counted nouns are
+`one`/`many` keys, because appending an "s" in code is English word formation.
+
+THE MIGRATION'S REAL LESSON: keys and a require are not a migration. The sweep
+call was missing, every widget rendered its declared `"--"`, and NOTHING WAS
+LOGGED -- which is the string table working as designed. Verified across all four
+panes that anything declaring keys also runs the sweep.
+
+**ALL FOUR PANES HAVE FINISHED TITLE ICONS.** The two beacons are STATE-DRIVEN --
+on and off variants swapped when the enabled box is ticked, seeded from real
+state at init, one shared implementation. The route is `pane.setTitleIcon`; the
+title icon is owned by the Pane and is NOT in the addressable widget tree, so
+`widget.setImage` fails on it SILENTLY. Title padding is now consistent across
+all four -- it is leading spaces in the title string and nothing else reaches it
+(`fact.pane.titlepadding`).
+
+---
 
 **Core loop.** A petport places, opens, spawns a unit from a socketed item, and
-the unit's state round-trips through that item across despawn, world reload and
-being carried to another world. Placement validation, leashing, recall and
-re-home are live. Multi-hop vent routing works end to end.
+that state round-trips through the item across despawn, world reload and being
+carried to another world. Placement validation, leashing, recall and re-home are
+live. Multi-hop vent routing works end to end.
 
 **Four locomotion classes** -- ground, flyer, aquatic, amphibious -- all verified
-in game, including the otter case: swimming a flooded tube to reach an air
-pocket and farming inside it.
+in game, including swimming a flooded tube to farm an air pocket.
 
 **Sorting, tidying, compaction, restock.** Deposit beacons route by tag and
-category; eviction runs the same predicate so a misfit is anything failing its
-own crate's filter. Storage compacts itself, bucketed by parameters -- BUT
-NEVER A MACHINE; see `dd.upcycler.slotsaremeanings`. Restock beacons handle
-several requests per crate: fetch, deliver, evict overstock, evict anything
-unrequested.
+category; eviction runs the same predicate. Storage compacts itself, bucketed by
+parameters, BUT NEVER A MACHINE. Restock beacons handle several requests per
+crate.
 
 **Farming**, end to end -- discovery, harvest, collection, deposit, replant
 intents, seed withdrawal, replanting at arbitrary footprint, watering of dry
-tilled soil, all surviving vent traversal both ways with no sprinkler
-infrastructure. Animal harvesting is built, and a submerged animal is reachable
-(`fact.pathing.floatingtarget`).
+tilled soil, all surviving vent traversal both ways. Animal harvesting is built
+and a submerged animal is reachable.
 
-**The upcycler's slot behaviour is finished and verified in game.** The shuttle
-runs on one priority, charge before burner, with the weight-aware fit test that
-is what makes it terminate -- `arch.upcycler.shuttlepriority`. Bulk where the
-destination rule is a dead end, paced where it is not. The mutual swap deadlock
-resolves itself. `consumeReagent` refuses exempt items. Both the pane and the
-machine read ONE refusal ladder (`arch.upcycler.stateladder`). Non-treats parked
-in an output slot are collected rather than stranding the machine. A rule carries
-two exclusions -- burn and reagent -- and the furnace door refuses a burn-denied
-hand-drop with a state line saying why.
+**The upcycler's slot behaviour is finished.** One shuttle priority, charge
+before burner, weight-aware fit test, bulk versus paced by destination, mutual
+swap deadlock self-resolving, exempt items refused, one refusal ladder shared by
+pane and machine, non-treats collected out of output slots.
 
-**The patrol class of bug is closed twice over.** Dispatch and arrival share ONE
-room predicate, room is DESCRIPTOR-true rather than name-true, every machine
-offer is capped to measured room before the engine sees it, and the report
-handler's done-cleanup runs BEFORE the arrival work. THE REORDERED BACKOFF
-LADDER IS STILL UNEXERCISED -- see `todo.port.backoffladder`.
+**The patrol class of bug is closed twice over.** THE REORDERED BACKOFF LADDER IS
+STILL UNEXERCISED -- `todo.port.backoffladder`, priority 0.
 
-**Metrics.** Per-unit lifetime stats on `petData.stats` -- items moved, crops
-planted, tiles watered, crops harvested, livestock harvested, tiles traveled,
-seconds active, headpats, and the Tidy Score -- gathered at existing choke
-points and persisted with the item. Tidy is logged but displayed nowhere; the
-rank belongs to Maxwell (`todo.unit.maidrank`).
+**Metrics.** Per-unit lifetime stats on `petData.stats`, persisted with the item.
+Tidy is logged and displayed nowhere; the rank belongs to Maxwell. The Stats tab
+is live.
 
-**The Stats tab is live**, a scrolling list with per-block striping and
-placeholder separators, refreshing text-only and measured not to strobe.
+**Headpats.** One gate -- vanilla's 3s interaction window -- so the emote and the
+ledger cannot disagree.
 
-**Headpats.** A click emotes and reports to the port, which counts it. One gate
--- vanilla's 3s interaction window -- so the emote and the ledger cannot
-disagree.
+**Still not built.** Docking. The fuel system, so treats are made and harvested
+but never eaten. Vents do not cross a medium boundary. Liquid permissions from
+pet upgrades. Rename. Maxwell.
 
-**Constants are globals** in the port's main chunk, which hit Lua's
-200-locals-per-scope ceiling. 127 file-scope locals remain.
+**Art.** Bespoke: the unit body, the petport, the crosshairs, treat COLOURS, the
+upcycler's charge bin icon, and ALL FOUR PANE TITLE ICONS. Placeholder: the vent,
+the upcycler, the eight treat sprites, the four chassis colour strips, the rest
+of the petport pane art, the module icon, stats list fills and separators, the
+upcycler's running light, and the two identical vanilla checkboxes on a rule row.
+The unit has frames for `run` and nothing else, and NO BLANK FRAME OF ITS OWN.
 
-**Crosshair markers, the petport pane, modules, the port band, tooltips.** All
-as previously described: 337x335 ContainerPane with portrait, fuel bar, cargo
-slot, diagnostics with tooltips, three tabs, five module slots, an enabled
-switch and four participation checkboxes. Tooltips are drawn on two canvases
-because a ContainerPane gets none from the engine.
+**The monsterpart is still named `drone_placeholder`.**
 
-**Every visible string in three of four panes** comes from one shared table.
-THE UPCYCLER IS STILL NOT MIGRATED and is the last pane holding its own -- 14
-literals including `Replace Me`, which must not ship. See
-`todo.pane.tooltipstrings`.
+---
 
-**Pet feeder checkboxes** on both beacons and the upcycler. Stored, mirrored,
-and READ BY NOTHING -- the fuel system does not exist yet.
+**BUILD STAMPS -- EVERY LOAD-BEARING FILE NOW CARRIES ONE.**
 
-**Still not built.** Docking. The fuel system itself, so treats are made and
-harvested but never eaten and the per-treat metrics have nothing to count.
-Vents do not cross a medium boundary. Liquid permissions from pet upgrades.
-Rename. Maxwell and any display of the Tidy Score.
+    petports_petport.lua      2026-08-30a door waits for the unit to fade
+    petports_contract.lua     2026-08-30b dematerialise on despawn
+    petportsTaskAction.lua    2026-08-30a launched vx holds for the whole arc
+    beaconconfig.lua          2026-08-30c state-driven title icon
+    restockconfig.lua         2026-08-30c state-driven title icon
+    upcyclerconfig.lua        2026-08-30e string sweep actually runs
 
-**Art.** Bespoke: the unit body, the petport, the crosshairs, the treat COLOURS,
-the upcycler's charge bin icon, and ALL FOUR PANE TITLE ICONS -- petport,
-upcycler, deposit beacon and restock beacon, the last two in on/off pairs.
-Placeholder: the vent, the upcycler, the eight treat sprites, the four chassis
-colour strips, the rest of the petport pane art, the module icon, the stats list
-stripe fills, the dashed orange separators, the upcycler's running light, and the
-two identical vanilla checkboxes on a rule row. The unit has frames for `run` and
-nothing else.
+THE PORT AND THE CONTRACT HAD NEVER HAD ONE. The contract's is logged LAZILY,
+from the first contract call -- putting it at chunk scope threw on an unbound
+`sb` DURING CONTEXT CREATION and killed every unit in the world: 16 spawn
+attempts, 16 dead contexts, no pets at all. `petportsTaskAction`'s stamp is
+FIRST-ENTRY-ONLY, so a continuation log has no stamp line and is
+indistinguishable from a stale file by that signal alone.
 
-**The monsterpart is still named `drone_placeholder`**, file and `name` field.
-Renaming is free while there is one variant and expensive once there are several.
+**STILL OPEN: `moveOne` logs every hop, ungated.** 47 lines in 9 seconds.
 
-**STILL OPEN: `moveOne` logs every hop, ungated.** MEASURED: 47 lines in 9
-seconds on a normal trickle, continuously against any large reagent backstock.
-The one message stream in this file that is not change-gated. Gate it or drop it
-to a counter before release.
-
-**STILL OPEN: the burn-denied / reagent-denied swap deadlock.** Both halves are
-correct error states so nothing is lost, but the burner-side branch `return`s
-first and only one of the two prints a line.
+**STILL OPEN: the burn-denied / reagent-denied swap deadlock** prints only one of
+its two lines.
 
 **STILL OPEN: a task can fail identically three times and nothing notices.** The
-failing jump fell twelve tiles, walked back, and re-attempted byte-identically;
-it only broke out because an unrelated vent failure abandoned the task. This is
-not the refusal loop `fact.pathing.searchorigin` covers -- the unit genuinely
-moves -- so nothing in the reject machinery can see it.
+unit genuinely moves, so the reject machinery cannot see it.
 
-**Build stamps.** `petportsTaskAction.lua` is at `2026-08-30a launched vx holds
-for the whole arc`. `petportsTaskAction`'s stamp is FIRST-ENTRY-ONLY, so a
-continuation log has no stamp line and is indistinguishable from a stale file by
-that signal alone -- worth knowing before it costs a round. THE PETPORT OBJECT
-AND `petports_contract.lua` STILL CARRY NO STAMP AT ALL, which is the exact
-silent-failure shape that already cost a round on the upcycler object.
+**Debug flags, all ON, wanting a release pass** -- `TASK_DEBUG`, `VENT_DEBUG`,
+`DEBUG` in all four panes, `FLY_POINT_DEBUG`, `DRAW_PLAN`, `FLY_TELEMETRY`,
+`CARGO_TRACE`. `PETPORTS_FILTER_DEBUG` is OFF and should stay off. Deferred
+deliberately to a release preflight rather than trimmed piecemeal.
 
-**Debug flags, all ON, all wanting review before release.** `TASK_DEBUG`,
-`VENT_DEBUG`, `DEBUG` in all four panes, `FLY_POINT_DEBUG`, `DRAW_PLAN`,
-`FLY_TELEMETRY`, `DEBUG` in petportconfig, and `CARGO_TRACE` in the petport
-object. `PETPORTS_FILTER_DEBUG` is OFF and should stay off. The TIDY +1 line and
-the shuttle lines are always-on by design. NEW THIS SESSION and always-on: the
-arc mover's `steering to the LAUNCHED vx`, `launch record cleared` and `STALE
-LAUNCH` lines. The first two are once-per-change and once-per-jump; the third
-should never appear and is a bug report if it does.
+**NOTHING IS COMMITTED.** The whole session sits in the working copy.
 
 ## ARCHITECTURE
 
@@ -4883,6 +4891,40 @@ category, on the reasoning that a field doing two jobs will eventually be
 changed for one of them and silently break the other. It got changed for one of
 them. Nothing broke.
 
+### A status effect is not applied before the spawning tick renders
+`fact.unit.spawnrender` -- see also `arch.port.anchor`, `todo.art.invisibleframe`
+
+Applying a materialise effect to a freshly spawned unit produced a visible
+full-size unit for ONE TICK, and only sometimes. Three attempts, each fixing a
+real problem and each leaving the pop:
+
+    port calls world.callScriptedEntity after spawnMonster   pop every time
+    spawn parameter, effect applied in the monster's init    pop ~1 in 3
+    the above plus a synchronous animation state             gone
+
+**A callScriptedEntity IS ALWAYS AT LEAST A TICK LATE.** The monster has
+initialised and rendered once before the call lands. Vanilla never does it that
+way: `capturable.lua` reads the SPAWN PARAMETER `wasRelocated` inside the
+monster's own init and applies `monsterrelocatespawn` there.
+
+**BUT init IS NOT LATE ENOUGH EITHER.** `status.addEphemeralEffect` hands off to
+the STATUS CONTROLLER, and whether that controller's first update lands before
+or after the render for that tick is not deterministic -- which is exactly the
+shape of an intermittent one-in-three. VANILLA HAS THE SAME HOLE. The relocator
+covers it with a beam projectile drawn over the spawn point; there is nothing to
+see because something is in front of it.
+
+**animator.setAnimationState IS SYNCHRONOUS**, and is the only thing reachable
+from a monster's init that is guaranteed in place before a frame can be drawn.
+Hiding the unit there and letting the effect take over whenever the status
+controller arrives closes it.
+
+**SELF-HEALING IS WHAT MAKES THAT SAFE.** groundPet writes `movement` every
+update out of setMovementState / setIdleState, so the hidden state survives
+exactly one tick and needs nothing to clear it. If the effect fails entirely the
+unit is invisible for one tick rather than visible for one -- the better failure,
+and still self-correcting.
+
 ### `pane.setTitleIcon` is the only route to a pane's header icon
 `fact.pane.titleicon` -- see also `fact.pane.windowicon`, `fact.pane.titlepadding`
 
@@ -6694,6 +6736,8 @@ fix — the rewrite is the fix.
 ### Multi-port deferral is arbitration by straight-line distance
 `todo.dispatch.deferral`
 
+**TRIAGED 2026-08-30 -- PRIORITY 1, AND IT IS A DELETE.** 21 of 22 drops deferred to a port that was already busy. Claims already arbitrate correctly and cannot deadlock, so the likely outcome is removing `anotherUnitIsCloser` and its six companions rather than improving the distance test.
+
 `anotherUnitIsCloser` picks a winner by straight-line distance, which the comment
 concedes is routinely wrong in a player's base. `DEFER_GRACE` exists to undo it
 after 12 seconds, `deferredSince` tracks the grace, and a four-way tally exists to
@@ -6704,6 +6748,8 @@ removes `anotherUnitIsCloser`, `DEFER_GRACE`, `deferredSince`, `entry.hasUnit`,
 
 ### Animals move, and nothing chases them
 `todo.farming.animalsmove`
+
+**TRIAGED 2026-08-30 -- FOLDS INTO `todo.pathing.movingtarget`.** Same root cause at a different altitude: a ground target resolved once against an entity that wanders. The `ANIMAL_REACH` measurement stays here as evidence; the fix belongs there.
 
 `ANIMAL_REACH` is 6.0, more generous than the crop reach, because the standable
 ground target resolves ONCE and does not re-resolve as the animal ambles. A
@@ -6723,6 +6769,8 @@ behavior evaluation re-runs `hasMonsterHarvest`, gets false, and clears it.
 ### One behaviour change to watch, from the same pass
 `todo.farming.behaviourwatch`
 
+**TRIAGED 2026-08-30 -- CLOSED, NOT OBSERVED.** The behaviour it asked us to watch for has not appeared at any point in testing since the change landed. Marked as not happening rather than left open indefinitely.
+
 `replantGroundTilled` used to accept a tilled mod at the anchor tile OR the one
 below, hedging an unverified assumption about where `world.entityPosition` sits
 for an object. Watering settled it -- `waterRuns` derives the soil tile the same
@@ -6736,6 +6784,8 @@ first suspect.** The log prints both mods and the `tilled` flag.
 
 ### Open decoupling work
 `todo.item.nicemicelore`
+
+**TRIAGED 2026-08-30 -- DEFERRED, AND THE ORDER IS DELIBERATE.** The whole petports system exists to furnish the Nicemice M.A.U.S. T6 ship, so PETPORTS HAS TO BE PRODUCTION-READY BEFORE the Nicemice pet is built. The colonyTag sweep happens when we get there.
 
 Descriptions still read "M.A.U.S. utility unit" — Nicemice lore in a standalone
 mod. All of it is confined to `description` / `shortdescription` fields.
@@ -6753,6 +6803,8 @@ eventually carry its own markers or drop the concept.
 
 ### The arrival brake has no floor and only one look to use it
 `todo.pathing.brakefloor` -- see also `fact.pathing.arcmoverthrottle`, `arch.pathing.solvelaunch`
+
+**TRIAGED 2026-08-30 -- PRIORITY 2.** Nothing is failing on it; it is a note about why the current margin exists rather than a defect. Revisit if the chassis ever narrows or `LAND_BRAKE_REACH` grows.
 
 The gate in `petportsArcMover`:
 
@@ -6787,6 +6839,8 @@ the chassis ever gets narrower or `LAND_BRAKE_REACH` ever grows.
 
 ### The planner cancels jumps the movement controller does not
 `todo.pathing.jumpmodel` -- see also `fact.pathing.partialjump`
+
+**TRIAGED 2026-08-30 -- PRIORITY 3.** THE WALL-CLIP CASE NOW LIVES HERE ALONE. A separate adversarial-testing entry was struck on 2026-08-30 once the courses passed, and the one scenario it still named -- an arc whose plan is wrong at both ends -- belongs here. Still unmeasured against the current solver, and now joined by branch 1's ceiling overshoot from `arch.pathing.solvelaunch`.
 
 **THE LAST STRUCTURAL PATHING PROBLEM, AND IT IS UPSTREAM OF ANYTHING THIS FILE
 CAN FIX.** A* draws an arc whose velocity DIES on contact with a side wall,
@@ -6837,6 +6891,8 @@ meet physics apex. **Run it alone**, not stacked on a behavioural change.
 ### moveLand is still vanilla's, and it is four lines
 `todo.pathing.moveland` -- see also `fact.pathing.arcmoverthrottle`
 
+**NOT TRIAGED IN THE 2026-08-30 PASS.** Every other backlog entry was given a priority or a decision that day and this one was not raised, so its absence here is a GAP rather than a judgement. Partly overtaken by the arrival brake either way -- see the entry body.
+
 **PARTLY OVERTAKEN, NOT FIXED.** The arc mover now stops the unit on arrival, so
 the specific failure that kept reaching this -- landing at flight speed and
 sliding off -- no longer depends on `moveLand` getting a tick. The three defects
@@ -6879,6 +6935,8 @@ that is a broken path and should surface as one.
 ### The fallback pather in `approachPoint` binds only `moveSwim`
 `todo.pathing.fallbackpather` -- see also `fact.pathing.smalljump`
 
+**TRIAGED 2026-08-30 -- PRIORITY 6.** The highest-priority pathing item on the list. It is narrow but it is a REAL wrong-jump on a real path, and the fix -- have the fallback call `freshPather` -- is small.
+
     self.pather = self.pather or PathMover:new({run = running})
     ...
     if self.pather.moveSwim ~= petportsFreeMover then
@@ -6912,6 +6970,8 @@ without a second variable.
 ### The debug colour legend does not match the game
 `todo.pathing.debugcolours` -- see also `proc.pathing.debugpath`
 
+**TRIAGED 2026-08-30 -- WILL NOT FIX.** A debug legend that disagrees with the game costs a moment of confusion to one reader who already has the source open. Not worth a change to shipping code.
+
 `DRAW_PLAN` uses vanilla's `debugPathEdgeColor` from `/scripts/pathing.lua`,
 which maps:
 
@@ -6935,6 +6995,8 @@ or by diffing the workbench copy against the game's unpacked assets. Until then,
 
 ### `petports_nodePosition` does not match `roundToNode` -- DELIBERATELY NOT FIXED
 `todo.pathing.nodeformula` -- see also `ref.pathing.nodelattice`, `fact.pathing.ongroundtest`
+
+**TRIAGED 2026-08-30 -- WILL NOT FIX WITHOUT EVIDENCE.** The divergences are understood and nothing has been traced to them. If it is not broken it does not get touched; a MEASURED failure attributable to the formula reopens this and nothing else does.
 
 Two known divergences from the engine, both understood, neither fixed, and that
 is a decision rather than a backlog item that got missed.
@@ -6968,6 +7030,8 @@ mismatch. No probing, no re-derivation, data already flowing through the log.
 ### Three overlapping recovery ladders
 `todo.pathing.recoveryladders`
 
+**TRIAGED 2026-08-30 -- PRIORITY 1.** Most of the stuck-unit cases the ladders were built for are now closed, so this is closer to dead weight than to risk. The substring-matched strandedness check is the part that would still bite.
+
 `RECALL_LIMIT` -> `STRANDED_LIMIT` -> `rehomeUnit`, on top of `TASK_DEADLINE` and
 a four-tier `FAILURE_BACKOFF`. rehomeUnit is instant, free and always works.
 Worse, `noteFailure` classifies strandedness by SUBSTRING-MATCHING the failure
@@ -6976,6 +7040,8 @@ matching when someone rewords a log line.
 
 ### Smaller ones
 `todo.tooling.smaller`
+
+**TRIAGED 2026-08-30 -- THE `pad = 0` LINE IS ANSWERED.** Tight corridors are working, tested this session alongside the arc mover fix. The other items in this list are untouched.
 
 - **Collect targets still bias upward** -- see the homeward section. Same one-line
   fix, not applied.
@@ -7024,6 +7090,8 @@ matching when someone rewords a log line.
 ### The upcycler's slot order is duplicated in two files with nothing linking them
 `todo.upcycler.slotorderdup`
 
+**TRIAGED 2026-08-30 -- WILL NOT FIX.** The upcycler is essentially complete and the duplicated slot order has not moved. Linking the two files now buys nothing on a machine nobody is still changing.
+
     petports_upcycler.lua   SLOT_INPUT 0   SLOT_REAGENT 1          SLOT_OUTPUT 2
     petports_petport.lua    MACHINE_SLOT_INPUT 0   MACHINE_SLOT_REAGENT 1   MACHINE_SLOT_OUTPUT 2
 
@@ -7046,6 +7114,8 @@ emptied and re-placed. Seen in game.
 ### Two vent entry sites, only one hardened
 `todo.vent.entrysites`
 
+**TRIAGED 2026-08-30 -- PRIORITY 7, BUT DEFERRED UNTIL PIPES.** The highest-priority item on the backlog and still not next: both entry sites should run the SAME validation rather than site A being hardened alone, and vent pipes rewrite what a hop IS -- see the pipes subsection under the vent architecture. Hardening entry site B against the current instantaneous model would be work done twice.
+
 `petportsTaskAction` calls `petports_ventTravel` from two places -- "already
 touching" and "walked to it via approachPoint". The fail-closed hardening went on
 the FIRST only. The second, which is the ORDINARY case, still does
@@ -7056,6 +7126,8 @@ the hop against `MAX_REPEAT_HOPS`. Both are labelled in the log
 
 ### The upcycler is the last pane holding its own strings
 `todo.pane.tooltipstrings` -- see also `arch.pane.stringtable`, `dd.upcycler.bakedindicators`
+
+**DONE 2026-08-30.** The upcycler is migrated and all four panes are on the shared string table. `Replace Me` is gone. Kept rather than deleted because `todo.art.runninglights` names it.
 
 MOST OF THIS ENTRY IS CLOSED. Tooltip behaviour is verified across all four
 panes, the upcycler's dead `createTooltip` is deleted, and three of four panes
@@ -7081,6 +7153,8 @@ selection is built, and the string goes with it.
 
 ### Pane art, and the order it has to happen in
 `todo.art.panes` -- see also `dd.upcycler.bakedindicators`
+
+**TRIAGED 2026-08-30 -- SHINE LAYERS ARE THE REMAINING WORK, AND THEY SPLIT.** All four panes need one. THE TWO BEACONS ARE READY FOR THEIRS; the petport and the upcycler are NOT, because their layouts are still moving. Deferred until the rest of the petport's UI is complete -- sizing a shine layer to a pane that is about to be compressed means doing it twice, which is the same reasoning the entry already gives below.
 
 **NEXT SESSION:**
 
@@ -7111,8 +7185,75 @@ agree on the gap between the header icon and the title text. See
 - **Slot targeting graphics** are effectively baked into the pane backgrounds,
   so they come after the same compression for the same reason.
 
+### A beached aquatic unit does nothing and nothing notices
+`todo.locomotion.beached` -- see also `todo.locomotion.sinker`, `fact.pathing.dropfaults`, `todo.pathing.recoveryladders`
+
+**TRIAGED 2026-08-30 -- BACKLOG, NO PRIORITY SET.** Recorded now while the vanilla precedent is fresh. The rescue already exists in the recovery ladders; what is missing is the detector, the animation and the suppression.
+
+**HALF BUILT ALREADY.** `environmentCheck` / `envUnsuitable` answers "can THIS
+chassis live at THIS port", withdraws a unit whose footprint stops suiting it,
+and brings it back when the port floods or drains. That is the SPAWN-SIDE half.
+What is missing is the case where an aquatic unit spawns legally into water and
+then ends up on dry land partway through a task. Nothing detects it and nothing
+reacts; it simply stands there.
+
+**VANILLA HAS THE ANSWER AND THE FILES ARE NAMED.** `/monsters/flopState.lua`
+and `/monsters/swimmingMonster.lua`, both read 2026-08-30.
+
+    -- swimmingMonster.lua, the detector
+    if not mcontroller.liquidMovement() then
+      if self.state.stateDesc() ~= "flopState" then
+        self.state.pickState({flop = true})
+      end
+    end
+
+`flopState` then jumps in a random direction on a timer, sets the `flopping`
+animation state, and returns true the moment `liquidMovement()` is true again --
+so the state ENDS ITSELF on rescue rather than being cancelled from outside.
+Larger vanilla fish flop; smaller ones (a different script, not read) just die.
+
+**THE DESIGN, AND IT IS A SMALL ONE.** Flop is the "save me" behaviour, not the
+rescue. A unit that flops long enough for the existing recovery ladders to
+teleport it home IS the correct outcome -- the port wants the unit back at work,
+and `rehomeUnit` is instant, free and always works. So this is a DETECTOR plus
+an ANIMATION plus a suppression, and the rescue already exists.
+
+**THREE THINGS TO SETTLE BEFORE WRITING IT.**
+
+**`flopState` USES `mcontroller.controlDown()`, WHICH THIS FILE ALREADY KNOWS IS
+UNSAFE.** See `fact.pathing.dropfaults`: it presses down and then checks whether
+it has landed, so the tick it arrives has already had a down issued and it falls
+through the surface it just reached. In vanilla that is harmless -- a fish on
+land has nowhere to fall. On a player's base, over a platform, a flopping unit
+would drop through the floor. COPY THE JUMP, NOT THE `controlDown`.
+
+**AN ACTION STATE WILL SUPPRESS IT.** groundPet's update reads
+
+    if self.actionState.stateDesc() == "" and not self.state.update(dt) then
+
+so a plain `%a+State` script only runs when NO action state holds the unit. An
+aquatic unit beached mid-task is inside `petportsTaskAction`, which means a
+flopState of ours would never be reached. Either the task action has to yield on
+`not liquidMovement()`, or the detection belongs inside the action rather than
+beside it. THIS IS THE REAL WORK; the flop itself is twenty lines.
+
+**AMPHIBIOUS IS EXEMPT.** That chassis keeps gravity and walks on land by
+design, so beaching is aquatic-only. The two share enough config that a check
+written against the wrong one would look like it worked.
+
+**WHAT COUNTS AS BEACHED** is not `liquidMovement()` alone for us --
+`PETPORTS_SUBMERGED_FILL` is 0.9 and already defines "in water" for the pathing
+side. Whether a shallow puddle counts as rescued needs a number, and it should
+be the same number, or a unit will flop its way into a puddle and stop.
+
+**BATCH IT.** A flop needs a `flopping` animation state in all four chassis
+animations. `todo.unit.names` and the `drone_placeholder` rename touch the same
+files, and the fade work already opened them once this session.
+
 ### Sinker locomotion -- ground pathing that will not swim
 `todo.locomotion.sinker` -- see also `dead.locomotion.pelagic`
+
+**TRIAGED 2026-08-30 -- NICE TO HAVE, NOT REQUIRED.** Worth an attempt at some point; nothing depends on it.
 
 Vanilla ground monsters walk into water and keep walking. Whether that is
 reachable from this mod's setup is unknown; the pelagic attempt failed because
@@ -7122,6 +7263,8 @@ gravity-enabled, so it is a different question rather than the same one answered
 ### Names for the chassis
 `todo.unit.names`
 
+**TRIAGED 2026-08-30 -- DEFERRED UNTIL THE ART EXISTS.** "Axolotter" is the only settled species. Naming the other three against placeholder sprites would fix names to art that has not been drawn.
+
 The four locomotion classes need real names rather than their class. "Axolotter"
 for the amphibious one. This also settles what the monsterpart files are called --
 see `status.port.inventory` on `drone_placeholder`, which is free to rename now and
@@ -7129,6 +7272,8 @@ expensive once there are several variants.
 
 ### Finish the petport pane
 `todo.pane.statstab` -- see also `arch.pane.hoverlayer`, `arch.pane.statslist`
+
+**TRIAGED 2026-08-30 -- BOTH REMAINDERS ARE BLOCKED ON SOMETHING ELSE.** The dressing goes with the art pass; the per-treat block cannot exist until food consumption works. Note that `todo.unit.maidrank` owns icons that render here, so part of THAT entry gates this one being called complete.
 
 - **The Stats tab is BUILT** -- a list, striped, with placeholder separators;
   see `arch.pane.statslist`. What remains here is dressing
@@ -7140,12 +7285,16 @@ expensive once there are several variants.
 ### Unit nameplates
 `todo.unit.nameplate` -- see also `todo.unit.names`
 
+**TRIAGED 2026-08-30 -- NEXT UP.** Vanilla sample code for driving names above monsters is available.
+
 Work out how names above monsters are driven and whether ours can carry one. Then
 a "display unit name" checkbox on the pet Settings tab, ON by default, beside the
 rename button -- the two belong together and neither means much without the other.
 
 ### Petport spawn choreography
 `todo.port.choreography` -- see also `plan.art.capturepodfade`, `plan.art.doorchoreography`
+
+**DONE 2026-08-30.** Spawn and despawn are choreographed -- the fade, the door gating, and the ordering between them. See `status.port.inventory` and `fact.unit.spawnrender`. WHAT SHIPPED IS THE TRANSITION, NOT THE WHOLE SEQUENCE: `plan.art.capturepodfade` and `plan.art.doorchoreography` describe more than the fade. Kept rather than deleted because other entries name it.
 
 A unit currently appears and disappears instantly. The fade is already specified
 in `plan.art.capturepodfade` and the door in `plan.art.doorchoreography`; this is
@@ -7155,22 +7304,17 @@ same two events.
 ### Error state on the petport itself
 `todo.port.errorindicator`
 
+**TRIAGED 2026-08-30 -- NEEDS RE-EVALUATION BEFORE ANY WORK.** Most of the stuck-unit cases this was meant to surface have since been fixed, so the per-port indicator light may no longer earn its cost. The surviving need may be nothing more than an appropriate warning in the pane when something is wrong with the port.
+
 Weigh animationState components for error conditions against the cost of driving
 them, and decide whether each port wants an indicator light. A player with twenty
 ports should be able to see which one is unhappy without opening twenty panes --
 the pane's diagnostic row already knows, it just cannot be seen from outside.
 
-### Adversarial platforming for the new jump code
-`todo.pathing.adversarialtest` -- see also `arch.pathing.solvelaunch`, `fact.pathing.eulertick`
-
-`solveLaunch` and the arrival brake were verified against one session's logs and a
-replay of every takeoff in them. That is not the same as a build designed to break
-them. Specifically untested: a wall-clipped arc, where the plan is wrong at both
-ends and a solver that faithfully flies it may fly it into the floor. See the
-warning in `todo.pathing.jumpmodel`.
-
 ### Modules, design and liquids
 `todo.module.designpass` -- see also `arch.module.effects`, `plan.module.investmentpath`
+
+**TRIAGED 2026-08-30 -- NEXT, AFTER THE UPCYCLER STRING MIGRATION.**
 
 - **A design pass on what modules a pet can have.** One placeholder lamp exists;
   the investment path names slots but not contents.
@@ -7182,6 +7326,8 @@ warning in `todo.pathing.jumpmodel`.
 ### Maxwell
 `todo.unit.maidrank`
 
+**TRIAGED 2026-08-30 -- A MINI-PROJECT IN ITS OWN RIGHT, AND PARTLY BLOCKING.** It needs a maid dress reward item, an Outpost shop area, universe flag patches to spawn it, and the surrounding overhead. BUT IT ALSO OWNS ICONS THAT RENDER ON THE PETPORT UI, so working prototypes of those are required BEFORE the petport pane can be called feature complete -- which makes a piece of this a dependency of `todo.pane.statstab` rather than a pure nice-to-have.
+
 A themed maid NPC who inspects a player's pets and awards maid ranks. He is called
 Maxwell. Presenting a pet with a high Tidy Score earns a maid dress cosmetic.
 
@@ -7190,6 +7336,8 @@ Score a consumer -- it is currently computed, displayed, and read by nothing.
 
 ### The upcycler must show it cannot burn
 `todo.upcycler.cantburnlight` -- see also `arch.upcycler.burnbox`, `dd.upcycler.bakedindicators`
+
+**TRIAGED 2026-08-30 -- SPECIFIED, AND IT IS AN ART TASK.** Not a status light beside the machine: an INDICATOR OUTLINE AROUND EACH OF THE THREE SLOTS, coloured by whether that slot works for whatever item is currently in it. Belongs to the upcycler's art pass alongside `todo.art.statsdressing`.
 
 A status light in the art and animationStates for the state "the burn slot is
 occupied but nothing can burn" -- whether because no rule names the item or
@@ -7201,13 +7349,54 @@ quietly not-burning is indistinguishable from a machine quietly done.
 ### The backoff ladder reorder is unexercised
 `todo.port.backoffladder` -- see also `arch.port.reporthandler`
 
+**TRIAGED 2026-08-30 -- PRIORITY 0.** A verification stub, not work. Watch one real arrival failure, confirm the counts climb and the intervals escalate, delete the entry.
+
 The fix is in and the patrol it caused is gone, but no arrival failure has
 happened SINCE -- the closing log has zero backoff lines. On the next genuine
 arrival failure, confirm the counts climb past 1 and the intervals escalate.
 If they do, delete this entry.
 
+### The unit's invisibility is borrowed from the spinner sheet
+`todo.art.invisibleframe` -- see also `todo.art.panes`, `todo.unit.names`
+
+**TRIAGED 2026-08-30 -- GOES WITH THE NEXT ART PASS.** No work until each chassis sheet gains its own blank frame. Until then the constraint below is the whole point of the entry: `spinner.png:blank` cannot be removed or renamed.
+
+**A LANDMINE, AND IT IS LOAD-BEARING IN THREE PLACES.** All four chassis
+animations declare an `invisible` movement state, and its image now points at
+
+    /monsters/lofty_petports/shared/spinner/spinner.png:blank
+
+-- the deliberately empty frame on the THINKING SPINNER'S sheet. A body layer
+resolving its image out of an unrelated part's spritesheet works and is wrong.
+
+**WHAT DEPENDS ON IT.** `petportsSleepAction` sets `invisible` when a unit
+sleeps inside a target; vent travel sets it for the hop (see the note in
+`petports_think.lua` about a spinner orphaned over an invisible unit); and
+`petports_contract`'s init wrapper sets it for one tick so a materialising unit
+cannot be seen at full size before the fade effect starts -- see
+`fact.unit.spawnrender`.
+
+**IT WAS A NO-OP UNTIL 2026-08-30.** The state was declared in all four
+animations and aliased to `<partImage>:run.<frame>`, so every one of those three
+call sites was showing a fully visible unit while believing otherwise. Nothing
+errored, nothing logged, and two of the three had been wrong since they were
+written. A DECLARED STATE ALIASED TO ANOTHER STATE'S IMAGE IS INDISTINGUISHABLE
+FROM A WORKING ONE until something depends on the difference.
+
+**THE FIX AT THE NEXT ART PASS:** a blank frame on each chassis sheet, and the
+`invisible` state pointed at its OWN sheet. Then the spinner can be redesigned,
+renamed or deleted -- which `todo.art.panes` and the speech-bubble rework both
+make likely -- without silently un-hiding sleeping units, units in transit, and
+every spawn.
+
+**UNTIL THEN, `spinner.png:blank` MAY NOT BE REMOVED OR RENAMED.** Its own
+.frames file marks it "deliberately empty", which reads as decorative and is
+not.
+
 ### Distinct glyphs and real separator art
 `todo.art.statsdressing`
+
+**TRIAGED 2026-08-30 -- THE CHECKBOXES ARE PROBABLY FINE.** Once the pane draws the lines showing what each column does, two identical checkboxes stop being ambiguous -- the line is the disambiguator, not the art. That leaves the separators and stripe fills, both cosmetic.
 
 Three placeholders from the metrics session, all flagged in code comments: the
 burn and reagent checkboxes on an upcycler rule row are IDENTICAL vanilla
@@ -7218,6 +7407,8 @@ fills, not designed art.
 
 ### The stall watchdog cannot tell "no progress" from "arrived, target moved"
 `todo.pathing.arrivedstall`
+
+**TRIAGED 2026-08-30 -- PRIORITY 2, AND A PREREQUISITE FOR `todo.pathing.movingtarget`.** Once targets move there will be genuine arrivals, stale-target arrivals and real stalls all producing the same log line. Separating them first is what makes the moving-target work measurable instead of guesswork.
 
 MEASURED 2026-08-30, on the run that finally milked the cow:
 
@@ -7236,6 +7427,10 @@ real stall.
 ### Farm animals move and nothing re-resolves the target
 `todo.pathing.movingtarget` -- see also `todo.pathing.arrivedstall`
 
+**TRIAGED 2026-08-30 -- WANTED, ESTIMATED 6 / 10.** The re-resolve itself is a 3; the cost is that a rebuild mid-flight discards the launch record and nothing steers the descent (`fact.pathing.arcmoverthrottle`), so THE RE-RESOLVE MUST NOT FIRE WHILE AIRBORNE and that gate has to be deliberate rather than emergent. The rest is the interaction with `arch.pathing.standablerank` caching and the probe results pushed to the port.
+
+ACCEPTED AS IMPERFECT, DELIBERATELY: there is no clean solution, "do not replan in the air" is good enough, and replanning periodically at all still beats vanilla's monsters standing against walls doing nothing. `todo.farming.animalsmove` folds into this.
+
 The approach position is resolved once and cached on `stateData.groundTarget`.
 A crop does not move, a drop does not move, a farm animal wanders continuously --
 so the cached point is stale before the unit arrives, and the only thing that
@@ -7249,6 +7444,8 @@ the other.
 
 ### Big obvious on/off lights on the pane
 `todo.art.runninglights` -- see also `todo.pane.tooltipstrings`
+
+**TRIAGED 2026-08-30 -- DEFERRED UNTIL THE OBJECT ART EXISTS.** The pane already has a blinking light that wants fine-tuning; the rest arrives with the object and pane art passes, and the pane's lights should match the object's aesthetically rather than being designed against a placeholder.
 
 DECORATIVE, and worth it because the switch is load-bearing in a way the
 current checkbox does not carry. Adding a rule deliberately switches the
@@ -7266,6 +7463,8 @@ as a one-off widget.
 ### Drop the side-by-side toggle logging
 `todo.upcycler.checkstatelog` -- see also `fact.pane.checkedpostoggle`
 
+**TRIAGED 2026-08-30 -- DEFERRED TO RELEASE PREFLIGHT.** Debug gating is being handled as ONE pass over every flag before shipping rather than trimmed stream by stream, so this waits with the rest. See the debug flag list in `status.port.inventory`.
+
 THE SEMANTIC QUESTION THIS ENTRY EXISTED FOR IS ANSWERED -- see
 `fact.pane.checkedpostoggle`. Neither branch of the old hypothesis was the
 fault; the toggles were broken for two unrelated reasons instead
@@ -7279,6 +7478,8 @@ reading has nothing left to settle.
 
 ### The rescue retry gate, if the churn ever matters
 `todo.upcycler.rescuechurn` -- see also `arch.upcycler.shuttle`
+
+**TRIAGED 2026-08-30 -- CLOSED, THE PREMISE IS FALSE.** Food does not rot inside the upcycler: its decay rate is 0, so the same-name stack the engine cannot merge never appears. No churn to gate.
 
 A same-name stack the engine cannot merge (rot) makes the bulk rescue cycle a
 take-and-return every few ticks until the charge drains the reagent slot.

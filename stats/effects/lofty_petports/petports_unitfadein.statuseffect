@@ -1,0 +1,56 @@
+//  PETPORTS -- UNIT MATERIALISE
+//
+//  Applied by the port immediately after world.spawnMonster, so the unit is
+//  faded out on its first rendered frame and ramps up to normal.
+//
+//  `reverse` is what makes this the same script as the fade-out read backwards;
+//  see petports_unitfade.lua for why both directions share one file.
+//
+//  NEVER KILLS. killOnFinish is false, so this expires and hands back a live
+//  unit -- unlike vanilla's monsterdespawn, which is the same shape ending in
+//  status.setResource("health", 0).
+//
+//  defaultDuration IS THE CEILING, NOT THE RAMP. The ramp is the two fade
+//  durations below and totals 0.2s; this is the outer bound the engine holds
+//  the effect for, and it must be comfortably longer or the effect is removed
+//  mid-fade and uninit clears the directives early. Vanilla uses 5 against a
+//  0.5s ramp and that ratio is worth keeping.
+
+{
+	"name" : "petports_unitfadein",
+
+	"effectConfig" : {
+		"grow" : true,
+		"killOnFinish" : false,
+
+		"fadeColorDuration" : 0.1,
+		"shrinkDuration" : 0.2,
+		"shrinkSize" : 0.25,
+		//  TWO, NOT VANILLA'S THREE. Measured in game: at 3 the halo reads as a
+		//  blur ring wider than the unit's own silhouette. monsterrelocate can
+		//  afford 3 because it is applied to arbitrary monsters, many far
+		//  larger than ours -- a 1.35-tile chassis is at the small end of what
+		//  that number was chosen for.
+		"borderWidth" : 2
+	},
+
+	//  ONE PHYSICS TICK, NOT FIVE. Vanilla's monsterrelocate declares this and
+	//  it is not decoration: the whole ramp is 0.3s, so at the default effect
+	//  delta it would get a handful of updates and read as a stepped pop rather
+	//  than a transition. The first build of this effect omitted it.
+	"scriptDelta" : 1,
+
+	//  THE CEILING, NOT THE RAMP. The ramp is the two durations above and totals
+	//  0.3s; this is the outer bound the engine holds the effect for and must be
+	//  comfortably longer, or the effect is removed mid-fade and uninit clears
+	//  the directives early. Vanilla uses 5 against its own 0.3s.
+	"defaultDuration" : 5.0,
+
+	//  SOUNDS ONLY -- see the header of the file. An effect's animator is its
+	//  own, so this is what animator.playSound in the script reaches.
+	"animationConfig" : "petports_unitfade.animation",
+
+	"scripts" : [
+		"petports_unitfade.lua"
+	]
+}

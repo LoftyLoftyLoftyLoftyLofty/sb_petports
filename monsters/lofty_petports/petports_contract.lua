@@ -22,6 +22,45 @@
 --  PETPORT CONTRACT
 --------------------------------------------------------------------------------
 
+--  BUILD STAMP, LOGGED LAZILY -- NEVER AT CHUNK SCOPE.
+--
+--  IT HAS NEVER HAD ONE, and that is the gap this closes. The absence of an
+--  object-side stamp already cost a full test round on the upcycler, and this
+--  is the file whose silent absence is hardest to diagnose: every contract
+--  function is reached by bare world.callScriptedEntity, which returns nil
+--  without raising when the target does not define it. A missing contract and
+--  a contract that answered "no" look identical from the port.
+--
+--  THE FIRST ATTEMPT PUT THE LOG CALL IN THE CHUNK BODY AND BROKE EVERY UNIT IN
+--  THE GAME. `sb` IS NOT BOUND WHILE THE CHUNKS RUN:
+--
+--      Exception while creating lua context for scripts '(...)':
+--      petports_contract.lua:39: attempt to index a nil value (global 'sb')
+--
+--  and because that is thrown during CONTEXT CREATION, the whole script list
+--  fails together -- groundPet and every action state with it. 16 spawn
+--  attempts, 16 dead contexts, no pets at all. A stamp is a diagnostic and a
+--  diagnostic that can take the actor down with it is worse than none.
+--
+--  THIS FILE MAY NOT DEFINE init, per the header above, so there is no callback
+--  to log from. Instead the stamp is emitted by the first CONTRACT CALL that
+--  arrives, which is strictly better information anyway: it proves the file
+--  loaded AND that the port can reach it, which is the pair of facts the stamp
+--  exists to establish.
+local CONTRACT_BUILD_STAMP = "2026-08-30b dematerialise on despawn"
+
+local contractStamped = false
+
+local function stampOnce()
+  if contractStamped then
+    return
+  end
+  contractStamped = true
+
+  sb.logInfo("PETPORTS contract build: %s (unit %s)",
+    CONTRACT_BUILD_STAMP, tostring(entity.id()))
+end
+
 --  Hand the petport everything worth keeping, so it can write it into the item.
 --
 --  Only `storage` round-trips for now. groundPet.lua reads knownPlayers,
@@ -55,10 +94,106 @@ end
 --  unit poofs audibly on recall, that is these two not taking effect, and the
 --  fix is passing "" rather than nil.
 function petports_despawn()
+  stampOnce()
   monster.setDeathParticleBurst(nil)
   monster.setDeathSound(nil)
-  status.setResource("health", 0)
+
+  --  THE EFFECT KILLS, NOT THIS FUNCTION. petports_unitfadeout ends its ramp
+  --  with status.setResource("health", 0), so the unit lives about a second
+  --  longer than it used to and disappears on a fade instead of an instant
+  --  vanish. See petports_unitfade.lua.
+  --
+  --  WHICH MAKES THIS FUNCTION'S RETURN A LIE IF READ AS "the unit is gone".
+  --  It always meant "the request was accepted"; the difference did not matter
+  --  while the kill was inline and it does now. Callers that need the unit
+  --  actually gone must poll world.entityExists -- the hull door does.
+  --
+  --  IDEMPOTENT. addEphemeralEffect on an effect already running restarts it,
+  --  which would visibly re-brighten a unit mid-fade, so a second call is
+  --  ignored. The port can ask twice: saveAndDespawn runs from unsocket and
+  --  again from uninit on world unload.
+  if self.petportsFading then
+    return true
+  end
+  self.petportsFading = true
+
+  status.addEphemeralEffect("petports_unitfadeout")
   return true
+end
+
+--  MATERIALISE, APPLIED FROM THE MONSTER'S OWN init.
+--
+--  THE FIRST VERSION WAS CALLED BY THE PORT after world.spawnMonster, and the
+--  unit was VISIBLE AT FULL SIZE WITH NO EFFECT for at least one tick. A
+--  callScriptedEntity is a round trip: the monster has already initialised and
+--  rendered once by the time the call lands.
+--
+--  VANILLA NEVER DOES IT THAT WAY. capturable.lua reads a SPAWN PARAMETER and
+--  applies the effect inside the monster's own init --
+--
+--      if capturable.wasRelocated() and not storage.spawned then
+--        status.addEphemeralEffect("monsterrelocatespawn")
+--
+--  -- so the relocator's monsters are already shrunk on their first rendered
+--  frame. The beam is not hiding a pop; there is no pop to hide.
+--
+--  WRAPPING init RATHER THAN DEFINING IT. The header of this file forbids
+--  DEFINING init, because a second definition silently REPLACES groundPet's.
+--  Capturing the previous one and calling through is the opposite of that: it
+--  preserves the chain. Verified that nothing in the monstertype's script list
+--  defines init after this file -- if one ever does, it will replace this
+--  wrapper and the pop comes back.
+--
+--  AFTER, NOT BEFORE. groundPet's init sets up the state machines and the pet
+--  resources; applying a status effect before that has run would be reaching
+--  into a half-built actor.
+local petportsBaseInit = init
+
+function init()
+  if petportsBaseInit then
+    petportsBaseInit()
+  end
+
+  stampOnce()
+
+  --  SET BY THE PORT IN THE SPAWN PARAMETERS. Absent means a unit that arrived
+  --  some other way -- a relocated one, a debug spawn -- and those should not
+  --  materialise out of nothing.
+  if not config.getParameter("petports_materialise", false) then
+    return
+  end
+
+  --  HIDDEN SYNCHRONOUSLY, BEFORE ANYTHING CAN RENDER.
+--
+--  THE SPAWN PARAMETER ALONE WAS NOT ENOUGH. Moving the effect into init
+--  removed most of the pop but not all of it -- a unit still appeared at full
+--  size for one tick about a third of the time. status.addEphemeralEffect hands
+--  off to the STATUS CONTROLLER, and whether that controller's first update
+--  lands before or after this tick's render is not deterministic. Vanilla has
+--  the same hole; the relocator's beam is what covers it, and we have no beam.
+--
+--  animator.setAnimationState IS SYNCHRONOUS. It is the one thing reachable
+--  from here that is guaranteed to be in place before a frame can be drawn, so
+--  the unit starts on a blank image and the effect takes over whenever the
+--  status controller gets to it.
+--
+--  SELF-HEALING, WHICH IS WHY THIS IS SAFE. groundPet writes "movement" every
+--  update out of setMovementState / setIdleState, so this state survives
+--  exactly one tick and needs nothing to clear it. IF THE EFFECT FAILS
+--  ENTIRELY the unit is invisible for one tick rather than visible for one --
+--  strictly the better failure, and still self-correcting.
+--
+--  `invisible` was already declared in all four chassis animations and aliased
+--  to the run strip, which made it a no-op. It now points at the spinner
+--  sheet's deliberately empty `blank` frame.
+  animator.setAnimationState("movement", "invisible")
+
+  local ok, err = pcall(status.addEphemeralEffect, "petports_unitfadein")
+
+  if not ok then
+    sb.logError("PETPORTS unit %s could not apply petports_unitfadein: %s",
+      tostring(entity.id()), tostring(err))
+  end
 end
 
 --  WEAR WHAT THE MODULES GRANT.

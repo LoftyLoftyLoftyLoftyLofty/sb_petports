@@ -1,0 +1,29 @@
+//  PETPORTS -- MATERIALISE / DEMATERIALISE SOUND
+//
+//  AN EFFECT-OWNED ANIMATION HOLDING NOTHING BUT SOUNDS, which is exactly what
+//  vanilla's monstercapture.animation is and the whole reason it exists. A
+//  status effect script's `animator` is its OWN, not the parent monster's, so
+//  animator.playSound here reaches this file and nothing else -- and that is
+//  what keeps the sound out of the four chassis animations, where it would have
+//  had to be duplicated and kept in step.
+//
+//  THE CAPTURE POD SOUND, BOTH WAYS. /sfx/npc/monsters/pod_capture3.ogg is what
+//  monstercapture.animation names as its `capture` sound -- and the same file is
+//  what monsterrelocate.animation carries, which is the transition this whole
+//  effect is modelled on. Taking the sound from the same place as the visuals
+//  is the point: the mech's whoosh belongs to a machine dropping out of orbit,
+//  not to a small unit folding into a dot.
+//
+//  ONE FILE FOR BOTH DIRECTIONS, as vanilla does -- monsterrelocate names a
+//  single `capture` sound and plays it whether the monster is going or coming.
+//
+//  TWO KEYS FOR ONE FILE, DELIBERATELY. Materialise and dematerialise are
+//  separate names so they can diverge later without touching the script; today
+//  they happen to point at the same asset.
+
+{
+	"sounds" : {
+		"materialise" : [ "/sfx/npc/monsters/pod_capture3.ogg" ],
+		"dematerialise" : [ "/sfx/npc/monsters/pod_capture3.ogg" ]
+	}
+}
