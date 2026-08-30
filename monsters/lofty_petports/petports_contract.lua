@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-08-30b dematerialise on despawn"
+local CONTRACT_BUILD_STAMP = "2026-08-30d free movers need one uniform medium"
 
 local contractStamped = false
 
@@ -605,13 +605,10 @@ end
 local function avoidedLiquids()
   if self.petportsAvoidLiquids ~= nil then return self.petportsAvoidLiquids end
 
-  local names = {}
-  for _, entry in ipairs(config.getParameter("petports_avoidLiquids", {})) do
-    names[string.lower(tostring(entry))] = true
-  end
+  self.petportsAvoidLiquids =
+    petports_habitatAvoidedSet(config.getParameter("petports_avoidLiquids", {}))
 
-  self.petportsAvoidLiquids = names
-  return names
+  return self.petportsAvoidLiquids
 end
 
 --  Is this liquid one this chassis refuses to be in? Cached per id, because
@@ -624,29 +621,19 @@ function petports_liquidDenied(liquidId)
   local cached = self.petportsLiquidVerdict[liquidId]
   if cached ~= nil then return cached end
 
-  local denied = false
+  --  THE RESOLUTION MOVED TO petports_habitat.lua; THE MEMO DID NOT.
+  --
+  --  The shared resolver caches the NAMES a liquid id maps to, which is a
+  --  property of the liquid. This cache holds the VERDICT, which is a property
+  --  of the pair -- and it is the one that matters here, because this is asked
+  --  once per tile row per candidate position inside searches that already run
+  --  eighty-one of them. Without it every call would walk the avoided set again.
   local names = avoidedLiquids()
+  local denied = petports_habitatLiquidDenied(names, liquidId)
 
   if next(names) ~= nil then
-    local ok, liquid = pcall(root.liquidConfig, liquidId)
-    local resolved = {}
-
-    if ok and type(liquid) == "table" then
-      if liquid.name ~= nil then table.insert(resolved, tostring(liquid.name)) end
-      if type(liquid.config) == "table" then
-        if liquid.config.name ~= nil then table.insert(resolved, tostring(liquid.config.name)) end
-        if liquid.config.itemDrop ~= nil then table.insert(resolved, tostring(liquid.config.itemDrop)) end
-      end
-    end
-
-    table.insert(resolved, tostring(liquidId))
-
-    for _, candidate in ipairs(resolved) do
-      if names[string.lower(candidate)] then denied = true break end
-    end
-
     sb.logInfo("UNIT liquid %s resolves to %s -- %s",
-      sb.printJson(liquidId), sb.printJson(resolved),
+      sb.printJson(liquidId), sb.printJson(petports_habitatLiquidNames(liquidId)),
       denied and "DENIED, this chassis will not enter it" or "allowed")
   end
 
@@ -755,14 +742,9 @@ end
 --  parameter and only the unit has read it.
 --
 --  `wet` and `dry` are "at least one tile of my footprint is like this", NOT
---  "all of them". A port half in the water offers BOTH, and that is the right
---  answer for both chassis -- a swimmer can sit in the flooded half, a flyer in
---  the dry half, and neither has to be told which.
---
---  A WALKER IS A DIFFERENT QUESTION AND MUST NOT BE ASKED THE FLYER ONE. Its
---  media flags default to canFly true / canSwim false, which would read as "air
---  only" and is meaningless -- a ground unit does not fly. What decides for a
---  walker is whether it will stand in liquid at all, which is petports_avoidLiquid.
+--  "all of them". WHAT THE LADDER DOES WITH THAT IS petports_habitat.lua's
+--  business and is deliberately not restated here -- this comment used to carry
+--  its own copy of the rule, and that copy went stale the day the rule changed.
 --
 --  RETURNS ONE TABLE, NOT TWO VALUES. Whether world.callScriptedEntity
 --  forwards multiple return values across the boundary is not something this
@@ -773,43 +755,50 @@ end
 --
 --  The reason travels with it because "the port despawned my pet" has to say
 --  why in one line, or it reads as the mod losing units.
+--  THE LADDER ITSELF NOW LIVES IN petports_habitat.lua, because the PORT has to
+--  ask the same question BEFORE a unit exists to answer it. This function is
+--  what gathers the LIVE capabilities and hands them over; the shared module
+--  owns the order of the tests and the causes.
+--
+--  STILL WORTH CALLING EVEN THOUGH THE PORT CAN ANSWER FROM THE TYPE. The type
+--  answer is a pre-check; this one is the truth, and it is the one that will
+--  start diverging when module-granted liquid permissions land. See the note at
+--  the head of petports_habitat.lua for which way that divergence runs.
+--  petports_media IS READ ONLY FOR A FREE MOVER, and that is not an
+--  optimisation. It logs the chassis's media on first call, including the
+--  "NEITHER, this chassis can legally occupy nothing" warning -- which is
+--  meaningless for a walker, whose flags are the meaningless defaults. The old
+--  ladder only reached it inside the free-mover branch and this keeps that true.
+function petports_capabilities()
+  local freeMover = petports_freeMover()
+  local media = freeMover and petports_media() or {}
+
+  return
+  {
+    freeMover = freeMover,
+    fly = media.fly,
+    swim = media.swim,
+    avoidLiquid = petports_avoidLiquid(),
+    avoided = avoidedLiquids()
+  }
+end
+
 function petports_canInhabit(wet, dry, liquids)
-  --  A LIQUID THIS CHASSIS REFUSES ANYWHERE IN THE FOOTPRINT IS DISQUALIFYING,
-  --  regardless of how much dry footing the port also offers. A petport with
-  --  one tile of lava in it is not a home for anything that avoids lava, and it
-  --  is checked before capability because no capability answers it.
-  for _, id in ipairs(liquids or {}) do
-    if petports_liquidDenied(id) then
-      return { ok = false, reason = "the port sits in a liquid this chassis will not enter" }
-    end
-  end
+  local verdict = petports_habitatVerdict(petports_capabilities(), wet, dry, liquids)
 
-  if petports_freeMover() then
-    local media = petports_media()
+  --  A nil VERDICT IS PASSED STRAIGHT THROUGH, and the port already treats it
+  --  as "this unit did not answer" -- which is the correct reading. It cannot
+  --  happen from here today, because a capability table built from live
+  --  callbacks is always a table, but returning a fabricated refusal instead
+  --  would retire a working unit over a future change in that module.
+  if verdict == nil then return nil end
 
-    if media.swim and wet then
-      return { ok = true, reason = "port is submerged and this chassis swims" }
-    end
-    if media.fly and dry then
-      return { ok = true, reason = "port is in air and this chassis flies" }
-    end
-
-    if wet and not dry then
-      return { ok = false, reason = "the port is fully submerged and this chassis cannot swim" }
-    end
-    if dry and not wet then
-      return { ok = false, reason = "the port is out of the water and this chassis cannot leave it" }
-    end
-
-    return { ok = false, reason = "this chassis can occupy neither medium the port offers" }
-  end
-
-  if not petports_avoidLiquid() then
-    return { ok = true, reason = "amphibious walker, any medium" }
-  end
-
-  if dry then return { ok = true, reason = "port has dry footing" } end
-  return { ok = false, reason = "the port is fully submerged and this walker will not stand in liquid" }
+  --  THE SENTENCE TRAVELS WITH THE CAUSE, because "the port despawned my pet"
+  --  has to say why in one line or it reads as the mod losing units. The port
+  --  can look it up itself and does; sending it costs one string and keeps this
+  --  answer readable in a log on its own.
+  verdict.reason = petports_habitatReason(verdict.cause)
+  return verdict
 end
 
 --  MAY THIS CHASSIS WORK ON A TARGET SITTING AT `position`?

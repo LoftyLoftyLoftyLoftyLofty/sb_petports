@@ -82,7 +82,7 @@
 --  delegate, and stays one.
 local vanillaSetJumpState = setJumpState
 
-local BUILD_STAMP = "2026-08-28b platform drop via controlDown"
+local BUILD_STAMP = "2026-08-30a plan rendering off"
 local stampLogged = false
 
 --  DELETE ME ONCE THE ANSWER IS IN THE LOG.
@@ -131,7 +131,14 @@ local stampLogged = false
 --  Requires /debug in game. Also switches on groundPet's drawDebugResources,
 --  which puts resource bars over the unit -- noisy, harmless, and the reason
 --  this is a toggle rather than being left on.
-local DRAW_PLAN = true
+--
+--  OFF 2026-08-30. The resource bars were obscuring the port during
+--  multi-chassis testing. IT IS ONE FLAG WITH TWO CONSUMERS -- self.debug gates
+--  both groundPet's bars and PathMover's debugPath -- so turning the bars off
+--  costs the plan lines too. Separating them means shadowing groundPet's draw,
+--  which is not worth it while the arc mover is settled; turn this back on for
+--  any session that is looking at plans again.
+local DRAW_PLAN = false
 
 --  ANSWERED 2026-08-27, IN GAME, BY LOOKING: the plan draws MAGENTA end to end,
 --  so the engine's platformer A* does emit Fly edges for a gravity-disabled

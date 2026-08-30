@@ -84,6 +84,7 @@
       //  petports_placement.lua must be present or petportsSleepAction calls a
       //  nil global.
       "/scripts/lofty_petports/petports_work.lua",
+      "/scripts/lofty_petports/petports_habitat.lua",
       "/monsters/lofty_petports/petports_petBehavior.lua",
       "/monsters/lofty_petports/petports_contract.lua",
       "/monsters/lofty_petports/petports_placement.lua",

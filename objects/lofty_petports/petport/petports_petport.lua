@@ -3,6 +3,12 @@ require "/scripts/messageutil.lua"
 require "/scripts/lofty_petports/petports_work.lua"
 require "/scripts/lofty_petports/petports_filters.lua"
 
+--  SO THE PORT CAN ANSWER "CAN THIS CHASSIS LIVE HERE" WITH NO UNIT TO ASK.
+--  The unit runs the same ladder over live capabilities; this side runs it over
+--  the monstertype's. See the head of that file for why there are two sources
+--  and which one wins.
+require "/scripts/lofty_petports/petports_habitat.lua"
+
 --  FOR ONE QUESTION ONLY: is this item name a reagent? Reagent routing needs
 --  the manifest's answer so that an item a MOD adds to a flavor is routed
 --  without anyone re-ticking anything -- see the note on MACHINE_SLOT_REAGENT.
@@ -1151,7 +1157,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-08-30a door waits for the unit to fade"
+local PETPORT_BUILD_STAMP = "2026-08-30b door gated on the environment verdict"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -2871,11 +2877,20 @@ end
 local function paneDiagnostics()
   local out = {}
 
+  --  TWO WORDINGS, AND THE DIFFERENCE IS NOT COSMETIC. The port refuses to open
+  --  its door on an unsuitable environment now, so the common case is a unit
+  --  that was NEVER DEPLOYED -- and telling a player their pet "has been
+  --  retired" when nothing ever came out reads as the mod having lost it.
+  --  self.envRetired records which happened, at the moment the verdict was set.
   if self.envUnsuitable ~= nil then
     table.insert(out, paneDiag("error", "Wrong environment",
-      "This unit's chassis cannot survive the liquid or air at its port. "
-      .. "It has been retired and will return on its own once the port drains "
-      .. "or floods back."))
+      self.envRetired
+        and ("This unit's chassis cannot survive the liquid or air at its port. "
+          .. "It has been retired and will return on its own once the port drains "
+          .. "or floods back.")
+        or ("This unit's chassis cannot survive the liquid or air at its port, so "
+          .. "the port has not deployed it. It will deploy on its own once the "
+          .. "port drains or floods back.")))
   end
 
   if (self.unreachableFailures or 0) > 0 and fresh(self.unreachableAt) then
@@ -3376,40 +3391,125 @@ end
 --  retires a unit also brings it back, and self.envUnsuitable is a cache of the
 --  last verdict rather than a permanent decision.
 --
---  ASKS THE UNIT WHILE IT STILL EXISTS. Capability is a monstertype parameter
---  and only the unit has read it, so the port measures its footprint and the
---  unit judges it. That also means this needs no knowledge of chassis types
---  here, and a locomotion class added later is covered without touching this.
+--  IT NO LONGER NEEDS A UNIT, AND THAT IS THE WHOLE CHANGE.
+--
+--  It used to return immediately unless a unit existed, because capability was
+--  a monstertype parameter and only the unit had read it. True of the ENTITY,
+--  never true of the TYPE -- root.monsterParameters answers the same questions
+--  from here, and this file already calls it twice for other reasons.
+--
+--  WHAT THE OLD ORDER COST, once the spawn stopped being a one-frame pop: the
+--  port opened its door, materialised a unit, waited up to ENVIRONMENT_INTERVAL,
+--  dematerialised it and closed the door, forever. The flicker that
+--  dd.port.envflicker accepted was a frame; the choreography made it a
+--  performance. See dd.port.envpresence for the supersession.
+--
+--  ASKS THE UNIT WHENEVER THERE IS ONE, AND THE TYPE OTHERWISE. Both routes run
+--  the SAME ladder in petports_habitat.lua, so they cannot disagree by drifting.
+--  They can disagree on purpose later, when module-granted liquid permissions
+--  make the live answer wider than the authored one -- and that runs the safe
+--  way: the type gate can only refuse a spawn the unit would have allowed.
 local function environmentCheck()
-  if self.petId == nil or not world.entityExists(self.petId) then return end
-
-  local wet, dry, liquids = portMedia()
-
-  local called, verdict = pcall(world.callScriptedEntity, self.petId,
-    "petports_canInhabit", wet, dry, liquids)
-
-  --  A UNIT THAT CANNOT ANSWER IS LEFT ALONE. callScriptedEntity returns nil
-  --  silently for a function the target does not define, so a nil here is
-  --  indistinguishable from an older unit script -- and failing closed on that
-  --  would retire working units over a version mismatch. A late retirement
-  --  costs a few seconds; a wrong one costs the player their pet.
-  if not called or type(verdict) ~= "table" then return end
-
-  if verdict.ok then
+  --  NO ITEM, NO QUESTION. A verdict about a chassis that is not socketed is
+  --  meaningless, and leaving a stale one latched here would hold the door shut
+  --  on the next unit in. Cleared rather than left alone for that reason.
+  if self.petData == nil or self.petData.monsterType == nil then
     self.envUnsuitable = nil
     return
   end
 
-  sb.logInfo("PETPORT %s RETIRING unit: %s (footprint wet %s, dry %s). Its state and "
-    .. "cargo are written back to the item, which stays socketed -- move it to a "
-    .. "suitable port to unload it.",
-    stationUniqueId(), tostring(verdict.reason or "cannot inhabit this port"),
-    tostring(wet), tostring(dry))
+  local live = self.petId ~= nil and world.entityExists(self.petId)
+  local wet, dry, liquids = portMedia()
+  local verdict = nil
 
-  self.envUnsuitable = verdict.reason or "cannot inhabit this port"
-  self.envWet, self.envDry = wet, dry
+  if live then
+    local called, answer = pcall(world.callScriptedEntity, self.petId,
+      "petports_canInhabit", wet, dry, liquids)
 
-  saveAndDespawn()
+    --  A UNIT THAT CANNOT ANSWER IS LEFT ALONE. callScriptedEntity returns nil
+    --  silently for a function the target does not define, so a nil here is
+    --  indistinguishable from an older unit script -- and failing closed on that
+    --  would retire working units over a version mismatch. A late retirement
+    --  costs a few seconds; a wrong one costs the player their pet.
+    --
+    --  IT DOES NOT FALL BACK TO THE TYPE. A live unit that will not answer is a
+    --  version mismatch, and the type answer would be a DIFFERENT question
+    --  quietly substituted for the one that failed. Leaving the last verdict
+    --  standing is the honest reading and the one that cannot retire anything.
+    if not called or type(answer) ~= "table" then return end
+    verdict = answer
+  else
+    --  nil FROM HERE IS "root.monsterParameters GAVE NOTHING", which is a
+    --  tooling problem and not a statement about the terrain. Same rule as
+    --  above: leave the port alone rather than brick it over a bad type name.
+    verdict = petports_habitatVerdict(
+      petports_habitatCapabilitiesForType(self.petData.monsterType),
+      wet, dry, liquids)
+
+    if verdict == nil then
+      if not self.envTypeUnreadable then
+        self.envTypeUnreadable = true
+        sb.logInfo("PETPORT %s cannot read capabilities for monster type %s -- the "
+          .. "environment gate is open and a unit will spawn unchecked",
+          stationUniqueId(), tostring(self.petData.monsterType))
+      end
+
+      self.envUnsuitable = nil
+      return
+    end
+
+    self.envTypeUnreadable = nil
+  end
+
+  --  THE UNIT'S OWN SENTENCE WINS WHERE THERE IS ONE. It is the same string
+  --  today -- both sides look it up in the same table -- but a unit answering
+  --  with a reason and no cause is what an out-of-step script version looks
+  --  like, and the specific sentence is more use in a log than the fallback.
+  local reason = verdict.reason or petports_habitatReason(verdict.cause)
+
+  if verdict.ok then
+    --  LOGGED ON THE TRANSITION ONLY, both ways. This runs every
+    --  ENVIRONMENT_INTERVAL now whether or not a unit exists, so an unconditional
+    --  line here would print forever at a port nobody is looking at.
+    if self.envUnsuitable ~= nil then
+      sb.logInfo("PETPORT %s environment now suits the socketed chassis: %s "
+        .. "(footprint wet %s, dry %s) -- the door may open again",
+        stationUniqueId(), reason, tostring(wet), tostring(dry))
+    end
+
+    self.envUnsuitable = nil
+    return
+  end
+
+  --  BOTH THE LINE AND THE FLAG BELONG TO THE TRANSITION, NOT TO THE POLL.
+  --
+  --  self.envRetired IS LATCHED HERE AND NOT ASSIGNED BELOW, and that is a real
+  --  bug rather than a tidiness point. Written unconditionally it would be true
+  --  on the tick a unit is retired and FALSE five seconds later, when the same
+  --  verdict is re-reached with no unit left to be live -- so the pane would
+  --  announce a retirement and then quietly rewrite it as "never deployed".
+  if self.envUnsuitable == nil then
+    --  WHICH OF THE TWO SENTENCES THE PANE SHOWS. "It has been retired" is a lie
+    --  about a unit that never existed, and the shared module cannot tell the
+    --  difference -- it is asked the same question either way.
+    self.envRetired = live
+
+    if live then
+      sb.logInfo("PETPORT %s RETIRING unit: %s (footprint wet %s, dry %s). Its state and "
+        .. "cargo are written back to the item, which stays socketed -- move it to a "
+        .. "suitable port to unload it.",
+        stationUniqueId(), reason, tostring(wet), tostring(dry))
+    else
+      sb.logInfo("PETPORT %s REFUSING to deploy: %s (footprint wet %s, dry %s). The "
+        .. "door stays shut and the item is untouched; it will deploy on its own if "
+        .. "the port floods or drains to suit it.",
+        stationUniqueId(), reason, tostring(wet), tostring(dry))
+    end
+  end
+
+  self.envUnsuitable = reason
+
+  if live then saveAndDespawn() end
 end
 
 --  DEFINED HERE, NOT BESIDE findWork, AND THE PLACEMENT IS LOAD-BEARING.
@@ -10012,13 +10112,21 @@ function update(dt)
     --  a swap nils petData first and then arrives here, and a first socket
     --  arrives here directly.
     --
-    --  An unsuitable unit socketed into an unsuitable port still spawns and is
-    --  retired within ENVIRONMENT_INTERVAL. That flicker is deliberate -- it is
-    --  once per player action, and the retirement line says why, which is worth
-    --  more than a silent refusal to spawn.
+    --  AN UNSUITABLE UNIT SOCKETED INTO AN UNSUITABLE PORT NO LONGER SPAWNS AT
+    --  ALL. It used to spawn and be retired within ENVIRONMENT_INTERVAL, and
+    --  that flicker was accepted as the price of the retirement line saying why.
+    --  The choreography changed the price: see dd.port.envpresence.
+    --
+    --  THE ENVIRONMENT TIMER IS ZEROED WITH THE SPAWN TIMER, and it has to be.
+    --  The verdict is what holds the door shut, so a verdict that arrives up to
+    --  ENVIRONMENT_INTERVAL after the socket arrives AFTER the door has opened
+    --  and the unit has spawned -- which is the entire bug, moved rather than
+    --  fixed. Both clocks start together or the gate is decorative.
     self.envUnsuitable = nil
-    self.envWet, self.envDry = nil, nil
+    self.envRetired = nil
+    self.envTypeUnreadable = nil
 
+    self.environmentTimer = 0
     self.spawnTimer = 0
   end
 
@@ -10053,8 +10161,43 @@ function update(dt)
     self.fadingPetId = nil
   end
 
+  --  ENVIRONMENT. Retires a unit whose home has become uninhabitable, refuses to
+  --  deploy one into a home it could not live in, and is what clears
+  --  self.envUnsuitable when the port becomes habitable again.
+  --
+  --  ABOVE THE DOOR INTENT, AND THE ORDER IS THE FIX. It used to sit below,
+  --  which was harmless while the verdict needed a live unit -- there was never
+  --  a verdict on the tick a port was socketed anyway. Now there is, and reading
+  --  it one line before it is written means a fresh placement into bad terrain
+  --  tells the door "open" on one tick and "close" on the next. The hull would
+  --  twitch, which is a smaller version of the same complaint.
+  --
+  --  IT ALSO RUNS WHILE THE PORT IS SWITCHED OFF. The verdict costs a footprint
+  --  measure on a five-second timer and keeping it current means the door makes
+  --  the right decision on the tick the player switches the port back ON, rather
+  --  than opening and then correcting itself.
+  self.environmentTimer = (self.environmentTimer or 0) - dt
+  if self.environmentTimer <= 0 then
+    self.environmentTimer = ENVIRONMENT_INTERVAL
+    environmentCheck()
+  end
+
+  --  THE DOOR NOW ALSO MEANS "AND SOMETHING COULD LIVE IN HERE".
+  --
+  --  unitPresent STILL OVERRIDES IT, and that is not a loophole. A unit being
+  --  retired is inside the port dematerialising, and dropping the hull on it is
+  --  the thing self.fadingPetId was added to prevent. The door closes when the
+  --  unit is actually gone, one poll later.
+  --
+  --  THE SPAWN GUARD BELOW IS WHAT MAKES THAT SAFE. During that same window the
+  --  hull reads "open" while envUnsuitable is set and self.petId is already nil,
+  --  which is exactly the shape the spawn block tests -- so without its own
+  --  envUnsuitable check it would deploy a replacement into the terrain that
+  --  just retired the last one.
   local unitPresent = self.petId ~= nil or self.fadingPetId ~= nil
-  setHullAnimationStateIntent((enabled or unitPresent) and "open" or "close")
+  local habitable = self.envUnsuitable == nil
+
+  setHullAnimationStateIntent(((enabled and habitable) or unitPresent) and "open" or "close")
 
   if not enabled then
     if self.petId ~= nil then
@@ -10071,14 +10214,6 @@ function update(dt)
       --  suppresses dispatch for work nobody will do.
       publishUnitPosition()
     end
-  end
-
-  --  ENVIRONMENT. Retires a unit whose home has become uninhabitable, and is
-  --  also what clears self.envUnsuitable when it becomes habitable again.
-  self.environmentTimer = (self.environmentTimer or 0) - dt
-  if self.environmentTimer <= 0 then
-    self.environmentTimer = ENVIRONMENT_INTERVAL
-    environmentCheck()
   end
 
   --  HEALTH. The slow backstop for a unit that is stuck with no work to fail
@@ -10124,31 +10259,26 @@ function update(dt)
       if animator.animationState("hullState") ~= "open" then
         self.spawnTimer = DOOR_POLL
       else
-        --  DO NOT RESPAWN INTO AN ENVIRONMENT THAT JUST RETIRED THIS UNIT.
+        --  DO NOT DEPLOY INTO AN ENVIRONMENT THAT JUST RETIRED A UNIT.
         --
-        --  Without this the port would spawn on RESPAWN_GRACE, environmentCheck
-        --  would retire it up to five seconds later, and the pair would loop
-        --  forever -- a flicker rather than a fix, and one that writes the item
-        --  back on every cycle.
+        --  MOSTLY UNREACHABLE NOW AND KEPT ANYWAY. The door is gated on the same
+        --  verdict, so an unsuitable port normally never reaches "open" and
+        --  never gets here. The exception is the dematerialise window: the hull
+        --  is held open by unitPresent while the retired unit fades, and
+        --  self.petId is already nil, so this branch runs with the terrain still
+        --  unsuitable. Without this test the port would deploy a replacement
+        --  into it and retire that one too.
         --
-        --  envUnsuitable is CLEARED BY environmentCheck ITSELF once the
-        --  footprint suits the chassis again, so a port that floods and later
-        --  drains brings its unit back with no player action. It cannot clear
-        --  itself while no unit exists to be asked, so the re-measure below is
-        --  what reopens it.
-        if self.envUnsuitable ~= nil then
-          local wet, dry = portMedia()
-
-          if wet ~= self.envWet or dry ~= self.envDry then
-            self.envWet, self.envDry = wet, dry
-            self.envUnsuitable = nil
-
-            sb.logInfo("PETPORT %s environment changed (wet %s, dry %s) -- allowing a "
-              .. "respawn attempt for the socketed unit",
-              stationUniqueId(), tostring(wet), tostring(dry))
-          end
-        end
-
+        --  THE RE-MEASURE THAT USED TO LIVE HERE IS GONE. It existed because
+        --  environmentCheck could not clear its own verdict with no unit to ask
+        --  -- so the reopening had to happen somewhere a unit was about to be
+        --  spawned. environmentCheck answers from the monstertype now and clears
+        --  itself on its own timer, which is where recovery belongs.
+        --
+        --  IT COULD NOT HAVE STAYED. Gating the door on envUnsuitable puts this
+        --  whole block behind a hull that will never reach "open" while the
+        --  verdict stands, so a re-measure here would be unreachable exactly when
+        --  it was needed and the port would never recover from a flood.
         if self.envUnsuitable == nil then
           spawnPet()
         end
