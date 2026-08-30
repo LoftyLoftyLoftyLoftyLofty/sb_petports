@@ -65,7 +65,20 @@ local DEBUG = false
 --  resolve leaves the dash showing. See petports_strings.config.
 require "/scripts/lofty_petports/petports_strings.lua"
 
-local BUILD_STAMP = "2026-08-29a strings from the shared table"
+--  THE TITLE ICON REFLECTS WHETHER THE BEACON IS ENABLED. One implementation
+--  shared with the deposit pane, which carries the same checkbox and the same
+--  handler shape. See petports_paneicon.lua -- the widget path it uses is a
+--  hypothesis with a disproof condition, not a settled fact.
+require "/scripts/lofty_petports/petports_paneicon.lua"
+
+--  THE TWO VARIANTS, DECLARED ONCE. The .config names the ON file as its
+--  pre-script default; these are what init and the toggle actually apply.
+local PANE_ICONS = {
+	on  = "/interface/lofty_petports/restockconfig/paneicon_restock_on.png",
+	off = "/interface/lofty_petports/restockconfig/paneicon_restock_off.png"
+}
+
+local BUILD_STAMP = "2026-08-30b title icon route probe"
 
 --  Absolute ceiling on a quota, AND IT MATCHES THE PANE'S REGEX RATHER THAN
 --  BEING CHOSEN INDEPENDENTLY. The textboxes filter input with \d{0,5}, so five
@@ -1099,6 +1112,10 @@ function init()
 
 	widget.setChecked("enabledCheckbox", self.state.enabled ~= false)
 
+	--  SEEDED FROM THE SAME VALUE AS THE CHECKBOX, on the line below it, so the
+	--  two cannot be made to disagree by a later edit that moves one of them.
+	petports_applyPaneIcon(PANE_ICONS, self.state.enabled)
+
 	--  ABSENT MEANS ON, so a beacon placed before this field existed feeds
 	--  pets rather than silently refusing to.
 	widget.setChecked("feederCheckbox", self.state.feeder ~= false)
@@ -1274,6 +1291,7 @@ end
 function enabledToggled()
 	self.state.enabled = widget.getChecked("enabledCheckbox")
 	dbg("enabledToggled -> %s", tostring(self.state.enabled))
+	petports_applyPaneIcon(PANE_ICONS, self.state.enabled)
 	write()
 end
 

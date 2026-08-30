@@ -42,49 +42,55 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-08-30 (overnight)
+### What is built, as of 2026-08-30 (pathing session)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-CAVEAT ON THIS PASS: this session touched the upcycler object and its pane, the
-new shared classifier, the petport object's machine-output scan, both pane
-icons, and the unit's ground resolver. Everything outside those carries its
-previous session's date and was not re-verified.
+CAVEAT ON THIS PASS: this session touched ONE FILE, `petportsTaskAction.lua`,
+and one behaviour inside it -- the arc mover's horizontal steering. Everything
+else carries its previous session's date and was not re-verified. The upcycler,
+the panes and the classifier are exactly as the overnight pass left them.
 
-**The upcycler's slot behaviour is finished and verified in game.** Rule-row
-checkboxes were broken two ways and are fixed (`applyState` stripped both
-exclusions; `x and nil or false` cannot yield nil -- `fact.tooling.andnilor`).
-The shuttle now runs on one priority, charge before burner, with a weight-aware
-fit test that is what makes it terminate -- see `arch.upcycler.shuttlepriority`.
-Bulk where the destination rule is a dead end, paced where it is not. The mutual
-swap deadlock resolves itself. `consumeReagent` refuses exempt items, and both
-the pane and the machine now read ONE refusal ladder
-(`arch.upcycler.stateladder`). Non-treats parked in an output slot are collected
-by a unit instead of stranding the machine (`arch.upcycler.outputeviction`).
-Tested: the loop case, bulk rescue, trickle, exempt in both slots, the deadlock,
-and eviction.
+**THE ARC MOVER NO LONGER THROTTLES A JUMP TO THE PLANNER'S MIND-CHANGE.** A*
+changes its own vx partway through nearly every arc it draws -- 12 to 1 at the
+apex, and it stays there for the whole descent. The mover steered toward that,
+so a unit launched at 7.96 was braked to 1 in a single look with a quarter
+second of falling left, crossed its landing altitude 1.83 tiles short, and fell
+twelve tiles. The launched velocity now holds for the entire arc. See
+`fact.pathing.plannervxdrop` for the frequency, `fact.pathing.arcmoverthrottle`
+for the mechanism, and `arch.pathing.solvelaunch` for what supersedes what.
 
-**Both panes have title icons and the upcycler has a running light.** The light
-flares hard on transition then settles -- off breathes and never fully dims, on
-goes steady -- because the problem it solves is a MISSED TRANSITION, not a missed
-state: adding a rule deliberately switches the machine off and a whole test round
-was run against a stopped machine before anyone noticed. Art is placeholder,
-driven entirely by image directive, so real art drops in with no script change.
+**IT HAD BEEN HAPPENING ON ALMOST EVERY JUMP SINCE THE MOVER WAS WRITTEN.** On
+solid terrain it cost a fraction of a tile near the ground and a solid surface
+forgives that, so nothing ever reported it. Platforms forgive nothing, and the
+same jump failed three times running in the same place.
 
-**A submerged farm animal is now reachable.** This took most of the session and
-three wrong fixes -- `fact.pathing.floatingtarget` is the entry, and it is worth
-reading before touching any resolver. The short version: underwater every point
-is standable, so `findGroundPosition` returned a spot hanging in open water and a
-walking chassis cannot finish a path there. It descends now.
+**THE CONTROL THAT SETTLED IT WAS AN ACCIDENT AND IS WORTH KNOWING.** A fourth
+attempt at the same jump had its task fail on vents at the apex; the pather was
+discarded mid-flight, nothing called the mover, and the unit flew pure
+ballistics onto its planned landing. Guided it missed by 1.83 tiles. Unguided
+it hit. `solveLaunch` had been right the whole time.
 
-**The search state machine reported exhausted searches as successes.** Three
-states, two branches: `hasPath false, aStar nil` means the search FINISHED WITH
-NO ROUTE and fell into the branch labelled "a path exists now". 37 real failures
-read as successes in one run, and the unit waited out the 10 s no-progress
-watchdog instead of reporting a conclusive answer immediately. Split into three.
-This predates the session and was found by the diagnostics, not by looking.
+**VERIFIED IN GAME ACROSS THREE COURSES.** Blocks, 3-wide platforms, and a
+single-wide death course: every jump landed, worst error 0.49 tiles, one launch
+record cleared per jump, zero stale-record warnings. Tight tunnels and air
+pockets re-tested and passing.
+
+**WHAT IS LEFT IN THE JUMP PATH IS THE ARRIVAL BRAKE, NOT THE LAUNCH.** Its
+gate has no floor and it gets one airborne look at a window half a tile wide.
+It missed three of eight jumps and, when it fires, can fire half a tile short.
+Residual is +-0.33 to +0.49 and currently harmless only because a 1.6-wide body
+braked half a tile short still overlaps the node's tile. See
+`todo.pathing.brakefloor`.
+
+**BRANCH 1 OF `solveLaunch` CAN FLY FOUR TILES ABOVE THE PLAN'S OWN APEX**, and
+the architecture entry used to say it could not. Corrected in place this session
+rather than filed beside, per `proc.pathing.supersede`. Left as-is deliberately;
+it is what buys a descending arrival. THE THING TO WATCH is that this puts the
+unit through space the planner validated for a lower arc, which open ground does
+not care about and a ceiling will.
 
 **Core loop.** A petport places, opens, spawns a unit from a socketed item, and
 the unit's state round-trips through that item across despawn, world reload and
@@ -98,175 +104,107 @@ pocket and farming inside it.
 **Sorting, tidying, compaction, restock.** Deposit beacons route by tag and
 category; eviction runs the same predicate so a misfit is anything failing its
 own crate's filter. Storage compacts itself, bucketed by parameters -- BUT
-NEVER A MACHINE, as of this session; see `dd.upcycler.slotsaremeanings`.
-Restock beacons handle several requests per crate: fetch, deliver, evict
-overstock, evict anything unrequested.
+NEVER A MACHINE; see `dd.upcycler.slotsaremeanings`. Restock beacons handle
+several requests per crate: fetch, deliver, evict overstock, evict anything
+unrequested.
 
 **Farming**, end to end -- discovery, harvest, collection, deposit, replant
 intents, seed withdrawal, replanting at arbitrary footprint, watering of dry
 tilled soil, all surviving vent traversal both ways with no sprinkler
-infrastructure. Animal harvesting is built.
+infrastructure. Animal harvesting is built, and a submerged animal is reachable
+(`fact.pathing.floatingtarget`).
 
-**The upcycler**, including the reagent slot, reagent routing, and NEW THIS
-SESSION a per-rule BURN checkbox and a slot shuttle. A rule now carries two
-exclusions -- may the item enter the burner, may it route to the reagent slot
--- and the machine shuttles its own stock between those slots as their
-consumption rates diverge, including a bulk rescue for burn-denied stock. See
-`arch.upcycler.burnbox` and `arch.upcycler.shuttle`. The furnace door itself
-refuses a burn-denied hand-drop, with a state line saying why nothing burns.
+**The upcycler's slot behaviour is finished and verified in game.** The shuttle
+runs on one priority, charge before burner, with the weight-aware fit test that
+is what makes it terminate -- `arch.upcycler.shuttlepriority`. Bulk where the
+destination rule is a dead end, paced where it is not. The mutual swap deadlock
+resolves itself. `consumeReagent` refuses exempt items. Both the pane and the
+machine read ONE refusal ladder (`arch.upcycler.stateladder`). Non-treats parked
+in an output slot are collected rather than stranding the machine. A rule carries
+two exclusions -- burn and reagent -- and the furnace door refuses a burn-denied
+hand-drop with a state line saying why.
 
-**The patrol class of bug is closed twice over.** Dispatch and arrival now
-share ONE room predicate (`machineRuleRoom`), room is DESCRIPTOR-true rather
-than name-true (food rot was the tell -- see `fact.item.descriptorroom`), every
-machine offer is capped to measured room before the engine sees it, and the
-report handler's done-cleanup runs BEFORE the arrival work so an arrival
-failure's backoff survives to escalate (see `arch.port.reporthandler`).
-Verified in the closing log: zero delivered-NOTHING lines, a 1000/1000 landing.
-THE REORDERED BACKOFF LADDER IS UNEXERCISED -- nothing failed after the fix --
-see `todo.port.backoffladder`.
+**The patrol class of bug is closed twice over.** Dispatch and arrival share ONE
+room predicate, room is DESCRIPTOR-true rather than name-true, every machine
+offer is capped to measured room before the engine sees it, and the report
+handler's done-cleanup runs BEFORE the arrival work. THE REORDERED BACKOFF
+LADDER IS STILL UNEXERCISED -- see `todo.port.backoffladder`.
 
-**Metrics.** The port gathers per-unit lifetime stats onto `petData.stats` --
-items moved, crops planted, tiles watered, crops harvested, livestock
-harvested, tiles traveled, seconds active (task time only), headpats, and the
-Tidy Score -- all at existing choke points, persisted with the item. See
-`arch.port.metrics`. Tidy is gathered and logged but deliberately displayed
-nowhere -- the rank belongs to Maxwell (`dd.dispatch.tidyscore`,
-`todo.unit.maidrank`).
+**Metrics.** Per-unit lifetime stats on `petData.stats` -- items moved, crops
+planted, tiles watered, crops harvested, livestock harvested, tiles traveled,
+seconds active, headpats, and the Tidy Score -- gathered at existing choke
+points and persisted with the item. Tidy is logged but displayed nowhere; the
+rank belongs to Maxwell (`todo.unit.maidrank`).
 
-**The Stats tab is live**, as a scrolling LIST rather than fixed labels, with
-per-block striping and placeholder separators. Steady-state refresh is
-text-only and MEASURED not to strobe; rows rebuild only when the line count
-changes. See `arch.pane.statslist`. The layout scales for the per-treat
-counters the fuel system will want.
+**The Stats tab is live**, a scrolling list with per-block striping and
+placeholder separators, refreshing text-only and measured not to strobe.
 
-**Headpats.** The unit is interactive: a click emotes (vanilla's own behavior,
-carried forward) and reports to the port, which counts it. One gate -- vanilla's
-3s interaction window -- so the emote and the ledger cannot disagree. See
-`arch.unit.headpat`. The handler is the documented future home of the
-stuck-cargo drop.
+**Headpats.** A click emotes and reports to the port, which counts it. One gate
+-- vanilla's 3s interaction window -- so the emote and the ledger cannot
+disagree.
 
-**Constants are globals, as of this session.** The port's main chunk hit Lua's
-200-locals-per-scope ceiling -- measured, the file refused to compile -- and 73
-UPPER_CASE constants were de-localized to buy the headroom back. 127 file-scope
-locals remain. See `arch.port.constantsglobal` and `fact.port.localceiling`.
+**Constants are globals** in the port's main chunk, which hit Lua's
+200-locals-per-scope ceiling. 127 file-scope locals remain.
 
-**Crosshair markers.** Every drop the network has an opinion about carries one,
-colour-coded by claim state, one marker per item.
+**Crosshair markers, the petport pane, modules, the port band, tooltips.** All
+as previously described: 337x335 ContainerPane with portrait, fuel bar, cargo
+slot, diagnostics with tooltips, three tabs, five module slots, an enabled
+switch and four participation checkboxes. Tooltips are drawn on two canvases
+because a ContainerPane gets none from the engine.
 
-**The petport pane.** 337x335 ContainerPane with a script. Portrait, name,
-species-when-renamed, 20-blip fuel bar with a label that follows the chassis,
-cargo slot with Take, current task, recency-gated diagnostic icons with working
-tooltips, three tabs, five module slots, the port band. Reads one mirrored
-object parameter; writes by message.
-
-**Modules** work end to end. Five itemslots against a slot count the unit has
-earned; a module socketed grants its declared status effects for as long as it
-stays there. One module exists, `petports_module_light`.
-
-**The port band.** Enabled switch, four participation checkboxes, claim markers.
-
-**Tooltips, in the petport pane only.** A ContainerPane gets no script tooltips
-from the engine, so this pane draws its own on two canvases. See
-`arch.pane.hoverlayer`. THE UPCYCLER WILL NOT GET ONE -- see
-`dd.upcycler.bakedindicators`.
-
-**Every visible string in three of four panes** comes from one shared table --
-the stats block joined it this session. THE UPCYCLER IS STILL NOT MIGRATED and
-is the last pane holding its own strings. See `arch.pane.stringtable`.
+**Every visible string in three of four panes** comes from one shared table.
+THE UPCYCLER IS STILL NOT MIGRATED and is the last pane holding its own -- 14
+literals including `Replace Me`, which must not ship. See
+`todo.pane.tooltipstrings`.
 
 **Pet feeder checkboxes** on both beacons and the upcycler. Stored, mirrored,
 and READ BY NOTHING -- the fuel system does not exist yet.
 
-**Still not built.** Docking. The fuel system itself -- so treats are made and
-harvested but never eaten, and the per-treat metrics have nothing to count.
+**Still not built.** Docking. The fuel system itself, so treats are made and
+harvested but never eaten and the per-treat metrics have nothing to count.
 Vents do not cross a medium boundary. Liquid permissions from pet upgrades.
 Rename. Maxwell and any display of the Tidy Score.
 
-**Art.** Bespoke: the unit body, the petport, the crosshairs, the treat
-COLOURS, the upcycler's charge bin icon. Placeholder: the vent, the upcycler,
-the eight treat sprites, the four chassis colour strips, all petport pane art,
-the module icon, and NEW: the stats list stripe fills (generated), the dashed
-orange separators, and the two IDENTICAL vanilla checkboxes on an upcycler rule
-row -- see `todo.art.statsdressing`. The unit has frames for `run` and nothing
-else.
+**Art.** Bespoke: the unit body, the petport, the crosshairs, the treat COLOURS,
+the upcycler's charge bin icon, both pane title icons. Placeholder: the vent, the
+upcycler, the eight treat sprites, the four chassis colour strips, all petport
+pane art, the module icon, the stats list stripe fills, the dashed orange
+separators, the upcycler's running light, and the two identical vanilla
+checkboxes on a rule row. The unit has frames for `run` and nothing else.
 
 **The monsterpart is still named `drone_placeholder`**, file and `name` field.
-Renaming is free while there is one variant and expensive once there are
-several.
+Renaming is free while there is one variant and expensive once there are several.
 
-**THE SHUTTLE NOW RUNS ON ONE PRIORITY: keeping the flavor charge full
-outranks burning more items.** Both directions consult `chargeFits`, which is
-weight-aware rather than "is the charge full" -- the looser form bounces a
-weight-8 reagent against a part-full charge forever, because room only frees by
-burning and the item that would do the burning is the one bouncing.
+**STILL OPEN: `moveOne` logs every hop, ungated.** MEASURED: 47 lines in 9
+seconds on a normal trickle, continuously against any large reagent backstock.
+The one message stream in this file that is not change-gated. Gate it or drop it
+to a counter before release.
 
-VERIFIED IN GAME 2026-08-30: one move then a stop where the old build bounced;
-bulk `RESCUED 21` and `RESCUED 4` on a reagent-denied stack; ~47 single moves
-on a charge-full trickle.
+**STILL OPEN: the burn-denied / reagent-denied swap deadlock.** Both halves are
+correct error states so nothing is lost, but the burner-side branch `return`s
+first and only one of the two prints a line.
 
-**THE MACHINE AND THE PANE EACH DECIDE THIS SEPARATELY, and both had to be
-fixed.** The pane computes its own warning text from the same manifest table,
-in its own hand-written check order -- so fixing the object changed nothing the
-player could see. A unit in the reagent slot still read "not a reagent" from
-the pane while the object had already moved on to "exempt". Sharing a lookup
-table does not make two check ORDERS agree; the order IS the logic and it lives
-in two files. Third instance of this drift shape after `applyState`/
-`storedRules` and the twin bulk rescues.
+**STILL OPEN: a task can fail identically three times and nothing notices.** The
+failing jump fell twelve tiles, walked back, and re-attempted byte-identically;
+it only broke out because an unrelated vent failure abandoned the task. This is
+not the refusal loop `fact.pathing.searchorigin` covers -- the unit genuinely
+moves -- so nothing in the reject machinery can see it.
 
-**THE OBJECT SCRIPT NOW CARRIES A BUILD STAMP** (`OBJECT_BUILD_STAMP`, logged
-from `init`). It had none while both panes did, and that cost a round on
-2026-08-30: a machine-side fix looked inert and there was no way to tell from
-the log whether the file had loaded. Object scripts reload on world load, not
-on file copy, so a stale one is silent and indistinguishable from a wrong one.
-
-THE EXEMPT CHECK WAS ORDERED WRONG ON ITS FIRST PASS and is fixed. It sat
-BELOW the manifest lookup, so treats, modules and pets in slot 1 all reported
-"not a reagent" -- none is in the manifest, so `entry == nil` returned before
-exempt was consulted. Exempt is a property of the ITEM and does not depend on
-the recipe table, so it now asks first, matching the furnace door. The general
-lesson: in a ladder of refusals, order by WHAT THE FACT IS ABOUT, not by how
-cheap the test is -- the item-level facts have to precede the table lookups or
-the specific message loses to the generic one. Bulk where
-the destination rule is a dead end, paced where the stack still has a future in
-the slot it is in. The old `count >= 2` anti-ping-pong guard is gone; the fit
-test subsumes it. `consumeReagent` also refuses exempt items now -- it was the
-one path that never checked the tag and it silently destroyed them. NOT YET
-VERIFIED IN GAME.
-
-**STILL OPEN: `moveOne` logs every hop, ungated.** MEASURED 2026-08-30: 47
-lines in 9 seconds on a normal trickle, and it will do that continuously
-against any large reagent backstock. It is the one message stream in this file
-that is not change-gated, and sustained trickle is the ordinary case rather
-than an event. Gate it or drop it to a counter before release.
-
-**STILL OPEN: the burn-denied / reagent-denied swap deadlock** (was `D3`). Both
-halves are now correctly error states under the agreed spec, so nothing is lost
--- but the burner-side branch `return`s first, so only one of the two prints a
-line. Batch 2's alert state is where that gets both.
-
-**The reagent slot now has a door and a way out.** `consumeReagent` refuses a
-reagent-denied item instead of eating it, and the slot shuttle grew the mirror
-of its burn-denied rescue so the stranded stock leaves for the burner. NOT YET
-VERIFIED IN GAME.
-
-**The upcycler's rule-row checkboxes were broken in two ways and are fixed.**
-`applyState` was stripping `reagent` and `burn` off every rule it read, and
-`x and nil or false` cannot produce nil so an untick never cleared. Both
-fixed, NOT YET VERIFIED IN GAME -- see `arch.upcycler.burnbox`,
-`fact.tooling.andnilor`, `fact.pane.checkedpostoggle`.
-
-**Pathing.** Untouched this session. The jump loop fix is holding.
-`smallJumpMultiplier` is 0.70711.
-
-**A CARGO LOSS WAS REPORTED AND NOT REPRODUCED** (previous session). Nothing
-recurred. `CARGO_TRACE` is left ON in `petports_petport.lua` to catch it.
+**Build stamps.** `petportsTaskAction.lua` is at `2026-08-30a launched vx holds
+for the whole arc`. `petportsTaskAction`'s stamp is FIRST-ENTRY-ONLY, so a
+continuation log has no stamp line and is indistinguishable from a stale file by
+that signal alone -- worth knowing before it costs a round. THE PETPORT OBJECT
+AND `petports_contract.lua` STILL CARRY NO STAMP AT ALL, which is the exact
+silent-failure shape that already cost a round on the upcycler object.
 
 **Debug flags, all ON, all wanting review before release.** `TASK_DEBUG`,
 `VENT_DEBUG`, `DEBUG` in all four panes, `FLY_POINT_DEBUG`, `DRAW_PLAN`,
 `FLY_TELEMETRY`, `DEBUG` in petportconfig, and `CARGO_TRACE` in the petport
-object. `PETPORTS_FILTER_DEBUG` is OFF and should stay off. The TIDY +1 line
-and the shuttle lines are always-on by design -- both are rare and are the only
-verification those systems have until their consumers exist.
+object. `PETPORTS_FILTER_DEBUG` is OFF and should stay off. The TIDY +1 line and
+the shuttle lines are always-on by design. NEW THIS SESSION and always-on: the
+arc mover's `steering to the LAUNCHED vx`, `launch record cleared` and `STALE
+LAUNCH` lines. The first two are once-per-change and once-per-jump; the third
+should never appear and is a bug report if it does.
 
 ## ARCHITECTURE
 
@@ -2438,16 +2376,43 @@ launch that arrives at the plan's landing on the DESCENDING branch.
 Both guarantee arriving descending, which is what makes a Land mean what it says.
 Never more horizontal reach than planned; raises still capped.
 
+**BRANCH 1 CAN FLY WELL ABOVE THE PLAN'S OWN APEX, AND THIS ENTRY USED TO DENY
+IT.** The claim was "this exceeds the plan's own apex by at most
+`JUMP_ARC_CLEARANCE`, and only in the pathological case". That is true of branch
+2, which PINS the apex. Branch 1 pins nothing -- it fixes arrival time from the
+planner's vx and solves whatever vy that demands. Measured on the death course:
+
+    launch kept vx: plan [-8,45] -> [-8,54.9286], landing [2520,1177.8] (dx -7 dy 3),
+                    apex 13.0292 vs plan 8.9469
+
+A three-tile rise flown four tiles higher than the planner drew. The only ceiling
+is `JUMP_VELOCITY_CAP` at 1.25x the planned velocity, which is 1.5625x the rise.
+
+NOT CHANGED, DELIBERATELY. The extra height is what buys a descending arrival at
+the planner's own horizontal reach, and every alternative is worse: capping the
+rise reintroduces the ascending-crossing arrival this function exists to remove,
+and lowering vx instead is branch 2, which is already what happens when branch 1
+cannot solve. Recorded because A CEILING WILL FIND THIS -- the unit passes
+through space the planner validated for a lower arc, per
+`fact.pathing.plannervxdrop`. If units start wedging into tunnel roofs, read this
+line first.
+
 **SOLVED ON THE DISCRETE TRAJECTORY**, per `fact.pathing.eulertick`. The first
 version solved the continuous parabola exactly and the unit still arrived half a
 tile high and clipped the ledge.
 
 **THE ARC MOVER HAS TO BE TOLD**, twice over. It steers toward the arc edge's own
 velocity, so a lowered launch is pushed straight back up to the planned value on
-the first airborne tick unless it is handed the launched value -- gated on the
-planned velocity matching, so a stale record cannot be applied to another jump.
-And it stops the unit on arrival rather than flying it off the landing, per
+the first airborne tick unless it is handed the launched value. And it stops the
+unit on arrival rather than flying it off the landing, per
 `fact.pathing.arcmoverthrottle`.
+
+**THE HANDOVER WAS ONCE GATED ON THE PLANNED VELOCITY MATCHING, AND THAT WAS
+WRONG.** SUPERSEDED 2026-08-30: the launched velocity now holds for the whole
+arc, with the record's LIFETIME carrying the ownership guarantee the comparison
+used to be asked for. The old gate silently lapsed on any edge where A* had
+changed its own vx, which is nearly every arc -- see `fact.pathing.plannervxdrop`
+for the frequency and `fact.pathing.arcmoverthrottle` for what it cost.
 
 `LAND_BRAKE_REACH` is sized by the MOVER'S CADENCE, not by taste: 0.5 tiles
 against 0.67 of travel per look at script delta 5. If the action's delta changes,
@@ -5757,6 +5722,36 @@ Anything solving a trajectory has to use the discrete form. A solver that is
 exactly right about continuous physics is wrong on the ground by `t` tiles, which
 is the difference between landing on a ledge and clipping its lip.
 
+### A* CHANGES ITS OWN vx PARTWAY THROUGH AN ARC, AND ALMOST EVERY ARC DOES IT
+`fact.pathing.plannervxdrop` -- see also `arch.pathing.solvelaunch`, `fact.pathing.arcmoverthrottle`
+
+MEASURED 2026-08-30. A Jump edge carries one velocity, but the Arc edges the
+planner draws from it do not all carry that velocity. Near the apex it
+substitutes a near-stationary one:
+
+    edge 62 Arc src [2515.10,1179.67] vel [12,14.03] -> dst [2515.79,1180.38] vel [12,7.06]
+    edge 63 Arc src [2515.79,1180.38] vel [12,7.06]  -> dst [2516.71,1180.75] vel [1,0]
+    edge 64 Arc src [2516.71,1180.75] vel [1,0]      -> dst [2516.93,1180.25] vel [1,-26.5]
+    edge 66 Arc src [2516.97,1179.25] vel [1,-30.8]  -> dst [2517,1177.8]     vel [1,-34.6]
+
+12 to 1, and it stays at 1 for the whole descent. The values seen are 1, -1 and
+0 -- and once, 12 on an arc launched at 0.
+
+**THIS IS THE ORDINARY CASE, NOT AN EDGE CASE.** Seven of eight jumps on the
+platform course did it, and seven of seven on the death course. Every jump this
+mod has ever planned has probably contained one.
+
+**IT WAS INVISIBLE ON SOLID TERRAIN FOR AS LONG AS IT EXISTED**, because the
+mover's response to it cost only a fraction of a tile near the ground and a solid
+surface forgives that -- see `ref.pathing.landings`. On platforms it costs the
+whole jump. What the mover did with it is `fact.pathing.arcmoverthrottle`.
+
+**THE WAYPOINTS ARE AS WRONG AS THE VELOCITY.** Once `solveLaunch` has committed,
+the arc the unit flies diverges from the arc A* drew, beginning at the vx change.
+That region was validated by the planner for the SLOW trajectory and is not
+validated for the flown one. Harmless in the open; the reason tight-corridor
+behaviour is worth re-testing after any change here.
+
 ### The arc mover flies the unit off its own landing
 `fact.pathing.arcmoverthrottle` -- see also `arch.pathing.solvelaunch`
 
@@ -5775,6 +5770,49 @@ whole log, so the mover never saw itself land at all.
 
 At script delta 5 the mover gets one look every five physics ticks -- 0.67 tiles
 of travel at walkSpeed 8. Any correction here has one shot.
+
+**THE SECOND DEFECT, FOUND 2026-08-30 AND FIXED: THE MOVER STEERS x TOWARD THE
+PLANNER'S PER-EDGE VELOCITY, AND THE PLANNER CHANGES IT MID-ARC.** See
+`fact.pathing.plannervxdrop`. The substitution that hands the mover the launched
+vx was gated on `launch.plannedVx == velocity[1]` -- matching the takeoff's
+planned vx was taken as proof that the edge belonged to this jump. It is not, and
+it fails on precisely the edges where the planner has changed its mind:
+
+    25.607  [2514.65,1180.89]  vel [7.95553, 6.256]   edge 62, gate passes
+    25.690  [2514.92,1181.07]  vel [1, -3.744]        edge 64, gate FAILS
+
+One look, at the apex, with a quarter second of descent left. The unit crossed
+its landing altitude 1.83 tiles short in x and fell twelve tiles. Three identical
+attempts.
+
+**THE CONTROL THAT SETTLED IT WAS AN ACCIDENT.** On a fourth attempt the water
+task failed on vents at the apex and the pather was discarded mid-flight. With
+nothing calling this mover the unit kept its launched vx, flew pure ballistics,
+and touched down at `[2517.22,1177.8]` -- its planned landing, 0.22 over. Guided
+it missed by 1.83 tiles; UNGUIDED IT HIT. That is the whole indictment: on the
+descent this mover was strictly worse than not running.
+
+**OWNERSHIP IS NOW A STATE INVARIANT, NOT A VELOCITY COMPARISON.** The launch
+record exists exactly as long as the pather is on an Arc edge -- cleared every
+tick it is not -- so `launch ~= nil` is the whole test. Stated as a per-tick
+state check rather than hooked onto each exit because there are at least four
+ways off an arc: the mover's grounded last-edge branch, its advance loop running
+past the last Arc, the skip loop stopping on a Land, and a path lost in flight.
+ONLY THE FIRST EVER CLEARED ANYTHING, and the failing jump took the third, so the
+record outlived its arc on every attempt. One rule covers exits not yet written.
+
+VERIFIED IN GAME 2026-08-30 across three courses -- 3-wide platforms, single-wide
+death course, and the original block course. Every jump landed. Worst error 0.49,
+one clear per jump, zero stale-record warnings.
+
+**WHAT IS LEFT IS THE BRAKE'S WINDOW, AND IT IS NOT THE LAUNCH.** The arrival
+test is airborne-only -- the grounded branch returns above it -- so it gets one
+look inside a box 0.5 wide in x and 1.0 tall, while a fast descent covers up to
+1.9 tiles per look. It missed three of eight jumps outright, and when it does
+fire it can fire up to half a tile short because the gate has no floor. See
+`todo.pathing.brakefloor`. Residual measured at +-0.33 to +0.49 and currently
+harmless: a 1.6-wide body braked half a tile short of a node still overlaps that
+node's tile. That is the body size, not a margin anyone chose.
 
 ### A Lua table with a hole becomes a Json object, not an array
 `fact.tooling.sparsejson` -- see also `arch.module.slots`
@@ -6661,6 +6699,40 @@ eventually carry its own markers or drop the concept.
 
 ---
 
+### The arrival brake has no floor and only one look to use it
+`todo.pathing.brakefloor` -- see also `fact.pathing.arcmoverthrottle`, `arch.pathing.solvelaunch`
+
+The gate in `petportsArcMover`:
+
+    if landing ~= nil and not pather.petportsLanding and vel[2] < 0
+      and math.abs(here[1] - landing[1]) <= LAND_BRAKE_REACH
+      and here[2] <= landing[2] + LAND_BRAKE_CEILING then
+
+Descending, within 0.5 of the landing's column, and not more than 1.0 above it.
+TWO PROBLEMS, both measured 2026-08-30, neither currently causing a failure.
+
+**NO FLOOR.** `here[2] <= landing[2] + 1.0` is satisfied by every y beneath the
+landing, without limit, so "arrived" means "near the column" and not "at the
+landing". A unit still half a tile short and half a tile high has its horizontal
+velocity zeroed and drops the rest of the way vertically:
+
+    ARCMOVER arrived at landing [2505,1166.8] from [2504.67,1167.3] vel [8,-10.5]
+
+That is the whole of the residual -0.33 seen on the death course.
+
+**ONE LOOK, AND THE GROUNDED BRANCH RETURNS ABOVE IT.** The test is airborne-only
+and the window is 0.5 x 1.0, while a fast descent covers up to 1.9 tiles per look
+at script delta 5. It missed three of eight jumps on the platform course. Jump
+four missed by 0.15 tiles of ceiling and was caught by `moveLand` instead:
+
+    02.489  [2516.64,1178.95]  vel [7.95553,-23.74]  onGround false   1178.95 > 1178.8
+    02.569  [2517.29,1177.8]   vel [5.8424,-1.5353]  onGround true
+
+**WHY THIS IS NOT URGENT.** A 1.6-wide body braked half a tile short of a node
+still overlaps that node's tile, so single-wide platforms survive it. That is the
+body size doing the work, not a margin anyone chose, and it stops being true if
+the chassis ever gets narrower or `LAND_BRAKE_REACH` ever grows.
+
 ### The planner cancels jumps the movement controller does not
 `todo.pathing.jumpmodel` -- see also `fact.pathing.partialjump`
 
@@ -7397,6 +7469,23 @@ demonstrate three times over.
 **THE RULE: assert the property that would break, not the presence of the
 change.** For a rename, count both old and new. For an insert, check every call
 site rather than a call site. For anything with indentation, look at the bytes.
+
+**AND THE CHECKER IS AS LIKELY TO BE WRONG AS THE FILE.** Twice on 2026-08-30 a
+pre-flight assertion failed and the fault was in the assertion:
+
+- **A regex pass split the file on `'\r\n'` after opening it in text mode**,
+  which had already translated CRLF to LF. The split found nothing, the whole
+  file became ONE line, and every `re.M` anchored pattern then matched or missed
+  for reasons having nothing to do with the code. A shape check that cannot see
+  line boundaries is not a shape check.
+- **A top-level comma counter did not skip string literals**, so the comma in
+  `"the pather is on %s, not an Arc "` read as an argument separator and a
+  correct `sb.logInfo` call was reported as an arity mismatch.
+
+Both were caught only because the failure was investigated instead of the code
+being edited to satisfy it. **A RED CHECK IS A QUESTION, NOT A VERDICT** -- find
+out which of the two is lying before changing either. The cost of getting this
+backwards is a working file edited into a broken one to please a broken test.
 
 ### An empty collection is not the same as a negative answer
 `proc.tooling.emptyvsno`

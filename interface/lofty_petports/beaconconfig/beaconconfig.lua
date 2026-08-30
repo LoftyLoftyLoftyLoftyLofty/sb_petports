@@ -24,6 +24,21 @@ require "/scripts/lofty_petports/petports_filters.lua"
 --  resolve leaves the dash showing. See petports_strings.config.
 require "/scripts/lofty_petports/petports_strings.lua"
 
+--  THE TITLE ICON REFLECTS WHETHER THE BEACON IS ENABLED. One implementation
+--  shared with the restock pane, which carries the same checkbox and the same
+--  handler shape. See petports_paneicon.lua -- the widget path it uses is a
+--  hypothesis with a disproof condition, not a settled fact.
+require "/scripts/lofty_petports/petports_paneicon.lua"
+
+--  THE TWO VARIANTS, DECLARED ONCE. The .config names the ON file as its
+--  pre-script default; these are what init and the toggle actually apply, and a
+--  disagreement between the two lists is a wrong icon for one frame at open,
+--  not a broken pane.
+local PANE_ICONS = {
+	on  = "/interface/lofty_petports/beaconconfig/paneicon_deposit_on.png",
+	off = "/interface/lofty_petports/beaconconfig/paneicon_deposit_off.png"
+}
+
 --  How often the liveness poll runs. Vanilla's transponder does this every
 --  tick, but that pane is a full deploy sequence where a missed item swap loses
 --  a station. This one only needs to notice within a moment.
@@ -54,7 +69,7 @@ local DEBUG = false
 --  and kills the script before a single function in it is defined. That is
 --  exactly how the monster taskAction was broken for three launches. init()
 --  logs it instead.
-local BUILD_STAMP = "2026-08-29a strings from the shared table"
+local BUILD_STAMP = "2026-08-30b title icon route probe"
 
 --  FORMATTED HERE, NOT BY sb.logInfo.
 --
@@ -813,6 +828,12 @@ function init()
 
 	widget.setChecked("enabledCheckbox", self.state.enabled ~= false)
 
+	--  THE ICON IS SEEDED FROM THE SAME VALUE AS THE CHECKBOX, on the line
+	--  below it, so the two cannot be made to disagree by a later edit that
+	--  moves one of them. The .config's `file` is a pre-script default and this
+	--  is what the player actually sees.
+	petports_applyPaneIcon(PANE_ICONS, self.state.enabled)
+
 	--  ABSENT MEANS ON, so a beacon placed before this field existed feeds
 	--  pets rather than silently refusing to.
 	widget.setChecked("feederCheckbox", self.state.feeder ~= false)
@@ -856,6 +877,7 @@ end
 function enabledToggled()
 	self.state.enabled = widget.getChecked("enabledCheckbox")
 	dbg("enabledToggled -> %s", tostring(self.state.enabled))
+	petports_applyPaneIcon(PANE_ICONS, self.state.enabled)
 	write()
 end
 
