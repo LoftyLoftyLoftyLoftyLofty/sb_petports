@@ -23,7 +23,7 @@
 
 {
 	"sounds" : {
-		"materialise" : [ "/sfx/npc/monsters/pod_capture3.ogg" ],
+		"materialise" : [ "/sfx/npc/monsters/pod_release1.ogg" ],
 		"dematerialise" : [ "/sfx/npc/monsters/pod_capture3.ogg" ]
 	}
 }
