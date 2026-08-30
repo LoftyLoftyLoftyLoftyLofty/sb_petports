@@ -26,8 +26,8 @@ require "/scripts/lofty_petports/petports_strings.lua"
 
 --  THE TITLE ICON REFLECTS WHETHER THE BEACON IS ENABLED. One implementation
 --  shared with the restock pane, which carries the same checkbox and the same
---  handler shape. See petports_paneicon.lua -- the widget path it uses is a
---  hypothesis with a disproof condition, not a settled fact.
+--  handler shape. See petports_paneicon.lua; the route is pane.setTitleIcon,
+--  settled in game and recorded as `fact.pane.titleicon`.
 require "/scripts/lofty_petports/petports_paneicon.lua"
 
 --  THE TWO VARIANTS, DECLARED ONCE. The .config names the ON file as its
@@ -69,7 +69,7 @@ local DEBUG = false
 --  and kills the script before a single function in it is defined. That is
 --  exactly how the monster taskAction was broken for three launches. init()
 --  logs it instead.
-local BUILD_STAMP = "2026-08-30b title icon route probe"
+local BUILD_STAMP = "2026-08-30c state-driven title icon"
 
 --  FORMATTED HERE, NOT BY sb.logInfo.
 --

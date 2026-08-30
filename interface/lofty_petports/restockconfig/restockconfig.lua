@@ -67,8 +67,8 @@ require "/scripts/lofty_petports/petports_strings.lua"
 
 --  THE TITLE ICON REFLECTS WHETHER THE BEACON IS ENABLED. One implementation
 --  shared with the deposit pane, which carries the same checkbox and the same
---  handler shape. See petports_paneicon.lua -- the widget path it uses is a
---  hypothesis with a disproof condition, not a settled fact.
+--  handler shape. See petports_paneicon.lua; the route is pane.setTitleIcon,
+--  settled in game and recorded as `fact.pane.titleicon`.
 require "/scripts/lofty_petports/petports_paneicon.lua"
 
 --  THE TWO VARIANTS, DECLARED ONCE. The .config names the ON file as its
@@ -78,7 +78,7 @@ local PANE_ICONS = {
 	off = "/interface/lofty_petports/restockconfig/paneicon_restock_off.png"
 }
 
-local BUILD_STAMP = "2026-08-30b title icon route probe"
+local BUILD_STAMP = "2026-08-30c state-driven title icon"
 
 --  Absolute ceiling on a quota, AND IT MATCHES THE PANE'S REGEX RATHER THAN
 --  BEING CHOSEN INDEPENDENTLY. The textboxes filter input with \d{0,5}, so five

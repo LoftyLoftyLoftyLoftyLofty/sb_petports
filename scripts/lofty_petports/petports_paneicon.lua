@@ -16,86 +16,32 @@
 --  proven to work from a pane script -- see the header of petports_strings.lua
 --  for why the data lives under /interface and the code does not.
 
---  THE ROUTE TO THE TITLE ICON IS NOT SETTLED, AND THIS PROBES IT.
+--  THE ROUTE IS `pane.setTitleIcon`, AND IT IS SETTLED.
 --
---  FIRST ATTEMPT, DISPROVEN 2026-08-30: `widget.setImage("title.icon", path)`.
---  The call did not throw and this module logged `applied` four times per pane,
---  AND THE ICON ON SCREEN NEVER CHANGED. The pcall only ever proved the call did
---  not raise; Starbound's widget bindings commonly no-op on a widget that does
---  not resolve, so a successful no-op was being reported as a success. THE
---  DISPROOF CONDITION WAS TOO WEAK -- "it returned" is not "it did something".
+--    void pane.setTitleIcon(String image)
 --
---  What that leaves: the title icon is almost certainly NOT a child in the
---  pane's addressable widget tree. It is owned by the Pane, the same way
---  ContainerPane owns the header icon it draws from `inventoryIcon` -- see
---  `fact.pane.windowicon`. `title.icon` in the .config is read at construction
---  and does not stay reachable by name.
+--  Confirmed in game 2026-08-30 on both beacon panes -- see
+--  `fact.pane.titleicon`. The .config's `icon` block still owns the icon's
+--  POSITION and its spacing from the title text; this only swaps the image.
 --
---  SO THIS ASKS THE ENGINE INSTEAD OF GUESSING. Two capabilities, both
---  answerable at runtime, reported once per pane:
+--  THE LOSING BRANCH IS DELETED RATHER THAN LEFT WIRED.
+--  `widget.setImage("title.icon", path)` was the first attempt. It neither threw
+--  nor changed anything: the title icon is owned by the Pane and is not in the
+--  addressable widget tree, and Starbound's widget bindings no-op on a name that
+--  does not resolve. Wrapped in a pcall it reported a successful NO-OP as a
+--  success, four times per pane, while the screen showed one icon throughout.
+--  `proc.tooling.guardedcall` carries the general form, which is the part worth
+--  keeping: A GUARD PROVES THE CALL RAN, NEVER THAT IT DID ANYTHING.
 --
---    pane.setTitleIcon   the purpose-built route, if ScriptPane exposes it.
---                        `type(...) == "function"` is a FACT, not a hypothesis:
---                        an absent binding is nil and says so immediately.
---
---    widget.getPosition  distinguishes "the widget exists and setImage did
---                        nothing" from "the widget was never there". A binding
---                        that no-ops on setImage will also return nil here.
---
---  THIS IS A PROBE, NOT A FALLBACK LADDER. It names the route it took in the
---  log every time it acts. ONCE THE ANSWER IS IN, DELETE THE LOSING BRANCH --
---  do not leave both wired and do not tune the loser.
-PETPORTS_PANEICON_WIDGET = "title.icon"
-
-local probed = false
-local route = nil
-
-local function probeOnce()
-	if probed then
-		return
-	end
-	probed = true
-
-	local hasSetter = type(pane) == "table" and type(pane.setTitleIcon) == "function"
-
-	--  GUARDED because getPosition on an unresolvable widget may throw rather
-	--  than return nil, and the two outcomes are both informative.
-	local okPos, posOrErr = pcall(widget.getPosition, PETPORTS_PANEICON_WIDGET)
-
-	sb.logInfo("PETPORTS paneicon PROBE: pane.setTitleIcon is %s; "
-		.. "widget.getPosition(%s) -> %s %s",
-		type(pane) == "table" and type(pane.setTitleIcon) or "no pane table",
-		PETPORTS_PANEICON_WIDGET,
-		tostring(okPos),
-		okPos and sb.printJson(posOrErr) or tostring(posOrErr))
-
-	if hasSetter then
-		route = "pane.setTitleIcon"
-	else
-		route = "widget.setImage"
-	end
-
-	sb.logInfo("PETPORTS paneicon PROBE: taking the %s route", route)
-end
-
---  Returns ok, err. `ok` here means THE ROUTE RAN, which after the first
---  attempt we know is not the same as the icon changing. The screen is still
---  the arbiter; this only reports what was tried.
-local function applyByRoute(path)
-	probeOnce()
-
-	if route == "pane.setTitleIcon" then
-		return pcall(pane.setTitleIcon, path)
-	end
-
-	return pcall(widget.setImage, PETPORTS_PANEICON_WIDGET, path)
-end
+--  NOTHING HERE IS GUARDED NOW, DELIBERATELY. There is no second route to fall
+--  back to and no question left to probe, so a failure should be loud rather
+--  than swallowed. An absent binding would mean a Starbound version change,
+--  which is worth finding out about immediately and not worth hiding.
 
 --  CHANGE-GATED, so a pane that calls this every update does not spam. The
---  first call always logs, because the first call is the one carrying the
---  answer to the question above.
+--  first call always logs, so the seed at init is visible as well as the
+--  toggles after it.
 local applied = nil
-local reported = false
 
 --  paths  { on = "<asset>", off = "<asset>" }
 --  enabled  the beacon's real state, not the checkbox's pre-script default
@@ -118,21 +64,13 @@ function petports_applyPaneIcon(paths, enabled)
 		return
 	end
 
-	local ok, err = applyByRoute(wanted)
+	pane.setTitleIcon(wanted)
+	applied = wanted
 
-	if ok then
-		applied = wanted
-		--  INPUTS, NOT JUST THE VERDICT. The state that produced the choice is
-		--  logged beside the choice, so a wrong icon can be triaged as either a
-		--  wrong state or a wrong mapping without another round.
-		--  THE ROUTE IS NAMED so a log cannot be read as proof the icon moved
-		--  without saying HOW it was asked to. That ambiguity cost a round.
-		sb.logInfo("PETPORTS paneicon set via %s <- %s (enabled %s)",
-			tostring(route), wanted, tostring(enabled))
-	elseif not reported then
-		reported = true
-		sb.logError("PETPORTS paneicon REFUSED by %s: %s", tostring(route), tostring(err))
-		sb.logError("PETPORTS paneicon: neither route reaches the title icon; "
-			.. "the swap needs a plain image widget over the header instead")
-	end
+	--  INPUTS, NOT JUST THE VERDICT. The state that produced the choice is
+	--  logged beside the choice, so a wrong icon triages as a wrong state or a
+	--  wrong mapping without another round. And it says what was ASKED of the
+	--  engine rather than claiming an outcome -- the screen decides that.
+	sb.logInfo("PETPORTS paneicon set via pane.setTitleIcon <- %s (enabled %s)",
+		wanted, tostring(enabled))
 end

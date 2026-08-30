@@ -166,11 +166,13 @@ Vents do not cross a medium boundary. Liquid permissions from pet upgrades.
 Rename. Maxwell and any display of the Tidy Score.
 
 **Art.** Bespoke: the unit body, the petport, the crosshairs, the treat COLOURS,
-the upcycler's charge bin icon, both pane title icons. Placeholder: the vent, the
-upcycler, the eight treat sprites, the four chassis colour strips, all petport
-pane art, the module icon, the stats list stripe fills, the dashed orange
-separators, the upcycler's running light, and the two identical vanilla
-checkboxes on a rule row. The unit has frames for `run` and nothing else.
+the upcycler's charge bin icon, and ALL FOUR PANE TITLE ICONS -- petport,
+upcycler, deposit beacon and restock beacon, the last two in on/off pairs.
+Placeholder: the vent, the upcycler, the eight treat sprites, the four chassis
+colour strips, the rest of the petport pane art, the module icon, the stats list
+stripe fills, the dashed orange separators, the upcycler's running light, and the
+two identical vanilla checkboxes on a rule row. The unit has frames for `run` and
+nothing else.
 
 **The monsterpart is still named `drone_placeholder`**, file and `name` field.
 Renaming is free while there is one variant and expensive once there are several.
@@ -4881,6 +4883,56 @@ category, on the reasoning that a field doing two jobs will eventually be
 changed for one of them and silently break the other. It got changed for one of
 them. Nothing broke.
 
+### `pane.setTitleIcon` is the only route to a pane's header icon
+`fact.pane.titleicon` -- see also `fact.pane.windowicon`, `fact.pane.titlepadding`
+
+    void pane.setTitleIcon(String image)
+
+CONFIRMED 2026-08-30 on both beacon panes. The `icon` block under a title widget
+is read AT CONSTRUCTION and the resulting icon is owned by the Pane, not placed
+in the addressable widget tree -- the same ownership `fact.pane.windowicon`
+describes for ContainerPane's header icon. The config block still owns the
+icon's POSITION; `setTitleIcon` only swaps the image.
+
+**`widget.setImage("title.icon", path)` DOES NOT WORK, AND DOES NOT SAY SO.** It
+was tried first, wrapped in a pcall, and it neither threw nor changed anything.
+Four `applied` lines per pane, on screen nothing. Starbound's widget bindings
+commonly no-op on a name that does not resolve, so the guard reported a
+successful NO-OP as a success. See `proc.tooling.guardedcall` -- the general
+lesson is worth more than this instance.
+
+**HOW IT WAS SETTLED WITHOUT ANOTHER GUESS.** `type(pane.setTitleIcon)` is a
+fact available at runtime: an absent binding is nil and says so on the first
+line of the log. Probing the two candidate routes and NAMING THE ONE TAKEN in
+every subsequent line turned an open question into one test round. Ask the
+engine what it has rather than asserting what it should have.
+
+### The gap between a pane's icon and its title is STRING PADDING
+`fact.pane.titlepadding` -- see also `fact.pane.titleicon`
+
+There is no offset field for this. The space between a header icon and the title
+text is LEADING SPACES INSIDE THE TITLE STRING, and there is no other lever:
+
+    "title"    : "  Petport",
+    "subtitle" : "  ^#b9b5b2;Configure and deploy pets",
+
+The title widget's own `position` moves the icon and the text TOGETHER, so it
+cannot change the distance between them. The icon's `position` can, but all four
+panes already sat at x -4; the visible inconsistency was entirely padding --
+2 spaces on the petport, 3 on the upcycler, NONE on either beacon.
+
+**THE PETPORT IS THE REFERENCE**, being the one checked against a vanilla
+crafting station and found correct. Two spaces on both title and subtitle, in
+all four panes, as of 2026-08-30.
+
+**NOT DISCOVERABLE EXCEPT BY READING A PANE THAT LOOKS RIGHT.** Nothing errors,
+nothing logs, and a pane with no padding renders perfectly happily with its text
+jammed against its icon.
+
+STILL INCONSISTENT AND LEFT ALONE: the upcycler's icon sits at y -24 where the
+other three sit at -4, and the two beacon subtitles have no `^#b9b5b2;` colour
+code where the petport and upcycler both do.
+
 ### `hasWindowIcon` -- ContainerPane draws its own header icon
 `fact.pane.windowicon`
 
@@ -7032,12 +7084,24 @@ selection is built, and the string goes with it.
 
 **NEXT SESSION:**
 
-- **Deposit and restock beacons need top-left pane icons.** They have none.
-- **Upcycler and petport need proper ones** to replace their placeholders.
 - **The upcycler's reagent indicator** -- the drawn line from the checkbox
   column to the reagent slot that replaces a tooltip. Open question: static art
   baked into the pane background, or a widget that only draws when at least one
   rule is ticked. Static is trivial and always correct while neither end moves.
+
+**DONE 2026-08-30 -- ALL FOUR PANES NOW CARRY FINISHED TITLE ICONS.** The
+upcycler's and the petport's landed overnight, replacing their placeholders; the
+two beacons landed in the session after.
+
+THE BEACON PAIR ARE STATE-DRIVEN rather than static -- an on and an off variant,
+swapped when the enabled box is ticked and seeded from the beacon's real state at
+init. One shared implementation in `petports_paneicon.lua` rather than six lines
+copied into two panes. The route is `pane.setTitleIcon`, per
+`fact.pane.titleicon`.
+
+ALSO DONE, AND IT WAS THE PART THAT LOOKED WRONG ON SCREEN: all four panes now
+agree on the gap between the header icon and the title text. See
+`fact.pane.titlepadding` -- it is string padding, and nothing else reaches it.
 
 **DEFERRED UNTIL THE LAYOUTS ARE FINAL, AND THE ORDER IS THE POINT:**
 
@@ -7447,6 +7511,26 @@ as the crosshair progress signal sitting below the vent branch's return.
 every one of them means "this genuinely should not run".** Housekeeping, state
 publication and anything the player can trigger from a UI almost never belong
 below a gate.
+
+### A GUARDED CALL PROVES THE CALL RAN, NEVER THAT IT DID ANYTHING
+`proc.tooling.guardedcall` -- see also `proc.tooling.assertshape`, `fact.pane.titleicon`
+
+`widget.setImage("title.icon", path)` was wrapped in a pcall, and the module
+logged `applied` on `ok`. It printed four times per pane. THE ICON NEVER CHANGED.
+Starbound's widget bindings commonly no-op on a name that does not resolve, so
+`ok` meant only "did not raise" -- and the log asserted something it had no way
+to know, in confident language, which is worse than logging nothing.
+
+**THE RULE: a probe's success condition must be an OBSERVABLE EFFECT, not the
+absence of an exception.** If the effect cannot be observed from inside the
+script, the log must say what was ATTEMPTED and by what route, and leave the
+verdict to the screen. Write `set via pane.setTitleIcon <- x` and not `applied`.
+
+**AND PREFER A CAPABILITY TEST TO A GUARD WHERE ONE EXISTS.**
+`type(pane.setTitleIcon) == "function"` is a fact the engine will answer
+directly; a pcall around a call that might silently do nothing is not. The
+second attempt probed both candidate routes, named the one taken in every line,
+and settled a question the first attempt had made LOOK settled.
 
 ### AN ASSERT HAS TO CHECK THE SHAPE OF WHAT WAS WRITTEN, NOT THAT THE WORDS APPEAR
 `proc.tooling.assertshape` -- see also `proc.tooling.halfedit`, `fact.tooling.nilglobal`

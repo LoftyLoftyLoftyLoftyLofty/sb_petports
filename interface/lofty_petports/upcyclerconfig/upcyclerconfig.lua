@@ -30,10 +30,15 @@
 require "/scripts/lofty_petports/petports_flavors.lua"
 require "/scripts/lofty_petports/petports_upcyclerstate.lua"
 
+--  EVERY VISIBLE STRING COMES FROM THE SHARED TABLE, the last of the four panes
+--  to migrate. The config names a key beside each widget and declares "--" as
+--  its value; a key that does not resolve leaves the dash showing.
+require "/scripts/lofty_petports/petports_strings.lua"
+
 local DEBUG = true
 
 --  Bump on every change to this file. See the log line in init().
-local PANE_BUILD_STAMP = "2026-08-30c toggle logging trimmed"
+local PANE_BUILD_STAMP = "2026-08-30d strings from the shared table"
 
 --  sb.logInfo accepts %s and nothing else. Pre-format through string.format,
 --  which has no such limit, and hand the logger one string.
@@ -47,9 +52,20 @@ local PANE_BUILD_STAMP = "2026-08-30c toggle logging trimmed"
 --  wrong for a fair number of English words too. It is right for every word
 --  this pane pluralises -- rule, reagent, treat, flavor, cell -- and a real
 --  plural table is not worth building until something needs translating.
-local function plural(count, word)
-	if count == 1 then return string.format("%d %s", count, word) end
-	return string.format("%d %ss", count, word)
+--  A COUNTED NOUN, ONE KEY PER FORM.
+--
+--  This replaced a helper that built "3 rules" by appending an "s" to the
+--  singular. That is English word formation in code -- the thing the string
+--  table's own header forbids -- and it produces nonsense in any language whose
+--  plural rule differs. The forms are now data: `upcycler.count.<noun>.one` and
+--  `.many`, each a "%s <noun>" pattern taking the pre-rendered count.
+--
+--  A LANGUAGE WITH MORE THAN TWO FORMS still needs more than this, but adding a
+--  `few` now costs a key and a branch here rather than a rewrite in the pane.
+local function counted(count, noun)
+	local form = "many"
+	if count == 1 then form = "one" end
+	return petports_format("upcycler.count." .. noun .. "." .. form, tostring(count))
 end
 
 local function dbg(fmt, ...)
@@ -264,59 +280,39 @@ end
 --  EACH ONE ENDS WITH WHAT TO DO, or at least with why there is nothing to do.
 --  A warning that only names the problem sends the player looking through the
 --  rules list for something that is not there.
-local WARNING_TEXT = {
-	outputBlocked = function(v)
-		return string.format("%s is blocking the output. Nothing will be made "
-			.. "until it is taken out.", labelFor(v.item))
-	end,
-
-	--  NAMES BOTH ITEMS, because naming one is what made this look like
-	--  ordinary waiting for so long. Neither can move until a slot is freed
-	--  by hand.
-	slotsDeadlocked = function(v)
-		return string.format("%s and %s each need the other's slot. Take one "
-			.. "out to break the tie.", labelFor(v.item), labelFor(v.other))
-	end,
-
-	inputExempt = function(v)
-		return string.format("%s can never be upcycled.", labelFor(v.item))
-	end,
-
-	inputNoRule = function(v)
-		return string.format("No rule names %s, so it will not be converted.",
-			labelFor(v.item))
-	end,
-
-	inputStranded = function(v)
-		return string.format("%s is denied the burner and cannot go in the "
-			.. "reagent slot either. Change its rule or take it out.",
-			labelFor(v.item))
-	end,
-
-	inputWaiting = function(v)
-		return string.format("%s is waiting for the reagent slot to clear.",
-			labelFor(v.item))
-	end,
-
-	reagentExempt = function(v)
-		return string.format("%s can never be upcycled.", labelFor(v.item))
-	end,
-
-	reagentNotAReagent = function(v)
-		return string.format("%s is not a reagent, so it will not flavor "
-			.. "anything. See the Flavors tab.", labelFor(v.item))
-	end,
-
-	reagentStranded = function(v)
-		return string.format("%s is denied both slots by its own rule. Change "
-			.. "the rule or take it out.", labelFor(v.item))
-	end,
-
-	reagentWaiting = function(v)
-		return string.format("%s is waiting for the burner to clear.",
-			labelFor(v.item))
-	end
+--  THE WARNING LINE, RENDERED ON `warnText` BESIDE THE EXCLAMATION ICON.
+--
+--  KEYED BY THE CLASSIFIER'S CAUSE ENUM. petports_upcyclerstate.lua returns a
+--  cause and carries NO TEXT, which is what lets the machine and the pane agree
+--  on a verdict without having to agree on wording -- see
+--  `arch.upcycler.stateladder`. That split is deliberate and should stay.
+--
+--  ONE KEY PER CAUSE, and the key is the cause lower-cased. Adding a cause to
+--  the classifier means adding `upcycler.warn.<cause>` to the string table;
+--  a cause with no key falls through to `warn.generic`, which names the item
+--  and says only that it is stopping the machine.
+--
+--  ARITY LIVES HERE, NOT IN THE TABLE. Every cause but one takes a single item
+--  name; slotsDeadlocked takes two, because naming one is what made that state
+--  look like ordinary waiting for so long.
+local WARNING_ARGS = {
+	slotsDeadlocked = function(v) return labelFor(v.item), labelFor(v.other) end
 }
+
+local function warningText(verdict)
+	local key = "upcycler.warn." .. string.lower(verdict.cause or "")
+
+	if petports_string(key) == nil then
+		return petports_format("upcycler.warn.generic", labelFor(verdict.item))
+	end
+
+	local args = WARNING_ARGS[verdict.cause]
+	if args ~= nil then
+		return petports_format(key, args(verdict))
+	end
+
+	return petports_format(key, labelFor(verdict.item))
+end
 
 --  ---------------------------------------------------------------------------
 --  THE RULE LIST
@@ -489,10 +485,10 @@ local function refreshSampleSlot()
 	if rule ~= nil and type(rule.item) == "string" then
 		pcall(widget.setItemSlotItem, "itemSlot_sample",
 			{ name = rule.item, count = 1 })
-		widget.setText("sampleHint", "Click holding an item")
+		widget.setText("sampleHint", petports_stringOr("upcycler.samplehint"))
 	else
 		pcall(widget.setItemSlotItem, "itemSlot_sample", nil)
-		widget.setText("sampleHint", "Click holding an item")
+		widget.setText("sampleHint", petports_stringOr("upcycler.samplehint"))
 	end
 end
 
@@ -501,9 +497,9 @@ local function refreshThreshold()
 
 	if rule ~= nil then
 		setThresholdText(rule.max)
-		widget.setText("thresholdLabel", "Keep at most")
+		widget.setText("thresholdLabel", petports_stringOr("upcycler.threshold"))
 	else
-		widget.setText("thresholdLabel", "New rule keeps")
+		widget.setText("thresholdLabel", petports_stringOr("upcycler.thresholdnew"))
 	end
 
 	--  Driven from here rather than from every caller, because every path that
@@ -906,8 +902,7 @@ function refreshStatus()
 
 	for _, item in ipairs(allSlotItems()) do
 		if hasTag(item.name, TAG_BEACON) then
-			showWarning("A beacon is in this machine. Machine slots are not "
-				.. "storage, so the network ignores it. Take it back out.")
+			showWarning(petports_stringOr("upcycler.warn.beacon"))
 			return
 		end
 	end
@@ -932,10 +927,10 @@ function refreshStatus()
 	})
 
 	if verdict ~= nil then
-		local said = WARNING_TEXT[verdict.cause]
+		local said = warningText(verdict)
 
 		if said ~= nil then
-			showWarning(said(verdict))
+			showWarning(said)
 		else
 			showWarning(string.format("%s is stopping the machine.",
 				labelFor(verdict.item)))
@@ -947,19 +942,19 @@ function refreshStatus()
 	hideWarning()
 
 	if not self.enabled then
-		widget.setText("lblStatus", string.format(
-			"%s. Machine is off.", plural(#self.rules, "rule")))
+		widget.setText("lblStatus",
+			petports_format("upcycler.status.off", counted(#self.rules, "rule")))
 		return
 	end
 
 	if input == nil then
-		widget.setText("lblStatus", string.format(
-			"%s. Running, input empty.", plural(#self.rules, "rule")))
+		widget.setText("lblStatus",
+			petports_format("upcycler.status.idle", counted(#self.rules, "rule")))
 		return
 	end
 
-	widget.setText("lblStatus", string.format(
-		"%s. Converting %s.", plural(#self.rules, "rule"), labelFor(input.name)))
+	widget.setText("lblStatus", petports_format("upcycler.status.converting",
+		counted(#self.rules, "rule"), labelFor(input.name)))
 end
 
 --  ---------------------------------------------------------------------------
@@ -1060,7 +1055,7 @@ local function refreshProgress(dt)
 					"/interface/lofty_petports/upcyclerconfig/progressbar.png:p%d", step))
 			end
 
-			widget.setText("progressLabel", string.format("%s / %s to next treat",
+			widget.setText("progressLabel", petports_format("upcycler.progress",
 				tostring(self.points), tostring(self.pointsPerFuel)))
 
 			refreshBlips(result.blips)
@@ -1256,7 +1251,7 @@ local function refreshReagents(flavor)
 	rebuildingFlavors = false
 
 	if flavor == nil then
-		widget.setText("reagentsLabel", "Select a flavor")
+		widget.setText("reagentsLabel", petports_stringOr("upcycler.flavors.prompt"))
 		return
 	end
 
@@ -1285,8 +1280,8 @@ local function refreshReagents(flavor)
 	end
 
 	widget.setText("reagentsLabel",
-		string.format("%s -- %s", flavor.label or flavor.id,
-			plural(#reagents, "reagent")))
+		petports_format("upcycler.flavors.selected", flavor.label or flavor.id,
+			counted(#reagents, "reagent")))
 
 	dbg("refreshReagents: %s, %d cell(s)", tostring(flavor.id), #reagents)
 end
@@ -1325,8 +1320,8 @@ local function refreshFlavors()
 
 
 			widget.setText(path .. ".rowLabel",
-				string.format("%s  (%d)", flavor.label or flavor.id,
-					#petports_flavorReagents(flavor.id)))
+				petports_format("upcycler.flavors.row", flavor.label or flavor.id,
+					tostring(#petports_flavorReagents(flavor.id))))
 
 			--  THE FLAVOR'S OWN TREAT AS ITS ICON. It is the flavor's identity,
 			--  it is already named by `item` in the config, and the treat colours
@@ -1660,7 +1655,7 @@ function init()
 		--  A read that fails and a machine with no rules look identical on
 		--  screen, so this says which it is rather than rendering an empty list
 		--  and leaving the player to guess.
-		widget.setText("lblStatus", "Could not read machine state.")
+		widget.setText("lblStatus", petports_stringOr("upcycler.status.unreadable"))
 	end
 end
 
