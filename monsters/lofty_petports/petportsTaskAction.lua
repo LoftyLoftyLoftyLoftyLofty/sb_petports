@@ -2627,6 +2627,86 @@ local function standableNear(position, searchUp)
       usable = false
     end
 
+    --  IS THERE ACTUALLY FLOOR UNDER THIS? ASSERTION ONLY -- NOTHING ACTS ON IT.
+    --
+    --  Underwater, petports_avoidLiquid() false makes validStandingPosition
+    --  count liquid as standable, so EVERY point in the water passes. With the
+    --  up-before-down bias, findGroundPosition can return the first wet point
+    --  it meets rather than descending to the seabed -- a spot hanging in open
+    --  water, which a walking chassis can never end a path on.
+    --
+    --  SUSPECTED CAUSE of the submerged-animal failure. A cow's entity position
+    --  is its CENTRE, floating above the floor; a dropped item rests ON the
+    --  floor. Same resolver, same pond, two tiles apart: the drop resolved to
+    --  1142.8 and was reached, the cow to 1143.8 and was not. Exactly one tile.
+    --
+    --  MEASURED 2026-08-30, and it is the whole submerged-animal bug. A cow's
+    --  entity position is its CENTRE, floating above the seabed; a dropped item
+    --  rests ON it. Same pond, same resolver, targets two tiles apart:
+    --
+    --    drop  [2536.42,1142.62] -> [2536.5,1142.8]   reached, item collected
+    --    cow   [2534.33,1143.38] -> [2534.5,1143.8]   no route, ever
+    --
+    --  No bias to blame: from 1143.38 the floating spot at 1143.8 is 0.42 away
+    --  and the seabed at 1142.8 is 0.58, so findGroundPosition returned the
+    --  genuinely NEARER one. Nothing rejected it because underwater
+    --  validStandingPosition calls every point standable.
+    --
+    --  IT DESCENDS -- IT DOES NOT REJECT. Rejecting was tried first and broke
+    --  every submerged target: findGroundPosition returns ONE answer per
+    --  column, so refusing it discards the column instead of searching it
+    --  lower. All seven columns returned the same floating y, all seven were
+    --  refused, and the resolver reported no standable position at all --
+    --  1456 rejections and a unit that never moved.
+    --
+    --  STEPS DOWN ONE TILE AT A TIME, re-validating each with the same
+    --  predicate the column search uses, so what comes back is a position this
+    --  column actually passed rather than an unchecked guess. Bounded by the
+    --  search depth already in scope, so it cannot walk off into the dark.
+    --
+    --  FREE MOVERS ARE EXEMPT. A flyer or an aquatic unit is SUPPOSED to finish
+    --  in open water; this is the walking chassis's constraint alone.
+    --
+    --  DRY LAND IS UNTOUCHED: `wet` is false there, so every route that has
+    --  ever worked pays one predicate and exits.
+    if usable and not petports_freeMover()
+       and petports_mediumAtPoint({ resolved[1], resolved[2] }) == "swim"
+       and not world.pointTileCollision({ resolved[1], resolved[2] - 1.0 }) then
+
+      local floor = nil
+
+      for drop = 1, math.abs(GROUND_SEARCH_DOWN) do
+        local lower = { resolved[1], resolved[2] - drop }
+
+        if world.pointTileCollision({ lower[1], lower[2] - 1.0 }) then
+          local fits, standable = pcall(validStandingPosition, lower,
+            petports_avoidLiquid())
+
+          if fits and standable and petports_mediumAllows(lower) then
+            floor = lower
+          end
+
+          --  STOP AT THE FIRST SOLID TILE either way. Past it we are inside
+          --  the seabed, and a deeper hit would be a different cave.
+          break
+        end
+      end
+
+      if floor ~= nil then
+        if TASK_DEBUG then
+          sb.logInfo("UNIT ground spot %s was floating, descended to %s (asked for %s)",
+            sb.printJson(resolved), sb.printJson(floor), sb.printJson(position))
+        end
+        resolved = floor
+      else
+        if TASK_DEBUG then
+          sb.logInfo("UNIT ground spot %s is floating and no floor below it (asked for %s)",
+            sb.printJson(resolved), sb.printJson(position))
+        end
+        usable = false
+      end
+    end
+
     if usable then
       local candidate = { resolved[1], resolved[2] }
       local distance = world.magnitude(candidate, position)
