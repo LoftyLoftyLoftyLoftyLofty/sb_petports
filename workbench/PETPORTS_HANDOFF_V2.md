@@ -42,17 +42,49 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-08-29 (late night)
+### What is built, as of 2026-08-30 (overnight)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-CAVEAT ON THIS PASS: this session touched the petport object heavily -- the
-metrics layer, the machine routing, the report handler, the file's constants --
-plus the upcycler object and its pane, the petport pane and config, the shared
-strings, and the monster contract. Everything outside those carries its
+CAVEAT ON THIS PASS: this session touched the upcycler object and its pane, the
+new shared classifier, the petport object's machine-output scan, both pane
+icons, and the unit's ground resolver. Everything outside those carries its
 previous session's date and was not re-verified.
+
+**The upcycler's slot behaviour is finished and verified in game.** Rule-row
+checkboxes were broken two ways and are fixed (`applyState` stripped both
+exclusions; `x and nil or false` cannot yield nil -- `fact.tooling.andnilor`).
+The shuttle now runs on one priority, charge before burner, with a weight-aware
+fit test that is what makes it terminate -- see `arch.upcycler.shuttlepriority`.
+Bulk where the destination rule is a dead end, paced where it is not. The mutual
+swap deadlock resolves itself. `consumeReagent` refuses exempt items, and both
+the pane and the machine now read ONE refusal ladder
+(`arch.upcycler.stateladder`). Non-treats parked in an output slot are collected
+by a unit instead of stranding the machine (`arch.upcycler.outputeviction`).
+Tested: the loop case, bulk rescue, trickle, exempt in both slots, the deadlock,
+and eviction.
+
+**Both panes have title icons and the upcycler has a running light.** The light
+flares hard on transition then settles -- off breathes and never fully dims, on
+goes steady -- because the problem it solves is a MISSED TRANSITION, not a missed
+state: adding a rule deliberately switches the machine off and a whole test round
+was run against a stopped machine before anyone noticed. Art is placeholder,
+driven entirely by image directive, so real art drops in with no script change.
+
+**A submerged farm animal is now reachable.** This took most of the session and
+three wrong fixes -- `fact.pathing.floatingtarget` is the entry, and it is worth
+reading before touching any resolver. The short version: underwater every point
+is standable, so `findGroundPosition` returned a spot hanging in open water and a
+walking chassis cannot finish a path there. It descends now.
+
+**The search state machine reported exhausted searches as successes.** Three
+states, two branches: `hasPath false, aStar nil` means the search FINISHED WITH
+NO ROUTE and fell into the branch labelled "a path exists now". 37 real failures
+read as successes in one run, and the unit waited out the 10 s no-progress
+watchdog instead of reporting a conclusive answer immediately. Split into three.
+This predates the session and was found by the diagnostics, not by looking.
 
 **Core loop.** A petport places, opens, spawns a unit from a socketed item, and
 the unit's state round-trips through that item across despawn, world reload and
@@ -1461,6 +1493,92 @@ untouched. Capped at 1.25x.
 Scaling `jumpSpeed` does NOT fix this: planner and movement controller both read
 `airJumpProfile.jumpSpeed`, so lowering it shrinks both and the percentage error
 survives.
+
+### One refusal ladder, read by both the upcycler pane and the machine
+`arch.upcycler.stateladder` -- see also `arch.upcycler.burnbox`, `fact.tooling.andnilor`
+
+`petports_upcyclerstate.lua`. BUILT 2026-08-30, after the same drift shape bit
+four times in two days:
+
+    applyState (pane) vs storedRules (object)   pane silently stripped both rule
+                                                exclusions and wrote them back
+    the two bulk rescues                        near-identical pair, now one
+    the refusal LADDERS themselves              machine reordered to ask exempt
+                                                before the manifest, pane not --
+                                                one item, two explanations
+    hasTag (pane) vs exempt (object)            same cached itemConfig walk twice
+
+**SHARING THE LOOKUP TABLE WAS NEVER ENOUGH. THE ORDER IS THE LOGIC.** A ladder
+of refusals is a sequence of returns, and a sequence written twice is two
+programs that happen to agree today.
+
+**IT DECIDES, IT DOES NOT SPEAK.** A verdict is a cause id and a severity, no
+sentences and no widget names. The pane turns a cause into player-facing text in
+its own voice; the machine turns the same cause into a log line and, later,
+indicator lights. Neither can change what counts as broken without changing it
+for the other.
+
+**SEVERITY IS THE FIELD THAT MATTERS.** `error` means a human must act -- the
+player's own configuration is rejecting something already inside the machine, or
+the item can never be processed at all. `waiting` clears itself. Only `error`
+lights an alarm; crying wolf on waiting states is how an alert surface becomes
+wallpaper.
+
+**ORDER WITHIN A SLOT IS BY WHAT THE FACT IS ABOUT, NOT BY WHAT IS CHEAP TO
+TEST.** Item-level facts (exempt) before table lookups (is it in the manifest)
+before configuration (what the rule says). Ordered the other way the generic
+message wins and the specific one never fires -- every exempt item is also absent
+from the reagent manifest, so a manifest-first ladder answers "not a reagent" for
+a pet. That shipped once.
+
+### The slot shuttle runs on one priority
+`arch.upcycler.shuttlepriority` -- see also `arch.upcycler.stateladder`
+
+**KEEPING THE FLAVOR CHARGE FULL OUTRANKS BURNING MORE ITEMS.** Burning is always
+available to a burn-allowed item; being spent as flavor is not, so the scarce
+option gets first refusal. Everything else falls out of that read from one side
+or the other.
+
+**`chargeFits` IS WHAT MAKES IT TERMINATE, and weight-awareness is load-bearing.**
+With an "is the charge full" test instead, a weight-8 reagent facing 3 free blips
+is pulled to the reagent slot, cannot be spent, and is pushed back -- one hop per
+tick forever, because room only frees by burning and the item that would do the
+burning is the one bouncing. Asking whether THIS item fits breaks it. One item's
+worth of flavor is lost on a part-full charge and that is the intended trade.
+Bounded by construction: heaviest manifest reagent is 8, `BLIP_CAPACITY` is 8.
+
+**BULK WHERE THE SLOT IS A DEAD END, PACED WHERE IT IS NOT.** A stack the
+destination rule has closed has no future where it sits, so it leaves at once --
+pacing it stranded ~400 milk, measured. A stack merely waiting for room trickles
+one at a time, because every blip the burner frees is one more spent as flavor.
+
+**THE MUTUAL SWAP DEADLOCK RESOLVES ITSELF.** Burn-denied stock in the burner
+needs the reagent slot; reagent-denied stock in the reagent slot needs the
+burner. Each is the other's blocker and it looks exactly like ordinary waiting
+from either side alone -- only a check holding both slots at once can tell "wait,
+that will clear" from "wait, forever". The predicate that detects it is shared
+with the pane, and BOTH CONDITIONS ALREADY PROVE THE SWAP IS LEGAL: each item is
+tested for permission to enter the slot the other occupies, so the swap re-checks
+nothing and cannot place illegally. It can only arise from an edit to something
+already socketed, since nothing delivers into a slot its rule denies.
+
+### Non-treats in a machine output slot are collected, not stranded
+`arch.upcycler.outputeviction` -- see also `arch.upcycler.shuttlepriority`
+
+`emitFuel` peeks rather than takes, so a parked non-treat blocks payout without
+losing a blip -- but nothing in the world cleared it and the machine stopped
+dead. The port's output scan was gated on `isFuelItem`; that gate is now a flag
+rather than a gate.
+
+**THE DELIVERY END NEEDED NOTHING.** Destinations are matched with
+`petports_filterAccepts` against the item ACTUALLY held, and `"deposit"` is the
+general storage set tidy and sort already use, so junk routes by the same filter
+rules as anything else a unit carries.
+
+**JUNK SKIPS THE BATCH FLOOR.** The floor exists because treats ACCUMULATE, so
+collecting the first one costs a round trip for three items. None of that applies
+to a single misplaced item: no more are coming, it can never reach a batch, and
+every second it sits there the machine is stopped.
 
 ### `standableNear` ranks every column by true distance
 `arch.pathing.standablerank` -- see also `arch.pathing.homewardbias`
@@ -4930,6 +5048,66 @@ So for an amphibious walker, `mustEndOnGround` being true does not restrict
 underwater targets at all -- a submerged position IS a valid standing position.
 This is most of why the otter works without any transition code.
 
+**AND IT IS ALSO WHY A SUBMERGED FARM ANIMAL WAS UNREACHABLE FOR AN ENTIRE
+SESSION.** The same permissiveness that lets the otter swim means EVERY point in
+the water passes, so `findGroundPosition` stops at the first one it meets rather
+than descending to the seabed. A cow's entity position is its CENTRE, floating
+above the floor; a dropped item rests ON the floor. Same pond, same resolver,
+two tiles apart:
+
+    drop  [2536.42,1142.62] -> [2536.5,1142.8]   reached, collected
+    cow   [2534.33,1143.38] -> [2534.5,1143.8]   no route, ever
+
+Exactly one tile, and no bias to blame: from 1143.38 the floating spot is 0.42
+away and the seabed 0.58, so the NEARER answer was returned and nothing objected
+to it. A walking chassis cannot finish a path in open water, so A* was correct
+to find none.
+
+**THE RESOLVER NOW DESCENDS WHEN A CANDIDATE IS WET WITH NO FLOOR BENEATH IT** --
+see `fact.pathing.floatingtarget`. This entry stays as the mechanism; that one is
+what to do about it.
+
+### A SUBMERGED TARGET RESOLVES TO A FLOATING POINT UNLESS THE RESOLVER DESCENDS
+`fact.pathing.floatingtarget` -- see also `fact.pathing.liquidstandable`, `arch.pathing.standablerank`
+
+MEASURED 2026-08-30, and it cost most of a session and three wrong fixes.
+
+`findGroundPosition` returns ONE answer per column, the nearest standable spot
+to the y it was given. Underwater that is whatever it meets first, because
+`validStandingPosition` calls every submerged point standable. For any target
+whose y sits above the floor -- which is every living entity, since an entity
+position is its centre -- the answer hangs in open water and a walking chassis
+can never finish a path there.
+
+**THE FIX DESCENDS, IT DOES NOT REJECT, AND THAT DISTINCTION IS THE WHOLE
+LESSON.** Rejecting the floating answer was tried first and broke every
+submerged target: refusing what a column returned discards the COLUMN, it does
+not make the column search lower. All seven columns returned the same floating
+y, all seven were refused, and the resolver reported no standable position at
+all -- 1456 rejections and a unit that never moved. The comment claiming the
+search would "continue on its own terms" was wrong and the code inherited it.
+
+So it steps down a tile at a time, re-validating each with the same predicates
+the column search uses, stopping at the first solid tile either way. Free movers
+are exempt -- a flyer or an aquatic unit is SUPPOSED to finish in open water.
+Dry land exits on the first predicate.
+
+**THREE FIXES WERE WRITTEN AND REVERTED BEFORE THE RIGHT LAYER WAS FOUND**, and
+all three died to one log each:
+
+    target-node lift        fired 18 times, never once for the cow -- animal
+                            work does not call petports_standingPointNear
+    maxLandingVelocity      relaxed to -1000: EVERY target began failing,
+                            37 exhausted searches, because removing the ceiling
+                            adds ruinously many drop edges and the search spends
+                            its whole node budget enumerating falls
+    reject-not-descend      as above
+
+**WHAT ACTUALLY CRACKED IT WAS A CONTROL, NOT A THEORY.** A pile of dirt dropped
+beside the cow was collected without trouble, which killed terrain, descent,
+distance and coverage in one action and turned the remaining question into
+arithmetic. Reach for the control earlier.
+
 ### `moveArc`'s grounded branch has two defects and they compound
 `fact.pathing.movearcdefects` -- see also `dd.pathing.motionnothealth`, `arch.pathing.arcmover`
 
@@ -6902,6 +7080,37 @@ art exists to prevent; the stats list separators are dull-orange dashed rules;
 and the stripe fills `row_180_11.png` / `_alt.png` are generated uniform
 fills, not designed art.
 
+### The stall watchdog cannot tell "no progress" from "arrived, target moved"
+`todo.pathing.arrivedstall`
+
+MEASURED 2026-08-30, on the run that finally milked the cow:
+
+    reporting failed for animal:100: no net progress -- moved 0 in 10s at
+    [2530.5,1142.8] heading for [2530.5,1142.8] ... moved 43.8911
+
+The unit walked 43.9 tiles, arrived exactly on its approach position, and was
+failed for standing still. It self-corrected on re-dispatch and milked the cow
+13.9 tiles later, so this costs a wasted dispatch rather than a task -- but it
+reads in the log as a pathing failure and is not one.
+
+Being within the arrival radius of your own approach position is success or a
+re-resolve, never a stall. Cheap to separate and worth doing before it masks a
+real stall.
+
+### Farm animals move and nothing re-resolves the target
+`todo.pathing.movingtarget` -- see also `todo.pathing.arrivedstall`
+
+The approach position is resolved once and cached on `stateData.groundTarget`.
+A crop does not move, a drop does not move, a farm animal wanders continuously --
+so the cached point is stale before the unit arrives, and the only thing that
+corrects it is failing the task and being re-dispatched.
+
+It works, at the cost of one failed dispatch per wander. Re-resolving when the
+tracked entity has moved more than some distance from the cached target is the
+obvious shape, but it interacts with `arch.pathing.standablerank` caching and
+with the probe results pushed to the port -- do not change one without reading
+the other.
+
 ### Big obvious on/off lights on the pane
 `todo.art.runninglights` -- see also `todo.pane.tooltipstrings`
 
@@ -6970,6 +7179,26 @@ next reader will trust the bold sentence over the paragraph five sections away.
 **WHERE TO LOOK.** `grep 'should stay'` and `grep 'do not change'` in this file,
 then check each against the ENGINE FACTS section. Every superseded claim should
 now name its successor tag inline, as the two above do.
+
+### Reach for a CONTROL before a theory
+`proc.tooling.controlfirst` -- see also `fact.pathing.floatingtarget`
+
+MEASURED 2026-08-30, at the cost of most of a session.
+
+An unreachable submerged cow produced four hypotheses and three written-and-
+reverted fixes -- a target-node lift, a relaxed landing-velocity ceiling, and a
+rejection that should have been a descent. Each was defensible, each was
+instrumented, and each died to a single log.
+
+What actually cracked it was dropping a pile of dirt beside the cow. The unit
+collected it immediately. That one action killed terrain, descent, distance,
+coverage and water simultaneously, and reduced the remaining question to
+arithmetic between two numbers 0.16 apart.
+
+**A CONTROL IS CHEAPER THAN INSTRUMENTATION AND FAR CHEAPER THAN A FIX.** When
+something fails in one specific case, the first move is to construct the nearest
+case that SUCCEEDS and diff them -- not to theorise about the failure. Ask what
+the working version of this looks like, and make one.
 
 ### Read the source before theorising about the source
 `proc.pathing.readsource`
