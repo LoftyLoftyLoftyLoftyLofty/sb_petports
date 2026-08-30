@@ -34,7 +34,7 @@ local DEBUG = true
 --  Bump on every change to this file. A pane has no visible version and a stale
 --  copy is indistinguishable from an unfixed one -- which cost a cycle on the
 --  upcycler before the stamp existed.
-local PANE_BUILD_STAMP = "2026-08-29t empty state cleared, dupe window closed"
+local PANE_BUILD_STAMP = "2026-08-29y wider dividers"
 
 local PANE_STATE_KEY = "petports_paneState"
 
@@ -84,7 +84,24 @@ local MODULE_SLOTS = 5
 --  moduleSlotClicked.
 local MODULE_TAG = "petports_module"
 
-local STATS_LINES = 8
+--  Minutes of active time before the per-hour rate is worth showing. Below
+--  this the division is honest arithmetic on a dishonest denominator -- one
+--  crate emptied in the first forty seconds reads as thousands an hour. Six
+--  minutes is a tenth of an hour, which is also the display precision of the
+--  active line, so the two settle together.
+local RATE_FLOOR_MINUTES = 6
+
+--  Striping and separators for the stats list. The alt art is the family's
+--  alternate shade at the list's 11px row height; clear is the do-nothing art
+--  a separator row wears so the stripe rhythm visibly breaks at each block.
+local STATS_ROW_ALT = "/interface/lofty_petports/shared/row_180_11_alt.png"
+local STATS_ROW_CLEAR = "/interface/lofty_petports/shared/row_180_clear.png"
+
+--  PLACEHOLDER SEPARATOR, BY REQUEST: a dashed rule in a dull yellow-orange so
+--  it reads unmistakably as "separator, art pending" rather than as a stat
+--  that failed to resolve. Real art replaces both of these later.
+local STATS_SEPARATOR_TEXT = string.rep("-", 50)
+local STATS_SEPARATOR_COLOR = { 184, 148, 64 }
 
 --  WHAT THE TASK LABEL SAYS, KEYED ON THE PORT'S INTERNAL TASK TYPE.
 --
@@ -178,8 +195,12 @@ local TAB_MEMBERS = {
 		"setCarried", "setCarriedLabel"
 	},
 	tabStats = {
-		"statsLine1", "statsLine2", "statsLine3", "statsLine4",
-		"statsLine5", "statsLine6", "statsLine7", "statsLine8"
+		--  ONE WIDGET, AND ITS VISIBILITY IS NOT THE ONLY GUARD. Whether
+		--  setVisible on a scrollArea cascades to the list inside it is
+		--  UNMEASURED, so paintStats also empties the list whenever the stats
+		--  tab is not the active one -- an empty list draws nothing wherever
+		--  visibility lands.
+		"statsScroll"
 	}
 }
 
@@ -819,10 +840,149 @@ local function paintModules(state)
 	paintModuleSlots()
 end
 
-local function paintStats(lines)
-	lines = lines or {}
-	for i = 1, STATS_LINES do
-		widget.setText("statsLine" .. i, lines[i] or "")
+--  1,234,567 rather than 1234567. The engine offers no locale formatting and
+--  the totals here are the one place in the pane a number can grow past four
+--  digits.
+local function groupDigits(value)
+	local text = tostring(math.floor(tonumber(value) or 0))
+
+	while true do
+		local replaced
+		text, replaced = string.gsub(text, "^(%d+)(%d%d%d)", "%1,%2")
+		if replaced == 0 then break end
+	end
+
+	return text
+end
+
+--  THE MIRROR CARRIES NUMBERS AND THIS TURNS THEM INTO SENTENCES -- the same
+--  split as bodyKind: the port does not know the wording, and the rate is
+--  derived HERE so the mirror never carries a value that two fields could
+--  disagree about.
+--
+--  RATES ARE SHOWN, TOTALS ARE STORED (dd.pane.ratesnottotals). The total is
+--  painted too, because "4,120 items" next to "over 3.2 h active" is the pair
+--  that means something; either alone is a number without a scale.
+--
+--  THE RATE LINE IS ABSENT, NOT ZERO, UNTIL THE CLOCK HAS RUN. See
+--  RATE_FLOOR_MINUTES. An absent line is a readout that has nothing to say
+--  yet; a wild early rate is a readout lying confidently.
+--
+--  activeMinutes ARRIVES PRE-QUANTIZED -- the port floors it to whole minutes
+--  so the mirror signature is not churned by the one field that moves every
+--  tick. Under an hour it is painted as minutes; from an hour up, as hours to
+--  one decimal, which RATE_FLOOR_MINUTES matches by construction.
+--
+--  A LIST NOW, NOT EIGHT LABELS, because the metric set outgrew the positions
+--  and per-treat counters will have no fixed count at all. THE STROBE
+--  HYPOTHESIS THIS TESTS: addListItem repaints the whole container (measured
+--  -- the beacon panes live with it), but setText on an EXISTING row may not.
+--  So rows are rebuilt ONLY when the line count changes -- once at minute six
+--  when the rate appears, and on tab entry -- and every other refresh touches
+--  text alone. If the tab strobes on refresh anyway, the hypothesis is dead
+--  and the eight labels come back from git.
+--
+--  POPULATED ONLY WHILE ITS TAB IS ACTIVE, cleared otherwise. This is the
+--  belt to setVisible's braces: whether hiding a scrollArea hides the list
+--  inside it is unmeasured, and an empty list draws nothing either way. The
+--  rebuild this costs on each visit to the tab coincides with the repaint the
+--  tab click already causes.
+local statsRowPaths = {}
+
+local function paintStats(stats)
+	if activeTab ~= "tabStats" or type(stats) ~= "table" then
+		if #statsRowPaths > 0 then
+			widget.clearListItems("statsScroll.statsList")
+			statsRowPaths = {}
+		end
+		return
+	end
+
+	local minutes = tonumber(stats.activeMinutes) or 0
+	local moved = tonumber(stats.moved) or 0
+
+	--  DENSE, IN DISPLAY ORDER, entries rather than bare strings so a
+	--  separator can carry its flag. The list draws top-down in insertion
+	--  order. The haul block, the farm block, then the odometer-and-affection
+	--  block; treats-per-type will append as its own block when eating exists.
+	local lines = {}
+
+	local function addLine(text)
+		table.insert(lines, { text = text })
+	end
+
+	local function addSeparator()
+		table.insert(lines, { text = STATS_SEPARATOR_TEXT, sep = true })
+	end
+
+	addLine(petports_format("petport.stats.moved", groupDigits(moved)))
+
+	if minutes >= RATE_FLOOR_MINUTES then
+		local perHour = math.floor(moved / (minutes / 60) + 0.5)
+		addLine(petports_format("petport.stats.rate", groupDigits(perHour)))
+	end
+
+	local duration
+	if minutes < 60 then
+		duration = petports_format("petport.stats.activeminutes", tostring(minutes))
+	else
+		duration = petports_format("petport.stats.activehours",
+			string.format("%.1f", minutes / 60))
+	end
+	addLine(petports_format("petport.stats.active", duration))
+
+	addSeparator()
+	addLine(petports_format("petport.stats.planted", groupDigits(stats.planted)))
+	addLine(petports_format("petport.stats.watered", groupDigits(stats.watered)))
+	addLine(petports_format("petport.stats.harvested", groupDigits(stats.harvested)))
+	addLine(petports_format("petport.stats.livestock", groupDigits(stats.livestock)))
+
+	addSeparator()
+	addLine(petports_format("petport.stats.traveled", groupDigits(stats.traveled)))
+	addLine(petports_format("petport.stats.headpats", groupDigits(stats.headpats)))
+
+	--  REBUILD ONLY ON A COUNT CHANGE; see the header. clearListItems fires
+	--  the list's own callback mid-rebuild -- measured on the beacon panes --
+	--  which is why statsRowSelected below must tolerate being called with the
+	--  list in any state.
+	--
+	--  STRIPES AND SEPARATOR DRESSING ARE SET HERE AND ONLY HERE, because a
+	--  rebuild is the one moment a repaint is already being paid for -- the
+	--  strobe hypothesis says setText alone is what keeps the steady state
+	--  calm, so the steady-state loop below touches nothing but text. Safe
+	--  because row meanings cannot change without the count changing: the only
+	--  line that comes and goes is the rate, and its arrival IS a count change.
+	--
+	--  PARITY RESETS AT EACH SEPARATOR, so every block starts on the base
+	--  shade and the alternation reads as belonging to its block. A separator
+	--  wears the clear art -- the visible break in the stripe rhythm is half
+	--  of what makes it read as a divider.
+	if #lines ~= #statsRowPaths then
+		widget.clearListItems("statsScroll.statsList")
+		statsRowPaths = {}
+
+		local stripe = false
+
+		for i = 1, #lines do
+			local rowId = widget.addListItem("statsScroll.statsList")
+			local rowPath = "statsScroll.statsList." .. rowId
+			statsRowPaths[i] = rowPath .. ".statText"
+
+			if lines[i].sep then
+				stripe = false
+				widget.setImage(rowPath .. ".rowBG", STATS_ROW_CLEAR)
+				widget.setFontColor(statsRowPaths[i], STATS_SEPARATOR_COLOR)
+			else
+				if stripe then
+					widget.setImage(rowPath .. ".rowBG", STATS_ROW_ALT)
+				end
+				stripe = not stripe
+			end
+		end
+	end
+
+	for i = 1, #lines do
+		widget.setText(statsRowPaths[i], lines[i].text)
 	end
 end
 
@@ -892,9 +1052,9 @@ local function showEmpty()
 		widget.setVisible("diag" .. i, false)
 	end
 
-	for i = 1, STATS_LINES do
-		widget.setText("statsLine" .. i, "")
-	end
+	--  Through paintStats rather than a loop of its own, so the empty path and
+	--  the tab-switch path clear the list the same one way.
+	paintStats(nil)
 
 	for i = 1, MODULE_SLOTS do
 		widget.setItemSlotItem("moduleSlot" .. i, nil)
@@ -1013,6 +1173,14 @@ end
 function tabStatsClicked()
 	showTab("tabStats")
 	refresh(true)
+end
+
+--  THE LIST'S REQUIRED CALLBACK, AND A DELIBERATE NO-OP. Selection means
+--  nothing on a readout, and the engine offers no way to refuse it --
+--  setListSelected(list, nil) throws -- so the selection is simply invisible:
+--  both schema BGs are the clear row art and this does nothing. It must also
+--  TOLERATE ANY LIST STATE, because clearListItems invokes it mid-rebuild.
+function statsRowSelected()
 end
 
 --  THE ONE PLACE A REPLY IS READ. Everything else here is fire-and-forget; this

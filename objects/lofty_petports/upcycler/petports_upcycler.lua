@@ -81,6 +81,7 @@ local FEEDER_KEY = "petports_upcyclerFeeder"
 --  treat a flavor produces. Same module the pane uses, so the two cannot
 --  disagree about what a reagent is.
 require "/scripts/lofty_petports/petports_flavors.lua"
+require "/scripts/lofty_petports/petports_upcyclerstate.lua"
 
 local POINTS_KEY = "petports_upcyclerPoints"
 
@@ -162,17 +163,28 @@ local FUEL_ITEM = "petports_petfuel"
 --  in this mod. Pet Treats carry the tag too, so output can never be laundered
 --  back into output -- the value floor means even a zero-price item is worth a
 --  point, so price alone would not have closed that loop.
+local OBJECT_BUILD_STAMP = "2026-08-30b auto-swap resolves the slot deadlock"
+
 local EXEMPT_TAG = "petports_no_upcycling"
 
 --  ---------------------------------------------------------------------------
 --  STORED STATE
 --  ---------------------------------------------------------------------------
 
---  A rule is { item = "<name>", max = <number> }.
+--  A rule is { item = "<name>", max = <number>, reagent = <nil|false>,
+--  burn = <nil|false> }. Both flags are EXCLUSIONS: absent means allowed, and
+--  only an explicit false closes that slot to the item -- the same shape the
+--  filter rules use, so a rule written before either checkbox existed behaves
+--  exactly as it always did.
 --
 --  TYPE-CHECKED ON EVERY READ, NOT NIL-CHECKED. A cleared parameter is stored
 --  as an explicit JSON null rather than a removed key, so an emptied rule list
 --  reads back as a null and a null is not a table.
+--  THIS LOOP IS DUPLICATED AS applyState() IN upcyclerconfig.lua AND THE TWO
+--  MUST CARRY THE SAME FIELDS. Nothing links them, and they have already
+--  drifted once: the pane's copy was not updated when `burn` was added, so it
+--  silently stripped both exclusions off every rule it round-tripped. Adding a
+--  field to a rule means adding it in BOTH places.
 local function storedRules()
 	local stored = config.getParameter(RULES_KEY)
 	if type(stored) ~= "table" then return {} end
@@ -181,7 +193,12 @@ local function storedRules()
 
 	for _, rule in ipairs(stored) do
 		if type(rule) == "table" and type(rule.item) == "string" and rule.item ~= "" then
-			table.insert(rules, { item = rule.item, max = tonumber(rule.max) or 0 })
+			table.insert(rules, {
+				item = rule.item,
+				max = tonumber(rule.max) or 0,
+				reagent = rule.reagent,
+				burn = rule.burn
+			})
 		end
 	end
 
@@ -424,6 +441,26 @@ local function consumeReagent()
 		return false
 	end
 
+	--  EXEMPT IS ASKED FIRST, ABOVE THE MANIFEST LOOKUP.
+	--
+	--  It is a property of the ITEM, not of the recipe table, so it does not
+	--  depend on the lookup and must not be ordered behind it. MEASURED
+	--  2026-08-30: it was below, and treats, modules and pets in this slot all
+	--  reported "not a reagent" instead -- none of them is in the manifest, so
+	--  `entry == nil` returned before exempt was ever consulted. The burn slot
+	--  got this right only because its door asks exempt before anything else.
+	--
+	--  THE DISTINCTION IS THE WHOLE POINT OF THE MESSAGE. "Not a reagent" is
+	--  a fact about a slot the player may have picked wrong; "exempt from
+	--  upcycling" is a fact about the item that no rule anywhere can change.
+	--  Sending someone to look for a rule that cannot exist is worse than
+	--  saying nothing.
+	if exempt(held) then
+		reagentState("%s in slot %s is exempt from upcycling entirely",
+			tostring(held.name), sb.printJson(SLOT_REAGENT))
+		return false
+	end
+
 	local entry = petports_reagentFor(held.name)
 
 	--  FAIL CLOSED. An item that is not a reagent sits in the slot doing
@@ -432,6 +469,30 @@ local function consumeReagent()
 	if entry == nil then
 		reagentState("%s in slot %s is not a reagent", tostring(held.name),
 			sb.printJson(SLOT_REAGENT))
+		return false
+	end
+
+	--  THE EXCLUSION IS ENFORCED AT THE SLOT, NOT ONLY AT ROUTING -- and this
+	--  is the door the reagent side was missing.
+	--
+	--  The burn box has had one since it was built: the furnace refuses a
+	--  burn-denied hand-drop rather than trusting that nothing will ever
+	--  deliver one. This side had nothing, so a reagent-denied item dropped in
+	--  by hand was consumed exactly as if the box were ticked, and the box
+	--  only ever meant anything to the units doing the delivering.
+	--
+	--  IT ALSO HAS TO BE HERE RATHER THAN ONLY IN THE SHUTTLE. consumeReagent
+	--  runs ABOVE shuttleSlots in update(), so without this the item is spent
+	--  on the tick it lands and the rescue below never sees it.
+	--
+	--  NO RULE MEANS NO OBJECTION. A hand-dropped reagent the player never
+	--  wrote a rule for still works; only an explicit denial closes the slot,
+	--  which is the same exclusion shape the rest of the rule uses.
+	local rule = ruleFor(held.name)
+
+	if rule ~= nil and rule.reagent == false then
+		reagentState("%s in slot %s is reagent-denied by its own rule",
+			tostring(held.name), sb.printJson(SLOT_REAGENT))
 		return false
 	end
 
@@ -476,6 +537,375 @@ local function consumeReagent()
 		sb.printJson(#queue), sb.printJson(BLIP_CAPACITY))
 
 	return true
+end
+
+--  THE SLOT SHUTTLE -- everything in this machine is supposed to end up
+--  destroyed, and this is what keeps items moving toward that when the slot
+--  they landed in cannot finish the job.
+--
+--  THE PRIORITY IS: KEEPING THE FLAVOR CHARGE FULL OUTRANKS BURNING MORE
+--  ITEMS. Burning is always available to a burn-allowed item; being spent as
+--  flavor is not, so the scarce option gets first refusal. Everything below
+--  falls out of that one rule read from one side or the other.
+--
+--  BULK WHERE THE SLOT IS A DEAD END, PACED WHERE IT IS NOT. A stack the
+--  destination slot's own rule has closed has no future where it sits, so it
+--  leaves all at once -- pacing it strands it, measured at ~400 milk. A stack
+--  that is merely waiting for room keeps its place and trickles one at a time,
+--  because every blip the burner frees is one more that gets spent as flavor.
+--
+--  chargeFits IS WHAT MAKES IT TERMINATE. Both directions consult it, read
+--  opposite ways, and the weight-aware form is load-bearing -- see its header
+--  for the infinite loop the "is the charge full" form produces.
+--
+--  BOTH DIRECTIONS NEED THE PLAYER'S PERMISSION, read from the rule's two
+--  boxes, plus the exempt check the furnace door runs, so nothing shuttles
+--  somewhere it would only sit refusing.
+--
+--  RUNS ABOVE THE ENABLED GATE, like consumeReagent beside it: moving an item
+--  between a machine's own slots destroys nothing, and what each slot then
+--  DOES with it is still governed by the switch and the rule.
+--
+--  Change-gated, like reagentState beside it, and on its OWN variable -- the
+--  two message streams interleave, and sharing one gate would make each reset
+--  the other into repeating itself.
+local function shuttleState(fmt, ...)
+	local text = string.format(fmt, ...)
+	if self.lastShuttleState == text then return end
+	self.lastShuttleState = text
+	sb.logInfo("PETPORTS upcycler shuttle: %s", text)
+end
+
+--  ONE BULK RESCUE, DRIVEN IN BOTH DIRECTIONS.
+--
+--  A stock the destination-side rule has closed has exactly ONE legal slot, so
+--  pacing it is pointless -- the one-at-a-time version stranded a measured
+--  ~400 milk behind a single parked reagent the moment the charge filled:
+--  slot occupied, dest-empty gate closed, stock frozen in a slot it is
+--  forbidden to be consumed in.
+--
+--  TAKE ALL, PUT, PUT BACK WHAT REFUSES. The engine sizes the merge --
+--  maxStack, rot parameters, all of it -- so this file needs no stack math of
+--  its own, and the put-back is the loss guard the paced mover carries too. A
+--  same-name stack the engine cannot merge (rot again) cycles a cheap
+--  take-and-return until the slot drains, and the change-gated line says so
+--  once rather than per tick.
+--
+--  WRITTEN ONCE ON PURPOSE. This was two copies for one session and the second
+--  direction would have been a third. A near-identical pair with nothing
+--  linking them is the same failure that stripped the rule exclusions in the
+--  pane -- see the note on storedRules above.
+local function bulkRescue(source, destination, held, blocker, why)
+	--  A DIFFERENT item is parked in the destination; no merge will ever
+	--  happen and attempting it every tick is noise.
+	if blocker ~= nil and blocker.name ~= held.name then
+		shuttleState("rescue of %s waiting: slot %s holds %s",
+			tostring(held.name), sb.printJson(destination), tostring(blocker.name))
+		return
+	end
+
+	local taken = world.containerTakeNumItemsAt(entity.id(), source, held.count or 1)
+	if type(taken) ~= "table" or (taken.count or 0) < 1 then return end
+
+	local leftover = world.containerPutItemsAt(entity.id(), taken, destination)
+	local refused = (type(leftover) == "table" and leftover.count or 0)
+	local moved = (taken.count or 0) - refused
+
+	if refused > 0 then
+		local returned = world.containerPutItemsAt(entity.id(), leftover, source)
+
+		if type(returned) == "table" and (returned.count or 0) > 0 then
+			sb.logError("PETPORTS upcycler SHUTTLE LOST %s %s: slot %s and slot %s "
+				.. "both refused the rescue",
+				sb.printJson(returned.count), tostring(held.name),
+				sb.printJson(destination), sb.printJson(source))
+		end
+	end
+
+	if moved > 0 then
+		self.lastShuttleState = nil
+		sb.logInfo("PETPORTS upcycler shuttle: RESCUED %s %s slot %s -> slot %s (%s)",
+			sb.printJson(moved), tostring(held.name),
+			sb.printJson(source), sb.printJson(destination), why)
+	else
+		shuttleState("rescue of %s waiting: slot %s cannot merge it",
+			tostring(held.name), sb.printJson(destination))
+	end
+end
+
+--  WOULD ONE OF THIS ITEM FIT THE CHARGE RIGHT NOW?
+--
+--  THE WHOLE PRIORITY RULE HANGS ON THIS BEING WEIGHT-AWARE RATHER THAN
+--  "is the charge full". Feeding the charge outranks burning, so with the
+--  looser test a weight-8 reagent facing 3 free blips is pulled to the reagent
+--  slot, cannot be spent there, and is pushed back to the burner -- one hop
+--  per tick, forever. Room only frees when blips are spent, blips are only
+--  spent by burning, and the item that would do the burning is the one
+--  bouncing. Nothing breaks the loop from inside.
+--
+--  Asking whether THIS item fits breaks it: the oversized one fails, goes to
+--  the burner, burns, frees room, and the next one is fed. One item's worth of
+--  flavor is lost on a part-full charge and that is the intended trade.
+--
+--  BOUNDED BY CONSTRUCTION: the heaviest reagent in the manifest is 8 and
+--  BLIP_CAPACITY is 8, so anything that fails here fits an empty charge. A
+--  modded reagent heavier than BLIP_CAPACITY would never be spendable and
+--  would burn every time -- wasteful, but still moving, which is the point.
+local function chargeFits(name)
+	local entry = petports_reagentFor(name)
+	if entry == nil then return false end
+
+	local weight = tonumber(entry.weight) or 0
+	if weight <= 0 then return false end
+
+	return weight <= (BLIP_CAPACITY - #blipQueue())
+end
+
+--  MOVE EXACTLY ONE, WITH THE SAME LOSS GUARD bulkRescue CARRIES.
+--
+--  Used by both PACED directions. Paced rather than bulk wherever the stack
+--  still has a future in the slot it is sitting in -- see the callers.
+local function moveOne(source, destination, held)
+	local taken = world.containerTakeNumItemsAt(entity.id(), source, 1)
+	if type(taken) ~= "table" or (taken.count or 0) < 1 then return end
+
+	local leftover = world.containerPutItemsAt(entity.id(), taken, destination)
+
+	if type(leftover) == "table" and (leftover.count or 0) > 0 then
+		--  SHOULD BE UNREACHABLE: the destination was empty a moment ago. Put
+		--  it back, loudly -- a shuttle that loses items is the one outcome
+		--  this machine is built to never produce.
+		local returned = world.containerPutItemsAt(entity.id(), leftover, source)
+
+		if type(returned) == "table" and (returned.count or 0) > 0 then
+			sb.logError("PETPORTS upcycler SHUTTLE LOST %s %s: destination %s and "
+				.. "source %s both refused",
+				sb.printJson(returned.count), tostring(held.name),
+				sb.printJson(destination), sb.printJson(source))
+		end
+		return
+	end
+
+	self.lastShuttleState = nil
+
+	--  CHANGE-GATED, BECAUSE A TRICKLE IS A STATE AND NOT AN EVENT.
+	--
+	--  MEASURED 2026-08-30: 47 lines in 9 seconds, and it runs continuously
+	--  against any real reagent backstock. This was the only message stream in
+	--  the file that was not gated, and an ungated line in a per-tick path
+	--  buries every other line in the log -- the shotgun logging is only
+	--  useful while it can still be read.
+	--
+	--  KEYED ON ITEM AND DIRECTION, so a run collapses to one line and a
+	--  CHANGE of either speaks up again. The interesting events are a trickle
+	--  starting, and a trickle turning around; the two hundred hops in between
+	--  are the same fact repeated.
+	--  A RUN IS CONSECUTIVE TICKS. Keying on the message alone would silence a
+	--  trickle that stops and later restarts with the same item and direction,
+	--  which is a new event and the second one is often the interesting one.
+	--  Comparing against the previous tick's counter distinguishes "still
+	--  going" from "started again".
+	local key = string.format("%s %s>%s", tostring(held.name),
+		tostring(source), tostring(destination))
+
+	local continuing = key == self.lastMoveKey
+		and self.lastMoveTick == (self.shuttleTick or 0) - 1
+
+	self.lastMoveTick = self.shuttleTick or 0
+
+	if not continuing then
+		self.lastMoveKey = key
+		sb.logInfo("PETPORTS upcycler shuttle: moving %s, slot %s -> slot %s "
+			.. "(one per tick while this holds)",
+			tostring(held.name), sb.printJson(source), sb.printJson(destination))
+	end
+end
+
+--  SWAP THE TWO SLOTS, RESOLVING A MUTUAL DEADLOCK WITHOUT A HUMAN.
+--
+--  ONLY REACHABLE FROM petports_upcyclerDeadlocked, AND THAT MATTERS: the
+--  predicate has already established that each item is PERMITTED in the slot
+--  the other occupies. This function therefore never has to re-check a rule --
+--  it cannot put anything anywhere its own configuration forbids, because
+--  being allowed there is the entry condition.
+--
+--  IT CAN ONLY ARISE FROM AN EDIT TO SOMETHING ALREADY SOCKETED. Nothing
+--  DELIVERS an item into a slot its rule denies; the shuttle and the units
+--  both check first. The only way in is the player unticking a box on an item
+--  already sitting there, which is exactly the case where doing the obvious
+--  thing silently beats demanding they fix it by hand.
+--
+--  BOTH TAKES BEFORE EITHER PUT. Emptying both slots first means both puts
+--  land in empty slots, so neither can be refused for a merge that will not
+--  fit -- which is the only failure a two-step swap could otherwise have.
+--
+--  THE PUT-BACK IS THE LOSS GUARD, and it is written for a case that should be
+--  impossible: a slot this function emptied one line earlier refusing what it
+--  just held. If that ever fires, it is logged as an error and not as a
+--  shuttle state, because it means an assumption about containers is wrong.
+local function swapSlots(input, reagent)
+	local tookInput = world.containerTakeNumItemsAt(entity.id(), SLOT_INPUT,
+		input.count or 1)
+	if type(tookInput) ~= "table" or (tookInput.count or 0) < 1 then return end
+
+	local tookReagent = world.containerTakeNumItemsAt(entity.id(), SLOT_REAGENT,
+		reagent.count or 1)
+
+	if type(tookReagent) ~= "table" or (tookReagent.count or 0) < 1 then
+		--  Only one side came out. Undo rather than leave it half done.
+		world.containerPutItemsAt(entity.id(), tookInput, SLOT_INPUT)
+		return
+	end
+
+	local leftInput = world.containerPutItemsAt(entity.id(), tookInput, SLOT_REAGENT)
+	local leftReagent = world.containerPutItemsAt(entity.id(), tookReagent, SLOT_INPUT)
+
+	local strandedIn = type(leftInput) == "table" and (leftInput.count or 0) or 0
+	local strandedRe = type(leftReagent) == "table" and (leftReagent.count or 0) or 0
+
+	if strandedIn > 0 then
+		local back = world.containerPutItemsAt(entity.id(), leftInput, SLOT_INPUT)
+		if type(back) == "table" and (back.count or 0) > 0 then
+			sb.logError("PETPORTS upcycler SWAP LOST %s %s: neither slot would "
+				.. "take it back", sb.printJson(back.count), tostring(input.name))
+		end
+	end
+
+	if strandedRe > 0 then
+		local back = world.containerPutItemsAt(entity.id(), leftReagent, SLOT_REAGENT)
+		if type(back) == "table" and (back.count or 0) > 0 then
+			sb.logError("PETPORTS upcycler SWAP LOST %s %s: neither slot would "
+				.. "take it back", sb.printJson(back.count), tostring(reagent.name))
+		end
+	end
+
+	self.lastShuttleState = nil
+	sb.logInfo("PETPORTS upcycler shuttle: SWAPPED %s and %s -- each held the "
+		.. "other's slot", tostring(input.name), tostring(reagent.name))
+end
+
+local function shuttleSlots()
+	--  Counts calls, not seconds. moveOne uses it to tell a continuing trickle
+	--  from a restarted one; nothing else reads it.
+	self.shuttleTick = (self.shuttleTick or 0) + 1
+
+	local input = world.containerItemAt(entity.id(), SLOT_INPUT)
+	local reagent = world.containerItemAt(entity.id(), SLOT_REAGENT)
+
+	local inputHeld = type(input) == "table" and type(input.name) == "string"
+	local reagentHeld = type(reagent) == "table" and type(reagent.name) == "string"
+
+	--  THE DEADLOCK IS CHECKED FIRST, BEFORE EITHER ONE-WAY RESCUE.
+	--
+	--  Both rescues would otherwise look at an occupied destination, correctly
+	--  decide to wait, and wait forever -- and the burner-side one returns
+	--  early, so only half the stall was ever even reported.
+	--
+	--  THE PREDICATE IS SHARED WITH THE PANE so the machine cannot act on a
+	--  definition of "stuck" that differs from the one the player is being
+	--  shown. See petports_upcyclerstate.lua.
+	if inputHeld and reagentHeld
+	   and petports_upcyclerDeadlocked(input.name, reagent.name, ruleFor) then
+		swapSlots(input, reagent)
+		return
+	end
+
+	--  ------------------------------------------------------------------
+	--  THE BURNER SIDE
+	--  ------------------------------------------------------------------
+	--
+	--  EXEMPT ITEMS ARE NEVER SHUTTLED ANYWHERE. Moving one only relocates
+	--  something every slot refuses; update() names it at the furnace door.
+	if inputHeld and not exempt(input) then
+		local rule = ruleFor(input.name)
+
+		--  NO RULE IS AN ERROR HERE, NOT A DEFAULT -- and deliberately the
+		--  opposite of the reagent slot's reading of the same condition. A
+		--  hand-dropped reagent is unambiguous: the player wanted that flavor
+		--  and there is nowhere else it could have been going. A hand-dropped
+		--  BURN item is not, and the rule is also the green light for the
+		--  bots, so it has to be asked for explicitly.
+		if rule ~= nil then
+			if rule.burn == false then
+				--  ONE LEGAL DESTINATION, SO BULK. Pacing a stack the burner
+				--  is closed to just strands it -- measured at ~400 milk
+				--  frozen behind a single parked reagent.
+				if rule.reagent ~= false and petports_reagentFor(input.name) ~= nil then
+					bulkRescue(SLOT_INPUT, SLOT_REAGENT, input,
+						reagentHeld and reagent or nil, "burner denied")
+				else
+					--  DENIED THE BURNER WITH NOWHERE ELSE TO GO. Either the
+					--  reagent box is unticked too, or the manifest does not
+					--  call it a reagent at all. Both are the player's own
+					--  configuration rejecting something already inside the
+					--  machine, which is the one case that needs a human.
+					--  BATCH 2 RAISES THE ALERT HERE.
+					shuttleState("%s stranded in slot %s: denied the burner and "
+						.. "the reagent slot cannot take it",
+						tostring(input.name), sb.printJson(SLOT_INPUT))
+				end
+
+				return
+			end
+
+			--  THE CHARGE OUTRANKS THE BURNER, and this is where that is
+			--  decided. Burning is always available to this item; feeding it
+			--  to the charge is not, so the scarce option wins.
+			--
+			--  PACED, ONE AT A TIME, and it no longer needs the old `count >=
+			--  2` anti-ping-pong guard: chargeFits is what stops the bounce
+			--  now. An item only moves here when it can actually be spent, and
+			--  once spent the slot is empty rather than wanting it back.
+			if rule.reagent ~= false and not reagentHeld
+			   and chargeFits(input.name) then
+				moveOne(SLOT_INPUT, SLOT_REAGENT, input)
+				return
+			end
+		end
+	end
+
+	--  ------------------------------------------------------------------
+	--  THE REAGENT SIDE
+	--  ------------------------------------------------------------------
+	if reagentHeld and not exempt(reagent) then
+		local rule = ruleFor(reagent.name)
+
+		if rule ~= nil and rule.reagent == false then
+			--  BULK, NOT PACED. The charge loader refuses this stack, so it
+			--  has no future in this slot at all and nothing is preserved by
+			--  trickling it -- while it sits there it blocks reagents that ARE
+			--  allowed. This is the mirror of the burner-side rescue above and
+			--  the reason bulkRescue is one function.
+			if rule.burn ~= false then
+				bulkRescue(SLOT_REAGENT, SLOT_INPUT, reagent,
+					inputHeld and input or nil, "reagent denied")
+			else
+				--  BATCH 2 RAISES THE ALERT HERE.
+				shuttleState("%s stranded in slot %s: its rule denies both slots",
+					tostring(reagent.name), sb.printJson(SLOT_REAGENT))
+			end
+
+			return
+		end
+
+		--  ALLOWED, SO IT ONLY LEAVES WHEN IT CANNOT BE SPENT. Fill the charge
+		--  until we cannot, then start burning -- so the trickle is gated on
+		--  the SAME fit test the burner side uses, read the other way round.
+		--
+		--  PACED HERE, unlike the denied case: this stack still has a future
+		--  in the reagent slot. Every blip the burner frees is another one
+		--  that gets spent as flavor instead, so moving the whole stack out
+		--  would throw away the reagents the player is holding.
+		--
+		--  A RULE IS REQUIRED TO LEAVE, THOUGH NOT TO BE SPENT. `rule == nil`
+		--  means a hand-drop, and a hand-dropped reagent was put there for
+		--  that slot only -- burning it is not what was asked for. It waits
+		--  for room instead, which is what update()'s charge loader gives it.
+		if not inputHeld and rule ~= nil and rule.burn ~= false
+		   and not chargeFits(reagent.name) then
+			moveOne(SLOT_REAGENT, SLOT_INPUT, reagent)
+		end
+	end
 end
 
 --  Move banked points into the output slot, one Treat at a time.
@@ -587,6 +1017,12 @@ function update(dt)
 	--  for the gate to protect here.
 	consumeReagent()
 
+	--  AFTER the charge loader on purpose: if consumeReagent just spent the
+	--  last reagent, the shuttle can refill the slot from burner stock in the
+	--  same pass instead of a tick later. Above the enabled gate for the
+	--  reasons in its own header.
+	shuttleSlots()
+
 	if not storedEnabled() then
 		state("idle: machine is switched off")
 		return
@@ -618,12 +1054,26 @@ function update(dt)
 		return
 	end
 
-	if ruleFor(input.name) == nil then
+	local inputRule = ruleFor(input.name)
+
+	if inputRule == nil then
 		--  THE HAND-DROP CASE. Named explicitly in the log because "nothing is
 		--  happening" and "nothing is happening because you have not told me I
 		--  may" are the same picture from outside.
 		state(string.format("REFUSING %s: no rule names it, so it will not be converted",
 			input.name))
+		self.carry = 0
+		return
+	end
+
+	if inputRule.burn == false then
+		--  THE BURN BOX, ENFORCED AT THE FURNACE DOOR. The routing already
+		--  refuses to DELIVER here, but a player can hand-drop anything, and a
+		--  checkbox that only guards the couriers while the machine eats
+		--  whatever lands is a checkbox that lies. Fail closed: it sits,
+		--  the shuttle below may rescue it toward the reagent slot, and this
+		--  line says why nothing is burning.
+		state(string.format("REFUSING %s: rule denies the burner", input.name))
 		self.carry = 0
 		return
 	end
@@ -670,6 +1120,15 @@ function update(dt)
 end
 
 function init()
+	--  BUILD STAMP, SAME PURPOSE AS THE PANE'S. The panes have carried one for
+	--  a while and this file did not, which cost a whole test round on
+	--  2026-08-30: a machine-side fix appeared to have no effect and there was
+	--  no way to tell from the log whether the file had even loaded. The real
+	--  cause was elsewhere, but ruling this out took a round it should not
+	--  have. Object scripts reload on world load, not on file copy, so a stale
+	--  one is silent and looks exactly like a wrong one.
+	sb.logInfo("PETPORTS upcycler build: %s", OBJECT_BUILD_STAMP)
+
 	--  STORAGE WINS WHERE IT EXISTS, PARAMETER FILLS IN WHERE IT DOES NOT.
 	--
 	--  A reload keeps storage, so it is already right and the parameter is a

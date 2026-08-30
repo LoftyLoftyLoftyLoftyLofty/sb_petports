@@ -28,11 +28,12 @@
 --  Same shape as petports_filters.lua, which beaconconfig.lua requires the same
 --  way -- so a pane script reaching a /scripts/ config is proven, not assumed.
 require "/scripts/lofty_petports/petports_flavors.lua"
+require "/scripts/lofty_petports/petports_upcyclerstate.lua"
 
 local DEBUG = true
 
 --  Bump on every change to this file. See the log line in init().
-local PANE_BUILD_STAMP = "2026-08-29e charge beside the reagent slot"
+local PANE_BUILD_STAMP = "2026-08-30c toggle logging trimmed"
 
 --  sb.logInfo accepts %s and nothing else. Pre-format through string.format,
 --  which has no such limit, and hand the logger one string.
@@ -252,6 +253,71 @@ local function labelFor(name)
 	return self.labels[name]
 end
 
+--  CAUSE ID -> PLAYER-FACING SENTENCE.
+--
+--  THE PANE'S HALF OF THE SPLIT. petports_upcyclerstate.lua decides what is
+--  wrong and which fault wins; this decides how to say it. Keeping the words
+--  here means the wording can be reworked, translated, or moved onto the
+--  string table without touching the logic, and the logic can gain a cause
+--  without a pane edit -- the caller falls back to a generic sentence.
+--
+--  EACH ONE ENDS WITH WHAT TO DO, or at least with why there is nothing to do.
+--  A warning that only names the problem sends the player looking through the
+--  rules list for something that is not there.
+local WARNING_TEXT = {
+	outputBlocked = function(v)
+		return string.format("%s is blocking the output. Nothing will be made "
+			.. "until it is taken out.", labelFor(v.item))
+	end,
+
+	--  NAMES BOTH ITEMS, because naming one is what made this look like
+	--  ordinary waiting for so long. Neither can move until a slot is freed
+	--  by hand.
+	slotsDeadlocked = function(v)
+		return string.format("%s and %s each need the other's slot. Take one "
+			.. "out to break the tie.", labelFor(v.item), labelFor(v.other))
+	end,
+
+	inputExempt = function(v)
+		return string.format("%s can never be upcycled.", labelFor(v.item))
+	end,
+
+	inputNoRule = function(v)
+		return string.format("No rule names %s, so it will not be converted.",
+			labelFor(v.item))
+	end,
+
+	inputStranded = function(v)
+		return string.format("%s is denied the burner and cannot go in the "
+			.. "reagent slot either. Change its rule or take it out.",
+			labelFor(v.item))
+	end,
+
+	inputWaiting = function(v)
+		return string.format("%s is waiting for the reagent slot to clear.",
+			labelFor(v.item))
+	end,
+
+	reagentExempt = function(v)
+		return string.format("%s can never be upcycled.", labelFor(v.item))
+	end,
+
+	reagentNotAReagent = function(v)
+		return string.format("%s is not a reagent, so it will not flavor "
+			.. "anything. See the Flavors tab.", labelFor(v.item))
+	end,
+
+	reagentStranded = function(v)
+		return string.format("%s is denied both slots by its own rule. Change "
+			.. "the rule or take it out.", labelFor(v.item))
+	end,
+
+	reagentWaiting = function(v)
+		return string.format("%s is waiting for the burner to clear.",
+			labelFor(v.item))
+	end
+}
+
 --  ---------------------------------------------------------------------------
 --  THE RULE LIST
 --  ---------------------------------------------------------------------------
@@ -343,6 +409,7 @@ local function refreshRules()
 		widget.setData(path, index)
 		widget.setData(path .. ".rowRemove", index)
 		widget.setData(path .. ".rowReagent", index)
+		widget.setData(path .. ".rowBurn", index)
 
 		widget.setText(path .. ".ruleText",
 			string.format("%s  >  %s", labelFor(rule.item), tostring(rule.max)))
@@ -354,6 +421,11 @@ local function refreshRules()
 		local isReagent = petports_reagentFor(rule.item) ~= nil
 		widget.setButtonEnabled(path .. ".rowReagent", isReagent)
 		widget.setChecked(path .. ".rowReagent", isReagent and rule.reagent ~= false)
+
+		--  THE BURN BOX IS LIVE FOR EVERYTHING -- the burner is the one slot
+		--  every ruled item can use, so there is no "not applicable" row.
+		--  Absent means burn; only an explicit false closes the furnace door.
+		widget.setChecked(path .. ".rowBurn", rule.burn ~= false)
 	end
 
 	if self.selectedIndex ~= nil and self.rowNames[self.selectedIndex] ~= nil then
@@ -840,59 +912,35 @@ function refreshStatus()
 		end
 	end
 
-	--  SOMETHING IN THE OUTPUT THAT IS NOT A TREAT.
+	--  THE VERDICT COMES FROM THE SHARED LADDER, NOT FROM HERE.
 	--
-	--  It refuses every treat the machine tries to place, so the machine banks
-	--  points and stops. NOTHING IN THE WORLD FIXES THIS: the port's fuel scan
-	--  only recognises treats, deliberately, because hauling off an item a
-	--  player parked somewhere is worse than leaving it there. This warning is
-	--  the only way they find out.
+	--  This block used to be a second refusal ladder -- same lookup tables as
+	--  the machine, its own hand-written order -- and it drifted from the
+	--  machine's within a day. All this does now is turn a cause id into a
+	--  sentence in the pane's voice. WHAT counts as broken, and WHICH fault
+	--  wins when several are true, both live in petports_upcyclerstate.lua.
 	--
-	--  ABOVE THE INPUT CHECKS. Both stop the machine, but an input it was never
-	--  told to convert is a machine doing what it was configured to do. A
-	--  blocked output is a correctly configured machine doing nothing, which is
-	--  the more surprising of the two.
-	if type(self.outputName) == "string"
-	   and not hasTag(self.outputName, TAG_FUEL) then
+	--  ADDING A CAUSE MEANS ADDING A LINE TO THE TABLE BELOW. An unrecognised
+	--  cause falls through to a generic sentence rather than showing nothing,
+	--  so a classifier that learns a new fault before the pane learns its
+	--  wording still tells the player something true.
+	local verdict = petports_upcyclerVerdict({
+		input = inputItem() ~= nil and inputItem().name or nil,
+		reagent = type(self.reagentName) == "string" and self.reagentName or nil,
+		output = type(self.outputName) == "string" and self.outputName or nil,
+		ruleFor = ruleFor
+	})
 
-		showWarning(string.format("%s is blocking the output. Nothing will be "
-			.. "made until it is taken out.", labelFor(self.outputName)))
-		return
-	end
+	if verdict ~= nil then
+		local said = WARNING_TEXT[verdict.cause]
 
-	local input = inputItem()
+		if said ~= nil then
+			showWarning(said(verdict))
+		else
+			showWarning(string.format("%s is stopping the machine.",
+				labelFor(verdict.item)))
+		end
 
-	if input ~= nil and hasTag(input.name, TAG_NO_UPCYCLING) then
-		--  The object refuses these whatever the rules say, so a rule naming
-		--  one would look configured and do nothing.
-		showWarning(string.format("%s can never be upcycled.", labelFor(input.name)))
-		return
-	end
-
-	if input ~= nil and ruleFor(input.name) == nil then
-		showWarning(string.format("No rule names %s, so it will not be "
-			.. "converted.", labelFor(input.name)))
-		return
-	end
-
-	--  AN ITEM IN THE REAGENT SLOT THAT IS NOT A REAGENT.
-	--
-	--  The machine fails closed and leaves it alone, which is right and also
-	--  completely silent -- from outside, "this is not a reagent" and "the bar
-	--  is full so I am waiting" look identical. This is the only place that can
-	--  tell the player which.
-	--
-	--  LOWEST SEVERITY of the three, and deliberately last: it costs the player
-	--  nothing, where an unrecognised INPUT means the machine is doing no work
-	--  at all.
-	--
-	--  Reads the same table the machine does, so the two cannot disagree about
-	--  what counts as a reagent.
-	local reagent = self.reagentName
-
-	if type(reagent) == "string" and petports_reagentFor(reagent) == nil then
-		showWarning(string.format("%s is not a reagent, so it will not flavor "
-			.. "anything. See the Flavors tab.", labelFor(reagent)))
 		return
 	end
 
@@ -1047,6 +1095,19 @@ end
 --  LIFECYCLE
 --  ---------------------------------------------------------------------------
 
+--  THIS LOOP IS A COPY OF storedRules() IN petports_upcycler.lua AND THE TWO
+--  MUST CARRY THE SAME FIELDS. Nothing links them.
+--
+--  MEASURED 2026-08-29: it dropped `reagent` and `burn`, because it was not
+--  updated when the burn box was added and the object's copy was. That is not
+--  a display bug. The pane holds the authoritative copy while open and writes
+--  the WHOLE state on every edit, so the first write of any kind pushed the
+--  stripped rules back over the object -- a stored exclusion was destroyed by
+--  opening the pane and touching anything at all.
+--
+--  Copied RAW rather than normalised, exactly as the object does it. A rule
+--  hand-edited to `burn = true` reads as allowed here and self-heals to the
+--  absent form on its first click, so there is nothing for a sanitiser to do.
 local function applyState(state)
 	self.rules = {}
 
@@ -1054,7 +1115,9 @@ local function applyState(state)
 		if type(rule) == "table" and type(rule.item) == "string" and rule.item ~= "" then
 			table.insert(self.rules, {
 				item = rule.item,
-				max = tonumber(rule.max) or 0
+				max = tonumber(rule.max) or 0,
+				reagent = rule.reagent,
+				burn = rule.burn
 			})
 		end
 	end
@@ -1399,6 +1462,32 @@ end
 --  stays right for someone who never opens this list.
 --  A LOCAL, REGISTERED ON THE LIST -- not a pane global. A row widget naming a
 --  scriptWidgetCallbacks entry throws at construction; see the header.
+--  BOTH TOGGLES FLIP THE STORED VALUE AND ASSERT THE WIDGET FROM IT -- they do
+--  not trust widget.getChecked to decide anything.
+--
+--  THE SEMANTIC IS NOW SETTLED. MEASURED 2026-08-29, six consecutive clicks:
+--  `widget.getChecked` inside a checkable button's callback reports the state
+--  AFTER the engine's own toggle. A box built checked reported false on its
+--  first click; the following click, on the box this handler had just set
+--  false, reported true. Which also disproves the other half of the old
+--  hypothesis -- setChecked(false) DOES land, or that second reading could not
+--  have been true.
+--
+--  So the widget would in fact agree with the rule on a plain click, and the
+--  setChecked below is an assert rather than a correction. It stays: after a
+--  list rebuild the widget's state comes from the rule anyway, and one
+--  authority is cheaper to reason about than two that usually agree.
+--
+--  THE SIDE-BY-SIDE LOGGING IS GONE, its question answered. It printed the
+--  widget's reading beside the stored one to settle which the engine gave;
+--  verified 2026-08-30 with both readings agreeing in both directions, so the
+--  second reading has nothing left to tell anyone. The routing line below
+--  still says what the click DID, which is the part worth keeping.
+--
+--  STORES AN EXCLUSION, NOT AN INCLUSION -- unchanged. Allowed removes the
+--  field entirely so the rule keeps deferring to defaults; only a denial is
+--  written down. Locals registered on the list, not pane globals; a row
+--  widget naming a scriptWidgetCallbacks entry throws at construction.
 local function ruleReagentToggled(_, index)
 	index = tonumber(index)
 	local rule = index and self.rules[index]
@@ -1408,17 +1497,56 @@ local function ruleReagentToggled(_, index)
 		return
 	end
 
-	local path = self.rowPaths[index]
-	local checked = path ~= nil and widget.getChecked(path .. ".rowReagent") or false
+	local nowAllowed = rule.reagent == false
 
-	if checked then
+	--  WRITTEN AS A BRANCH BECAUSE `x and nil or false` CANNOT YIELD nil.
+	--  `true and nil` is nil, and `nil or false` is false -- so the expression
+	--  returns false on BOTH branches and the field goes in on the first click
+	--  and never comes back out. MEASURED 2026-08-29: six clicks logged
+	--  "reagent slot" while storing `reagent = false` every time.
+	if nowAllowed then
 		rule.reagent = nil
 	else
 		rule.reagent = false
 	end
 
+	local path = self.rowPaths[index]
+	if path ~= nil then
+		widget.setChecked(path .. ".rowReagent", nowAllowed)
+	end
+
 	dbg("reagent routing for %s -> %s", tostring(rule.item),
-		checked and "reagent slot" or "burner only")
+		nowAllowed and "reagent slot" or "burner only")
+
+	writeState()
+end
+
+local function ruleBurnToggled(_, index)
+	index = tonumber(index)
+	local rule = index and self.rules[index]
+
+	if rule == nil then
+		dbg("burn toggle ignored: no rule at index %s", tostring(index))
+		return
+	end
+
+	local nowAllowed = rule.burn == false
+
+	--  A BRANCH, NOT `x and nil or false` -- see ruleReagentToggled for why
+	--  that expression can never produce nil.
+	if nowAllowed then
+		rule.burn = nil
+	else
+		rule.burn = false
+	end
+
+	local path = self.rowPaths[index]
+	if path ~= nil then
+		widget.setChecked(path .. ".rowBurn", nowAllowed)
+	end
+
+	dbg("burner entry for %s -> %s", tostring(rule.item),
+		nowAllowed and "allowed" or "denied")
 
 	writeState()
 end
@@ -1511,6 +1639,7 @@ function init()
 	--  takes the pane down with it.
 	widget.registerMemberCallback(RULES_LIST, "ruleRowRemove", ruleRowRemove)
 	widget.registerMemberCallback(RULES_LIST, "ruleReagentToggled", ruleReagentToggled)
+	widget.registerMemberCallback(RULES_LIST, "ruleBurnToggled", ruleBurnToggled)
 	widget.registerMemberCallback(FLAVORS_LIST, "flavorRowClicked", flavorRowClicked)
 
 	--  Cleared here and then owned by refreshSampleSlot, which applyState reaches
@@ -1538,7 +1667,90 @@ end
 --  POLLED, NOT PUSHED. The machine converts in its own update loop whether or
 --  not anyone is looking at it, so there is deliberately no way to ask whether
 --  this pane is open and nothing here drives the object. It is a view.
+--  ---------------------------------------------------------------------------
+--  THE RUNNING LIGHT
+--  ---------------------------------------------------------------------------
+--
+--  THE PROBLEM IT SOLVES IS A MISSED TRANSITION, NOT A MISSED STATE. Adding a
+--  rule switches the machine off on purpose, and a player who has just clicked
+--  in the rules list is not looking at a small checkbox somewhere else. A whole
+--  test round was run against a switched-off machine on 2026-08-30.
+--
+--  SO IT IS LOUDEST RIGHT AFTER THE CHANGE AND THEN SETTLES. A light that
+--  blinks forever at one intensity is wallpaper inside a minute, and the next
+--  time it matters nobody sees it. The flare carries the signal; the steady
+--  state afterwards is just an honest readout.
+--
+--    switched OFF   hard flicker for FLARE_SECONDS, then a slow breathing
+--                   pulse that never fully dims -- the machine is stopped and
+--                   that stays worth knowing
+--    switched ON    one bright confirming flare, then steady and quiet
+--
+--  DRIVEN ENTIRELY BY IMAGE DIRECTIVE, hence no animation file and no frames.
+--  Directives supplied through setImage COMPOUND with any already on the
+--  widget's file rather than replacing them, so the .config leaves the file
+--  bare and every visual state is composed here.
+local LIGHT_WIDGET = "runningLight"
+local LIGHT_ON = "/interface/lofty_petports/upcyclerconfig/light_on.png"
+local LIGHT_OFF = "/interface/lofty_petports/upcyclerconfig/light_off.png"
+
+local FLARE_SECONDS = 2.2
+local FLICKER_HZ = 9
+local BREATHE_HZ = 0.7
+local BREATHE_FLOOR = 0.45
+
+--  0..1 -> the two hex digits of a multiply directive's alpha byte.
+local function alphaHex(level)
+	local byte = math.floor(math.max(0, math.min(1, level)) * 255 + 0.5)
+	return string.format("%02x", byte)
+end
+
+local function paintLight(dt)
+	local enabled = self.enabled == true
+
+	--  FIRST PAINT IS NOT A TRANSITION. self.lightWas starts nil, and treating
+	--  nil as "changed" would flare every time the pane opens -- which trains
+	--  the player to ignore exactly the flare that matters.
+	if self.lightWas == nil then
+		self.lightWas = enabled
+		self.lightFlare = 0
+	elseif self.lightWas ~= enabled then
+		self.lightWas = enabled
+		self.lightFlare = FLARE_SECONDS
+	end
+
+	self.lightFlare = math.max(0, (self.lightFlare or 0) - (dt or 0))
+	self.lightClock = ((self.lightClock or 0) + (dt or 0)) % 3600
+
+	local level
+
+	if self.lightFlare > 0 then
+		--  SQUARE WAVE, NOT A SINE. A hard on/off edge reads as an alarm; a
+		--  smooth one reads as decoration, and this moment is an alarm.
+		local phase = math.floor(self.lightClock * FLICKER_HZ) % 2
+		level = phase == 0 and 1.0 or 0.15
+	elseif enabled then
+		level = 1.0
+	else
+		--  Breathing, floored well above zero so the off state is never
+		--  momentarily indistinguishable from a light that is simply absent.
+		local wave = (math.sin(self.lightClock * BREATHE_HZ * 2 * math.pi) + 1) / 2
+		level = BREATHE_FLOOR + wave * (1 - BREATHE_FLOOR)
+	end
+
+	local file = enabled and LIGHT_ON or LIGHT_OFF
+	local directive = string.format("%s?multiply=ffffff%s", file, alphaHex(level))
+
+	--  Repainting an unchanged directive every frame is wasted work, and a
+	--  changed one is a real event worth being able to see.
+	if directive ~= self.lightPainted then
+		self.lightPainted = directive
+		pcall(widget.setImage, LIGHT_WIDGET, directive)
+	end
+end
+
 function update(dt)
+	paintLight(dt)
 	syncThreshold()
 	refreshStatus()
 	refreshProgress(dt)

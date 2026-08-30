@@ -46,7 +46,28 @@ require "/scripts/lofty_petports/petports_flavors.lua"
 --  That keeps vanilla's pet scripts usable unmodified while the behavior work
 --  happens separately.
 
-local STATUS_INTERVAL = 2.0
+--  CONSTANTS ARE GLOBALS, DELIBERATELY, AS OF 2026-08-29.
+--
+--  The main chunk hit Lua's 200-locals-per-scope ceiling -- measured: build 201
+--  refused to compile, "too many local variables (limit is 200) in main
+--  function" -- and 74 of those slots were UPPER_CASE constants. A global costs
+--  no slot, and DE-LOCALIZING TOUCHES NO READ SITE: every existing reference
+--  resolves to the global unchanged, which is what makes this the safe fix
+--  where a rename to a constants table would not be.
+--
+--  Globals here are CONTEXT-scoped, not game-scoped -- they are visible to the
+--  scripts this file requires and to nothing else. Checked at conversion time:
+--  none of the required petports scripts define or read any of these names.
+--
+--  DEBUG IS THE ONE EXCEPTION AND STAYS LOCAL. It is the only name generic
+--  enough that a required script -- vanilla's included, someday -- could
+--  plausibly own a global by it, and a collision on a debug flag fails
+--  silently in the worst direction.
+--
+--  The local/global split still signals what it always did for FUNCTIONS:
+--  global means "reachable from a handler registered in init". UPPER_CASE
+--  already says "constant" without needing `local` to say it twice.
+STATUS_INTERVAL = 2.0
 
 --  How often the port re-measures the liquid in its own footprint.
 --
@@ -55,12 +76,12 @@ local STATUS_INTERVAL = 2.0
 --  responsive enough that a flooding port retires its unit before the unit gets
 --  itself stuck, and the measurement is sixteen liquid lookups, which is
 --  nothing against a per-second work scan.
-local ENVIRONMENT_INTERVAL = 5.0
+ENVIRONMENT_INTERVAL = 5.0
 
 --  Fill fraction that counts as submerged. MUST MATCH PETPORTS_SUBMERGED_FILL
 --  in petports_contract.lua -- the port and the unit have to agree about what
 --  water is, or a unit is retired for an environment it would have accepted.
-local ENVIRONMENT_SUBMERGED_FILL = 0.9
+ENVIRONMENT_SUBMERGED_FILL = 0.9
 
 --  How often the port asks whether its unit is still alive in the useful sense.
 --
@@ -70,7 +91,7 @@ local ENVIRONMENT_SUBMERGED_FILL = 0.9
 --  the case where a player goes looking for their pet and cannot find it. Work
 --  failure is the RESPONSIVE path when there is work; this is the one that
 --  notices when there is not.
-local HEALTH_INTERVAL = 30.0
+HEALTH_INTERVAL = 30.0
 
 --  Consecutive still checks before re-homing. THE NUMBER IS SET BY COLD-CACHE
 --  ROUTE PLANNING, NOT BY IMPATIENCE: the first plan from a port spends roughly
@@ -78,19 +99,19 @@ local HEALTH_INTERVAL = 30.0
 --  exhaust A* to answer. At two checks this would abort those searches for ever
 --  and the route cache would never populate. Three puts the floor at 90 seconds,
 --  comfortably past the longest legitimate stillness measured.
-local HEALTH_STALL_LIMIT = 3
+HEALTH_STALL_LIMIT = 3
 
 --  Displacement that counts as "moved" between checks. Generous, because the
 --  question is "is this thing alive", not "is it making good progress".
-local HEALTH_MOVE = 1.0
+HEALTH_MOVE = 1.0
 
 --  How close to the port counts as parked. A unit on station is motionless BY
 --  DESIGN under strictPortTethering, so home has to be excluded or every idle
 --  fleet re-homes itself every ninety seconds. Wider than the unit's own
 --  TETHER_SLACK of 3.0, since the unit parks on resolved ground that can sit a
 --  little off the port's own origin.
-local HEALTH_HOME_SLACK = 5.0
-local RESPAWN_GRACE = 1.0
+HEALTH_HOME_SLACK = 5.0
+RESPAWN_GRACE = 1.0
 
 --  WHICH LOOPS THIS PORT TAKES PART IN.
 --
@@ -101,7 +122,7 @@ local RESPAWN_GRACE = 1.0
 --  BY GROUP, NOT BY TASK. There are fourteen work generators and nobody thinks
 --  in generators. Four boxes is what a player can hold in their head, and the
 --  grouping is by what they SEE happening rather than by dispatch structure.
-local PARTICIPATION_KEY = "petports_participation"
+PARTICIPATION_KEY = "petports_participation"
 
 --  THE FOUR GROUPS, AND WHICH GENERATORS EACH ONE GATES.
 --
@@ -164,7 +185,7 @@ end
 --  An OBJECT parameter rather than anything on petData: it describes the port,
 --  survives the item being taken out and put back, and does not travel with a
 --  unit carried elsewhere. See the petports_setPortEnabled handler.
-local ENABLED_KEY = "petports_enabled"
+ENABLED_KEY = "petports_enabled"
 
 --  CLAIM CROSSHAIRS, AND THEY BELONG TO THE PORT RATHER THAN TO THE UNIT.
 --
@@ -176,7 +197,7 @@ local ENABLED_KEY = "petports_enabled"
 --
 --  ABSENT MEANS ON, matching the enabled switch and matching what every
 --  existing world already does.
-local CROSSHAIRS_KEY = "petports_crosshairs"
+CROSSHAIRS_KEY = "petports_crosshairs"
 
 --  GLOBAL BECAUSE ITS READERS ARE SCATTERED -- the message handler in init(),
 --  the lifecycle block in update(), and the pane mirror -- and the first of
@@ -216,7 +237,7 @@ end
 --  So this interval is exactly how much resource drift an unsocket discards.
 --  Only petResources are affected; durable state is written on change and
 --  world unload IS covered, since uninit runs while the item is still socketed.
-local WRITE_INTERVAL = 10.0
+WRITE_INTERVAL = 10.0
 
 --  Instrumentation, dormant by default (see handoff §4). Flip to true to trace
 --  the item <-> pet state round trip in starbound.log.
@@ -251,13 +272,13 @@ local DEBUG = true
 --  Passed to the stagehand as `coverageSize` at spawn, so changing it here is
 --  enough -- but only for stagehands spawned AFTER the change. An existing
 --  residency keeps the size it was born with until its port respawns it.
-local COVERAGE_SIZE = 64
+COVERAGE_SIZE = 64
 
 --  How long a container that could not take a whole load is passed over for.
 --
 --  Not a permanent verdict. A player empties chests, and a chest that was full
 --  a minute ago usually is not.
-local CONTAINER_FULL_BACKOFF = 60.0
+CONTAINER_FULL_BACKOFF = 60.0
 
 --  How often to re-scan containers for beacons.
 --
@@ -265,19 +286,19 @@ local CONTAINER_FULL_BACKOFF = 60.0
 --  changes constantly is the chest's other contents, which this does not care
 --  about. Meanwhile the scan reads every container in coverage, and coverage
 --  just became four times the area.
-local BEACON_INTERVAL = 5.0
+BEACON_INTERVAL = 5.0
 
 --  The config key a beacon item carries. See
 --  /items/lofty_petports/beacons/petports_beacon_deposit.activeitem.
-local BEACON_KEY = "petports_sortingBeaconBehavior"
+BEACON_KEY = "petports_sortingBeaconBehavior"
 
 --  Set by the beacon's configuration pane. Absent means ON -- see
 --  beaconBehaviorOf.
-local BEACON_ENABLED_KEY = "petports_beaconEnabled"
+BEACON_ENABLED_KEY = "petports_beaconEnabled"
 
 --  The deposit filter, shape documented in petports_filters.lua. Absent means
 --  accept everything.
-local BEACON_FILTER_KEY = "petports_beaconFilter"
+BEACON_FILTER_KEY = "petports_beaconFilter"
 
 --  MACHINES DECLARE A CAPABILITY, NOT AN IDENTITY.
 --
@@ -285,12 +306,12 @@ local BEACON_FILTER_KEY = "petports_beaconFilter"
 --  matching objectName. A name would have to be relearned for every tier,
 --  variant and third-party copy; a marker keeps working for all of them, and
 --  the next machine kind costs the port nothing.
-local MACHINE_KEY = "petports_machine"
+MACHINE_KEY = "petports_machine"
 
 --  Rules live on the machine object, written by its own pane. Same principle as
 --  the beacon filter: read the thing itself and it cannot disagree with itself.
-local MACHINE_RULES_KEY = "petports_upcyclerRules"
-local MACHINE_ENABLED_KEY = "petports_upcyclerEnabled"
+MACHINE_RULES_KEY = "petports_upcyclerRules"
+MACHINE_ENABLED_KEY = "petports_upcyclerEnabled"
 
 --  A MACHINE'S SLOTS ARE NOT STORAGE.
 --
@@ -298,7 +319,7 @@ local MACHINE_ENABLED_KEY = "petports_upcyclerEnabled"
 --  otherwise make it a sorting destination -- and units would begin filing
 --  cargo into the one device in the mod that destroys things. Anything carrying
 --  this tag has its contents ignored by beacon scanning entirely.
-local IGNORE_BEACONS_TAG = "petports_ignore_inserted_beacons"
+IGNORE_BEACONS_TAG = "petports_ignore_inserted_beacons"
 
 --  FORWARD-DECLARED HERE, AND THE POSITION IS THE POINT.
 --
@@ -361,7 +382,7 @@ local socketedItem
 --  object is invisible to ipairs -- which is how a full cargo list could read
 --  as empty everywhere downstream without anything ever throwing. If that is
 --  what is happening, this line says so in words rather than printing "{}".
-local CARGO_TRACE = true
+CARGO_TRACE = true
 
 local function cargoSummary(cargo)
   if cargo == nil then return "nil" end
@@ -406,14 +427,14 @@ end
 --  a restock beacon, takes its crate out of the deposit pool, and asks for
 --  nothing, which is the honest reading of "I put this here but have not said
 --  what I want".
-local BEACON_REQUESTS_KEY = "petports_beaconRequests"
+BEACON_REQUESTS_KEY = "petports_beaconRequests"
 
 --  THE SHAPE THAT CAME BEFORE THE LIST. Read only so a beacon configured under
 --  the earlier build keeps working until its pane is next opened, which is when
 --  it gets rewritten as a one-entry list. See restockRequestsOf.
-local BEACON_ITEM_KEY = "petports_beaconItem"
-local BEACON_MIN_KEY = "petports_beaconMin"
-local BEACON_MAX_KEY = "petports_beaconMax"
+BEACON_ITEM_KEY = "petports_beaconItem"
+BEACON_MIN_KEY = "petports_beaconMin"
+BEACON_MAX_KEY = "petports_beaconMax"
 
 --  How long a claim survives without a refresh. Long enough to walk across the
 --  rect, short enough that an abandoned job frees up while the player watches.
@@ -432,7 +453,7 @@ local BEACON_MAX_KEY = "petports_beaconMax"
 --  editing a verified working path to add an unverified one, and the process
 --  note in the handoff is emphatic about not stacking changes like that. Fold
 --  it once harvesting is proven.
-local HARVEST_INTERVAL = 5.0
+HARVEST_INTERVAL = 5.0
 
 --  WHICH NUMBER world.farmableStage COUNTS FROM. UNVERIFIED.
 --
@@ -458,7 +479,7 @@ local HARVEST_INTERVAL = 5.0
 --  unit, is sized so that costs little, and a harvest that does not change it is
 --  reported as a failure, which puts it on the standard backoff ladder instead
 --  of hammering it once a second.
-local FARMABLE_STAGE_BASE = 0
+FARMABLE_STAGE_BASE = 0
 
 --  NOTE the damage amount and harvest level live on the UNIT, in
 --  petportsTaskAction.lua, because the unit is what swings. Every script in a
@@ -480,7 +501,7 @@ local FARMABLE_STAGE_BASE = 0
 --
 --  The cap also bounds the task. A run is capped at this length, so a long row
 --  becomes several sweeps rather than one task that outlives TASK_DEADLINE.
-local WATER_CARRY = 10
+WATER_CARRY = 10
 
 --  How far to look left and right from a crop for more dry soil.
 --
@@ -488,15 +509,15 @@ local WATER_CARRY = 10
 --  least a fleet can do is finish the row it is standing in -- soil that is
 --  tilled and dry and contiguous is planting-ready ground somebody prepared on
 --  purpose.
-local WATER_RUN_REACH = 32
+WATER_RUN_REACH = 32
 
-local CLAIM_TTL = 30.0
+CLAIM_TTL = 30.0
 
 --  How often to look for work and to push claim expiry out.
-local WORK_INTERVAL = 1.0
+WORK_INTERVAL = 1.0
 
 --  How often to re-state an unchanged dispatch rejection.
-local REJECT_REPEAT = 30.0
+REJECT_REPEAT = 30.0
 
 --  Hard ceiling on a single task, regardless of what the unit reports.
 --
@@ -509,10 +530,10 @@ local REJECT_REPEAT = 30.0
 --  Raised from 60: a COLD route cache legitimately spends 40+ seconds probing,
 --  since each unreachable edge costs the full A* exhaustion. Once warm, plans
 --  resolve in milliseconds.
-local TASK_DEADLINE = 150.0
+TASK_DEADLINE = 150.0
 
 --  Diagnostic task only: how long the unit stands at the point.
-local DIAG_DWELL = 3.0
+DIAG_DWELL = 3.0
 
 --  UNREACHABLE WORK BACKOFF
 --
@@ -543,10 +564,10 @@ local DIAG_DWELL = 3.0
 --  The ramp matters more than the ceiling. One and two seconds cover "try
 --  again in a moment", five and ten cover "something is genuinely in the way",
 --  and only past that does the port conclude it should stop asking often.
-local FAILURE_BACKOFF = { 1.0, 2.0, 5.0, 10.0, 30.0 }
+FAILURE_BACKOFF = { 1.0, 2.0, 5.0, 10.0, 30.0 }
 
 --  How many failed walk-home attempts before the unit is re-homed instead.
-local RECALL_LIMIT = 2
+RECALL_LIMIT = 2
 
 --  Consecutive unreachable-target failures before the unit is treated as
 --  SEALED IN rather than merely unlucky.
@@ -558,19 +579,19 @@ local RECALL_LIMIT = 2
 --  Small on purpose. A genuinely unreachable target fails fast once its edges
 --  are cached, so three in a row is seconds of evidence, not minutes -- and a
 --  unit that can still reach anything at all resets this on its first success.
-local STRANDED_LIMIT = 3
+STRANDED_LIMIT = 3
 
 --  How far beyond the network's coverage to look for usable vents.
-local VENT_SEARCH_MARGIN = 24
+VENT_SEARCH_MARGIN = 24
 
 --  Fall back to the diagnostic task when there is no real work?
 --
 --  Useful for exercising residency and dispatch with an empty rect, noisy
 --  otherwise. Off by default now that collection exists.
-local DIAG_FALLBACK = false
+DIAG_FALLBACK = false
 
 --  Residency stagehand type. One per petport, spawned on first update.
-local RESIDENCY_TYPE = "petports_residency"
+RESIDENCY_TYPE = "petports_residency"
 
 local function trace(label, value)
   if not DEBUG then return end
@@ -581,6 +602,37 @@ local function trace(label, value)
   else
     sb.logInfo("[petport] %s: %s", label, tostring(value))
   end
+end
+
+--  METRICS -- raw monotonic totals on petData.stats. See dd.pane.ratesnottotals:
+--  TOTALS ARE STORED HERE, RATES ARE COMPUTED IN THE PANE, and the pane owns
+--  the wording, same split as bodyKind.
+--
+--  ON petData RATHER THAN ON THE PORT, because the stats describe the UNIT: they
+--  ride writeBackToItem wholesale, survive unsocket, reload and respawn, and
+--  travel with the item -- which is what an examiner NPC will one day inspect.
+--
+--  DELIBERATELY DOES NOT SET self.dirty. Every moved/tidy increment happens on a
+--  path that already ends in flushCargo or writeBackToItem, and `active` ticks
+--  every frame -- marking that dirty would turn the slow write timer into a
+--  write-per-tick. Losing up to one WRITE_INTERVAL of stats to a crash is the
+--  accepted cost.
+--
+--  ONE TABLE, ONE LOCAL SLOT. Three functions live on it -- add,
+--  noteStorageTake, paneStats -- because the main chunk sits at Lua's
+--  200-locals-per-scope ceiling, MEASURED 2026-08-29: build 201 refused to
+--  compile with "too many local variables (limit is 200) in main function".
+--  Fields resolve at call time through the table, so definition order between
+--  them stops mattering; the table itself is declared up here so every later
+--  function can reach it.
+local metrics = {}
+
+metrics.add = function(key, amount)
+  if self.petData == nil then return end
+  if amount == nil or amount == 0 then return end
+
+  self.petData.stats = self.petData.stats or {}
+  self.petData.stats[key] = (self.petData.stats[key] or 0) + amount
 end
 
 --  The port's coverage rect: the region it keeps resident, the area its unit
@@ -623,7 +675,7 @@ end
 --  carries it -- refreshed only when the unit has moved MATERIALLY, because
 --  this is replicated state and a per-tick write would be the one genuinely
 --  expensive thing in the design.
-local UNIT_POSITION_THRESHOLD = 4.0
+UNIT_POSITION_THRESHOLD = 4.0
 
 local function publishUnitPosition()
   local registry = petports_registry()
@@ -1099,6 +1151,28 @@ function init()
     end
   end))
 
+  --  A HEADPAT. Sent by the unit when a player interacts with it AND vanilla's
+  --  own interaction window accepts it -- see interact() in
+  --  petports_contract.lua, where the send sits INSIDE the interactCooldown
+  --  branch. ONE GATE, AND IT IS THE UNIT'S: a pat that emotes is exactly a
+  --  pat that counts, and no second cooldown here can disagree with the first.
+  --  The port-side 1s cooldown this used to carry is superseded.
+  --
+  --  THE STUCK-CARGO BRANCH GOES HERE WHEN IT EXISTS. The intended design:
+  --  interacting with a unit that is holding cargo it cannot deliver makes it
+  --  drop that cargo, and only an interaction with nothing to drop is a pat.
+  --  Cargo lives on petData, so the PORT owns that decision -- the unit
+  --  reports every accepted interaction and this handler decides what it
+  --  meant. Today no stuck-cargo mechanic exists, so every one is a pat.
+  message.setHandler("petports_headpat", simpleHandler(function()
+    if self.petData == nil then return end
+
+    metrics.add("headpats", 1)
+
+    sb.logInfo("PETPORT %s headpat (%s lifetime)", stationUniqueId(),
+      sb.printJson((self.petData.stats and self.petData.stats.headpats) or 0))
+  end))
+
   --  ---- THE PANE'S WRITE PATH ----------------------------------------------
   --
   --  The pane READS through a mirrored parameter and WRITES through these. It
@@ -1483,6 +1557,32 @@ function init()
       receiveCargo(report.cargo)
     end
 
+    --  THE DONE-CLEANUP RUNS BEFORE THE ARRIVAL WORK, AND THE ORDER IS A FIX.
+    --
+    --  MEASURED 2026-08-29: a unit patrolled an upcycler at three trips a
+    --  second, and every cycle logged "backing off for 1 seconds (failure 1)"
+    --  -- the ladder never climbed. "Done" means the WALK succeeded; it says
+    --  nothing about the delivery, which happens below and records its own
+    --  failure through noteFailure. Sitting at the bottom, this cleanup erased
+    --  that record microseconds after it was written, so the escalating
+    --  backoff -- the thing that turns a broken delivery into a slow retry
+    --  instead of a sprint -- was dead code on every arrival failure.
+    --
+    --  Up here it clears STALE failures from earlier attempts, which is its
+    --  actual job, and anything the arrival work notes afterwards stands.
+    --  unreachableFailures and the recall counter are reachability state and
+    --  reaching the target is exactly what "done" attests, so they belong in
+    --  the same early clear.
+    if report.outcome == "done" then
+      self.workFailures[report.id] = nil
+      self.unreachableFailures = 0
+      if report.id == "return:" .. stationUniqueId() then
+        self.recallFailures = 0
+      end
+    else
+      noteFailure(report.id, report.reason or "no detail")
+    end
+
     --  Arrived at a deposit container. The port does the transfer, not the
     --  unit: the cargo has been on petData the whole time, so it never has to
     --  exist anywhere else and there is no second window to lose it in.
@@ -1569,6 +1669,13 @@ function init()
         spendSeed(self.task.item)
       end
 
+      --  ITS OWN METRIC, NOT "moved" -- watering is farm work, not hauling,
+      --  and folding it into the haul total hid it. Counted from the report
+      --  for the same reason the spend is: tiles actually done, not tiles
+      --  assigned. spendSeed itself stays metric-free; the task type here is
+      --  the only thing that knows what the spend MEANT.
+      metrics.add("watered", watered)
+
       sb.logInfo("PETPORT %s watering finished: %s tile(s), %s %s spent",
         stationUniqueId(), sb.printJson(watered), sb.printJson(watered),
         tostring(self.task.item))
@@ -1578,6 +1685,11 @@ function init()
     if report.outcome == "done" and self.task ~= nil
        and self.task.type == "replant" and self.task.id == report.id then
       spendSeed(self.task.seed)
+
+      --  Same split as watering above: planting is its own metric, and this
+      --  branch is the one place that knows the spend put a crop in the ground.
+      metrics.add("planted", 1)
+
       petports_replantClear(self.task.target, "replanted")
     end
 
@@ -1589,6 +1701,10 @@ function init()
     --  resetToStage distinction without reading any config.
     if report.outcome == "done" and self.task ~= nil
        and self.task.type == "harvest" and self.task.id == report.id then
+      --  A COMPLETED HARVEST IS ONE, whatever it dropped -- the metric counts
+      --  executions of the task, and the yield is the treasure pool's business.
+      metrics.add("harvested", 1)
+
       if not world.entityExists(self.task.target)
          and self.task.targetName ~= nil then
         petports_replantSet(self.task.position, self.task.targetName,
@@ -1596,18 +1712,16 @@ function init()
       end
     end
 
-    if report.outcome == "done" then
-      self.workFailures[report.id] = nil
-
-      --  It got somewhere. Whatever the last few failures were, it is not
-      --  sealed in.
-      self.unreachableFailures = 0
-      if report.id == "return:" .. stationUniqueId() then
-        self.recallFailures = 0
-      end
-    else
-      noteFailure(report.id, report.reason or "no detail")
+    --  A completed livestock collection. Same counting rule as the crop
+    --  harvest above: one per execution, however many items the animal shed.
+    if report.outcome == "done" and self.task ~= nil
+       and self.task.type == "animal" and self.task.id == report.id then
+      metrics.add("livestock", 1)
     end
+
+    --  The done-cleanup that used to sit here moved ABOVE the delivery
+    --  branches -- see the note at the top of this handler. A failure noted
+    --  during the arrival work must survive to drive its backoff.
 
     petports_claimRelease(self.task.id, stationUniqueId())
     self.task = nil
@@ -2037,7 +2151,12 @@ local function machineAt(id)
           --  filter rules are: a rule written before this feature existed, or
           --  one whose item a mod later adds to a flavor, then routes as a
           --  reagent by default instead of needing the player to find it.
-          reagent = rule.reagent
+          reagent = rule.reagent,
+
+          --  SAME SHAPE FOR THE BURNER. Absent means the burner is open to
+          --  this item; only an explicit false closes it. A rule written
+          --  before the burn checkbox existed keeps burning, unchanged.
+          burn = rule.burn
         })
       end
     end
@@ -2540,8 +2659,8 @@ end
 --  needs a number that has to be derived, it belongs in the port's own logic
 --  with a name, not in here.
 
-local PANE_STATE_KEY = "petports_paneState"
-local PANE_MIRROR_INTERVAL = 0.5
+PANE_STATE_KEY = "petports_paneState"
+PANE_MIRROR_INTERVAL = 0.5
 
 --  THE PANE'S BLIP COUNT AND THIS PORT'S WRITE RESOLUTION ARE THE SAME NUMBER,
 --  and that is the coupling worth knowing about. Hunger is quantised to this
@@ -2551,12 +2670,12 @@ local PANE_MIRROR_INTERVAL = 0.5
 --
 --  Lowering it here makes the pane's top blips unreachable. Raising it costs
 --  writes. petportconfig.lua's BLIP_COUNT carries the matching note.
-local PANE_FUEL_BLIPS = 20
+PANE_FUEL_BLIPS = 20
 
 --  The pane draws four at most, so there is no point mirroring more. Ordered
 --  worst-first: a red condition should never be pushed off the row by an
 --  informational one.
-local PANE_DIAG_LIMIT = 4
+PANE_DIAG_LIMIT = 4
 
 --  IS THE UNIT A MACHINE OR AN ANIMAL? The fuel bar is labelled from this and
 --  nothing else reads it yet.
@@ -2659,7 +2778,7 @@ end
 --  And its contents are developer prose with tile rects in them. "no drops in
 --  network coverage (own rect [2518, 1129, 2582, 1193])" is a log line. It
 --  belongs in the log, where it already is.
-local DIAG_MAX_CHARS = 26
+DIAG_MAX_CHARS = 26
 
 --  TWO STRINGS PER DIAGNOSTIC, AND THAT IS WHAT THE ICON ROW IS FOR.
 --
@@ -2692,7 +2811,7 @@ end
 --
 --  So the COUNT is untouched and the DISPLAY is gated on recency. The lifetime
 --  tally is a Stats-tab number; the status line carries only what is true now.
-local DIAG_FRESH = 30.0
+DIAG_FRESH = 30.0
 
 local function fresh(at)
   if at == nil then return false end
@@ -2757,7 +2876,7 @@ end
 --  ONE SLOT AT THE BOTTOM, NOT ZERO. A Common pet with no slots renders the
 --  Modules region of the pane completely empty, which reads as a broken pane
 --  rather than as an unupgraded unit. Every pet can hold something.
-local MODULE_SLOTS_BY_RARITY = {
+MODULE_SLOTS_BY_RARITY = {
   common = 1,
   uncommon = 2,
   rare = 3,
@@ -2775,7 +2894,7 @@ local MODULE_SLOTS_BY_RARITY = {
 --  CLAMPED HERE, ON THE WRITE SIDE, so an item authoring twenty slots gets five
 --  rather than fifteen invisible ones. A slot the player cannot see is a slot
 --  whose contents cannot be removed.
-local MODULE_SLOTS_MAX = 5
+MODULE_SLOTS_MAX = 5
 
 function petportModuleSlots()
   local item = socketedItem()
@@ -2838,7 +2957,7 @@ end
 --      modules = { { slot = 1, item = <descriptor> }, { slot = 3, item = ... } }
 --
 --  ORDER IN THE LIST IS NOT MEANINGFUL. `slot` is, and every reader keys off it.
-local MODULE_TAG = "petports_module"
+MODULE_TAG = "petports_module"
 
 --  IS THIS ITEM A MODULE AT ALL?
 --
@@ -2916,7 +3035,7 @@ end
 --
 --  OURS ALONE. Anything else applying effects to the unit uses its own category
 --  and is untouched by this.
-local MODULE_EFFECT_CATEGORY = "petports_modules"
+MODULE_EFFECT_CATEGORY = "petports_modules"
 
 --  PUSHED ON CHANGE, AND THE PET ID IS PART OF WHAT COUNTS AS A CHANGE.
 --
@@ -2966,6 +3085,50 @@ local function paneSerial()
   local seed = self.petData and self.petData.seed
   if seed == nil then return nil end
   return string.format("%06d", math.floor(tonumber(seed) or 0) % 1000000)
+end
+
+--  THE STATS BLOCK FOR THE MIRROR -- NUMBERS, NOT LINES. The pane owns the
+--  wording and the arithmetic that makes a total into a rate, same split as
+--  bodyKind: the port does not know the words and should not.
+--
+--  active IS QUANTIZED TO WHOLE MINUTES, and that is load-bearing. It is the
+--  one field guaranteed to change every tick, and the mirror is signature-gated
+--  -- mirrored raw it would defeat the change gate outright and force a write
+--  plus a repaint every PANE_MIRROR_INTERVAL forever. A minute is finer than
+--  anything the pane displays.
+--
+--  tidy IS GATHERED AND DELIBERATELY NOT MIRRORED. dd.dispatch.tidyscore: the
+--  raw number is never displayed -- the rank belongs to Maxwell -- so putting
+--  it on the wire would be mirroring a number nothing may paint. It is visible
+--  in the log at every increment instead.
+--
+--  ZEROS RATHER THAN ABSENT for a unit with no history yet: this only runs with
+--  petData present, and a fresh unit showing "Items moved: 0" is alive where a
+--  blank tab reads as broken.
+metrics.paneStats = function()
+  local stats = (self.petData and self.petData.stats) or {}
+
+  return {
+    moved = math.floor(stats.moved or 0),
+    planted = math.floor(stats.planted or 0),
+    watered = math.floor(stats.watered or 0),
+    harvested = math.floor(stats.harvested or 0),
+    livestock = math.floor(stats.livestock or 0),
+    headpats = math.floor(stats.headpats or 0),
+
+    --  QUANTIZED TO TENS ONLY WHILE ON A TASK, EXACT AT REST. The raw total on
+    --  petData is never quantized -- the flooring here is wire-churn control
+    --  only, because a walking unit would otherwise bump the blob (a
+    --  setConfigParameter write and its client sync) every mirror interval.
+    --  The moment the task ends, the wire syncs to the exact figure, so the
+    --  display always settles on the truth and the next task counts up from
+    --  it. There is no leftover to carry or clear; the total always held
+    --  every tile.
+    traveled = (self.task ~= nil)
+        and math.floor((stats.traveled or 0) / 10) * 10
+        or math.floor(stats.traveled or 0),
+    activeMinutes = math.floor((stats.active or 0) / 60)
+  }
 end
 
 function mirrorPaneState(dt)
@@ -3069,12 +3232,12 @@ function mirrorPaneState(dt)
       --  on nothing every poll.
       petId = (self.petId ~= nil and world.entityExists(self.petId)) and self.petId or nil,
 
-      --  NOT BUILT, AND ABSENT RATHER THAN FAKED. A rolled flavor and the stats
-      --  block both belong here and neither exists yet. The pane renders a
-      --  blank for a missing field and a wrong value for a placeholder one, so
-      --  absent is the honest option.
       flavor = self.petData.flavor,
-      stats = nil,
+      stats = metrics.paneStats(),
+
+      --  NOT BUILT, AND ABSENT RATHER THAN FAKED. The pane renders a blank for
+      --  a missing field and a wrong value for a placeholder one, so absent is
+      --  the honest option.
       network = nil
     }
   end
@@ -3238,7 +3401,7 @@ end
 --  A deny-list grows every time a work type is added and fails closed in the
 --  worst way -- by silently starving a unit rather than by erroring. This
 --  fails open, which for work dispatch is the correct direction.
-local RECT_CHECKED_TYPES = {
+RECT_CHECKED_TYPES = {
   ["diag"] = true
 }
 
@@ -3423,7 +3586,7 @@ end
 --  After this many seconds of a drop sitting unclaimed, take it anyway. Long
 --  enough that a genuinely closer unit wins the race in normal play, short
 --  enough that a player notices nothing.
-local DEFER_GRACE = 12.0
+DEFER_GRACE = 12.0
 
 local function anotherUnitIsCloser(position, ourDistance)
   for _, entry in ipairs(petports_networkMembers(stationUniqueId())) do
@@ -3942,13 +4105,13 @@ local claimFree
 --  An upcycler's input slot. Zero-based, like every container OFFSET; the keys
 --  world.containerItems returns are one-based, which is what SLOT_KEY_TO_OFFSET
 --  exists to reconcile. Nothing here goes through those keys.
-local MACHINE_SLOT_INPUT = 0
+MACHINE_SLOT_INPUT = 0
 
 --  THE REAGENT SLOT, AND YES THIS IS THE THIRD COPY OF A NUMBER THAT LIVES IN
 --  petports_upcycler.lua. Deliberate for now -- see todo.upcycler.slotorderdup.
 --  If a SLOT_ constant moves over there, this moves with it, and the failure is
 --  a unit posting surplus into whatever the slot became.
-local MACHINE_SLOT_REAGENT = 1
+MACHINE_SLOT_REAGENT = 1
 
 --  DO NOT WALK ACROSS A BASE TO DELIVER TWENTY BLOCKS.
 --
@@ -3966,7 +4129,7 @@ local MACHINE_SLOT_REAGENT = 1
 --  CAPPED BY THE SURPLUS ITSELF, at the call site: a network only 30 items over
 --  its threshold should still deliver those 30 and finish the job, rather than
 --  holding out for a batch that will never exist.
-local MACHINE_MIN_BATCH = 0.25
+MACHINE_MIN_BATCH = 0.25
 
 --  How many of `stack` the machine's INPUT slot could take right now.
 --
@@ -3974,8 +4137,13 @@ local MACHINE_MIN_BATCH = 0.25
 --  would count the output and reagent slots as room and send a unit walking to
 --  a machine whose input is full. Slot-precise, because delivery is
 --  slot-precise: containerPutItemsAt(id, stack, 0) and nothing else.
-local function machineInputRoom(machineId, stack)
-  local ok, held = pcall(world.containerItemAt, machineId, MACHINE_SLOT_INPUT)
+--  How much of this stack a NAMED SLOT could take. The name-specific answer:
+--  zero when the slot holds something else, the free headroom when it holds
+--  the same item, a full stack when empty. Every caller that used to ask
+--  machineInputRoom now goes through machineRuleRoom below, which is why no
+--  input-only wrapper survives.
+local function machineSlotRoom(machineId, slot, stack)
+  local ok, held = pcall(world.containerItemAt, machineId, slot)
   if not ok then return 0 end
 
   local limit = stackSizeOf(stack.name)
@@ -3987,15 +4155,52 @@ local function machineInputRoom(machineId, stack)
   --  more cargo into.
   if held.name ~= stack.name then return 0 end
 
+  --  SAME NAME IS NOT SAME ITEM, AND THE PATROL LOG PROVED IT. Measured
+  --  2026-08-29: dispatch said "room for 1000", both puts refused all 1000,
+  --  sub-second loop. Milk is food, food carries rot state in parameters, and
+  --  the engine merges by DESCRIPTOR -- a slot of older milk offers no room to
+  --  fresher milk however much headroom the name math sees. Compared only when
+  --  the caller HAS parameters: drain's synthetic name-only probe stays an
+  --  estimate, and the per-stack cap at its take site is what makes that safe.
+  if stack.parameters ~= nil and not compare(held.parameters, stack.parameters) then
+    return 0
+  end
+
   local room = limit - (held.count or 0)
   if room < 0 then return 0 end
 
   return room
 end
 
+--  THE ROOM A RULE ACTUALLY OFFERS THIS STACK -- the sum of every slot the
+--  rule's checkboxes leave open. This is the ONE predicate dispatch and
+--  arrival must share: the patrol bug class is exactly a dispatch that asked
+--  about the burner while the arrival routed reagent-first, so any change to
+--  which slots a delivery may use has to happen HERE and nowhere else.
+--
+--    burn ~= false      the burner counts
+--    reagent ~= false   the reagent slot counts, IF the manifest calls the
+--                       item a reagent -- same test the arrival routing runs
+--
+--  Both denied is a rule that accepts nothing, and it correctly reads as zero
+--  room everywhere: no dispatch, no walk, no backoff loop.
+local function machineRuleRoom(machine, rule, stack)
+  local room = 0
+
+  if rule.burn ~= false then
+    room = room + machineSlotRoom(machine.id, MACHINE_SLOT_INPUT, stack)
+  end
+
+  if rule.reagent ~= false and petports_reagentFor(stack.name) ~= nil then
+    room = room + machineSlotRoom(machine.id, MACHINE_SLOT_REAGENT, stack)
+  end
+
+  return room
+end
+
 --  How empty is the input slot, regardless of what we intend to put there.
 --
---  SEPARATE FROM machineInputRoom, WHICH IS NAME-SPECIFIC. That one answers
+--  SEPARATE FROM machineSlotRoom, WHICH IS NAME-SPECIFIC. That one answers
 --  "could this stack go in", and returns zero when the slot holds something
 --  else -- correct for deciding a delivery, useless for ranking machines
 --  against each other, because every busy machine would score zero and the
@@ -4163,7 +4368,12 @@ local function machineWantsAny(machine, floorWaived)
           stack.count or 1)
       end
 
-      local room = machineInputRoom(machine.id, stack)
+      --  THE SAME ROOM THE ARRIVAL WILL USE. machineRuleRoom sums every slot
+      --  the rule's checkboxes leave open -- this used to ask about the burner
+      --  alone while depositCargoToMachine routed reagent-first, and a
+      --  disagreement between those two is a unit dispatched to a delivery
+      --  that cannot land, walking it off in front of the machine.
+      local room = machineRuleRoom(machine, rule, stack)
 
       if held <= rule.max then
         --  STRICTLY GREATER, so a threshold of N leaves N reachable and stable
@@ -4206,7 +4416,7 @@ local function machineRoomFor(machine)
 
         if held > rule.max then
           room = room + math.min(stack.count or 0,
-            machineInputRoom(machine.id, stack))
+            machineRuleRoom(machine, rule, stack))
         end
       end
     end
@@ -4576,7 +4786,7 @@ end
 --  in other scripts. The probe is gone: it had to TAKE a stack to test a
 --  candidate, and putting a rejected one back with containerAddItems can land
 --  it in a different slot and stale the snapshot the next attempt uses.
-local SLOT_KEY_TO_OFFSET = -1
+SLOT_KEY_TO_OFFSET = -1
 
 --  Take up to `count` from ONE slot, and hand back what actually left.
 --
@@ -4609,6 +4819,42 @@ local SLOT_KEY_TO_OFFSET = -1
 --  `taken.name == expected.name` alone would have accepted the wrong track.
 --  compare() is what makes this safe for items whose identity is not their
 --  name -- which is the whole point of the change.
+--  THE TIDY SCORE, COUNTED AT THE MOMENT IT HAPPENS. See dd.dispatch.tidyscore:
+--  when a unit removes the LAST STACK OF A TYPE from a container, +1. An event,
+--  an integer, and monotonic by construction -- every put the fleet makes is
+--  filter-approved, so no unit can add a type a container did not ask for.
+--
+--  BY NAME, AND THAT IS THE RIGHT GRAIN. world.containerAvailable counts by
+--  name, not descriptor -- normally a hazard, here exactly the semantics the
+--  entropy framing wants: two dye variants of one item read as one TYPE to the
+--  player's eye, and the score is about the player's eye.
+--
+--  MACHINES DO NOT SCORE. A machine's slots are not a shelf (see
+--  depositCargoToMachine) -- emptying an upcycler's output slot eliminates "a
+--  type" every single time, which would credit routine fuel hauling as
+--  housekeeping. machineAt is the same test everything else uses.
+--
+--  Called AFTER the take, by whichever withdraw actually got something.
+--  Compaction never calls this: moving a type around inside one container is
+--  not removing it.
+metrics.noteStorageTake = function(containerId, name)
+  if containerId == nil or name == nil then return end
+  if machineAt(containerId) ~= nil then return end
+
+  local ok, left = pcall(world.containerAvailable, containerId, name)
+  if not ok or type(left) ~= "number" or left > 0 then return end
+
+  metrics.add("tidy", 1)
+
+  --  ALWAYS LOGGED. Increments are rare -- one per type actually cleared out of
+  --  a crate -- and the score is deliberately not painted anywhere yet (the
+  --  rank display belongs to Maxwell, see dd.dispatch.tidyscore), so the log is
+  --  the only way to verify gathering until he exists.
+  sb.logInfo("PETPORT %s TIDY +1: cleared the last %s out of %s (score %s)",
+    stationUniqueId(), tostring(name), sb.printJson(containerId),
+    sb.printJson((self.petData and self.petData.stats and self.petData.stats.tidy) or 0))
+end
+
 local function takeFromSlot(containerId, slot, count, expected)
   if count == nil or count < 1 then return nil end
 
@@ -4744,6 +4990,11 @@ function withdrawSeed(containerId, seedName, workId, count)
       stationUniqueId(), sb.printJson(got), tostring(seedName),
       sb.printJson(containerId))
   end
+
+  --  A fetch that emptied the crate of this type is a type-elimination too --
+  --  the score does not care which task did the tidying. Asked after every
+  --  slot is settled, so a partial take of a multi-slot type cannot score.
+  metrics.noteStorageTake(containerId, seedName)
 end
 
 --  Take a misfiled stack out of a crate. The eviction half of tidying.
@@ -4832,9 +5083,26 @@ function withdrawMisfit(containerId, name, count, workId, slot)
     stationUniqueId(), sb.printJson(taken.count or 1), tostring(name),
     sb.printJson(containerId), tostring(slot))
 
-  --  Still worth doing: taking from the right slot stops this pass fragmenting
-  --  the crate, but says nothing about fragmentation that was already there.
-  compactContainer(containerId)
+  --  BEFORE the compaction below on purpose, though the order cannot matter:
+  --  compaction only rearranges what is already present, so it can neither
+  --  create nor destroy the zero this checks for.
+  metrics.noteStorageTake(containerId, name)
+
+  --  Still worth doing on a CRATE: taking from the right slot stops this pass
+  --  fragmenting it, but says nothing about fragmentation that was already
+  --  there.
+  --
+  --  NEVER ON A MACHINE. A machine's slots are MEANINGS, not shelf space --
+  --  the same principle depositCargoToMachine states on the put side, now
+  --  enforced on the take side, because the FUEL task routes through here
+  --  with the MACHINE as the container. Observed before this guard: every
+  --  treat pickup compacted the upcycler, fragmentation() read milk in the
+  --  burner plus milk in the reagent slot as one item split across two slots,
+  --  and containerAddItems refilled lowest-slot-first -- the whole reagent
+  --  stack merged into the burner on every harvest.
+  if machineAt(containerId) == nil then
+    compactContainer(containerId)
+  end
 
   receiveCargo(taken)
 end
@@ -4949,12 +5217,20 @@ function depositCargo(containerId)
   local before = #self.petData.cargo
   local remaining = {}
 
+  --  ITEMS MOVED, COUNTED FROM WHAT ACTUALLY LANDED. See
+  --  dd.pane.ratesnottotals -- the total is stored, the pane makes it a rate.
+  --  Placed counts only: whatever the crate refused stays on the unit and is
+  --  counted whenever it finally lands somewhere.
+  local delivered = 0
+
   for _, stack in ipairs(self.petData.cargo) do
     --  THROUGH placeStack, NEVER containerAddItems DIRECTLY. Cargo stacks are
     --  merged without a maxStack cap -- see receiveCargo -- so this descriptor
     --  can be several stacks' worth, which is precisely what the raw call
     --  destroys.
     local unplaced = placeStack(containerId, stack)
+
+    delivered = delivered + (stack.count or 1) - unplaced
 
     if unplaced > 0 then
       table.insert(remaining, {
@@ -5000,6 +5276,8 @@ function depositCargo(containerId)
         and ("backed off for " .. sb.printJson(CONTAINER_FULL_BACKOFF))
         or "will re-check per descriptor")
   end
+
+  metrics.add("moved", delivered)
 
   --  A DELIVERY IS A GOOD MOMENT TO TIDY THE SHELF. The unit is standing here
   --  anyway, so this costs no trip -- and a partial stack that just merged into
@@ -5093,58 +5371,73 @@ function depositCargoToMachine(machineId, workId)
         sb.printJson(rule.max))
       table.insert(remaining, stack)
     else
-      --  SLOT-PRECISE, AND ONLY THE SURPLUS PORTION. Parameters carry across so
-      --  the kept remainder is the same item the unit picked up.
-      local offer = {
-        name = stack.name,
-        count = surplus,
-        parameters = stack.parameters
-      }
-
-      --  A REAGENT GOES TO THE REAGENT SLOT, AND FALLS BACK TO THE BURNER.
+      --  SLOT-PRECISE, ONLY THE SURPLUS PORTION, parameters carried on every
+      --  put so the kept remainder is the same item the unit picked up.
       --
-      --  NO NEW WORK GENERATOR AND NO FETCH LOGIC. The drain path already
-      --  brought this item; the only thing that changes is which slot it lands
-      --  in. Nothing reaches an upcycler unless the player filtered it in, so
-      --  anything arriving is already surplus by their own definition -- and
-      --  flavoring it is strictly better use of it than burning it.
+      --  A REAGENT GOES TO THE REAGENT SLOT, AND FALLS BACK TO THE BURNER --
+      --  IF THE RULE'S BURN BOX ALLOWS IT.
       --
-      --  THE FALLBACK IS THE WHOLE SAFETY STORY. A full reagent slot, or one
-      --  holding a different reagent, simply refuses; whatever it would not
-      --  take goes to the burner in the same trip. There is no state where the
-      --  unit walks away still holding something the machine wanted.
+      --  EVERY OFFER IS CAPPED TO MEASURED, DESCRIPTOR-TRUE ROOM FIRST.
+      --  machineSlotRoom is asked with the REAL stack, parameters and all, and
+      --  only what fits is ever handed to the engine. Measured 2026-08-29:
+      --  uncapped offers of 1000 milk were refused WHOLE by slots with
+      --  name-level headroom -- rot parameters block the merge -- and whether
+      --  containerPutItemsAt would even split an oversized offer stops
+      --  mattering once no offer can be oversized.
+      --
+      --  THE FALLBACK IS THE SAFETY STORY, AND THE BURN BOX IS ITS GATE.
+      --  Whatever the reagent slot cannot take goes to the burner in the same
+      --  trip -- UNLESS the rule denies the burner, in which case it stays
+      --  aboard and files to ordinary storage. Denying the burner is the
+      --  player saying "never destroy this", and a fallback that destroys it
+      --  anyway would make the checkbox a lie.
+      local allowBurn = rule.burn ~= false
       local routeToReagent = rule.reagent ~= false
         and petports_reagentFor(stack.name) ~= nil
 
-      local leftover
+      local remainingCount = surplus
 
-      if routeToReagent then
-        leftover = world.containerPutItemsAt(machineId, offer,
-          MACHINE_SLOT_REAGENT)
+      if routeToReagent and remainingCount > 0 then
+        local slotRoom = machineSlotRoom(machineId, MACHINE_SLOT_REAGENT, stack)
+        local offerCount = math.min(remainingCount, slotRoom)
+        local landed = 0
 
-        local refused = (type(leftover) == "table" and leftover.count or 0)
-
-        sb.logInfo("PETPORT %s reagent route: %s of %s %s into the reagent slot, %s refused",
-          stationUniqueId(), sb.printJson(surplus - refused),
-          sb.printJson(surplus), tostring(stack.name), sb.printJson(refused))
-
-        --  WHAT THE REAGENT SLOT WOULD NOT TAKE, OFFERED TO THE BURNER. Built
-        --  from the refusal rather than reusing `offer`, or a partial
-        --  acceptance would be posted twice.
-        if refused > 0 then
-          leftover = world.containerPutItemsAt(machineId, {
+        if offerCount > 0 then
+          local leftover = world.containerPutItemsAt(machineId, {
             name = stack.name,
-            count = refused,
+            count = offerCount,
             parameters = stack.parameters
-          }, MACHINE_SLOT_INPUT)
+          }, MACHINE_SLOT_REAGENT)
+
+          local refused = (type(leftover) == "table" and leftover.count or 0)
+          landed = offerCount - refused
+          remainingCount = remainingCount - landed
         end
-      else
-        leftover = world.containerPutItemsAt(machineId, offer,
-          MACHINE_SLOT_INPUT)
+
+        sb.logInfo("PETPORT %s reagent route: %s of %s %s into the reagent slot (slot room %s)%s",
+          stationUniqueId(), sb.printJson(landed), sb.printJson(surplus),
+          tostring(stack.name), sb.printJson(slotRoom),
+          (remainingCount > 0 and not allowBurn)
+            and " -- burner denied by rule, remainder stays aboard" or "")
       end
 
-      local unplaced = (type(leftover) == "table" and leftover.count or 0)
-      local placed = surplus - unplaced
+      if allowBurn and remainingCount > 0 then
+        local slotRoom = machineSlotRoom(machineId, MACHINE_SLOT_INPUT, stack)
+        local offerCount = math.min(remainingCount, slotRoom)
+
+        if offerCount > 0 then
+          local leftover = world.containerPutItemsAt(machineId, {
+            name = stack.name,
+            count = offerCount,
+            parameters = stack.parameters
+          }, MACHINE_SLOT_INPUT)
+
+          local refused = (type(leftover) == "table" and leftover.count or 0)
+          remainingCount = remainingCount - (offerCount - refused)
+        end
+      end
+
+      local placed = surplus - remainingCount
 
       if placed > 0 then moved = moved + placed end
 
@@ -5169,6 +5462,11 @@ function depositCargoToMachine(machineId, workId)
 
   cargoTrace("deposit: cargo replaced", remaining)
   self.petData.cargo = remaining
+
+  --  `moved` is already the placed sum here -- this function was doing the
+  --  accounting before the stat existed. A machine feed is a delivery like any
+  --  other; the machine only stops SCORING (see noteStorageTake), not counting.
+  metrics.add("moved", moved)
 
   if moved == 0 then
     --  RECORDED, NOT JUST LOGGED.
@@ -5228,6 +5526,10 @@ function depositCargoOnly(containerId, name)
   local remaining = {}
   local moved = false
 
+  --  Same accounting as depositCargo: placed counts only, refused stays on the
+  --  unit and is counted when it lands.
+  local delivered = 0
+
   for _, stack in ipairs(self.petData.cargo) do
     if stack.name ~= name then
       table.insert(remaining, stack)
@@ -5237,6 +5539,8 @@ function depositCargoOnly(containerId, name)
       --  THROUGH placeStack. Same reason as depositCargo: a cargo stack has no
       --  maxStack cap and the raw call silently discards the overflow.
       local unplaced = placeStack(containerId, stack)
+
+      delivered = delivered + (stack.count or 1) - unplaced
 
       if unplaced > 0 then
         table.insert(remaining, {
@@ -5268,6 +5572,8 @@ function depositCargoOnly(containerId, name)
 
   cargoTrace("deposit: cargo replaced", remaining)
   self.petData.cargo = remaining
+
+  metrics.add("moved", delivered)
 
   --  Same as an ordinary deposit: the unit is already here, and a delivery
   --  landing beside an existing partial stack is the common way a request
@@ -6887,7 +7193,7 @@ end
 --  Calling it from workUpdate -- which is defined after everything -- removes
 --  the ordering dependency entirely rather than papering over it with a
 --  forward declaration.
-local REPLANT_SWEEP_INTERVAL = 5.0
+REPLANT_SWEEP_INTERVAL = 5.0
 
 local function sweepReplants(dt)
 	self.replantSweepTimer = (self.replantSweepTimer or 0) - dt
@@ -7937,9 +8243,13 @@ local function drainWork()
           --  below the threshold the player set. This is what makes "keep at
           --  most N" mean N rather than "somewhere near N".
           --
-          --  CAP TWO: the machine's input room, so the unit is never sent to
-          --  fetch something the machine cannot accept when it arrives.
-          local room = machineInputRoom(machine.id, { name = rule.item, count = 1 })
+          --  CAP TWO: the room the rule's checkboxes actually offer, so the
+          --  unit is never sent to fetch something the machine cannot accept
+          --  when it arrives. machineRuleRoom, the same predicate dispatch and
+          --  arrival use -- a burn-denied reagent still gets fetched for its
+          --  reagent slot, and a both-denied rule fetches nothing.
+          local room = machineRuleRoom(machine, rule,
+            { name = rule.item, count = 1 })
 
           --  CAP THREE, AND THE ONE THAT STOPS THE DRIBBLE: a trip has to be
           --  worth taking. Without this the drain sizes itself to whatever the
@@ -7974,7 +8284,18 @@ local function drainWork()
                       --  CAP THREE: what is actually in the slot. Slot-precise
                       --  from end to end, so parameters survive and a partial
                       --  take comes off the slot the port actually looked at.
-                      local count = math.min(surplus, stack.count or 0, room)
+                      --
+                      --  CAP FOUR: THIS STACK'S OWN DESCRIPTOR-TRUE ROOM. The
+                      --  aggregate `room` above was estimated from the bare
+                      --  name -- the only thing drain knows before it reads a
+                      --  crate -- but THIS stack has real parameters, and a
+                      --  slot of differently-rotted milk offers it nothing
+                      --  however much the name math sees. Asking again with
+                      --  the real stack is what stops drain fetching a load
+                      --  the machine will refuse and depositWork will file
+                      --  straight back -- the fetch-and-return loop.
+                      local count = math.min(surplus, stack.count or 0, room,
+                        machineRuleRoom(machine, rule, stack))
 
                       if count > 0 then
                         --  EXCLUSIVE ACROSS PORTS -- NO PORT SUFFIX.
@@ -8094,8 +8415,8 @@ end
 --  linking it to the first; if SLOT_OUTPUT moves in petports_upcycler.lua this
 --  has to move with it, and the failure is a unit hauling off whatever is in
 --  the reagent slot.
-local MACHINE_SLOT_OUTPUT = 2
-local MACHINE_FUEL_ITEM = "petports_petfuel"
+MACHINE_SLOT_OUTPUT = 2
+MACHINE_FUEL_ITEM = "petports_petfuel"
 
 --  ANY TREAT, NOT JUST THE PLAIN ONE.
 --
@@ -8108,7 +8429,7 @@ local MACHINE_FUEL_ITEM = "petports_petfuel"
 --  Pet Treats group matches on, so "the port thinks this is fuel" and "a crate
 --  will accept it as fuel" cannot drift apart. It also picks up a modded
 --  flavor's treat with no further work.
-local MACHINE_FUEL_TAG = "petports_fuel"
+MACHINE_FUEL_TAG = "petports_fuel"
 
 --  Cached because root.itemConfig re-runs an item's build script, and this is
 --  asked once per machine per work tick. An item's tags cannot change at
@@ -8156,8 +8477,25 @@ local function fuelWork()
       --  surprising.
       local ok, held = pcall(world.containerItemAt, machine.id, MACHINE_SLOT_OUTPUT)
 
-      if ok and type(held) == "table" and isFuelItem(held.name)
+      --  NOT GATED ON isFuelItem ANY MORE. Anything in the output slot is
+      --  collectable, treat or not.
+      --
+      --  A NON-TREAT PARKED HERE STOPS THE MACHINE DEAD. emitFuel peeks rather
+      --  than takes, so it refuses to place and banks points instead -- a
+      --  correctly configured machine producing nothing, with no rule to
+      --  change and nothing in the world that fixes it. It could only ever be
+      --  cleared by hand, which is the opposite of what this mod is for.
+      --
+      --  THE DELIVERY END NEEDED NOTHING. Destinations are matched with
+      --  petports_filterAccepts against the item ACTUALLY held, and "deposit"
+      --  is the general storage set that tidy and sort already use, so junk
+      --  routes by the same filter rules as anything else a unit carries. The
+      --  work stays type "fuel" because withdrawMisfit is what consumes it and
+      --  that is a take-from-a-slot, not a treat-specific errand.
+      if ok and type(held) == "table" and type(held.name) == "string"
          and (held.count or 0) > 0 then
+        local isFuel = isFuelItem(held.name)
+
         waiting = waiting + 1
 
         --  IS IT WORTH THE WALK YET?
@@ -8180,7 +8518,40 @@ local function fuelWork()
 
         local okInput, input = pcall(world.containerItemAt, machine.id,
           MACHINE_SLOT_INPUT)
-        local idle = not okInput or type(input) ~= "table" or input.name == nil
+        local inputEmpty = not okInput or type(input) ~= "table" or input.name == nil
+
+        --  AN EMPTY BURNER STOPPED MEANING A DRY MACHINE when the shuttle
+        --  landed. The shuttle feeds the burner ONE item at a time and only
+        --  into an EMPTY slot, so a machine working through reagent-slot stock
+        --  is empty-burnered most of the time BY DESIGN -- and reading that as
+        --  "nothing left to convert" harvested every single treat the moment
+        --  it was made, one round trip each. Observed exactly that.
+        --
+        --  So: empty input counts as idle only when the reagent slot offers no
+        --  shuttle-eligible supply -- an item its rule lets into the burner
+        --  (both boxes, the shuttle's own feed condition). The exempt check
+        --  the shuttle also runs is deliberately not mirrored here: the tag
+        --  lives on item config the port has no reader for, and the miss is
+        --  conservative -- treats wait for the batch floor instead of
+        --  single-tripping, and the full and stalled exceptions still release.
+        local feeding = false
+
+        if inputEmpty then
+          local okReagent, reagent = pcall(world.containerItemAt, machine.id,
+            MACHINE_SLOT_REAGENT)
+
+          if okReagent and type(reagent) == "table" and reagent.name ~= nil then
+            for _, rule in ipairs(machine.rules) do
+              if rule.item == reagent.name and rule.burn ~= false
+                 and rule.reagent ~= false then
+                feeding = true
+                break
+              end
+            end
+          end
+        end
+
+        local idle = inputEmpty and not feeding
 
         --  THE THIRD "NO MORE ARE COMING" CASE, and the one flavored treats
         --  introduced: the machine has a treat banked that WILL NOT STACK with
@@ -8195,7 +8566,16 @@ local function fuelWork()
 
         local stalled = okBlocked and blocked == true
 
-        local worthTaking = (held.count or 0) >= batch or full or idle or stalled
+        --  JUNK SKIPS THE BATCH FLOOR ENTIRELY.
+        --
+        --  The floor exists because treats ACCUMULATE -- one per thousand
+        --  points -- so collecting the first one made costs a round trip for
+        --  three items. None of that applies to a single misplaced item: no
+        --  more are coming, it will never reach a batch, and every second it
+        --  sits there the machine is stopped. Waiting for a floor it cannot
+        --  reach is the stranding this change exists to remove.
+        local worthTaking = not isFuel
+          or (held.count or 0) >= batch or full or idle or stalled
 
         if worthTaking and not refusedSeen[held.name] then
           refusedSeen[held.name] = true
@@ -8283,12 +8663,12 @@ local function fuelWork()
   end
 
   if waiting == 0 then
-    return nil, "no machine has fuel waiting"
+    return nil, "no machine has anything in its output slot"
   end
 
   if trickling > 0 then
     return nil, string.format(
-      "%s machine(s) holding fuel, %s still converting and not yet worth a trip",
+      "%s machine(s) with output, %s still converting and not yet worth a trip",
       waiting, trickling)
   end
 
@@ -8296,7 +8676,7 @@ local function fuelWork()
   --  the two differ, and "no crate accepts petports_petfuel" while the machine
   --  holds spicy ones sends a reader looking at the wrong filter.
   return nil, string.format(
-    "%s machine(s) holding fuel, but no deposit crate accepts %s or has room",
+    "%s machine(s) with output, but no deposit crate accepts %s or has room",
     waiting, table.concat(refusedNames, ", "))
 end
 
@@ -8789,7 +9169,7 @@ end
 
 --  Faster than WORK_INTERVAL on purpose. Dispatch changes between work ticks,
 --  and a marker that lags its task by five seconds is describing the past.
-local CROSSHAIR_INTERVAL = 0.5
+CROSSHAIR_INTERVAL = 0.5
 
 --  How long a marker may live before it is rebuilt.
 --
@@ -8807,7 +9187,7 @@ local CROSSHAIR_INTERVAL = 0.5
 --  MUST STAY BELOW THE PROJECTILE'S timeToLive. If it ever exceeds it, markers
 --  wink out and reappear on their own, which reads as the network losing track
 --  of the item.
-local CROSSHAIR_REFRESH = 20.0
+CROSSHAIR_REFRESH = 20.0
 
 --  DEFAULTS ONLY. Overridden per unit by petData.crosshairColors, so an
 --  accessibility or preference interface can rewrite them per unit without
@@ -8816,7 +9196,7 @@ local CROSSHAIR_REFRESH = 20.0
 --
 --  RRGGBBAA, fed to "?multiply=" against a white sprite with a black outline:
 --  white takes the colour, black stays black.
-local CROSSHAIR_COLORS = {
+CROSSHAIR_COLORS = {
   --  Dispatched. The unit has been given this target.
   routing = "ffd23fff",
 
@@ -8843,7 +9223,7 @@ local CROSSHAIR_COLORS = {
   unclaimed = "9aa0a6ff"
 }
 
-local CROSSHAIR_PROJECTILE = {
+CROSSHAIR_PROJECTILE = {
   routing = "petports_crosshair",
   enroute = "petports_crosshair",
   unroutable = "petports_crosshair_failed",
@@ -8863,7 +9243,7 @@ local CROSSHAIR_PROJECTILE = {
 --  Ordered by how much the player needs to know it. Being worked on beats a
 --  failure, because it supersedes it; a failure beats a blockage, because it is
 --  more specific; anything beats "nobody has got to it".
-local CROSSHAIR_PRIORITY = {
+CROSSHAIR_PRIORITY = {
   routing = 4,
   enroute = 4,
   unroutable = 3,
@@ -8892,8 +9272,8 @@ end
 --  write per marker per two and a half seconds, and nothing observable changes:
 --  the claim's job is to answer "is someone else already drawing this", and it
 --  answers identically either way.
-local CROSSHAIR_CLAIM_TTL = 4.0
-local CROSSHAIR_CLAIM_RENEW = 1.5
+CROSSHAIR_CLAIM_TTL = 4.0
+CROSSHAIR_CLAIM_RENEW = 1.5
 
 --  May this port draw the marker for this drop, in this state?
 --
@@ -9131,7 +9511,7 @@ end
 --
 --  Half a tile is tight enough that a marker never visibly lags the item, and
 --  loose enough that a settling drop is not messaged every pass.
-local CROSSHAIR_DRIFT = 0.5
+CROSSHAIR_DRIFT = 0.5
 
 --  How long a marker must hold a state before it may show a different one.
 --
@@ -9148,7 +9528,7 @@ local CROSSHAIR_DRIFT = 0.5
 --  DELIBERATELY NOT A FIX FOR THE CYCLE ITSELF. The dispatch-fail-backoff loop
 --  is correct behaviour and the log records it in full; this only governs how
 --  often the cosmetic redraws.
-local CROSSHAIR_DWELL = 1.5
+CROSSHAIR_DWELL = 1.5
 
 --  TRANSITIONS THE DWELL DOES NOT GOVERN.
 --
@@ -9163,7 +9543,7 @@ local CROSSHAIR_DWELL = 1.5
 --  yellow-to-green change was the one transition in the set that reliably
 --  landed inside the dwell window and paid the full 1.5s. Everything else here
 --  changes state on a marker that has usually been up for a while.
-local CROSSHAIR_IMMEDIATE = {
+CROSSHAIR_IMMEDIATE = {
   routing = { enroute = true }
 }
 
@@ -9692,6 +10072,57 @@ function update(dt)
 
       self.spawnTimer = RESPAWN_GRACE
     end
+  end
+
+  --  ACTIVE TIME -- the honest denominator from dd.pane.ratesnottotals, and
+  --  GATED ON HAVING A TASK: idle-with-no-work does not count. Same definition
+  --  of "working" the fuel design already uses -- hunger drains only while
+  --  working -- so the clock and the stomach agree. A recall or a diagnostic
+  --  filler still counts; the unit is on the clock, just not hauling.
+  --
+  --  NO dirty AND NO FLUSH -- see metrics.add. This rides the slow write below,
+  --  which is the next statement, so at most WRITE_INTERVAL of it is ever at
+  --  risk.
+  if self.petId ~= nil and world.entityExists(self.petId) then
+    if self.task ~= nil then
+      metrics.add("active", dt)
+    end
+
+    --  THE ODOMETER. Per-tick wrap-aware step between successive positions.
+    --
+    --  ADDS ONLY WHILE ON A TASK -- same gate as the clock above, so traveled
+    --  and active measure the same definition of working and idle pacing near
+    --  the port counts toward neither. THE SAMPLING IS DELIBERATELY NOT GATED:
+    --  the baseline must follow the unit through idle time, or the first
+    --  working tick after an idle stroll measures the whole stroll as one
+    --  step -- and past ten tiles the threshold below would then discard real
+    --  legwork as a teleport.
+    --
+    --  world.magnitude RATHER THAN RAW SUBTRACTION, because worlds wrap
+    --  horizontally and a unit working near the seam would otherwise bank the
+    --  whole planet's circumference in one tick.
+    --
+    --  THE THRESHOLD IS A DISCONTINUITY DETECTOR, NOT A SPEED LIMIT. Vent hops,
+    --  recalls and respawns all move the unit by setPosition, and an odometer
+    --  that credits a teleport is measuring the network's shortcuts, not the
+    --  unit's legwork. Ten tiles in one tick is 600 tiles/s -- nothing walks,
+    --  flies or swims that fast -- so past it the step is discarded and the
+    --  baseline re-seeded where the unit reappeared.
+    local position = world.entityPosition(self.petId)
+
+    if position ~= nil then
+      if self.odometerLast ~= nil and self.task ~= nil then
+        local step = world.magnitude(position, self.odometerLast)
+        if step < 10 then
+          metrics.add("traveled", step)
+        end
+      end
+      self.odometerLast = position
+    end
+  else
+    --  No unit, no baseline. Without this the first sample after a respawn
+    --  measures against wherever the previous unit last stood.
+    self.odometerLast = nil
   end
 
   --  Immediate on a durable change, otherwise on the slow timer.

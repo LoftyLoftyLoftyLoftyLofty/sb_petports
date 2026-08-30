@@ -1990,3 +1990,46 @@ function petports_drawRouteDebug(stateData)
     end
   end
 end
+
+--------------------------------------------------------------------------------
+--  PLAYER INTERACTION -- HEADPATS
+--------------------------------------------------------------------------------
+--
+--  THE UNIT IS A DUMB REPORTER. Every accepted interaction is sent to the home
+--  port and the PORT decides what it meant -- today a headpat, later "drop the
+--  stuck cargo" once that mechanic exists, because cargo lives on petData and
+--  only the port can see it. See the petports_headpat handler in
+--  petports_petport.lua.
+--
+--  THIS REPLACES VANILLA'S interact() AND CARRIES ITS BODY FORWARD -- read
+--  from the vanilla source, not guessed. groundPet.lua defines interact() to
+--  emote "happy" on a config cooldown ("interactCooldown", default 3.0)
+--  tracked in self.lastInteract, which its init() zeroes. One shared
+--  environment means this later definition replaces it silently, so the emote
+--  half is reproduced verbatim below; lose it and pats go visually dead.
+--
+--  NO setInteractive AND NO setAnchor SHADOW, because vanilla already does
+--  both jobs: groundPet's init() calls monster.setInteractive(true), and its
+--  setAnchor() stores the port's entity id in self.anchorId, which
+--  updateAnchor() re-verifies every second. Reading vanilla's own field beats
+--  shadowing vanilla's function to duplicate it.
+--
+--  ONE GATE, AND IT IS VANILLA'S. The send sits INSIDE the interactCooldown
+--  branch, so a pat that emotes is exactly a pat that counts -- the emote and
+--  the ledger cannot disagree, and mashing E collapses to one of each per
+--  window. The port-side counting cooldown this used to pair with is gone.
+function interact()
+  if world.time() - self.lastInteract > config.getParameter("interactCooldown", 3.0) then
+    emote("happy")
+    self.lastInteract = world.time()
+
+    --  An orphan with no live port has nobody to tell. Quietly nothing: the
+    --  pat happened, the ledger just was not open.
+    if self.anchorId ~= nil and world.entityExists(self.anchorId) then
+      world.sendEntityMessage(self.anchorId, "petports_headpat")
+    end
+  end
+
+  --  nil: no interact action, same as vanilla's fall-through.
+  return nil
+end

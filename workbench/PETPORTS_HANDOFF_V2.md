@@ -42,16 +42,17 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-08-29
+### What is built, as of 2026-08-29 (late night)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-CAVEAT ON THIS PASS: this session touched the petport pane and object, both
-beacon panes, the upcycler pane and object, `petportsTaskAction.lua`,
-`petports_contract.lua`, and the item/filter registration files. Paragraphs
-outside those areas were not re-verified and carry their previous session's date.
+CAVEAT ON THIS PASS: this session touched the petport object heavily -- the
+metrics layer, the machine routing, the report handler, the file's constants --
+plus the upcycler object and its pane, the petport pane and config, the shared
+strings, and the monster contract. Everything outside those carries its
+previous session's date and was not re-verified.
 
 **Core loop.** A petport places, opens, spawns a unit from a socketed item, and
 the unit's state round-trips through that item across despawn, world reload and
@@ -64,99 +65,176 @@ pocket and farming inside it.
 
 **Sorting, tidying, compaction, restock.** Deposit beacons route by tag and
 category; eviction runs the same predicate so a misfit is anything failing its
-own crate's filter. Storage compacts itself, bucketed by parameters. Restock
-beacons handle several requests per crate: fetch, deliver, evict overstock,
-evict anything unrequested.
+own crate's filter. Storage compacts itself, bucketed by parameters -- BUT
+NEVER A MACHINE, as of this session; see `dd.upcycler.slotsaremeanings`.
+Restock beacons handle several requests per crate: fetch, deliver, evict
+overstock, evict anything unrequested.
 
 **Farming**, end to end -- discovery, harvest, collection, deposit, replant
 intents, seed withdrawal, replanting at arbitrary footprint, watering of dry
 tilled soil, all surviving vent traversal both ways with no sprinkler
 infrastructure. Animal harvesting is built.
 
-**The upcycler**, including the reagent slot: converts surplus to flavored Pet
-Treats, survives mine-and-replace, and nothing without a matching rule can reach
-it.
+**The upcycler**, including the reagent slot, reagent routing, and NEW THIS
+SESSION a per-rule BURN checkbox and a slot shuttle. A rule now carries two
+exclusions -- may the item enter the burner, may it route to the reagent slot
+-- and the machine shuttles its own stock between those slots as their
+consumption rates diverge, including a bulk rescue for burn-denied stock. See
+`arch.upcycler.burnbox` and `arch.upcycler.shuttle`. The furnace door itself
+refuses a burn-denied hand-drop, with a state line saying why nothing burns.
+
+**The patrol class of bug is closed twice over.** Dispatch and arrival now
+share ONE room predicate (`machineRuleRoom`), room is DESCRIPTOR-true rather
+than name-true (food rot was the tell -- see `fact.item.descriptorroom`), every
+machine offer is capped to measured room before the engine sees it, and the
+report handler's done-cleanup runs BEFORE the arrival work so an arrival
+failure's backoff survives to escalate (see `arch.port.reporthandler`).
+Verified in the closing log: zero delivered-NOTHING lines, a 1000/1000 landing.
+THE REORDERED BACKOFF LADDER IS UNEXERCISED -- nothing failed after the fix --
+see `todo.port.backoffladder`.
+
+**Metrics.** The port gathers per-unit lifetime stats onto `petData.stats` --
+items moved, crops planted, tiles watered, crops harvested, livestock
+harvested, tiles traveled, seconds active (task time only), headpats, and the
+Tidy Score -- all at existing choke points, persisted with the item. See
+`arch.port.metrics`. Tidy is gathered and logged but deliberately displayed
+nowhere -- the rank belongs to Maxwell (`dd.dispatch.tidyscore`,
+`todo.unit.maidrank`).
+
+**The Stats tab is live**, as a scrolling LIST rather than fixed labels, with
+per-block striping and placeholder separators. Steady-state refresh is
+text-only and MEASURED not to strobe; rows rebuild only when the line count
+changes. See `arch.pane.statslist`. The layout scales for the per-treat
+counters the fuel system will want.
+
+**Headpats.** The unit is interactive: a click emotes (vanilla's own behavior,
+carried forward) and reports to the port, which counts it. One gate -- vanilla's
+3s interaction window -- so the emote and the ledger cannot disagree. See
+`arch.unit.headpat`. The handler is the documented future home of the
+stuck-cargo drop.
+
+**Constants are globals, as of this session.** The port's main chunk hit Lua's
+200-locals-per-scope ceiling -- measured, the file refused to compile -- and 73
+UPPER_CASE constants were de-localized to buy the headroom back. 127 file-scope
+locals remain. See `arch.port.constantsglobal` and `fact.port.localceiling`.
 
 **Crosshair markers.** Every drop the network has an opinion about carries one,
 colour-coded by claim state, one marker per item.
 
 **The petport pane.** 337x335 ContainerPane with a script. Portrait, name,
-species-when-renamed, 20-blip fuel bar, cargo slot with Take, current task,
-recency-gated diagnostic icons with tooltips, three tabs. Reads one mirrored
+species-when-renamed, 20-blip fuel bar with a label that follows the chassis,
+cargo slot with Take, current task, recency-gated diagnostic icons with working
+tooltips, three tabs, five module slots, the port band. Reads one mirrored
 object parameter; writes by message.
 
-**Modules -- NEW THIS SESSION, working end to end.** Five itemslots, shown
-against a slot count the unit has earned. A module socketed into a slot grants
-its declared status effects to the unit for as long as it stays there; pulling it
-out drops them. One module exists, `petports_module_light`, a placeholder green
-diamond granting a centred point light. Effects are pushed with
-`status.setPersistentEffects` under one category, so removal needs no path of its
-own. The swap is performed in the pane, synchronously, mech-assembly style, and
-stamped with a token the port echoes -- see `dd.module.writetoken`.
+**Modules** work end to end. Five itemslots against a slot count the unit has
+earned; a module socketed grants its declared status effects for as long as it
+stays there. One module exists, `petports_module_light`.
 
-**The port band -- NEW THIS SESSION.** The enabled switch works: off despawns the
-unit after writing its state back to the item and blocks respawn; on brings it
-back. It persists as an object parameter and survives reload. The four
-participation checkboxes gate dispatch by group -- item pickup, sorting, farming,
-machines. Claim markers moved here from the pet tab, and now actually gate the
-markers rather than being written and never read.
+**The port band.** Enabled switch, four participation checkboxes, claim markers.
 
 **Tooltips, in the petport pane only.** A ContainerPane gets no script tooltips
-from the engine at all, so this pane draws its own on two canvases -- see
-`arch.pane.hoverlayer`. Text is declared beside the widget in the pane config and
-swept at init. THE UPCYCLER STILL HAS NONE and its `createTooltip` is dead code;
-the two beacons are ScriptPanes and theirs work. See
-`todo.pane.tooltipstrings`.
+from the engine, so this pane draws its own on two canvases. See
+`arch.pane.hoverlayer`. THE UPCYCLER WILL NOT GET ONE -- see
+`dd.upcycler.bakedindicators`.
 
-**Pet feeder checkboxes** on both beacons and the upcycler. Stored, mirrored, and
-READ BY NOTHING -- the fuel system does not exist yet. On by default for the
-beacons, off for the upcycler, which is deliberate: the upcycler makes the treats,
-so grazing it skips the entire haul-and-store loop.
+**Every visible string in three of four panes** comes from one shared table --
+the stats block joined it this session. THE UPCYCLER IS STILL NOT MIGRATED and
+is the last pane holding its own strings. See `arch.pane.stringtable`.
 
-**Still not built.** Docking. The fuel system itself -- treats accumulate in seven
-flavors and nothing eats one, which is why three feeder checkboxes are inert.
+**Pet feeder checkboxes** on both beacons and the upcycler. Stored, mirrored,
+and READ BY NOTHING -- the fuel system does not exist yet.
+
+**Still not built.** Docking. The fuel system itself -- so treats are made and
+harvested but never eaten, and the per-treat metrics have nothing to count.
 Vents do not cross a medium boundary. Liquid permissions from pet upgrades.
-Rename. The Stats tab is empty and the port gathers no metrics. Reagent-slot
-automation is designed but unbuilt -- see `todo.upcycler.reagentrouting`.
+Rename. Maxwell and any display of the Tidy Score.
 
-**Art.** Bespoke: the unit body, the petport, the crosshairs, the treat COLOURS
-(see `dd.art.treatcolours`). Placeholder: the vent, the upcycler, the eight treat
-sprites, the four chassis colour strips, all petport pane art, the module icon.
-The unit has frames for `run` and nothing else, so every animation state resolves
-to the same eight frames.
+**Art.** Bespoke: the unit body, the petport, the crosshairs, the treat
+COLOURS, the upcycler's charge bin icon. Placeholder: the vent, the upcycler,
+the eight treat sprites, the four chassis colour strips, all petport pane art,
+the module icon, and NEW: the stats list stripe fills (generated), the dashed
+orange separators, and the two IDENTICAL vanilla checkboxes on an upcycler rule
+row -- see `todo.art.statsdressing`. The unit has frames for `run` and nothing
+else.
 
 **The monsterpart is still named `drone_placeholder`**, file and `name` field.
 Renaming is free while there is one variant and expensive once there are
-several, since which monsterpart a unit wears follows from its seed over the
-matching set.
+several.
 
-**Pathing -- THE JUMP LOOP IS FIXED, AND IT TOOK THREE DISTINCT CORRECTIONS.**
-A unit trying to water a plot looped on the same missed jump, five to ten
-identical laps at a time, across three sessions. The three faults were stacked
-and each one hid the next.
+**THE SHUTTLE NOW RUNS ON ONE PRIORITY: keeping the flavor charge full
+outranks burning more items.** Both directions consult `chargeFits`, which is
+weight-aware rather than "is the charge full" -- the looser form bounces a
+weight-8 reagent against a part-full charge forever, because room only frees by
+burning and the item that would do the burning is the one bouncing.
 
-*The plan's Land can sit on the ASCENDING crossing.* A* emits a Jump edge whose
-own arc waypoints top out at the target height while the launch it prescribes is
-still rising hard. `solveLaunch` now flies the plan's LANDING rather than its
-stated velocity. See `arch.pathing.solvelaunch`.
+VERIFIED IN GAME 2026-08-30: one move then a stop where the old build bounced;
+bulk `RESCUED 21` and `RESCUED 4` on a reagent-denied stack; ~47 single moves
+on a charge-full trickle.
 
-*The engine integrates with explicit Euler at 1/60.* The first solver was exactly
-right about continuous physics and the engine runs something else, so the unit
-arrived a half tile high and clipped the ledge. See `fact.pathing.eulertick`.
+**THE MACHINE AND THE PANE EACH DECIDE THIS SEPARATELY, and both had to be
+fixed.** The pane computes its own warning text from the same manifest table,
+in its own hand-written check order -- so fixing the object changed nothing the
+player could see. A unit in the reagent slot still read "not a reagent" from
+the pane while the object had already moved on to "exempt". Sharing a lookup
+table does not make two check ORDERS agree; the order IS the logic and it lives
+in two files. Third instance of this drift shape after `applyState`/
+`storedRules` and the twin bulk rescues.
 
-*The arc mover flew the unit off its own landing.* It drives x toward the flight
-velocity and zeroes `groundFriction` every airborne tick, so a unit that arrived
-perfectly slid off a one-tile ledge in five ticks. It now stops on arrival. See
-`fact.pathing.arcmoverthrottle`.
+**THE OBJECT SCRIPT NOW CARRIES A BUILD STAMP** (`OBJECT_BUILD_STAMP`, logged
+from `init`). It had none while both panes did, and that cost a round on
+2026-08-30: a machine-side fix looked inert and there was no way to tell from
+the log whether the file had loaded. Object scripts reload on world load, not
+on file copy, so a stale one is silent and indistinguishable from a wrong one.
 
-`smallJumpMultiplier` is 0.70711, vanilla's half-height. An escalating version was
-built and removed -- see `dead.pathing.jumpescalation`.
+THE EXEMPT CHECK WAS ORDERED WRONG ON ITS FIRST PASS and is fixed. It sat
+BELOW the manifest lookup, so treats, modules and pets in slot 1 all reported
+"not a reagent" -- none is in the manifest, so `entry == nil` returned before
+exempt was consulted. Exempt is a property of the ITEM and does not depend on
+the recipe table, so it now asks first, matching the furnace door. The general
+lesson: in a ladder of refusals, order by WHAT THE FACT IS ABOUT, not by how
+cheap the test is -- the item-level facts have to precede the table lookups or
+the specific message loses to the generic one. Bulk where
+the destination rule is a dead end, paced where the stack still has a future in
+the slot it is in. The old `count >= 2` anti-ping-pong guard is gone; the fit
+test subsumes it. `consumeReagent` also refuses exempt items now -- it was the
+one path that never checked the tag and it silently destroyed them. NOT YET
+VERIFIED IN GAME.
+
+**STILL OPEN: `moveOne` logs every hop, ungated.** MEASURED 2026-08-30: 47
+lines in 9 seconds on a normal trickle, and it will do that continuously
+against any large reagent backstock. It is the one message stream in this file
+that is not change-gated, and sustained trickle is the ordinary case rather
+than an event. Gate it or drop it to a counter before release.
+
+**STILL OPEN: the burn-denied / reagent-denied swap deadlock** (was `D3`). Both
+halves are now correctly error states under the agreed spec, so nothing is lost
+-- but the burner-side branch `return`s first, so only one of the two prints a
+line. Batch 2's alert state is where that gets both.
+
+**The reagent slot now has a door and a way out.** `consumeReagent` refuses a
+reagent-denied item instead of eating it, and the slot shuttle grew the mirror
+of its burn-denied rescue so the stranded stock leaves for the burner. NOT YET
+VERIFIED IN GAME.
+
+**The upcycler's rule-row checkboxes were broken in two ways and are fixed.**
+`applyState` was stripping `reagent` and `burn` off every rule it read, and
+`x and nil or false` cannot produce nil so an untick never cleared. Both
+fixed, NOT YET VERIFIED IN GAME -- see `arch.upcycler.burnbox`,
+`fact.tooling.andnilor`, `fact.pane.checkedpostoggle`.
+
+**Pathing.** Untouched this session. The jump loop fix is holding.
+`smallJumpMultiplier` is 0.70711.
+
+**A CARGO LOSS WAS REPORTED AND NOT REPRODUCED** (previous session). Nothing
+recurred. `CARGO_TRACE` is left ON in `petports_petport.lua` to catch it.
 
 **Debug flags, all ON, all wanting review before release.** `TASK_DEBUG`,
-`VENT_DEBUG`, `DEBUG` in the petport and upcycler panes, `FLY_POINT_DEBUG`,
-`DRAW_PLAN`, `FLY_TELEMETRY`, `DEBUG` in petportconfig.
-`PETPORTS_FILTER_DEBUG` is OFF and should stay off -- measured at 89% of one
-session's entire log.
+`VENT_DEBUG`, `DEBUG` in all four panes, `FLY_POINT_DEBUG`, `DRAW_PLAN`,
+`FLY_TELEMETRY`, `DEBUG` in petportconfig, and `CARGO_TRACE` in the petport
+object. `PETPORTS_FILTER_DEBUG` is OFF and should stay off. The TIDY +1 line
+and the shuttle lines are always-on by design -- both are rare and are the only
+verification those systems have until their consumers exist.
 
 ## ARCHITECTURE
 
@@ -2300,8 +2378,74 @@ writes the item back first, so cargo and resources survive.
 push and `workUpdate`'s housekeeping all keep running while a port is off. An
 early return there is how the replant sweep once stopped running for empty ports.
 
+### One string table for every pane
+`arch.pane.stringtable` -- see also `arch.pane.hoverlayer`, `todo.pane.tooltipstrings`
+
+EVERY VISIBLE STRING LIVES IN ONE ASSET,
+`/interface/lofty_petports/shared/petports_strings.config`, resolved by
+`/scripts/lofty_petports/petports_strings.lua`.
+
+**THE PAIR IS SPLIT ACROSS TWO DIRECTORIES ON PURPOSE.** The data is a pane
+asset and is read by path, which works from anywhere. The loader is `require`d,
+and every proven require path in this mod points at `/scripts/lofty_petports/`.
+Whether require resolves out of `/interface` is not known, and finding out costs
+a pane that will not open -- MEASURED, that is exactly what a missing require
+does: the script does not load, the pane still opens, and nothing in the UI says
+so. See `fact.pane.requiresilent`.
+
+**A WIDGET NAMES A KEY, NOT A STRING.** `petportsString` for a label or a button
+caption, `petportsTip` for hover text, both dotted keys swept at init. Adding or
+rewording a string is the table plus one key and no Lua.
+
+**"--" IS THE FALLBACK AND IT IS DECLARED IN THE PANE, NOT WRITTEN BY THE
+LOADER.** Every migrated widget carries `"value" : "--"`, and a key that does not
+resolve is simply left alone. A broken load is therefore a pane full of dashes:
+unmistakable in testing, and unreachable in a shipped build without the asset
+being absent outright. Verified in game by misfiling the loader.
+
+**RUNTIME TEXT IS A FORMAT STRING, NOT CONCATENATION.** `"Allow" .. " " .. name`
+bakes English word order into the pane; `"%s %s"` lets a translator move the
+pieces, and the verbs are their own keys because they are words rather than
+code. `petports_format` applies the fallback on a missing key, a non-string, or
+a specifier mismatch.
+
+**PANES NEVER NAME `PETPORTS_STRING_MISSING`.** `petports_stringOr` and
+`petports_format` apply it internally. A constant read across a file boundary is
+what `petports_paneheck.py` flags as a possible nil global -- correctly, since
+that is how it fails -- and four panes writing `or PETPORTS_STRING_MISSING`
+would bury a real finding in noise.
+
+**`common` IS FOR WORDING THAT REPEATS.** "Beacon active" was two identical
+literals in two panes and is now one key. A string moves there the moment a
+second pane needs it, so the two cannot drift.
+
+### Reagent routing into the upcycler -- BUILT
+`arch.upcycler.reagentrouting` -- see also `dd.upcycler.reagentdefault`, `todo.upcycler.slotorderdup`
+
+A delivered item the flavor manifest recognises goes to `MACHINE_SLOT_REAGENT`
+rather than the burner, and the remainder goes to `MACHINE_SLOT_INPUT` in the
+same trip. REVISED THIS SESSION: every offer is now CAPPED to measured,
+descriptor-true slot room before the engine sees it, and the burner fallback is
+GATED on the rule's burn box -- a denied burner keeps the remainder aboard to
+file into ordinary storage. See `arch.upcycler.burnbox` for the predicate both
+dispatch and arrival now share, and `fact.item.descriptorroom` for why the cap
+exists.
+
+**NO NEW WORK GENERATOR AND NO FETCH LOGIC.** The drain path already brought the
+item; the only thing that changed is which slot it lands in. One call site in
+`petports_petport.lua` -- the other `MACHINE_SLOT_INPUT` use is a read.
+
+**THE PORT NOW NEEDS THE FLAVOR MANIFEST** for one question, so it requires
+`petports_flavors.lua`. That is what lets a modded reagent route without anyone
+re-ticking anything.
+
+**MACHINE_SLOT_REAGENT IS A THIRD COPY OF A NUMBER.** Deliberate -- see
+`todo.upcycler.slotorderdup`. If a `SLOT_` constant moves in the upcycler, this
+moves with it, and the failure is a unit posting surplus into whatever the slot
+became.
+
 ### The petport pane draws its own tooltips on two canvases
-`arch.pane.hoverlayer` -- see also `fact.pane.notooltips`, `fact.pane.canvasocclusion`
+`arch.pane.hoverlayer` -- see also `fact.pane.notooltips`, `fact.pane.canvasocclusion`, `fact.pane.textmeasure`, `fact.pane.paneclip`
 
 The engine will not give a ContainerPane script tooltips, so this pane does what
 `/interface/easel/signstoregui.lua` does for its entire interface: reads the
@@ -2310,24 +2454,296 @@ cursor off a canvas and draws the tooltip by hand.
 **TWO CANVASES, AND THE SPLIT IS FORCED.** `hoverCanvas` is full-pane at zlevel
 -5, beneath the background, never drawn on -- it only answers where the cursor is,
 and cannot occlude anything because nothing is under it. `tipCanvas` is small,
-topmost and `visible: false` until there is something to say, then moved to the
-cursor. It covers only the patch a tooltip already covers.
+topmost and `visible: false` until there is something to say, then moved.
 
-**TOOLTIP TEXT IS DECLARED IN THE CONFIG**, as a `petportsTip` key on the widget
-it describes, and swept out of `config.getParameter("gui")` once at init. Adding
-one is a config key and no Lua. Dynamic text -- the diagnostics -- still comes
-from code, because only its existence is static.
+**TOOLTIP TEXT IS A KEY, NOT A STRING.** Declared as `petportsTip` on the widget
+it describes and resolved against the shared table -- see
+`arch.pane.stringtable`. Dynamic text -- the diagnostics -- still comes from
+code, because only its existence is static.
 
-**THE BOX IS SIZED BY ESTIMATE AND IT HAS TO BE.** The canvas API cannot measure
-text. `TIP_CHAR_W` is back-fitted from a rendered tooltip: a 76-character body
-broke at 33 characters against a 140px wrap, so 4.24px each, rounded up to 4.3 so
-the error is a spare line rather than a clipped one. Colour codes are stripped
-before counting -- `^green;` and `^reset;` are fourteen bytes and zero pixels.
+**THE BOX IS SIZED BY MEASUREMENT.** A canvas cannot measure text, but a LABEL
+reports the size of the text it laid out. Two hidden labels, one per font size,
+are written to and read back with `widget.getSize`; the box is
+`TIP_PAD * 2 + titleH + TIP_GAP + bodyH`. `TIP_GAP` is the only authored spacing
+left and it is a gap between blocks rather than a guess at either one's size, so
+it does not vary with script. See `fact.pane.textmeasure` and
+`dead.pane.charwidth`.
+
+**TEXT IS ANCHORED TOP AND FLOWS DOWN.** Both blocks are positioned from the top
+edge of the box, so a wrong height can only leave slack or spill below -- it
+cannot collide with the title. Bottom anchoring cannot do that: on a canvas a
+bottom-anchored wrapped block grows UPWARD from its anchor, which put the body
+through the title for three builds. See `fact.pane.canvasanchor`.
+
+**THE BOX IS ANCHORED TO THE WIDGET, NOT THE POINTER.** Its top-left sits on the
+hovered widget's top-right, so it opens down and to the right, never covers a
+9px checkbox, and does not drift while hovering. Anchoring to the cursor meant
+two clamps, and the clamps -- not the engine -- were what pinned every tooltip in
+the participation band to one bottom edge.
+
+**IT FLIPS ACROSS THE WIDGET AT THE PANE EDGE, IT DOES NOT SLIDE.** Sliding back
+along the edge is what parked the box on top of the checkbox. `TIP_MARGIN` is a
+keep-off from a measured clipping boundary: the pane art is 337 wide and a box
+reaching exactly 337 was already cut.
 
 A canvas can be moved but NOT RESIZED, so `tipCanvas` is declared at the size of
-the largest tooltip and the drawn box shrinks inside it. Anything longer clips.
+the largest tooltip and the drawn box shrinks inside it. 80px is a hard ceiling
+and exceeding it now logs.
+
+### Metrics -- gathered on the port, stored on the item
+`arch.port.metrics` -- see also `dd.dispatch.tidyscore`, `dd.pane.ratesnottotals`, `dd.unit.odometer`
+
+Per-unit lifetime totals live on `petData.stats` and ride `writeBackToItem`
+wholesale -- they survive unsocket, reload and respawn, and travel with the
+item, which is what an examiner NPC will one day inspect. Keys: `moved`,
+`planted`, `watered`, `harvested`, `livestock`, `traveled`, `active`,
+`headpats`, `tidy`.
+
+**ONE LOCAL SLOT FOR THE WHOLE LAYER.** Three functions -- `metrics.add`,
+`metrics.noteStorageTake`, `metrics.paneStats` -- live on one `metrics` table
+because the main chunk sits near Lua's local ceiling; see
+`fact.port.localceiling`.
+
+**NO dirty FLAG, EVER.** Every moved/tidy event happens on a path that already
+ends in a flush, and `active` ticks every frame -- marking it dirty would turn
+the slow write timer into a write-per-tick. At most `WRITE_INTERVAL` of stats
+is at risk to a crash, accepted.
+
+**COUNTED AT CHOKE POINTS, NOT SPRINKLED.** `moved` in the three deposit
+functions (placed sums only); `planted` and `watered` in the task-report
+branches, because only the task type knows what a `spendSeed` MEANT;
+`harvested` and `livestock` one per done-report of their task types, whatever
+the yield; `tidy` in `metrics.noteStorageTake` after both withdraws; `active`
+and `traveled` in `update()`.
+
+**THE MIRROR CARRIES NUMBERS, THE PANE OWNS WORDS AND RATES** -- the bodyKind
+split. `activeMinutes` is floored to whole minutes and `traveled` to tens
+WHILE ON A TASK (exact at rest), because both would otherwise defeat the
+mirror's change gate and sync the blob to clients every interval.
+
+**`tidy` IS GATHERED AND NOT MIRRORED.** The raw number is never displayed
+(`dd.dispatch.tidyscore`); each increment logs `TIDY +1`, which is its only
+verification until Maxwell exists.
+
+### The Stats tab is a list, and steady state is text-only
+`arch.pane.statslist` -- see also `arch.pane.stringtable`
+
+Fixed labels were replaced by `statsScroll.statsList` when the metric set
+outgrew eight positions -- and per-treat counters will have no fixed count at
+all.
+
+**REBUILD ONLY ON A LINE-COUNT CHANGE; setText OTHERWISE.** MEASURED: text
+updates on existing rows do not strobe the widget. `addListItem` still repaints
+the whole container, so rebuilds happen only on tab entry and when the rate
+line appears at minute six.
+
+**POPULATED ONLY WHILE ITS TAB IS ACTIVE, cleared otherwise.** Whether
+`setVisible` on a scrollArea cascades to the list inside is UNMEASURED; an
+empty list draws nothing wherever visibility lands, and the rebuild each visit
+hides inside the repaint the tab click already causes.
+
+**STRIPES AND SEPARATOR DRESSING ARE SET AT REBUILD ONLY** -- the one moment a
+repaint is already paid for. Safe because row meanings cannot change without
+the count changing. Parity resets at each separator so alternation reads as
+belonging to its block; separators wear the clear art and a dull-orange dashed
+placeholder line (`todo.art.statsdressing`).
+
+**SELECTION IS MEANINGLESS AND MADE INVISIBLE, NOT FOUGHT.** Both schema BGs
+are the clear art and the callback is a no-op that tolerates being fired
+mid-rebuild, because `clearListItems` invokes it and
+`setListSelected(list, nil)` throws.
+
+### The burn box, and the one room predicate
+`arch.upcycler.burnbox` -- see also `arch.upcycler.reagentrouting`, `dd.upcycler.reagentdefault`
+
+THE RULE SHAPE IS WRITTEN DOWN IN TWO PLACES WITH NOTHING LINKING THEM --
+`storedRules()` on the object and `applyState()` in the pane. THEY DRIFTED,
+2026-08-29: the pane's copy was never updated when `burn` was added, so it
+rebuilt every rule as `{ item, max }` and dropped both exclusions. Not a
+display bug -- the pane holds the authoritative copy while open and writes the
+WHOLE state on every edit, so opening the pane and touching anything at all
+destroyed a stored exclusion on the object. Both files now carry a comment
+naming the other. ADDING A FIELD TO A RULE MEANS ADDING IT TWICE.
+
+**BOTH EXCLUSIONS ARE ENFORCED AT THE SLOT, NOT ONLY AT ROUTING, as of
+2026-08-29.** The furnace door has always refused a burn-denied hand-drop. The
+charge loader had NO equivalent, so a reagent-denied item dropped into the
+reagent slot was consumed exactly as if the box were ticked and the box meant
+nothing to anyone but the units delivering. `consumeReagent` now refuses one,
+which is also what makes the second rescue reachable -- it runs ABOVE
+`shuttleSlots` in `update`, so without the refusal the item was spent on the
+tick it landed.
+
+**AND THE RESCUE IS A MIRRORED PAIR, sharing one `bulkRescue`.** Burn-denied
+stock in the burner goes to the reagent slot; reagent-denied stock in the
+reagent slot goes to the burner. Same shape from opposite ends, mutually
+exclusive by configuration, and each only reachable because the slot the item
+is LEAVING refuses it -- so a rescue never races a consumer for the same item.
+Two dead ends state themselves rather than failing quietly: both slots denied,
+and denied-plus-exempt. Written as one function on purpose; a near-identical
+pair with nothing linking them is the drift recorded immediately below.
+
+A rule is now `{ item, max, reagent, burn }`, both flags EXCLUSIONS: absent
+allows, only an explicit `false` closes that slot -- so every pre-checkbox rule
+behaves exactly as it did. The pane's `rowBurn` sits left of `rowReagent`
+(order: burn, then reagent) and writes only the untick.
+
+**`machineRuleRoom` IS THE ONE PREDICATE.** It sums exactly the slots the
+rule's checkboxes leave open, descriptor-true (`machineSlotRoom` compares
+parameters whenever the caller has real ones), and it is asked by
+`machineWantsAny`, `machineRoomFor` AND drain's per-stack cap. The patrol bug
+class is precisely a dispatch that asks a different question than the arrival
+answers; any change to which slots a delivery may use happens here and nowhere
+else.
+
+**ARRIVAL OFFERS ARE CAPPED TO MEASURED ROOM** before `containerPutItemsAt`
+ever runs, so whether the engine splits an oversized offer stops mattering. A
+refused remainder with the burner denied stays aboard and files to storage --
+a fallback that destroys what the checkbox protects would make the checkbox a
+lie.
+
+**THE FURNACE DOOR ENFORCES IT TOO.** A hand-dropped burn-denied item sits in
+the burner refusing, with a state line saying why -- a checkbox that only
+guards the couriers while the machine eats hand-drops also lies. See
+`todo.upcycler.cantburnlight` for making that state visible without a log.
+
+### The slot shuttle
+`arch.upcycler.shuttle` -- see also `arch.upcycler.burnbox`
+
+The burner eats items per second, the charge eats one reagent per spend --
+left alone, a both-boxes rule either strands reagents idle or runs the reagent
+slot dry while good reagents burn. The machine now moves its own stock.
+
+**THE PACED DIRECTIONS: ONE ITEM, ONLY INTO AN EMPTY SLOT.** Self-pacing with
+no rates to tune: the burner drains, empties, pulls one from reagent stock
+(both boxes, plus the exempt check the furnace door runs); the charge spends
+the reagent, the slot empties, pulls one from burner stock (reagent box plus
+the manifest). The `>= 2` guard leaves the last both-boxes item to burn rather
+than ping-ponging one item between slots forever.
+
+**THE BULK RESCUE, FIRST AND UNPACED.** Burn-denied stock in the burner has
+exactly one legal destination, and pacing it stranded a measured ~400 milk
+behind one parked reagent the moment the charge filled. Take all, put, put
+back what refuses -- the engine sizes the merge, maxStack and rot and all, so
+the machine needs no stack math. Two change-gated waiting states: a DIFFERENT
+item parked in the reagent slot (no attempt made), and a same-name stack the
+engine cannot merge, which cycles a cheap take-and-return until the charge
+drains the slot (`todo.upcycler.rescuechurn` for the optional gate).
+
+**RUNS WHERE consumeReagent RUNS -- above the enabled gate** -- and for the
+same reason: moving items between a machine's own slots destroys nothing.
+
+### The report handler cleans up before it delivers
+`arch.port.reporthandler`
+
+MEASURED 2026-08-29: a unit patrolled an upcycler at three trips a second and
+every cycle logged "failure 1" -- the escalating backoff never climbed,
+because the `outcome == "done"` cleanup sat BELOW the delivery branches and
+erased the failure `noteFailure` had just recorded. "Done" attests the WALK,
+not the delivery.
+
+The cleanup now runs ABOVE the arrival work: it clears stale failures from
+earlier attempts -- its actual job -- plus the reachability resets that
+reaching the target genuinely attests, and anything the arrival work notes
+afterwards stands. This protected drain and tidy arrivals too, which carried
+the same latent wipe.
+
+### Constants are globals
+`arch.port.constantsglobal` -- see also `fact.port.localceiling`
+
+73 of the port's 74 UPPER_CASE constants are declared bare, freeing their
+local slots, because DE-LOCALIZING TOUCHES NO READ SITE -- delete the word
+`local` and every reference resolves to the global unchanged, which is what
+made this safe where a rename to a constants table would not have been.
+
+Globals are CONTEXT-scoped: visible to the scripts this file requires and
+nothing else. Checked at conversion: none of the required petports scripts
+define or read any of these names. `DEBUG` is the one exception and stays
+local -- generic enough that a required script could someday own a global by
+that name, and a collision on a debug flag fails silently in the worst
+direction.
+
+The local/global split still signals what it always did for FUNCTIONS: global
+means "reachable from a handler registered in init". UPPER_CASE already says
+"constant" without `local` saying it twice.
+
+### Headpats ride vanilla's interaction
+`arch.unit.headpat` -- see also `fact.unit.groundpetinteract`, `dd.unit.headpatgate`
+
+The contract replaces `interact()` and CARRIES VANILLA'S BODY FORWARD -- the
+happy emote on `interactCooldown` -- then reports `petports_headpat` to
+`self.anchorId`, vanilla's own field, refreshed by vanilla every second. No
+`setAnchor` shadow and no `setInteractive` call: vanilla already does both
+jobs, and reading its field beats shadowing its function to duplicate it.
+
+The port's handler just counts. It is the documented future home of the
+stuck-cargo drop: cargo lives on petData, so the port is the only party that
+can ever decide "drop it" versus "pat".
 
 ## DESIGN DECISIONS
+
+### The port band splits by what the player SEES, not by what the code owns
+`dd.pane.bandsplit`
+
+Left column is invisible functionality: whether the port runs at all, and which
+network it belongs to. Nothing there produces anything you can point at in the
+world. Right column is the opposite -- tick a box, watch something start
+happening on screen.
+
+**CLAIM MARKERS IS ON THE RIGHT AND TECHNICALLY BELONGS ON THE LEFT.** It is a
+PORT setting, stored beside enabled and participation, and it gates no work. But
+it is the most immediately visible switch in the pane, so it sits with the task
+toggles, one row clear of them. Anyone tidying that band by ownership will move
+it and make the pane worse.
+
+Both columns share baselines: heading row 296, then 284, 268, and a fourth at
+252 that only the checkbox column uses. A checkbox sits 4px under its own label.
+
+### The upcycler explains its reagent checkbox with art, not a tooltip
+`dd.upcycler.bakedindicators` -- see also `arch.pane.hoverlayer`, `todo.pane.tooltipstrings`
+
+The reagent checkbox needs explaining and is NOT getting a tooltip. The pane
+grows a drawn indicator instead -- a line tracing the checkbox column to the
+reagent slot -- so the control explains itself to someone who was never going to
+hover it.
+
+**THIS IS WHY THE UPCYCLER HAS NO HOVER LAYER AND IS NOT GETTING ONE.** It is a
+ContainerPane, so `createTooltip` is closed to it, and the only control that
+needed hover text now has a better answer. A future maintainer finding no
+tooltips here is looking at a decision, not a gap -- `createTooltip` has already
+been re-added to this pane once on that assumption and deleted again.
+
+### A reagent routes by default, and the tick is an exclusion
+`dd.upcycler.reagentdefault` -- see also `arch.upcycler.reagentrouting`
+
+Absent means "ask the flavor manifest"; only `false` is stored. Ticking removes
+the field rather than writing `true`.
+
+**SO THE DEFAULT STAYS RIGHT FOR SOMEONE WHO NEVER OPENS THE LIST**, and a rule
+written before this feature existed -- or one whose item a MOD later adds to a
+flavor -- starts routing without anyone finding it. Same shape as the filter
+rules, and for the same reason.
+
+**NOTHING REACHES AN UPCYCLER UNLESS THE PLAYER FILTERED IT IN**, so anything
+arriving is already surplus by their own definition. Flavoring it is strictly
+better use of it than burning it, which is what makes routing-by-default safe
+rather than presumptuous.
+
+### A list row is as wide as its scroll area minus eight
+`dd.pane.rowwidth`
+
+MEASURED across every list in the mod: a scroll area leaves 8px for its
+scrollbar. Restock's requests and the deposit beacon's rules both do; the
+upcycler's two lists were leaving 28 and 12, which is the gap between the row
+art and the scrollbar.
+
+The row art is COLUMN-IDENTICAL -- every column is the same pixels -- so a new
+width is generated exactly rather than stretched. `row_148` and `row_164` were
+made that way from `row_144`.
+
+**TWO LISTS IN ONE PANE CAN NEED TWO WIDTHS**, which is why the upcycler's row
+art constants are split by list rather than shared. Sharing them meant widening
+one widened both.
 
 ### Treat colours survive colour blindness and the sprites do not matter
 `dd.art.treatcolours`
@@ -2561,6 +2977,15 @@ ask for it. Monotonic without clamping.
 has no scale for is noise. Ranks are granted by an examiner NPC rather than
 assigned automatically -- which puts the thematic naming on a character instead
 of on a squirrel, and makes the rank something the player goes and gets.
+
+**GATHERED AS OF 2026-08-29.** `petData.stats.tidy`, +1 in
+`metrics.noteStorageTake` when a withdraw leaves `containerAvailable` at zero
+for the taken name -- name-level counting is exactly the grain the player's
+eye uses, which is the one place that engine quirk helps. MACHINES DO NOT
+SCORE (`dd.upcycler.slotsaremeanings`): emptying an output slot eliminates "a
+type" every time and would credit routine fuel hauling as housekeeping. Every
+increment logs, still displayed nowhere; Maxwell is the display
+(`todo.unit.maidrank`).
 
 ### The harvest pool, and why the field probably feeds itself
 `dd.farming.harvestpool`
@@ -2887,8 +3312,13 @@ readout: a healthy idle unit sat there reporting "2 unreachable" forever, which
 a player reads as a fault.
 
 **SO THE COUNT IS UNTOUCHED AND THE DISPLAY IS GATED ON RECENCY.** Each increment
-stamps a timestamp; the diagnostic shows for 30 seconds. The lifetime tally is a
-Stats-tab number. The status line carries only what is true now.
+stamps a timestamp; the diagnostic shows for 30 seconds. The status line
+carries only what is true now.
+
+**SUPERSEDED IN PART, 2026-08-29: the lifetime tally is NOT a Stats-tab
+number.** Ruled out when the tab was built -- unreachable counts are re-homing
+machinery, not a readout for the player. The escalation state stays exactly as
+above; nothing player-facing counts unreachables anywhere.
 
 ### The portrait's facing is normalised against the body
 `dd.pane.portraitfacing` -- see also `fact.pane.portrait`
@@ -2921,6 +3351,13 @@ construction rather than by a rule.
 The corollary, from the upcycler's blip display: never show a raw number the
 player has no scale for. Give it a rank, a threshold, or a fleet comparator, or
 do not show it.
+
+**REFINED, 2026-08-29: "active" is TASK time, not spawned time.** The clock
+runs only while the unit holds work -- a recall or diagnostic filler counts,
+idle-with-no-work does not -- which is the same definition of working that
+hunger already uses, so the clock and the stomach agree. The odometer is gated
+the same way (`dd.unit.odometer`) so the numerator and the denominator measure
+one thing.
 
 ### A* HAS NO CONCEPT OF MEDIUM, SO COST IS THE ONLY STEERING AVAILABLE
 `dd.pathing.coststeering` -- see also `fact.pathing.edgebymedium`
@@ -3273,6 +3710,45 @@ the echo would never be sent.
 A token rather than a timeout: a deadline has to guess how long a commit takes
 and is wrong on a loaded server. Only modules are held back -- everything else in
 a mid-flight mirror is painted normally, because nothing else is in flight.
+
+### The odometer is wrap-aware, task-gated, and refuses teleports
+`dd.unit.odometer` -- see also `dd.pane.ratesnottotals`
+
+`world.magnitude` per tick between successive positions -- raw subtraction
+would bank the planet's circumference at the world seam. A step past ten tiles
+in one tick is a DISCONTINUITY, not travel: vent hops, recalls and respawns
+move by setPosition, and an odometer that credits a teleport measures the
+network's shortcuts rather than the unit's legwork -- the step is discarded
+and the baseline re-seeded. The ADD is gated on holding a task, same as the
+clock; the SAMPLING is not, so the baseline follows the unit through idle and
+the first working step is a step, not the whole idle stroll.
+
+On the wire it is floored to tens while working and exact at rest. THERE IS NO
+LEFTOVER TO CARRY OR CLEAR -- the raw total always held every tile; only the
+mirror rounds, and only for churn.
+
+### Machines do not score, and are never compacted
+`dd.upcycler.slotsaremeanings` -- see also `dd.dispatch.tidyscore`
+
+A machine's slots are MEANINGS, not shelf space. Stated on the put side since
+`depositCargoToMachine` existed; this session enforced the take side too,
+because the FUEL task routes its pickup through `withdrawMisfit`, whose
+crate-compaction landed on the MACHINE. Measured consequence: every treat
+harvest read burner-milk plus reagent-milk as one item split across two slots,
+consumed it all, and `containerAddItems` refilled lowest-slot-first -- the
+whole reagent stack migrated into the burner on every pickup. `withdrawMisfit`
+now compacts only when `machineAt` says the container is not a machine, and
+the Tidy Score has excluded machines since it existed.
+
+### One gate for a headpat
+`dd.unit.headpatgate` -- see also `arch.unit.headpat`
+
+The send sits INSIDE vanilla's `interactCooldown` branch, so a pat that emotes
+is exactly a pat that counts -- the emote and the ledger cannot disagree, and
+mashing E collapses to one of each per window. A second, port-side counting
+cooldown was built and removed: two clocks that can drift against each other
+is one clock too many for a stat whose whole job is matching what the player
+saw.
 
 ## DESIGN INTENT -- PLANNED
 
@@ -5035,6 +5511,28 @@ needed", which has never appeared in any log to date, so it has never fired.
 walk.** The fix is one line -- move `freshPather` above `tryVentRoute`, or
 forward-declare it.
 
+### `x and nil or y` CAN NEVER YIELD nil, AND IT LOOKS LIKE IT SHOULD
+`fact.tooling.andnilor` -- see also `arch.upcycler.burnbox`
+
+`true and nil` is nil, and `nil or false` is false. So BOTH branches of the
+expression return the y operand. The idiom works for every value except the
+one it is usually reached for.
+
+MEASURED 2026-08-29. `rule.burn = nowAllowed and nil or false` was the whole
+mechanism for CLEARING an exclusion, in a design where absent and false are
+the two meanings. The field went in on the first click and could never come
+back out. Six logged clicks reported "allowed" while storing `false` every
+time, because the log printed the intent and the store held the result.
+
+**IT IS SILENT IN EVERY WAY A BUG CAN BE.** It parses, it runs, it type-checks
+nowhere, and the failure is a value that is merely wrong rather than missing.
+Write the branch:
+
+    if nowAllowed then rule.burn = nil else rule.burn = false end
+
+Both instances in this mod are gone. A grep for `and nil or` should stay
+empty.
+
 ### `goto` does not exist — Starbound is Lua 5.1
 `fact.tooling.lua51`
 
@@ -5115,6 +5613,66 @@ BELIEVED FROM READING, not from a log in this mod. The record-list shape is
 correct either way, which is why it was taken without waiting for the
 measurement.
 
+### A LABEL REPORTS THE SIZE OF THE TEXT IT LAID OUT
+`fact.pane.textmeasure` -- see also `dead.pane.charwidth`, `arch.pane.hoverlayer`
+
+A canvas cannot measure text -- `drawText` returns void and there is no measure
+call -- but `widget.getSize` on a LABEL hands back the bounds of the text it just
+rendered. That is the only measurement route in the UI.
+
+MEASURED, four bodies at a 140px wrap: 133x25, 137x16, 127x25, 139x25. Widths
+track the string; heights fit `7 + (n - 1) * 9` exactly.
+
+**A HIDDEN LABEL STILL LAYS OUT.** A visible alpha-zero twin returned identical
+numbers on all four, so the measuring labels are simply `visible: false`.
+
+**THERE IS NO FRAME LAG.** Hover order was Farming, Item Pickup, Sorting,
+Machines; a lag of one would have given Item Pickup the 25 belonging to Farming,
+and it returned its own 16. `setText` then `getSize` in the same frame is safe.
+
+**`widget.setText` SETS A BUTTON'S CAPTION**, not only a label's value. Verified:
+three tab captions and a Take button all resolve through the same sweep.
+
+### A PANE CLIPS A CANVAS THAT OVERHANGS IT, AND FLUSH IS ALREADY TOO FAR
+`fact.pane.paneclip` -- see also `arch.pane.hoverlayer`
+
+A canvas positioned so that part of it falls outside the pane is cut at the pane
+edge. MEASURED: the petport's art is 337 wide, and tooltip boxes reaching
+exactly 337 lost their right edge -- all four participation tooltips, not only
+the two whose arithmetic obviously overran.
+
+So a keep-off margin has to REJECT the boundary rather than allow it.
+
+### A BOTTOM-ANCHORED WRAPPED BLOCK GROWS UPWARD ON A CANVAS AND DOWNWARD ON A LABEL
+`fact.pane.canvasanchor` -- see also `arch.pane.hoverlayer`
+
+Two renderers, two behaviours, and both were established by being wrong first.
+
+**CANVAS `drawText`, `verticalAnchor = "bottom"`:** the position is the bottom of
+the WHOLE BLOCK and lines stack upward from it. The tooltip code assumed the
+opposite -- first line at the position, stacking down -- and back-offset the body
+by `(lines - 1)` to land its last line on the padding. Under that assumption an
+overlap is arithmetically impossible at any height, which is exactly what the
+observed overlap falsified.
+
+**LABEL WIDGET, `vAnchor = "bottom"` DECLARED:** the position is the TOP of the
+block and the text flows down. The declaration does not change it. A modules
+hint placed to grow up into a gap grew down over the readout below it instead.
+
+The canvas API takes `horizontalAnchor`/`verticalAnchor`; a label takes
+`hAnchor`/`vAnchor`. They are not interchangeable.
+
+### A FAILED `require` IN A PANE SCRIPT IS SILENT IN THE UI
+`fact.pane.requiresilent` -- see also `arch.pane.stringtable`
+
+A missing required asset throws during context load and takes the WHOLE script
+with it. The pane still opens. It renders every widget from its config defaults
+and runs no code at all, which looks like a plausible pane rather than a broken
+one -- the tell is that widgets from every tab are drawn at once, because
+`showTab` never ran.
+
+The log line is the only signal. MEASURED by misfiling `petports_strings.lua`.
+
 ### A ContainerPane does not forward createTooltip to its script
 `fact.pane.notooltips` -- see also `arch.pane.hoverlayer`, `fact.pane.canvasocclusion`
 
@@ -5136,6 +5694,30 @@ is closed to a ContainerPane.
 Two wrong fixes went in before this was measured -- one guessing at the hit test,
 one adding the `tooltipLayout` the config was genuinely missing. Both were real
 defects. Neither was the reason.
+
+### `widget.getChecked` IN A CHECKABLE BUTTON'S CALLBACK IS THE POST-TOGGLE STATE
+`fact.pane.checkedpostoggle` -- see also `arch.upcycler.burnbox`
+
+The engine flips the box and THEN fires the callback, so the callback never
+sees the state the player clicked on. It sees the state they clicked it INTO.
+
+MEASURED 2026-08-29 across six consecutive clicks on one upcycler rule row,
+with the box built checked:
+
+    click 1   box checked     reported false
+    click 2   box unchecked   reported true
+    click 3+  box checked     reported false
+
+**AND THE SAME LOG DISPROVES THE OTHER HALF OF THE OLD HYPOTHESIS.**
+`setChecked(false)` DOES land against a `"checked": true` template default --
+click 2 could only have read true if click 1's `setChecked(false)` had taken
+effect. Both candidate explanations in `todo.upcycler.checkstatelog` were
+wrong, and the real faults were elsewhere entirely.
+
+**THIS DOES NOT MAKE getChecked THE RIGHT THING TO READ.** The rule stays the
+authority and the widget is still repainted from it. After a list rebuild the
+widget's state comes from the rule anyway, and one authority is cheaper to
+reason about than two that merely usually agree.
 
 ### A canvas on top kills every item tooltip beneath it
 `fact.pane.canvasocclusion` -- see also `arch.pane.hoverlayer`
@@ -5160,7 +5742,109 @@ This also explains the sign store: its dispenser is a separate container with a
 separate UI because its canvas covers the pane, and an item grid under that canvas
 would be dead. That is a workaround, not a design.
 
+### THE MAIN CHUNK HAS A 200-LOCAL CEILING, AND THIS FILE FOUND IT
+`fact.port.localceiling` -- see also `arch.port.constantsglobal`
+
+MEASURED 2026-08-29, verbatim from the load:
+
+    Error code 3, [string "/objects/lofty_petports/petport/petp..."]:9475:
+    too many local variables (limit is 200) in main function near '('
+
+The limit is PER SCOPE, and a file's main chunk is a scope. It is 200 in every
+mainline Lua and in OpenStarbound's vendored lparser.c at the pre-edit fork
+commit, which is as close to reading retail as it gets without the binary.
+Stacked mods never surface it because separate files are separate chunks --
+nothing pools.
+
+The port file entered the session at 198 file-scope locals and sits at 127
+after the constants conversion. Adding a file-scope `local` costs a slot;
+adding a global, or a field on an existing table, costs nothing.
+
+### SAME NAME IS NOT SAME ITEM -- ROOM IS A DESCRIPTOR QUESTION
+`fact.item.descriptorroom`
+
+MEASURED 2026-08-29: dispatch computed "room for 1000" by name math; both
+`containerPutItemsAt` calls refused all 1000; the target slots held the same
+item NAME with different PARAMETERS. Milk is food, food carries rot state in
+its parameters, and the engine merges stacks by DESCRIPTOR -- a slot of older
+milk offers no room to fresher milk however much headroom the name arithmetic
+sees.
+
+Consequence: any room predicate that will feed a PUT must compare parameters
+(`compare` from vanilla util.lua, the same test receiveCargo uses), or cap the
+offer to measured room, or both -- this mod now does both.
+
+WHETHER `containerPutItemsAt` SPLITS AN OVERSIZED SAME-DESCRIPTOR OFFER IS
+UNMEASURED. The refusals above are fully explained by the descriptor mismatch,
+and capping every offer to measured room made the question moot. Do not build
+on either answer.
+
+### containerAddItems FILLS FROM THE LOWEST SLOT
+`fact.item.addorder`
+
+Measured via the machine-compaction migration (`dd.upcycler.slotsaremeanings`):
+items consumed from slots 0 and 1 and re-added landed in slot 0 first. Which
+is fine for a crate and is exactly why nothing that re-adds by
+`containerAddItems` may ever touch a container whose SLOTS HAVE MEANINGS.
+
+### groundPet.lua ALREADY OWNS INTERACTION
+`fact.unit.groundpetinteract` -- see also `arch.unit.headpat`
+
+Read from the vanilla source, 2026-08-29. `groundPet.lua` defines
+`interact()` -- happy emote gated on `config.getParameter("interactCooldown",
+3.0)` via `self.lastInteract`, which its `init()` zeroes -- and its `init()`
+calls `monster.setInteractive(true)`. Its `setAnchor(entityId)` stores the
+anchor in `self.anchorId` and writes `storage.anchorPosition`;
+`updateAnchor()` re-calls it every second. So a later-loaded script that
+defines `interact` REPLACES the emote unless it carries the body forward, the
+anchor's entity id is already on `self`, and nothing needs to call
+setInteractive again.
+
 ## DISPROVEN
+
+### SIZING TEXT BY CHARACTER COUNT, IN ANY LANGUAGE
+`dead.pane.charwidth` -- see also `fact.pane.textmeasure`
+
+The tooltip box was sized from `#body * TIP_CHAR_W / wrapWidth`, with
+`TIP_CHAR_W` back-fitted at 4.3px from a rendered English string.
+
+MEASURED, the same four English bodies divided by their real line counts: 3.89,
+4.44, 5.53, 5.53 px per character. The constant could not have been right,
+because WRAPPING BREAKS ON WORD BOUNDARIES and a character count does not
+predict where those fall. One tooltip was estimated at four lines and renders in
+three, which was the visible slack under it.
+
+A translated string makes it worse rather than differently wrong -- a CJK glyph
+is roughly twice a Latin one, so the error becomes a factor and it CLIPS instead
+of running long -- but this was already unfixable in the language it was fitted
+to. Replaced by measurement, not by a better constant.
+
+### THE UNSOCKET CARGO LOSS, WHICH IS NOT REPRODUCIBLE AND MAY NEVER HAVE BEEN REAL
+`dead.cargo.unsocketloss` -- see also `status.port.inventory`
+
+Cargo was reported destroyed by an unsocket, "most of the time", with one stack
+of dirt surviving. Three theories were proposed and the first two were wrong.
+
+**THE WRITE PATH IS PROVEN SOUND.** A character save was dumped to JSON after an
+unsocket: `parameters.petData.cargo` held 100 snowflakes. The item carries cargo
+correctly across an unsocket and a full game shutdown.
+
+**THREE TRACED CYCLES AFTERWARDS WERE CLEAN**, including two live
+pickup-unsocket-resocket rounds: item to petData to spawn to deposit, cargo
+intact at every step, deposited into the crate within seconds.
+
+**NOTHING FUNCTIONAL CHANGED BETWEEN THE FAILING BUILD AND THE CLEAN ONE.** The
+only edits in between were the trace calls themselves. So there is no fix to
+point at, and two possibilities remain: it is intermittent, or every observation
+was the stale pane described in `proc.tooling.earlyreturn` -- which was live
+at the time, froze the pane on an unsocket, and would show a cargo slot the port
+had already discarded.
+
+The reported symptom "the pet kept picking up items while holding cargo" fits
+the stale pane exactly: a unit with cargo takes the deposit path outright and
+cannot be dispatched to a pickup, so the port's own view of cargo was empty.
+
+`CARGO_TRACE` is left ON to catch a recurrence. Do not treat this as closed.
 
 ### Ranking by distance under scarcity starves the far machines
 `dead.dispatch.nearestfirst` -- see also `dd.dispatch.emptiestfirst`
@@ -6038,8 +6722,12 @@ matching when someone rewords a log line.
 ### The upcycler's slot order is duplicated in two files with nothing linking them
 `todo.upcycler.slotorderdup`
 
-    petports_upcycler.lua   SLOT_INPUT 0   SLOT_REAGENT 1   SLOT_OUTPUT 2
-    petports_petport.lua    MACHINE_SLOT_INPUT 0            MACHINE_SLOT_OUTPUT 2
+    petports_upcycler.lua   SLOT_INPUT 0   SLOT_REAGENT 1          SLOT_OUTPUT 2
+    petports_petport.lua    MACHINE_SLOT_INPUT 0   MACHINE_SLOT_REAGENT 1   MACHINE_SLOT_OUTPUT 2
+
+THE REAGENT COPY IS NEW and the port now WRITES through it -- see
+`arch.upcycler.reagentrouting`. Accepted deliberately as the simple
+implementation; it doubles the surface of this duplication.
 
 Reordered from input/output/reagent so the pane could draw them in pipeline
 order. The port carries its own copies because it reads machine slots directly
@@ -6064,46 +6752,50 @@ refusing vent, does not verify the landing against the plan, and does not count
 the hop against `MAX_REPEAT_HOPS`. Both are labelled in the log
 (`[ENTRY SITE A]` / `[ENTRY SITE B]`).
 
-### Tooltips and label strings, everywhere
-`todo.pane.tooltipstrings` -- see also `arch.pane.hoverlayer`, `fact.pane.notooltips`
+### The upcycler is the last pane holding its own strings
+`todo.pane.tooltipstrings` -- see also `arch.pane.stringtable`, `dd.upcycler.bakedindicators`
 
-- **Verify tooltip behaviour is consistent across all four panes.** Only the
-  petport has the hover layer. The upcycler is the other ContainerPane and its
-  `createTooltip` -- including the "Pet feeder" one -- has never fired and is dead
-  code today. The two beacons are ScriptPanes and theirs work.
-- **Verify the upcycler's food flavor tooltips display anything at all.** They
-  are written against `createTooltip`, so on current evidence they do not.
-- **A tooltip on every checkbox.** Probable exceptions: "enable machine" and
-  "enable beacon", which say what they do.
-- **Pull labels AND tooltip strings into one centralised .config.** They are
-  currently spread across four pane configs with no way to check them together,
-  and the wording repeats between panes.
+MOST OF THIS ENTRY IS CLOSED. Tooltip behaviour is verified across all four
+panes, the upcycler's dead `createTooltip` is deleted, and three of four panes
+are on the shared string table.
 
-### Pane art, four jobs
-`todo.art.panes`
+- **Migrate the upcycler onto the string table.** 14 literals still in its
+  config: `Upcycler running`, `Pet feeder`, `Upcycle above this many`, `Add a
+  rule`, `Keep at most`, `Click holding an item`, `How it works`, `Flavors`,
+  `in`, `out`, `reagent`, `Select a flavor`, `Replace Me`, and the instructions
+  paragraph. Plus its runtime status line.
+- **`Replace Me` is a placeholder that must not ship.**
+
+WHAT IS DELIBERATELY NOT ON THIS LIST ANY MORE: a tooltip on every checkbox.
+Nineteen checkboxes exist; five have tips and the rest need none. The three
+"enabled" boxes and the three tabs say what they do; "Pet feeder" is simple to
+understand; "Accept everything" is simple enough as long as someone understands
+that rules beat it. The upcycler's reagent box is answered by
+`dd.upcycler.bakedindicators` instead.
+
+`portNetworkLabel` still builds `"id: " .. network` in Lua rather than from a
+format string. Left alone deliberately: it becomes a spinner when network
+selection is built, and the string goes with it.
+
+### Pane art, and the order it has to happen in
+`todo.art.panes` -- see also `dd.upcycler.bakedindicators`
+
+**NEXT SESSION:**
 
 - **Deposit and restock beacons need top-left pane icons.** They have none.
 - **Upcycler and petport need proper ones** to replace their placeholders.
-- **All four panes need the diagonal shine layer on the background.**
-- **Slot targeting graphics are placeholder in every pane and disappear behind an
-  itemSlot once something is in it.** Needs a real pass, not a tweak.
+- **The upcycler's reagent indicator** -- the drawn line from the checkbox
+  column to the reagent slot that replaces a tooltip. Open question: static art
+  baked into the pane background, or a widget that only draws when at least one
+  rule is ticked. Static is trivial and always correct while neither end moves.
 
-### Reagent routing into the upcycler
-`todo.upcycler.reagentrouting` -- see also `dd.upcycler.blips`, `todo.upcycler.slotorderdup`
+**DEFERRED UNTIL THE LAYOUTS ARE FINAL, AND THE ORDER IS THE POINT:**
 
-Checkboxes in the upcycler's filter list marking which eligible items are
-REAGENTS, ticked by default for anything the flavor manifest recognises.
-
-A delivered item that is a reagent goes to the reagent slot rather than the burner
-slot, unless the reagent slot is full, in which case it burns as normal.
-
-**NO NEW WORK GENERATOR AND NO FETCH LOGIC.** The drain path already brings the
-item; the only change is where it lands. Nothing reaches an upcycler unless the
-player already filtered it in, so anything arriving is already marked as surplus
--- a reagent hitting the slot instead of the burner is strictly better use of it.
-
-The tick exists to EXCLUDE a reagent from that routing, which keeps the default
-right for a player who never opens the list.
+- **The diagonal shine layer on all four backgrounds.** It has to be sized
+  precisely to each pane, and the panes are going to be COMPRESSED once they are
+  feature complete. Doing it first means doing it twice.
+- **Slot targeting graphics** are effectively baked into the pane backgrounds,
+  so they come after the same compression for the same reason.
 
 ### Sinker locomotion -- ground pathing that will not swim
 `todo.locomotion.sinker` -- see also `dead.locomotion.pelagic`
@@ -6122,10 +6814,11 @@ see `status.port.inventory` on `drone_placeholder`, which is free to rename now 
 expensive once there are several variants.
 
 ### Finish the petport pane
-`todo.pane.statstab` -- see also `arch.pane.hoverlayer`
+`todo.pane.statstab` -- see also `arch.pane.hoverlayer`, `arch.pane.statslist`
 
-- **The Stats tab is eight labels and `stats = nil` in the mirror.** Metrics are
-  not gathered on the port either.
+- **The Stats tab is BUILT** -- a list, striped, with placeholder separators;
+  see `arch.pane.statslist`. What remains here is dressing
+  (`todo.art.statsdressing`) and the per-treat block once eating exists.
 - **Decide whether the unit's HP bar belongs in the pane at all.** A unit that
   cannot be hurt by anything the player builds may not need one.
 - **Rename is still `not built`** behind its button on the Settings tab.
@@ -6180,6 +6873,73 @@ Maxwell. Presenting a pet with a high Tidy Score earns a maid dress cosmetic.
 
 Filed rather than dropped because it is the only thing so far that gives the Tidy
 Score a consumer -- it is currently computed, displayed, and read by nothing.
+
+### The upcycler must show it cannot burn
+`todo.upcycler.cantburnlight` -- see also `arch.upcycler.burnbox`, `dd.upcycler.bakedindicators`
+
+A status light in the art and animationStates for the state "the burn slot is
+occupied but nothing can burn" -- whether because no rule names the item or
+because the rule's burn box denies it. WHILE ENABLED, OCCUPIED, AND UNABLE TO
+BURN, IT SHOULD BE BEEPING. The machine already knows the state -- the furnace
+door logs it -- it just cannot be seen or heard from outside, and a machine
+quietly not-burning is indistinguishable from a machine quietly done.
+
+### The backoff ladder reorder is unexercised
+`todo.port.backoffladder` -- see also `arch.port.reporthandler`
+
+The fix is in and the patrol it caused is gone, but no arrival failure has
+happened SINCE -- the closing log has zero backoff lines. On the next genuine
+arrival failure, confirm the counts climb past 1 and the intervals escalate.
+If they do, delete this entry.
+
+### Distinct glyphs and real separator art
+`todo.art.statsdressing`
+
+Three placeholders from the metrics session, all flagged in code comments: the
+burn and reagent checkboxes on an upcycler rule row are IDENTICAL vanilla
+checkbox art with different meanings -- the exact misreading the beacon verb
+art exists to prevent; the stats list separators are dull-orange dashed rules;
+and the stripe fills `row_180_11.png` / `_alt.png` are generated uniform
+fills, not designed art.
+
+### Big obvious on/off lights on the pane
+`todo.art.runninglights` -- see also `todo.pane.tooltipstrings`
+
+DECORATIVE, and worth it because the switch is load-bearing in a way the
+current checkbox does not carry. Adding a rule deliberately switches the
+machine off (`sampleSlotClicked: machine was running, switching it off`) so a
+half-built ruleset cannot eat something -- correct behaviour, but it means the
+machine stops during ordinary editing and the only tell is a small checkbox the
+player just clicked past. MEASURED 2026-08-30: a full test round was run
+against a switched-off machine before the state was noticed.
+
+Big, unmissable, and on the pane rather than the object -- object-side
+indicator lights are a separate art pass. This is the same alert-surface
+problem as the stranded-slot states, so build it with those in mind rather than
+as a one-off widget.
+
+### Drop the side-by-side toggle logging
+`todo.upcycler.checkstatelog` -- see also `fact.pane.checkedpostoggle`
+
+THE SEMANTIC QUESTION THIS ENTRY EXISTED FOR IS ANSWERED -- see
+`fact.pane.checkedpostoggle`. Neither branch of the old hypothesis was the
+fault; the toggles were broken for two unrelated reasons instead
+(`fact.tooling.andnilor`, `arch.upcycler.burnbox`).
+
+What is left is one line of cleanup. Both rule-row toggles still log the
+widget's report beside the stored result, kept deliberately for one round to
+confirm the two fixes. Once a log shows an untick storing an ABSENT field,
+drop the widget half of the message; the rule is the authority and the second
+reading has nothing left to settle.
+
+### The rescue retry gate, if the churn ever matters
+`todo.upcycler.rescuechurn` -- see also `arch.upcycler.shuttle`
+
+A same-name stack the engine cannot merge (rot) makes the bulk rescue cycle a
+take-and-return every few ticks until the charge drains the reagent slot.
+Invisible in practice; if it ever shows in a log or profiler, gate re-attempts
+on the reagent slot's count changing. Three lines, filed rather than done
+because unmeasured cost does not buy code.
 
 ## PROCESS
 
@@ -6345,9 +7105,35 @@ cost 1.5-3s and the vent case cost the whole journey.
 ### AN EARLY RETURN IN update() KEEPS COSTING THE SAME BUG
 `proc.tooling.earlyreturn`
 
-Third instance now, and the second this session.
+FOURTH INSTANCE NOW, and the fourth is the most expensive so far.
 
-`consumeReagent` sat below `if not storedEnabled() then return end`, so an off
+**`mirrorPaneState` WAS NEVER RUNNING ON AN EMPTY PORT.** The no-item branch
+returns at line ~9355, inside `update()`; the mirror was called ~190 lines
+below it. So an unsocket froze the pane permanently: it went on reading the blob
+written while the unit was still socketed -- name, portrait, fuel, and a full
+module set with clickable slots. That is the module duplication path, and it is
+the prime suspect for `dead.cargo.unsocketloss` as well.
+
+**THE COMMENT JUSTIFYING THE OLD POSITION WAS WRONG, AND WAS TRUSTED.** It said
+the no-item return "sits inside workUpdate", so being above `workUpdate` was
+sufficient. It is not in workUpdate. A whole timing theory was built on that
+sentence, complete with arithmetic off `WORK_INTERVAL`; the arithmetic was fine
+and the premise was fiction. **A COMMENT ABOUT CONTROL FLOW IS A CLAIM, NOT A
+MEASUREMENT** -- check it against the line numbers before building on it.
+
+Fixed by HOISTING rather than by duplicating the call into the no-item branch,
+which is how claims and unit position were fixed the previous two times. A pane
+needs telling on every path -- switched off, not a pet item, malformed item --
+not just that one. Verified mechanically afterwards: two early returns in
+`update()`, both below the mirror.
+
+The consequence is that the mirror now runs BEFORE `self.petData` is cleared
+later in the same tick, so it must not trust `petData` -- it asks the container
+instead. That check was belt-and-braces when it was added and is load-bearing
+now.
+
+
+PREVIOUSLY: `consumeReagent` sat below `if not storedEnabled() then return end`, so an off
 machine ignored its reagent slot entirely. That is not an edge case -- ADDING A
 RULE SWITCHES THE MACHINE OFF, so the natural order (add rule, drop reagent in,
 set threshold, switch on) put the reagent in during the one window where it was
@@ -6360,6 +7146,28 @@ as the crosshair progress signal sitting below the vent branch's return.
 every one of them means "this genuinely should not run".** Housekeeping, state
 publication and anything the player can trigger from a UI almost never belong
 below a gate.
+
+### AN ASSERT HAS TO CHECK THE SHAPE OF WHAT WAS WRITTEN, NOT THAT THE WORDS APPEAR
+`proc.tooling.assertshape` -- see also `proc.tooling.halfedit`, `fact.tooling.nilglobal`
+
+Twice in one session an edit was asserted and shipped broken anyway.
+
+**A FUNCTION WENT IN WITH LITERAL `\t` SEQUENCES** instead of tabs, from a
+Python escaping mistake. The assertion pass counted tokens -- every expected name
+was present, so it passed. Token counts do not see indentation.
+`petports_paneheck.py` caught it on block balance and three phantom calls.
+
+**A NEW CALL SITE WAS CHECKED AGAINST THE WRONG CALLER.** `socketedItem` is a
+`local function` defined 550 lines below a message handler that started calling
+it. The position check was made against a DIFFERENT call site -- the one below
+the definition, which passes -- and the new one was never checked. It threw
+`attempt to call a nil value` on the first click. See `fact.tooling.nilglobal`, a
+fact this file already carried and this file's own forward declarations already
+demonstrate three times over.
+
+**THE RULE: assert the property that would break, not the presence of the
+change.** For a rename, count both old and new. For an insert, check every call
+site rather than a call site. For anything with indentation, look at the bytes.
 
 ### An empty collection is not the same as a negative answer
 `proc.tooling.emptyvsno`
