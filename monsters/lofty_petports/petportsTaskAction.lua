@@ -131,7 +131,7 @@ local TASK_DEBUG = true
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-08-29c stop on arrival instead of sliding off"
+local BUILD_STAMP = "2026-08-30a launched vx holds for the whole arc"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -2024,9 +2024,22 @@ function petportsJumpMover(pather)
     --  its landing exactly as before, with the launch line in the log claiming
     --  it had been corrected.
     --
-    --  plannedVx IS CARRIED so the substitution can verify the arc it is being
-    --  applied to belongs to this jump. It is cleared when the arc ends.
-    pather.petportsLaunch = { vx = vx, plannedVx = edge.jumpVelocity[1] }
+    --  plannedVx IS CARRIED FOR DIAGNOSIS ONLY, NOT AS A GATE. It used to be
+    --  the test for whether an arc edge belonged to this jump, and that was
+    --  wrong in the one case that matters -- see the airborne branch of
+    --  petportsArcMover, and fact.pathing.plannervxdrop. The arc's ownership is
+    --  now a state invariant maintained per tick: the record exists only while
+    --  the pather is on an Arc edge.
+    --
+    --  jumpIndex IS THE EDGE THE JUMP WAS TAKEN FROM. The arcs belonging to this
+    --  jump are the contiguous run after it, so an index at or below it in a
+    --  substitution is a record that should already have been cleared, and is
+    --  logged as such rather than silently applied.
+    pather.petportsLaunch = {
+      vx = vx,
+      plannedVx = edge.jumpVelocity[1],
+      jumpIndex = pather.finder and pather.finder.currentEdgeIndex
+    }
 
     --  A NEW JUMP IS NOT A LANDING. Cleared here as well as when an arc ends,
     --  because an arc that terminates some other way -- the skip logic reaching
@@ -2260,19 +2273,76 @@ function petportsArcMover(pather)
   --  removed -- silently, mid-flight, with the takeoff line still reporting the
   --  corrected value.
   --
-  --  GATED ON THE PLANNED VELOCITY MATCHING, so a stale record cannot be applied
-  --  to an arc belonging to some other jump -- or to a FALLING arc entered with
-  --  no takeoff at all, which has no launch of its own to honour.
+  --  THE LAUNCH HOLDS FOR THE WHOLE ARC, NOT FOR THE EDGES THAT HAPPEN TO AGREE
+  --  WITH IT. This gate used to read `launch.plannedVx == velocity[1]`, on the
+  --  reasoning that matching the takeoff's planned vx proved the edge belonged
+  --  to this jump. It does not, and the case where it fails is the ordinary one:
+  --  A* CHANGES ITS OWN vx PARTWAY THROUGH AN ARC. See
+  --  fact.pathing.plannervxdrop. Measured on the platform course:
+  --
+  --      edge 62 Arc  vel [12,7.06]  -> dst [2516.71,1180.75] vel [1,0]
+  --      edge 64 Arc  vel [1,0]      -> dst [2516.93,1180.25] vel [1,-26.5]
+  --
+  --      25.607  [2514.65,1180.89]  vel [7.95553, 6.256]   edge 62, gate passes
+  --      25.690  [2514.92,1181.07]  vel [1, -3.744]        edge 64, gate FAILS
+  --
+  --  One look, and the unit is braked from the launched 7.96 to the planner's 1
+  --  at the apex, with a quarter second of descent still to run. It crossed its
+  --  landing altitude 1.83 tiles short in x and fell twelve tiles.
+  --
+  --  THE CONTROL THAT SETTLED IT: on a later attempt the task failed mid-flight
+  --  and the pather was discarded at the apex. With nothing calling this mover,
+  --  the unit kept its launched vx, flew pure ballistics and touched down at
+  --  [2517.22,1177.8] -- its planned landing, 0.22 over. Guided it missed by
+  --  1.83 tiles; unguided it hit. solveLaunch was right the whole time.
+  --
+  --  SO THE PLANNER'S PER-EDGE VELOCITIES DESCRIBE A TRAJECTORY THE UNIT IS NO
+  --  LONGER FLYING, and must not steer anything once a launch is committed.
+  --  With friction zeroed above, holding launch.vx is what the ballistic case
+  --  does on its own; this branch now just declines to interfere with it.
+  --
+  --  OWNERSHIP IS A STATE INVARIANT NOW, NOT A VELOCITY COMPARISON. The record
+  --  exists only while the pather is on an Arc edge -- cleared every tick it is
+  --  not, in the arc tick block -- so `launch ~= nil` is the whole test. That
+  --  closes the two cases the old gate was defending: a stale record cannot
+  --  survive the Land at the end of its own arc, and a FALLING arc entered with
+  --  no takeoff has no record to inherit.
+  --
+  --  OVERSHOOT IS STILL HANDLED, AND NOT BY THIS. The arrival brake above is
+  --  what stops a fast flat jump sliding off its landing; that is untouched.
+  --  What is removed here is only the mid-flight re-sync to the plan.
   local wantVx = velocity[1]
   local launch = pather.petportsLaunch
 
-  if launch ~= nil and launch.plannedVx == velocity[1] then
+  if launch ~= nil then
     wantVx = launch.vx
 
-    if not pather.petportsArcSubstituted then
-      pather.petportsArcSubstituted = true
-      sb.logInfo("UNIT ARCMOVER steering to the LAUNCHED vx %s rather than the planned %s",
-        sb.printJson(wantVx), sb.printJson(velocity[1]))
+    --  A RECORD OLDER THAN THE EDGE IT IS BEING APPLIED TO SHOULD NOT EXIST.
+    --  The arcs of a jump are the contiguous run after the Jump edge, so an
+    --  index at or below jumpIndex means the per-tick clear did not fire. Named
+    --  rather than corrected: it is a bug in the invariant, and silently
+    --  refusing the substitution would hide it.
+    local index = pather.finder and pather.finder.currentEdgeIndex
+
+    if launch.jumpIndex ~= nil and index ~= nil and index <= launch.jumpIndex then
+      sb.logInfo("UNIT ARCMOVER STALE LAUNCH: record from jump edge %s applied on edge %s "
+        .. "-- the per-tick clear should have removed this",
+        sb.printJson(launch.jumpIndex), sb.printJson(index))
+    end
+
+    --  LOGGED ON EVERY CHANGE OF THE PLANNED VALUE, NOT ONCE PER PATHER. The
+    --  old latch printed twice in a 1178-line log and never for the jump that
+    --  failed, because petportsArcSubstituted stayed set across four jumps --
+    --  and there was no line at all when the substitution LAPSED, which is the
+    --  event that was breaking the flight. Keyed on the planned vx so a steady
+    --  arc still prints once, while the edge that used to end the substitution
+    --  now prints the divergence it causes.
+    if pather.petportsArcSubstituted ~= velocity[1] then
+      pather.petportsArcSubstituted = velocity[1]
+      sb.logInfo("UNIT ARCMOVER steering to the LAUNCHED vx %s; this edge's plan says %s "
+        .. "(jump edge %s, now on edge %s)",
+        sb.printJson(wantVx), sb.printJson(velocity[1]),
+        sb.printJson(launch.jumpIndex), sb.printJson(index))
     end
   end
 
@@ -3811,6 +3881,38 @@ function petportsTaskAction.update(dt, stateData)
             sb.printJson(yGap), sb.printJson(PLAN_WALK_LOOKAHEAD))
         end
       end
+    end
+  else
+    --  THE LAUNCH RECORD LIVES EXACTLY AS LONG AS THE ARC DOES.
+    --
+    --  petportsArcMover honours pather.petportsLaunch for every arc edge of the
+    --  jump it belongs to, with `launch ~= nil` as the whole ownership test, so
+    --  the record's LIFETIME is now the invariant that keeps it honest. Stating
+    --  it as a per-tick state check rather than hooking each exit is deliberate:
+    --  there are at least four ways off an arc -- the mover's grounded
+    --  last-edge branch, its advance loop running past the last Arc, the skip
+    --  loop stopping on a Land, and a path lost mid-flight -- and only the first
+    --  ever cleared this. The failing jump on the platform course took the
+    --  third, so the record would have outlived its arc every single time.
+    --
+    --  ONE PLACE, ONE RULE: not on an Arc edge, no launch record. That covers
+    --  every exit including ones not written yet.
+    --
+    --  A TAKEOFF TICK IS NOT AN EXIT. This block runs before edgeMove, so on the
+    --  tick a jump launches the current edge is still the Jump and the record
+    --  has not been written yet -- moveJump sets it and advances onto the first
+    --  Arc later in the same tick. The clear below sees nothing to clear, which
+    --  is correct, and the following tick reads an Arc.
+    if self.pather ~= nil and self.pather.petportsLaunch ~= nil then
+      sb.logInfo("UNIT ARCMOVER launch record cleared at %s: the pather is on %s, not an Arc "
+        .. "-- launched vx %s is no longer being honoured",
+        sb.printJson(mcontroller.position()),
+        tostring(arcEdge and arcEdge.action or "no edge"),
+        sb.printJson(self.pather.petportsLaunch.vx))
+
+      self.pather.petportsLaunch = nil
+      self.pather.petportsArcSubstituted = nil
+      self.pather.petportsLanding = nil
     end
   end
 
