@@ -38,7 +38,7 @@ require "/scripts/lofty_petports/petports_strings.lua"
 local DEBUG = true
 
 --  Bump on every change to this file. See the log line in init().
-local PANE_BUILD_STAMP = "2026-08-30d strings from the shared table"
+local PANE_BUILD_STAMP = "2026-08-30e string sweep actually runs"
 
 --  sb.logInfo accepts %s and nothing else. Pre-format through string.format,
 --  which has no such limit, and hand the logger one string.
@@ -1575,6 +1575,17 @@ function init()
 	--  independently of the object, and a stale copy behaves exactly like an
 	--  unfixed one.
 	sb.logInfo("PETPORTS upcyclerconfig build: %s", PANE_BUILD_STAMP)
+
+	--  ONCE, AT INIT. The gui table and the string table are both fixed for the
+	--  life of the pane, so there is nothing a later pass could find.
+	--
+	--  MIGRATING THE KEYS IS NOT MIGRATING THE PANE. The keys and the require
+	--  went in without this call, and every migrated widget rendered its own
+	--  declared "--" with NOTHING IN THE LOG -- which is the string table
+	--  working exactly as designed, and is why a silent pane of dashes has to be
+	--  read as "the sweep did not run" rather than "the table failed to load".
+	--  petports_stringsFailed() is what tells those two apart.
+	petports_applyStrings()
 
 	--  CLEAR THE ONLY FILE-SCOPE DRAW CACHE THAT NEVER CLEARS ITSELF.
 	--
