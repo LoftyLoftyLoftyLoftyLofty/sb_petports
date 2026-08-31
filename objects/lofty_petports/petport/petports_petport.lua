@@ -87,7 +87,13 @@ ENVIRONMENT_INTERVAL = 5.0
 --  Fill fraction that counts as submerged. MUST MATCH PETPORTS_SUBMERGED_FILL
 --  in petports_contract.lua -- the port and the unit have to agree about what
 --  water is, or a unit is retired for an environment it would have accepted.
-ENVIRONMENT_SUBMERGED_FILL = 0.9
+--
+--  NOW READ FROM THE SHARED MODULE rather than spelled again here. Dispatch
+--  eligibility samples tiles through petports_habitatMedia, which needs the same
+--  threshold, and a third copy of 0.9 was one copy too many. The contract's own
+--  constant is deliberately left alone -- it is load-bearing for the pathing
+--  work closed on 2026-08-31 and agrees today.
+ENVIRONMENT_SUBMERGED_FILL = PETPORTS_HABITAT_SUBMERGED_FILL
 
 --  Consecutive environment polls a unit must read as outside its own medium
 --  before the port re-homes it. See mediumCheck.
@@ -1171,7 +1177,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-08-31d home point asks the unit"
+local PETPORT_BUILD_STAMP = "2026-08-31f eligibility gate keyed by target"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -3642,6 +3648,29 @@ end
 
 --------------------------------------------------------------------------------
 
+--  THE SOCKETED CHASSIS'S CAPABILITIES, WITH ITS MODULES APPLIED.
+--
+--  READS THE ITEM, NOT THE UNIT, and that is the whole reason it can be asked at
+--  all times. A port whose environment refuses the spawn still holds the item,
+--  still knows the monsterType, and still has to answer questions about what
+--  that chassis could do -- the same argument that moved the habitat ladder out
+--  of petports_contract.lua in the first place.
+--
+--  MODULES ARE PART OF THE QUESTION. Leaving petportModuleLiquids out here would
+--  defeat the liquid modules exactly halfway: the environment gate would let a
+--  poison-immune unit live at a poison pool, and dispatch would then refuse it
+--  every target in the pool it was socketed to work.
+--
+--  CACHED BY petports_habitatCapabilitiesForType, per monsterType, so this is a
+--  table lookup plus a permission-set walk that is almost always empty. Cheap
+--  enough to call per candidate, which is what dispatch eligibility does.
+local function unitCapabilities()
+  if self.petData == nil or self.petData.monsterType == nil then return nil end
+
+  return petports_habitatCapabilitiesForType(self.petData.monsterType,
+    petports_habitatPermittedSet(petportModuleLiquids()))
+end
+
 --  WHAT MEDIA DOES THIS PORT'S OWN FOOTPRINT OFFER?
 --
 --  Returns wet, dry -- each meaning "at least one occupied tile is like this".
@@ -3772,10 +3801,7 @@ local function environmentCheck()
     --  never be deployed to use it. The gate has to know what the socketed
     --  modules grant, which is why the permission set is read from the ITEM and
     --  not from a status effect on a unit that does not exist yet.
-    verdict = petports_habitatVerdict(
-      petports_habitatCapabilitiesForType(self.petData.monsterType,
-        petports_habitatPermittedSet(petportModuleLiquids())),
-      wet, dry, liquids)
+    verdict = petports_habitatVerdict(unitCapabilities(), wet, dry, liquids)
 
     if verdict == nil then
       if not self.envTypeUnreadable then
@@ -4020,6 +4046,150 @@ local function homePointNear()
   return nil
 end
 
+--  CAN THE SOCKETED CHASSIS WORK AT THIS TARGET AT ALL?
+--
+--  `todo.dispatch.eligibility`. The port filtered farmables on ripeness, claims,
+--  backoff and existence, and never asked whether THIS CHASSIS could service
+--  one. An aquatic unit was therefore dispatched to dry crops, declined on
+--  arrival, and failed two seconds later -- and with several ripe crops rotating
+--  against a per-target backoff, one was always eligible, so the leash never
+--  finished. It read in game as stutter stepping and looked like a pathing
+--  fault.
+--
+--  THE SAME LADDER THE ENVIRONMENT GATE RUNS, ASKED ABOUT A TARGET INSTEAD OF A
+--  HOME. petports_habitatVerdict already encodes every rule this needs: free
+--  movers by medium, a walker that avoids liquid needs dry footing, and an
+--  amphibious walker takes any medium. Writing a second predicate would have
+--  been the fourth spelling of one question -- standingPointNear is the third --
+--  and this file's history is mostly about what happens when two of those drift.
+--
+--  DELIBERATELY NOT petports_targetAllowed. That function looks like the right
+--  one and is not: it reads petports_media(), which defaults canSwim to false,
+--  and the amphibious chassis declares NEITHER flag. It has only ever been
+--  reachable through petports_flyPointNear, which returns nil for a walker, so
+--  its walker branch has never run. Using it here would refuse an amphibious
+--  unit every submerged target -- the one chassis that is supposed to take them
+--  all -- and the drone would pass dry targets only by accident of canFly
+--  defaulting true.
+--
+--  AN OBJECT IS SAMPLED BY ITS OWN FOOTPRINT. Crops, containers and machines are
+--  all objects, so world.objectSpaces answers for every one of them and a
+--  half-submerged shipping container is correctly a valid target for both a
+--  swimmer and a flyer -- either can touch some part of it. Everything else --
+--  item drops, livestock, patients -- is a point, and a point cannot straddle a
+--  waterline, so MIXED_MEDIUM is unreachable there by construction.
+--
+--  IT DOES NOT ASK WHERE THE UNIT WOULD STAND. That is standingPointNear's
+--  question and the two are complementary: this one refuses a target in the
+--  wrong medium, that one refuses a target with no footing. Moving targets get
+--  the second and not the first, because a Mooshi's position at dispatch is
+--  already stale and sampling the medium of a stale point buys nothing.
+--
+--  FAILS OPEN. A capability table that could not be built means
+--  root.monsterParameters gave nothing, which is a tooling problem and not a
+--  statement about the terrain -- the same reading environmentCheck takes. A
+--  port that starves its unit over an unreadable type is worse than one that
+--  dispatches a trip that fails.
+local function targetSuits(position, entityId)
+  local caps = unitCapabilities()
+  if caps == nil then return true end
+
+  local points = petports_habitatObjectPoints(entityId)
+
+  if points == nil then
+    if position == nil then return true end
+    points = { { position[1], position[2] } }
+  end
+
+  local wet, dry, liquids = petports_habitatMedia(points)
+  local verdict = petports_habitatVerdict(caps, wet, dry, liquids)
+
+  if verdict == nil or verdict.ok then return true end
+
+  return false, petports_habitatTargetReason(verdict.cause)
+end
+
+--  Say it once per target, then only when that target's answer changes.
+--
+--  A REFUSAL HERE IS THE NORMAL STEADY STATE, not an error: an aquatic unit in a
+--  base with a dry farm refuses every crop, every scan, forever. Ungated that is
+--  the loudest line in the log by a wide margin.
+--
+--  ONE SLOT WAS NOT A GATE. The first version of this kept a single
+--  self.lastEligibilitySkip, on the assumption that a repeating refusal repeats
+--  the same sentence. It does not: a port walks EIGHT refused targets per scan
+--  -- five crops, a crate, a request crate, a machine -- so every line displaced
+--  the one before it and nothing was ever suppressed. Measured at 767 lines in a
+--  three-minute session, 69 of them the same sentence about crop 191, on a port
+--  that dispatched nothing at all. A gate keyed on the wrong thing is not a
+--  quieter log, it is the same log plus a comment claiming otherwise.
+--
+--  KEYED BY TARGET, VALUED BY SENTENCE, so each target says its piece once and
+--  says it again only if the verdict changes underneath it -- a row that floods,
+--  a module that grants a liquid.
+--
+--  RESET WHEN THE CHASSIS CHANGES, because every answer in the table was about
+--  the old one. Swapping an aquatic unit for a flyer inverts the whole set, and
+--  a stale table would silently swallow the first refusal of each new target.
+--
+--  NOT SILENT, THOUGH. `todo.dispatch.eligibility` records that this is a
+--  VISIBLE behaviour change -- a unit that used to fail noisily at a dry farm
+--  now ignores it silently -- and until the pane says so, the log is the only
+--  place a player chasing a still pet can find out why. The per-scan summary
+--  line still counts them every tick; this only stops the roll call repeating.
+local function targetRefused(label, reason)
+  local chassis = self.petData ~= nil and self.petData.monsterType or nil
+
+  if self.eligibilitySkips == nil or self.eligibilitySkipsChassis ~= chassis then
+    self.eligibilitySkips = {}
+    self.eligibilitySkipsChassis = chassis
+  end
+
+  local key = tostring(label)
+  local note = tostring(reason)
+
+  if self.eligibilitySkips[key] ~= note then
+    self.eligibilitySkips[key] = note
+    sb.logInfo("PETPORT %s SKIPPING %s %s -- this chassis cannot work there",
+      stationUniqueId(), key, note)
+  end
+end
+
+--  Both halves in one call, for the generators that only need "yes or no".
+local function targetEligible(label, position, entityId)
+  local ok, reason = targetSuits(position, entityId)
+  if ok then return true end
+
+  targetRefused(label, reason)
+  return false
+end
+
+--  BOTH QUESTIONS, IN THE ORDER THAT MAKES THE CHEAP ONE FIRST.
+--
+--  Every object target wants the same pair: is the target in a medium this
+--  chassis works in, and is there anywhere near it to stand. They are genuinely
+--  different -- a crate in air above a pool passes the second for an aquatic
+--  unit and fails the first, which is the measured bug recorded in the header
+--  of petports_targetAllowed -- and the medium test is a handful of
+--  world.liquidAt calls against a standing search, so it goes first.
+--
+--  RETURNS THE STANDING POINT, because every caller needs it as the dispatch
+--  position. A nil means refused, for either reason, and the reason has already
+--  been said in the log by whichever half refused.
+--
+--  MOVING TARGETS DO NOT COME HERE. A patient or an animal gets the reach test
+--  alone -- see the note in animalWork.
+local function servicePointNear(label, entityId, position, radius)
+  local suits, why = targetSuits(position, entityId)
+
+  if not suits then
+    targetRefused(label, why)
+    return nil
+  end
+
+  return standingPointNear(position, radius or 4)
+end
+
 local function findStandingPoint(rect)
   for _ = 1, 12 do
     local x = math.floor(rect[1] + math.random() * (rect[3] - rect[1])) + 0.5
@@ -4214,7 +4384,7 @@ local function collectionWork(mergeOnly)
   --  possible causes, so deferral -- the one that can deadlock -- was invisible
   --  and presented as a backoff that did not exist.
   local rejected = { claimed = 0, backedOff = 0, deferred = 0, gone = 0,
-    unmergeable = 0 }
+    unmergeable = 0, medium = 0 }
 
   self.deferredSince = self.deferredSince or {}
   local stillDeferred = {}
@@ -4254,6 +4424,15 @@ local function collectionWork(mergeOnly)
       local position = world.entityPosition(dropId)
       if position == nil then
         rejected.gone = rejected.gone + 1
+
+      --  MEDIUM BEFORE DISTANCE, so an ineligible drop does not win the
+      --  comparison and end the rung. A drop is not an object, so this samples
+      --  the single tile the item sits in -- which is the right question even
+      --  where a mod has turned on item buoyancy, because a floating drop and a
+      --  sunk one are then genuinely in different media and the fleet should
+      --  divide them that way.
+      elseif not targetEligible("drop " .. tostring(dropId), position, dropId) then
+        rejected.medium = rejected.medium + 1
       else
         --  Distance is measured from the UNIT, not the port -- it is the unit
         --  that has to walk.
@@ -4303,9 +4482,10 @@ local function collectionWork(mergeOnly)
   if best == nil then
     return nil, string.format(
       "%s drops in rect, none takeable: %s claimed, %s backed off, "
-      .. "%s deferred to a closer unit, %s gone%s",
+      .. "%s deferred to a closer unit, %s gone, %s in a medium this chassis "
+      .. "cannot work in%s",
       #drops, rejected.claimed, rejected.backedOff,
-      rejected.deferred, rejected.gone,
+      rejected.deferred, rejected.gone, rejected.medium,
 
       --  Only meaningful on a top-up pass, and silent otherwise. On a normal
       --  pass it is always zero, and a reason string listing a category that
@@ -5381,7 +5561,8 @@ local function upcyclerWork()
     --  Stand next to it, not on it -- same reason as a deposit crate, and
     --  resolved by the unit for the same reason: a point the unit cannot occupy
     --  fails the last leg of the route and therefore the whole plan.
-    local stand = standingPointNear(machine.position, 4)
+    local stand = servicePointNear("upcycler " .. tostring(machine.id),
+      machine.id, machine.position, 4)
 
     if stand == nil then
       sb.logInfo("PETPORT %s upcycler %s SKIPPED: no standable spot within 4 tiles of %s",
@@ -5495,7 +5676,8 @@ local function depositWork()
       --  validStandingPosition before pathing starts, which fails the last leg
       --  of the route and therefore the entire plan -- the unit does not move at
       --  all, and the log reads as a vent failure rather than a bad target.
-      local stand = standingPointNear(beacon.position, 4)
+      local stand = servicePointNear("crate " .. tostring(beacon.id),
+        beacon.id, beacon.position, 4)
 
       if stand == nil then
         sb.logInfo("PETPORT %s deposit target %s SKIPPED: no standable spot within 4 tiles of %s",
@@ -7372,7 +7554,8 @@ local function animalWork()
 	end
 
 	local best, bestDistance = nil, nil
-	local rejected = { notReady = 0, claimed = 0, backedOff = 0, gone = 0 }
+	local rejected = { notReady = 0, claimed = 0, backedOff = 0, gone = 0,
+		unreachable = 0 }
 
 	for _, animal in ipairs(animals) do
 		local workId = "animal:" .. animal.id
@@ -7401,7 +7584,22 @@ local function animalWork()
 				local position = world.entityPosition(animal.id)
 				local distance = world.magnitude(from, position)
 
-				if bestDistance == nil or distance < bestDistance then
+				--  A MOVING TARGET GETS THE REACH TEST AND NOT THE MEDIUM TEST.
+				--
+				--  standingPointNear asks the UNIT, which is per-chassis for
+				--  free: a free mover resolves through petports_flyPointNear,
+				--  which already refuses a medium the chassis cannot enter, and
+				--  a walker resolves through the ground search, which refuses
+				--  standing in liquid it avoids. So this one call answers both
+				--  halves for livestock, and sampling the animal's own tile on
+				--  top of it would only add a verdict about a position that is
+				--  stale by the time the unit arrives.
+				--
+				--  THE THIRD COPY OF A CALL medicWork ALREADY MAKES for
+				--  patients. Livestock was the only moving target without it.
+				if standingPointNear(position, 4) == nil then
+					rejected.unreachable = rejected.unreachable + 1
+				elseif bestDistance == nil or distance < bestDistance then
 					best = { id = animal.id, name = animal.name, position = position }
 					bestDistance = distance
 				end
@@ -7412,9 +7610,9 @@ local function animalWork()
 	if best == nil then
 		local reason = string.format(
 			"%s farm animal(s), none harvestable: %s not ready, %s claimed, "
-			.. "%s backed off, %s gone",
+			.. "%s backed off, %s gone, %s with nowhere this chassis can stand",
 			#animals, rejected.notReady, rejected.claimed,
-			rejected.backedOff, rejected.gone)
+			rejected.backedOff, rejected.gone, rejected.unreachable)
 
 		if reason ~= self.animalRejectReason then
 			self.animalRejectReason = reason
@@ -7462,7 +7660,7 @@ local function harvestWork()
 	end
 
 	local best, bestDistance = nil, nil
-	local rejected = { unripe = 0, claimed = 0, backedOff = 0, gone = 0 }
+	local rejected = { unripe = 0, claimed = 0, backedOff = 0, gone = 0, medium = 0 }
 
 	for _, crop in ipairs(crops) do
 		local workId = "harvest:" .. crop.id
@@ -7508,6 +7706,19 @@ local function harvestWork()
 			--  Harvested by the player, or by another network's unit, between
 			--  the scan and now.
 			rejected.gone = rejected.gone + 1
+
+		--  THIS IS THE ONE THE LOG INDICTED. A crop is an object, so the sample
+		--  is its own footprint -- a plant standing with its feet in a paddy and
+		--  its head in air is legitimately workable by either chassis, and one
+		--  fully under water is workable only by a swimmer.
+		--
+		--  IN THE LOOP, NOT ON THE WINNER, and that is the whole reason it is
+		--  here rather than in dispatchable(). Refusing the winner would decline
+		--  the entire harvest rung and fall through to animals, so a swimmer with
+		--  one dry crop nearest and four submerged ones behind it would harvest
+		--  nothing. Refusing a candidate lets the next-nearest win.
+		elseif not targetEligible("crop " .. tostring(crop.id), crop.position, crop.id) then
+			rejected.medium = rejected.medium + 1
 		else
 			local distance = world.magnitude(from, crop.position)
 
@@ -7523,9 +7734,10 @@ local function harvestWork()
 	if best == nil then
 		local reason = string.format(
 			"%s farmable(s) in coverage, none harvestable: %s unripe, "
-			.. "%s claimed, %s backed off, %s gone",
+			.. "%s claimed, %s backed off, %s gone, %s in a medium this "
+			.. "chassis cannot work in",
 			#crops, rejected.unripe, rejected.claimed,
-			rejected.backedOff, rejected.gone)
+			rejected.backedOff, rejected.gone, rejected.medium)
 
 		--  LOGGED HERE, NOT RETURNED AND HOPED FOR. findWork returns the
 		--  deposit reason ahead of this one, so a port sitting next to nine
@@ -7773,18 +7985,35 @@ local function waterWork()
 				sb.printJson(stack.count or 1), sb.printJson(tiles[1]),
 				sb.printJson(tiles[#tiles]))
 
-			return {
-				id = workId,
-				type = "water",
-				port = stationUniqueId(),
-				tiles = tiles,
-				waterIndex = 1,
-				item = want.item,
-				previousMod = run.mod,
-				newMod = want.newMod,
-				tint = want.tint,
-				position = { tiles[1][1] + 0.5, tiles[1][2] + 1.5 }
-			}
+			--  THE SPACE ABOVE THE SOIL, NOT THE SOIL. A tilled tile is solid
+			--  foreground, so world.liquidAt over it always reads zero and a
+			--  check aimed there would pass every chassis every time. The tile
+			--  above is where liquid actually sits and where the unit stands, so
+			--  it is both the honest sample and the dispatch position -- one
+			--  expression rather than two that must stay equal.
+			--
+			--  THE HEAD OF THE RUN ONLY. A run that crosses a waterline is a
+			--  farm somebody deliberately built half under water, and a tile
+			--  that already has liquid on it is not a tile that needs a bucket.
+			--  If one ever shows up in a log, the fix is to truncate the run to
+			--  its eligible prefix -- which rewrites the task rather than
+			--  filtering it, and is a different shape of change.
+			local head = { tiles[1][1] + 0.5, tiles[1][2] + 1.5 }
+
+			if targetEligible("water run " .. tostring(run.key), head, nil) then
+				return {
+					id = workId,
+					type = "water",
+					port = stationUniqueId(),
+					tiles = tiles,
+					waterIndex = 1,
+					item = want.item,
+					previousMod = run.mod,
+					newMod = want.newMod,
+					tint = want.tint,
+					position = head
+				}
+			end
 		end
 	end
 
@@ -8076,8 +8305,20 @@ local function containerWithSeed(seedName)
 			local available = world.containerAvailable(beacon.id,
 				{ name = seedName, count = 1 })
 
+			--  KEEP LOOKING RATHER THAN GIVE UP, which is the same rule
+			--  restockFetchWork's source scan follows and for the same reason: a
+			--  network holding the seed in both a wet crate and a dry one should
+			--  serve a swimmer from the wet one rather than refuse to replant.
+			--
+			--  BOTH FETCH LEGS COME THROUGH HERE -- withdrawWork's seed and
+			--  medicWork's dose. The medic's DELIVERY leg has been checked since
+			--  it was written and its fetch never was, so a medic could verify it
+			--  could reach a patient and then be sent to a crate it could not.
 			if type(available) == "number" and available >= 1 then
-				return beacon.id
+				if servicePointNear("crate " .. tostring(beacon.id),
+					beacon.id, beacon.position, 4) ~= nil then
+					return beacon.id
+				end
 			end
 		end
 	end
@@ -8171,6 +8412,24 @@ local function replantWork()
 		return nil, "intent tile is occupied"
 	end
 
+	--  ABOVE THE HOLE, NOT THE HOLE. Same trap watering has: the intent names a
+	--  tilled tile, which is solid foreground, so sampling it reads zero liquid
+	--  for every chassis and the check would be vacuously true -- and worse than
+	--  useless, because "air" is a REFUSAL for an aquatic unit, so a submerged
+	--  farm would turn away the only chassis that could work it.
+	--
+	--  NOT DISPATCHED FROM HERE, deliberately. The task position stays the tile,
+	--  because the unit resolves its own standing point from it the way
+	--  collection does, and changing that would be a change to placement rather
+	--  than to eligibility.
+	local above = { intent.position[1] + 0.5, intent.position[2] + 1.5 }
+	local suits, why = targetSuits(above, nil)
+
+	if not suits then
+		targetRefused("replant at " .. tostring(key), why)
+		return nil, "replant tile " .. tostring(key) .. " " .. tostring(why)
+	end
+
 	sb.logInfo("PETPORT %s REPLANT dispatch: %s back into %s (tile %s)",
 		stationUniqueId(), tostring(intent.name), tostring(key),
 		sb.printJson(intent.position))
@@ -8228,7 +8487,12 @@ local function withdrawWaterWork()
 							local available = world.containerAvailable(beacon.id,
 								{ name = want.item, count = 1 })
 
-							if type(available) == "number" and available >= 1 then
+							--  A SOURCE THE UNIT CANNOT REACH IS NOT A SOURCE. Same rule
+							--  as containerWithSeed above: skip it and let the loop
+							--  find another crate holding the same liquid.
+							if type(available) == "number" and available >= 1
+								and servicePointNear("crate " .. tostring(beacon.id),
+									beacon.id, beacon.position, 4) ~= nil then
 								local take = math.min(wanted, available)
 
 								sb.logInfo("PETPORT %s FETCHWATER dispatch: %s x%s "
@@ -8484,8 +8748,14 @@ local function medicWork()
   if carried == nil then
     local containerId = containerWithSeed(MEDIC_ITEM)
 
+    --  "NONE THIS UNIT CAN GET TO", NOT "NONE". containerWithSeed skips a crate
+    --  the chassis cannot reach, so a nil here covers both cases and the old
+    --  wording would send a player looking for a stock problem that is really a
+    --  terrain one. The crate that was skipped names itself in the SKIPPING line
+    --  above this, so the pair reads correctly.
     if containerId == nil then
-      return nil, string.format("%s patient(s) waiting, but no %s in network storage",
+      return nil, string.format(
+        "%s patient(s) waiting, but no %s in network storage this unit can reach",
         #patients, MEDIC_ITEM)
     end
 
@@ -8594,7 +8864,8 @@ local function restockDeliverWork()
             and world.containerItemsCanFit(beacon.id, carried) or nil
 
           if fits == nil or fits > 0 then
-            local stand = standingPointNear(beacon.position, 4)
+            local stand = servicePointNear("request crate " .. tostring(beacon.id),
+              beacon.id, beacon.position, 4)
 
             if stand == nil then
               sb.logInfo("PETPORT %s restock delivery to %s SKIPPED: no standable spot within 4 tiles of %s",
@@ -8685,7 +8956,8 @@ local function restockFetchWork()
     --  standingPointNear asks the UNIT, so this is per-chassis for free: a
     --  submerged request crate is unreachable for a walker and fine for a
     --  swimmer, with no special case here.
-    if standingPointNear(beacon.position, 4) == nil then
+    if servicePointNear("request crate " .. tostring(beacon.id),
+       beacon.id, beacon.position, 4) == nil then
       unreachable = unreachable + 1
 
       if self.lastRestockSkip ~= beacon.id then
@@ -8759,7 +9031,8 @@ local function restockFetchWork()
                   { name = request.item, count = 1 })
 
                 if type(n) == "number" and n >= 1 then
-                  if standingPointNear(crate.position, 4) == nil then
+                  if servicePointNear("crate " .. tostring(crate.id),
+                     crate.id, crate.position, 4) == nil then
                     if self.lastRestockSourceSkip ~= crate.id then
                       self.lastRestockSourceSkip = crate.id
                       sb.logInfo("PETPORT %s restock source %s at %s SKIPPED: holds %s but "
@@ -9019,7 +9292,8 @@ local function tidyWork()
             elseif not roomFor then
               full = full + 1
             else
-              local stand = standingPointNear(source.position, 4)
+              local stand = servicePointNear("crate " .. tostring(source.id),
+                source.id, source.position, 4)
 
               if stand == nil then
                 sb.logInfo("PETPORT %s tidy source %s SKIPPED: no standable spot within 4 tiles of %s",
@@ -9145,7 +9419,8 @@ local function drainWork()
       --  standingPointNear ASKS THE UNIT, so this is per-chassis by
       --  construction: a submerged machine is unreachable for a walker and fine
       --  for a swimmer, and neither has to be special-cased here.
-      local reachable = standingPointNear(machine.position, 4)
+      local reachable = servicePointNear("upcycler " .. tostring(machine.id),
+        machine.id, machine.position, 4)
 
       if reachable == nil then
         if self.lastDrainSkip ~= machine.id then
@@ -9257,7 +9532,8 @@ local function drainWork()
                           and (failure["until"] or 0) > world.time()
 
                         if not backedOff and claimFree(workId) then
-                          local stand = standingPointNear(source.position, 4)
+                          local stand = servicePointNear("crate " .. tostring(source.id),
+                            source.id, source.position, 4)
 
                           if stand == nil then
                             sb.logInfo("PETPORT %s drain source %s SKIPPED: no standable spot within 4 tiles of %s",
@@ -9547,7 +9823,8 @@ local function fuelWork()
                 and (failure["until"] or 0) > world.time()
 
               if not backedOff and claimFree(workId) then
-                local stand = standingPointNear(machine.position, 4)
+                local stand = servicePointNear("machine " .. tostring(machine.id),
+                  machine.id, machine.position, 4)
 
                 if stand == nil then
                   sb.logInfo("PETPORT %s fuel source %s SKIPPED: no standable spot within 4 tiles of %s",
@@ -9651,7 +9928,8 @@ local function compactWork()
           local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
 
           if not backedOff and claimFree(workId) then
-            local stand = standingPointNear(source.position, 4)
+            local stand = servicePointNear("crate " .. tostring(source.id),
+              source.id, source.position, 4)
 
             if stand == nil then
               sb.logInfo("PETPORT %s compaction of %s SKIPPED: no standable spot within 4 tiles of %s",

@@ -78,6 +78,35 @@ local REASONS =
 	[PETPORTS_HABITAT_SUBMERGED_WALKER] = "the port is fully submerged and this walker will not stand in liquid"
 }
 
+--  THE SAME CAUSES, SAID ABOUT A TARGET INSTEAD OF A HOME.
+--
+--  A SECOND TABLE RATHER THAN A REWORDING, because the sentences above ship in
+--  the retirement log -- the one place a player is told why their pet went away
+--  -- and rewording them there would change what the log says while looking
+--  like a refactor. The header on this file says so explicitly.
+--
+--  KEYED BY THE SAME CLOSED SET, so the ladder stays one ladder and a new cause
+--  cannot be added to one vocabulary and forgotten in the other. A missing key
+--  falls back to the cause name rather than to the port sentence, because
+--  "the port sits in a liquid this chassis will not enter" printed about a crate
+--  forty tiles away is worse than no sentence at all.
+local TARGET_REASONS =
+{
+	[PETPORTS_HABITAT_FORBIDDEN_LIQUID] = "sits in a liquid this chassis will not enter",
+	[PETPORTS_HABITAT_MIXED_MEDIUM] = "straddles a waterline, and this chassis needs all of it to be one medium",
+	[PETPORTS_HABITAT_SUBMERGED_NO_SWIM] = "is submerged and this chassis cannot swim",
+	[PETPORTS_HABITAT_DRY_NO_FLY] = "is out of the water and this chassis cannot leave it",
+	[PETPORTS_HABITAT_NO_MEDIUM] = "offers neither medium this chassis can occupy",
+	[PETPORTS_HABITAT_SUBMERGED_WALKER] = "is submerged and this walker will not stand in liquid"
+}
+
+--  The refusal sentence for a TARGET, phrased as a predicate so a caller can
+--  write "crop 158 <reason>". Only refusal causes are listed; an accepting cause
+--  reaching here is a caller bug and reads as one.
+function petports_habitatTargetReason(cause)
+	return TARGET_REASONS[cause] or ("is refused: " .. tostring(cause))
+end
+
 function petports_habitatReason(cause)
 	return REASONS[cause] or "cannot inhabit this port"
 end
@@ -177,6 +206,33 @@ end
 --  petports_habitatCapabilitiesForType, which is the entry point callers use.
 local capabilityCache = {}
 
+--  The axis-aligned box a collision poly occupies, as {left, bottom, right, top}
+--  relative to the body's position. Same layout mcontroller.boundBox() returns,
+--  so the two are interchangeable at a call site.
+--
+--  nil FOR A MISSING OR MALFORMED POLY rather than a fabricated default. A box
+--  invented here would be silently wrong in a way no log would show; a nil is a
+--  caller's problem and says so.
+local function polyBounds(poly)
+	if type(poly) ~= "table" or #poly == 0 then return nil end
+
+	local left, bottom, right, top = nil, nil, nil, nil
+
+	for _, point in ipairs(poly) do
+		if type(point) == "table" and #point >= 2 then
+			local x, y = point[1], point[2]
+
+			if left == nil or x < left then left = x end
+			if right == nil or x > right then right = x end
+			if bottom == nil or y < bottom then bottom = y end
+			if top == nil or y > top then top = y end
+		end
+	end
+
+	if left == nil then return nil end
+	return { left, bottom, right, top }
+end
+
 local function typeCapabilities(monsterType)
 	if monsterType == nil then return nil end
 
@@ -204,7 +260,26 @@ local function typeCapabilities(monsterType)
 		fly = read("petports_canFly", true),
 		swim = read("petports_canSwim", false),
 		avoidLiquid = read("petports_avoidLiquid", true),
-		avoided = petports_habitatAvoidedSet(read("petports_avoidLiquids", {}))
+		avoided = petports_habitatAvoidedSet(read("petports_avoidLiquids", {})),
+
+		--  THE BODY BOX, DERIVED FROM THE AUTHORED POLY.
+		--
+		--  The unit reads mcontroller.boundBox(), which an object cannot call.
+		--  movementSettings.collisionPoly is the same authored shape the engine
+		--  builds that box from, so the AABB of the poly IS the box -- and it
+		--  is readable through root.monsterParameters with no entity, which is
+		--  the whole point: a chassis whose port is full of lava never spawns,
+		--  and the port still needs to know how big it would have been.
+		--
+		--  CACHED WITH THE REST, and for the same reason: authored constants
+		--  that cannot change for the life of the world.
+		--
+		--  NOTHING READS THIS YET. Object targets are sampled by their own
+		--  world.objectSpaces and point targets by a single tile, so no caller
+		--  needs a body box today. It is here because the alternative -- asking
+		--  a live unit at spawn -- cannot answer for a unit that failed to
+		--  spawn, which is exactly the case a port needs an answer in.
+		bounds = polyBounds(movement.collisionPoly)
 	}
 
 	capabilityCache[key] = caps
@@ -242,7 +317,8 @@ function petports_habitatCapabilitiesForType(monsterType, permitted)
 		fly = caps.fly,
 		swim = caps.swim,
 		avoidLiquid = caps.avoidLiquid,
-		avoided = avoided
+		avoided = avoided,
+		bounds = caps.bounds
 	}
 end
 
@@ -453,4 +529,98 @@ function petports_habitatVerdict(caps, wet, dry, liquids)
 
 	if dry then return { ok = true, cause = PETPORTS_HABITAT_DRY_FOOTING } end
 	return { ok = false, cause = PETPORTS_HABITAT_SUBMERGED_WALKER }
+end
+
+--  ---------------------------------------------------------------------------
+--  SAMPLING A PATCH OF WORLD
+--  ---------------------------------------------------------------------------
+
+--  WHAT COUNTS AS SUBMERGED, FOR EVERY CALLER OF THIS FILE.
+--
+--  This number exists three times in the mod and all three must agree, because
+--  a port that calls a tile wet while the unit standing in it calls the same
+--  tile dry produces a unit retired from a home it was perfectly happy in.
+--  ENVIRONMENT_SUBMERGED_FILL in petports_petport.lua now reads this one;
+--  PETPORTS_SUBMERGED_FILL in petports_contract.lua is still its own copy and
+--  is deliberately left alone -- it is load-bearing for the pathing work closed
+--  on 2026-08-31 and is not worth reopening for a constant that agrees.
+PETPORTS_HABITAT_SUBMERGED_FILL = 0.9
+
+--  Summarise a list of world points into the three arguments the verdict takes.
+--
+--  THE SHAPE petports_habitatVerdict ALREADY WANTED. The port has been building
+--  this inline from world.objectSpaces since the environment gate landed; this
+--  is that loop with the source of the points lifted out, so the gate and
+--  dispatch eligibility cannot come to different conclusions about one tile.
+--
+--  `wet` AND `dry` ARE NOT COMPLEMENTS ACROSS A MULTI-TILE SAMPLE, and that is
+--  the whole reason the verdict takes both: a footprint with some of each is
+--  MIXED_MEDIUM, which is a refusal in its own right and not the absence of an
+--  answer. Over a ONE-POINT sample they are complements and MIXED_MEDIUM is
+--  unreachable, which is correct -- one tile cannot straddle anything.
+--
+--  AN EMPTY LIST READS AS DRY, matching what portMedia already returns for an
+--  object with no spaces. Reporting neither medium instead would refuse every
+--  chassis, which is the wrong direction to fail for a question about work.
+--
+--  ANY LIQUID AT ALL CONTRIBUTES ITS ID, not merely a submerging amount. The
+--  verdict's forbidden check is a deny-list and a chassis that will not enter
+--  lava will not enter a splash of it either -- see PETPORTS_HARMFUL_FILL in
+--  petports_contract.lua, which draws the same line at 0.1 for the unit's own
+--  movement.
+function petports_habitatMedia(points)
+	if points == nil or #points == 0 then return false, true, {} end
+
+	local wet, dry = false, false
+	local seen, liquids = {}, {}
+
+	for _, point in ipairs(points) do
+		local level = world.liquidAt(point)
+		local fill = (level ~= nil) and (level[2] or 0) or 0
+
+		if level ~= nil and level[1] ~= nil and fill > 0 and not seen[level[1]] then
+			seen[level[1]] = true
+			table.insert(liquids, level[1])
+		end
+
+		if fill >= PETPORTS_HABITAT_SUBMERGED_FILL then
+			wet = true
+		else
+			dry = true
+		end
+	end
+
+	return wet, dry, liquids
+end
+
+--  The tile centres an object occupies, in world coordinates.
+--
+--  world.objectSpaces IS AVAILABLE TO ANYTHING IN A WORLD CONTEXT and takes any
+--  entity id, so this answers for a crop, a crate or a machine without caring
+--  which. A non-object returns nothing, which is the caller's signal to fall
+--  back to a point -- item drops and livestock take that path.
+--
+--  THE +0.5 AND THE math.floor ARE BOTH LOAD-BEARING. Spaces are integer tile
+--  offsets from the object's tile origin, so the origin has to be floored before
+--  they are added and the result has to be nudged to a tile centre before
+--  world.liquidAt is asked about it. This is portMedia's arithmetic, unchanged.
+function petports_habitatObjectPoints(entityId)
+	if entityId == nil then return nil end
+
+	local ok, spaces = pcall(world.objectSpaces, entityId)
+	if not ok or type(spaces) ~= "table" or #spaces == 0 then return nil end
+
+	local origin = world.entityPosition(entityId)
+	if origin == nil then return nil end
+
+	local points = {}
+
+	for _, space in ipairs(spaces) do
+		table.insert(points, {
+			math.floor(origin[1]) + space[1] + 0.5,
+			math.floor(origin[2]) + space[2] + 0.5
+		})
+	end
+
+	return points
 end
