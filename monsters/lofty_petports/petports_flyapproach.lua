@@ -82,7 +82,7 @@
 --  delegate, and stays one.
 local vanillaSetJumpState = setJumpState
 
-local BUILD_STAMP = "2026-08-30a plan rendering off"
+local BUILD_STAMP = "2026-08-31c steer gate reset once, not per tick"
 local stampLogged = false
 
 --  DELETE ME ONCE THE ANSWER IS IN THE LOG.
@@ -567,6 +567,40 @@ local function flyPathClear(from, to)
   return true
 end
 
+--  THE MEDIUM HALF OF flyPathClear, WITHOUT THE GEOMETRY HALF.
+--
+--  EXISTS BECAUSE A PLAN EDGE HAS TO BE VALIDATED ALONG ITS LENGTH AND NOT AT
+--  ITS ENDS, and geometry must not enter that question. A* has already decided
+--  the edge is geometrically traversable; second-guessing it here would refuse
+--  legal routes through terrain it understands better than we do. The MEDIUM is
+--  the part it knows nothing about.
+--
+--  SAME SAMPLING AS flyPathClear so the two cannot disagree about where the
+--  waterline is: same step, same body box, same predicate. Only the collision
+--  test is absent.
+local function flyMediumClear(from, to)
+  local bounds = mcontroller.boundBox()
+
+  local span = world.distance(to, from)
+  local length = math.sqrt(span[1] * span[1] + span[2] * span[2])
+
+  --  A degenerate line is one point, and that point is `from`. Answering true
+  --  here would approve a step the unit is already refusing to be in.
+  if length < 0.001 then return petports_mediumAllows(from, bounds) end
+
+  local steps = math.ceil(length / FLY_SWEEP_STEP)
+
+  for i = 0, steps do
+    local t = i / steps
+    local x = from[1] + span[1] * t
+    local y = from[2] + span[2] * t
+
+    if not petports_mediumAllows({ x, y }, bounds) then return false end
+  end
+
+  return true
+end
+
 --  Both action names this mover owns. A plan may legitimately mix them for an
 --  amphibious chassis crossing a surface, and string-pulling across that
 --  boundary is safe because flyPathClear tests the MEDIUM on every sample.
@@ -593,32 +627,85 @@ end
 --  rainwater having sealed the route, is UNRESOLVED -- and prevention does not
 --  depend on knowing which, because a flyer that never gets wet never asks.
 --
---  ENDPOINTS ARE ENOUGH. Plan edges are a tile apart, so a route cannot cross a
---  medium boundary between two consecutive waypoints without one of them
---  landing in it. The long straight line that CAN skip a boundary is the
---  string-pull shortcut, and flyPathClear already samples that at 0.8 intervals.
+--  ENDPOINTS WERE NOT ENOUGH, AND THE PREMISE THAT SAID THEY WERE IS RETIRED.
+--  It read:
 --
---  ONCE PER PLAN, NOT PER TICK. The verdict cannot change while the plan does
---  not, and re-walking forty edges every tick would be the largest thing this
---  mover does.
+--      Plan edges are a tile apart, so a route cannot cross a medium boundary
+--      between two consecutive waypoints without one of them landing in it.
+--
+--  THIS FILE ALREADY CONTRADICTED ITSELF ON THAT POINT. FLY_AIM_RANGE exists
+--  because "an edge is not guaranteed to be one tile", forty lines above. Two
+--  statements about the same objects, one of them load-bearing for a safety
+--  check, and only one of them true.
+--
+--  MEASURED 2026-08-31: an AQUATIC unit was given a plan that STARTED submerged
+--  in one pool and ENDED submerged in another, and travelled through the
+--  player's base -- air -- in between. Nothing rejected it and the unit flew it
+--  faithfully. The engine's own validity test is geometric, so a route between
+--  two wet nodes through dry air is a route it considers sound; the medium is
+--  ours to enforce and we were enforcing it at the wrong granularity.
+--
+--  SO EVERY LEG IS SWEPT, not just its endpoint. flyMediumClear samples at the
+--  same 0.8 interval with the same body box as the string-pull test, so the plan
+--  check and the shortcut check cannot disagree about where a waterline is.
+--
+--  ONCE PER PLAN, NOT PER TICK, AND THAT IS WHAT MAKES THE SWEEP AFFORDABLE. A
+--  ninety-edge plan is roughly two hundred samples -- large for a per-tick cost
+--  and unremarkable once, against a plan that will be flown for several seconds.
+--  The per-plan gate is petportsPlanSig in the mover and it has to stay.
 
---  ASYMMETRIC, AND THIS IS THE PART THAT MATTERS.
+--  THE ESCAPE CLAUSE IS GONE. A UNIT OUT OF ITS MEDIUM PLANS NOTHING, AND THE
+--  PORT SENDS IT HOME.
 --
---  The rule is "do not ENTER a medium you are not allowed in", NOT "never be in
---  one". A unit that is ALREADY somewhere illegal -- however it got there --
---  must be allowed to plan its way out, and every route out of water begins
---  with edges in water. Rejecting those would turn a recoverable mistake into a
---  permanent one, which is precisely the state this check exists to prevent.
+--  Two versions of an escape licence have now been measured and both were the
+--  mechanism of a bug rather than a safety net.
 --
---  So: if the unit is currently in a disallowed medium, every plan is accepted.
+--  V1, A BLANKET PASS: while the unit was out of medium, EVERY plan was
+--  accepted. That latches -- a unit that has left the water is out of medium,
+--  so the next plan is unconditional, so it need never come back.
+--
+--  V2, A BOUNDED PREFIX: the licence covered the leading run of illegal
+--  waypoints and ended at the first legal one. Strictly better and still wrong,
+--  because ANY water counts as the end of the escape, including a DIFFERENT
+--  POOL. Measured 2026-08-31, an aquatic unit blind-steered into a drain-held
+--  air gap and was then handed a 25-edge plan -- five Fly edges across the gap,
+--  then Swim -- which the prefix licensed end to end as "a route out". It
+--  crossed. A 17-edge plan later did the same over a pool rim.
+--
+--  THE PREMISE WAS THE ERROR, NOT EITHER BOUND. Both versions assume the unit
+--  is the right thing to ask for a rescue plan. It is not. A displaced unit
+--  wants to be AT ITS PORT, and the port can put it there instantly, for free,
+--  with no pathing at all -- rehomeUnit already exists and is the rescue every
+--  recovery ladder in this mod ends with. Letting the pather improvise a way
+--  back is strictly worse than a teleport and, as measured twice, is a licence
+--  to go somewhere else entirely.
+--
+--  SO THE RULE IS NOW UNCONDITIONAL: no chassis plans a route through a medium
+--  it may not occupy, including out of one. The unit refuses, issues no control
+--  and holds still; petports_outOfMedium reports the condition and the port's
+--  mediumCheck re-homes it. See both.
+--
+--  A UNIT THAT CANNOT MOVE IS NOT STRANDED HERE, and that is the property that
+--  makes the unconditional rule safe. Standing still is the SIGNAL. It was only
+--  unsafe while nothing was watching for it.
 local function planMediumValid(finder)
   if finder == nil or finder.edges == nil then return true end
 
   local bounds = mcontroller.boundBox()
+  local from = mcontroller.position()
 
-  --  Already in violation: escaping outranks the constraint. See above.
-  if not petports_mediumAllows(mcontroller.position(), bounds) then
-    return true, nil, nil, "already out of medium, any route out is allowed"
+  --  REPORTED TO THE CALLER, NOT JUST USED. The medium a plan STARTED in is
+  --  what tells a reader whether a refusal is an ordinary "that route is
+  --  illegal" or the displaced case that the port is about to re-home.
+  local startMedium = petports_mediumAt(from, bounds)
+
+  --  THE UNIT'S OWN POSITION IS EDGE ZERO. Checked first and refused outright,
+  --  because a plan from somewhere illegal is not a plan this chassis should be
+  --  flying at all -- see the header.
+  if not petports_mediumAllows(from, bounds) then
+    return false, 0, from,
+      "the unit is ALREADY outside its own medium -- it plans nothing from here "
+        .. "and the port will re-home it", startMedium
   end
 
   for index, edge in ipairs(finder.edges) do
@@ -626,11 +713,23 @@ local function planMediumValid(finder)
 
     if target ~= nil then
       local ok, why = petports_mediumAllows(target, bounds)
-      if not ok then return false, index, target, why end
+
+      if not ok then
+        return false, index, target, why, startMedium
+      elseif not flyMediumClear(from, target) then
+        --  THE ENDPOINT IS FINE AND THE LEG INTO IT IS NOT. This is the case
+        --  endpoint validation could not see and is the whole reason for the
+        --  sweep -- name it separately so the log says which check refused.
+        return false, index, target,
+          "legal in itself, but the leg into it crosses a medium this chassis "
+            .. "may not occupy", startMedium
+      end
+
+      from = target
     end
   end
 
-  return true
+  return true, nil, nil, nil, startMedium
 end
 
 --  Cheap identity for "is this the same plan as last tick". Edge count plus the
@@ -671,15 +770,31 @@ function petportsFreeMover(pather)
   if pather.petportsPlanSig ~= signature then
     pather.petportsPlanSig = signature
 
-    local ok, index, at, why = planMediumValid(finder)
+    local ok, index, at, why, startMedium = planMediumValid(finder)
     pather.petportsPlanRejected = not ok
 
     if not ok then
-      sb.logInfo("UNIT PLAN REFUSED at %s: edge %s of %s ends at %s, which is %s -- "
+      sb.logInfo("UNIT PLAN REFUSED at %s (medium %s): edge %s of %s ends at %s, which is %s -- "
         .. "issuing no control, so this task will fail on the progress watchdog "
         .. "rather than fly the unit somewhere it cannot get out of",
-        sb.printJson(here), sb.printJson(index),
+        sb.printJson(here), tostring(startMedium), sb.printJson(index),
         sb.printJson(finder.edges and #finder.edges), sb.printJson(at), tostring(why))
+    else
+      --  THE ACCEPTED CASE IS LOGGED TOO, AND IT IS NOT NOISE.
+      --
+      --  A plan that is flown is indistinguishable in the log from a plan that
+      --  was never checked, which is exactly the ambiguity that let an aquatic
+      --  unit cross a base unremarked. One line per PLAN, not per tick -- the
+      --  same gate the refusal sits behind -- so a unit working steadily costs
+      --  one line per replan.
+      --
+      --  THE MEDIUM IS IN IT BECAUSE IT IS THE DISCRIMINATOR. "air" here for a
+      --  swimmer means the plan was waved through by the escape clause rather
+      --  than examined, and that is a completely different bug from a plan that
+      --  was examined and passed.
+      sb.logInfo("UNIT PLAN accepted at %s (medium %s): %s edge(s), every leg swept",
+        sb.printJson(here), tostring(startMedium),
+        sb.printJson(finder.edges and #finder.edges))
     end
   end
 
@@ -998,6 +1113,25 @@ function approachPoint(dt, targetPosition, stopDistance, running)
 
   if result == "running" then
     self.petportsFlyPathEnd = nil
+
+    --  THE STEER GATE IS CLEARED HERE, AND THE PLACE IS THE WHOLE FIX.
+    --
+    --  petportsSteerBlind holds the last outcome the fallback announced, so a
+    --  per-tick line does not bury the log. It used to be cleared ONLY on the
+    --  no-motion path below -- reached when `legal` is false -- and never in
+    --  this branch. So the first blind steer of a unit's life latched the
+    --  value and every later one was silent for as long as that unit lived.
+    --
+    --  MEASURED 2026-08-31: 72 "FLY path ended with false" and ZERO steering
+    --  lines in one session, while the unit was demonstrably being driven at
+    --  flySpeed with no plan. The session before it logged exactly three --
+    --  one per re-home, because a respawn is the only thing that was resetting
+    --  it. A silent fallback is how this went unattributed for two sessions.
+    --
+    --  A RUNNING PLAN IS THE EVENT THAT MAKES THE PREVIOUS OUTCOME STALE, which
+    --  is why it belongs beside petportsFlyPathEnd rather than anywhere else.
+    self.petportsSteerBlind = nil
+
     mcontroller.controlFace(self.pather.deltaX or toTarget[1])
     setMovementState(running)
   else
@@ -1045,21 +1179,67 @@ function approachPoint(dt, targetPosition, stopDistance, running)
     if length > 0.0001 then
       local clear = flyPathClear(here, targetPosition)
 
-      --  MEDIUM STILL APPLIES. Steering blind is a licence to ignore the
-      --  PATHFINDER, not a licence to swim into lava or for a flyer to dive.
-      --  flyPathClear tests medium on every sample, so a clear line is already
-      --  a legal one; the blind case below has to check the destination itself.
-      local legal = clear or petports_mediumAllows(targetPosition)
+      --  MEDIUM STILL APPLIES, ALONG THE WHOLE LINE AND NOT JUST AT ITS END.
+      --
+      --  Steering blind is a licence to ignore the PATHFINDER, not a licence to
+      --  swim into lava or for a swimmer to leave the water. flyPathClear tests
+      --  both geometry and medium, so a clear line is already a legal one; when
+      --  it refuses, the fallback has to know WHICH of the two refused it.
+      --  BLOCKED GEOMETRY IS STILL WORTH APPROACHING -- the unit slides along
+      --  the obstacle and may get round it, which is the whole value of the
+      --  fallback. AN ILLEGAL MEDIUM IS NOT, because a unit does not slide off
+      --  water into air, it simply leaves.
+      --
+      --  MEASURED 2026-08-31, AND THIS IS THE FIRST HALF OF THE POOL CROSSING.
+      --  The line read
+      --
+      --      local legal = clear or petports_mediumAllows(targetPosition)
+      --
+      --  which re-asked the medium question AT THE DESTINATION ONLY, so a line
+      --  whose ends are both wet was approved however dry its middle was. An
+      --  aquatic unit in one pool, dispatched to a drop in another across a
+      --  drain-held air gap:
+      --
+      --      entering task drop:3305 at [2485.2,1145.92]   submerged, pool A
+      --      A* fails -- path LOST, aStar false
+      --      under way: 4.21808 tile(s), now at [2489.4,1146.32]
+      --      PLAN accepted at [2490.4,1146.34] (medium air)
+      --
+      --  Four tiles of driven flight, at flySpeed, out of the water and into the
+      --  gap, with no plan in existence. Everything after that -- including the
+      --  plan the escape clause then licensed -- followed from this line.
+      --
+      --  ASYMMETRY IS NOT NEEDED HERE, AND THAT IS A DELIBERATE DIFFERENCE FROM
+      --  THE OLD planMediumValid. A unit that is already out of its medium is
+      --  not steered out of trouble by this fallback; it is sent home. See
+      --  petports_outOfMedium and the port's mediumCheck.
+      local legal = clear or flyMediumClear(here, targetPosition)
+
+      --  THREE OUTCOMES, AND THE REFUSAL IS ONE OF THEM RATHER THAN SILENCE. A
+      --  refused fallback issues no control, so the unit stops and the task dies
+      --  on the progress watchdog. That is correct for a target this chassis
+      --  cannot legally reach, and indistinguishable from a hang unless it says
+      --  so.
+      local steer = (not legal) and "refused" or clear and "clear" or "blocked"
+
+      if self.petportsSteerBlind ~= steer then
+        self.petportsSteerBlind = steer
+
+        sb.logInfo("UNIT STEERING %s at %s from %s -- no route, and %s",
+          (steer == "refused") and "REFUSED" or "DIRECTLY",
+          sb.printJson(targetPosition), sb.printJson(here),
+          (steer == "refused")
+            and "the straight line leaves this chassis's medium -- issuing no "
+              .. "control, so this task will fail on the progress watchdog rather "
+              .. "than steer the unit out of the medium it lives in"
+          or (steer == "clear")
+            and "the line is clear, aiming straight. This is vanilla's "
+              .. "flyInGeneralDirection fallback, not a plan."
+          or "the line is blocked by terrain but legal, approaching anyway. This "
+            .. "is vanilla's flyInGeneralDirection fallback, not a plan.")
+      end
 
       if legal then
-        if self.petportsSteerBlind ~= clear then
-          self.petportsSteerBlind = clear
-          sb.logInfo("UNIT STEERING DIRECTLY at %s from %s -- no route, line is %s. "
-            .. "This is vanilla's flyInGeneralDirection fallback, not a plan.",
-            sb.printJson(targetPosition), sb.printJson(here),
-            clear and "clear, aiming straight" or "blocked, approaching anyway")
-        end
-
         --  Normalised to flySpeed rather than passing the raw displacement, so
         --  a distant target does not command a speed the controller will simply
         --  clamp and a near one does not crawl.
@@ -1077,7 +1257,20 @@ function approachPoint(dt, targetPosition, stopDistance, running)
       end
     end
 
-    self.petportsSteerBlind = nil
+    --  THE GATE IS NOT CLEARED HERE, AND THIS LINE IS WHERE 1871 IDENTICAL LOG
+    --  LINES CAME FROM.
+    --
+    --  `self.petportsSteerBlind = nil` used to sit here, and it was correct while
+    --  this was the SILENT path: it was reached only when `legal` was false, and
+    --  nothing above had written the gate on that tick. Making the refusal a
+    --  LOGGED outcome broke that -- the refusal sets the gate twenty lines up,
+    --  falls straight past `if legal`, and lands here, which clears it again on
+    --  the same tick. Set, cleared, set, cleared, once per tick, for as long as
+    --  the unit faces a target it will not steer toward. Measured 2026-08-31:
+    --  1871 lines in four minutes.
+    --
+    --  A RUNNING PLAN IS THE ONLY THING THAT MAKES THE PREVIOUS OUTCOME STALE,
+    --  and that is where the reset now lives -- see the branch above.
     setIdleState()
   end
 

@@ -89,6 +89,21 @@ ENVIRONMENT_INTERVAL = 5.0
 --  water is, or a unit is retired for an environment it would have accepted.
 ENVIRONMENT_SUBMERGED_FILL = 0.9
 
+--  Consecutive environment polls a unit must read as outside its own medium
+--  before the port re-homes it. See mediumCheck.
+--
+--  TWO, WHICH IS TEN SECONDS, AND THE SECOND POLL IS NOT CAUTION FOR ITS OWN
+--  SAKE. petports_mediumAt requires EVERY tile row the body overlaps to be at or
+--  above ENVIRONMENT_SUBMERGED_FILL, so a swimmer riding just under a surface can
+--  read "air" for a moment without having gone anywhere. Ten seconds of a
+--  genuinely beached unit costs nothing; teleporting a working one off a job
+--  because it bobbed is a visible bug.
+--
+--  NOT THREE. HEALTH_STALL_LIMIT is 3 because a cold-cache route probe is
+--  legitimately motionless for 45-50 seconds; there is no equivalent legitimate
+--  reason to be in the wrong medium for fifteen.
+MEDIUM_STRIKE_LIMIT = 2
+
 --  How often the port asks whether its unit is still alive in the useful sense.
 --
 --  SEPARATE FROM DISPATCHED-WORK FAILURE, AND IT HAS TO BE. The stranding ladder
@@ -1156,7 +1171,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-08-30r farming is a module"
+local PETPORT_BUILD_STAMP = "2026-08-31b mediumCheck re-homes a displaced unit"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -4469,6 +4484,73 @@ local function medicPatients()
 
   table.sort(out, function(a, b) return a.ratio < b.ratio end)
   return out
+end
+
+--  A UNIT SITTING IN A MEDIUM ITS CHASSIS MAY NOT OCCUPY IS SENT HOME.
+--
+--  THIS IS THE OTHER HALF OF REMOVING THE ESCAPE CLAUSE. planMediumValid used to
+--  let a displaced unit plan its own way out, and both versions of that licence
+--  turned out to be a licence to fly somewhere else -- an aquatic unit crossed a
+--  drain-held air gap into a second pool under it, twice, on 2026-08-31. The
+--  unit now refuses to plan at all from an illegal medium, which makes it hold
+--  still, which makes this the thing that has to notice.
+--
+--  RE-HOMING IS THE WHOLE RESPONSE, and it is the right one because it is what
+--  the unit wanted anyway. A displaced pet belongs at its port; rehomeUnit is
+--  instant, free, needs no pathing, and writes state and cargo back to the item
+--  first. The recovery ladders all end here already -- this only arrives sooner
+--  and with a reason attached.
+--
+--  ON THE ENVIRONMENT TIMER, NOT THE HEALTH ONE. HEALTH_INTERVAL is 30 seconds
+--  and needs three strikes, which is 90 seconds of a swimmer sitting in open air
+--  before anything reacts. ENVIRONMENT_INTERVAL is 5, and this is the same
+--  family of question that timer already asks: "does where this unit is suit the
+--  chassis it is".
+--
+--  TWO CONSECUTIVE POLLS, NOT ONE, AND THE SECOND ONE IS NOT CAUTION FOR ITS OWN
+--  SAKE. petports_mediumAt requires EVERY row the body overlaps to be at or above
+--  PETPORTS_SUBMERGED_FILL, so a swimmer riding just under a surface can read
+--  "air" for an instant without having gone anywhere. Ten seconds of a genuinely
+--  beached unit is cheap; teleporting a working one off a job because it bobbed
+--  is not.
+--
+--  A WALKER IS NOT ASKED TWICE, IT IS NOT ASKED AT ALL. petports_outOfMedium
+--  reports `checked = false` for a gravity-enabled chassis, because medium
+--  permission is a free-mover concept and the answer would otherwise be a
+--  meaningless true.
+local function mediumCheck()
+  if self.petId == nil or not world.entityExists(self.petId) then
+    self.mediumStrikes = 0
+    return
+  end
+
+  local called, answer = pcall(world.callScriptedEntity, self.petId,
+    "petports_outOfMedium")
+
+  --  A UNIT THAT CANNOT ANSWER IS LEFT ALONE, the same rule environmentCheck
+  --  follows and for the same reason: callScriptedEntity returns nil silently
+  --  for a function the target does not define, so a nil here is indistinguish-
+  --  able from an older unit script. Failing closed would re-home working units
+  --  over a partial install.
+  if not called or type(answer) ~= "table" then return end
+  if not answer.checked or not answer.out then
+    self.mediumStrikes = 0
+    return
+  end
+
+  self.mediumStrikes = (self.mediumStrikes or 0) + 1
+
+  sb.logInfo("PETPORT %s unit is outside its own medium at %s (reads %s) -- "
+    .. "poll %s of %s, it will plan nothing until this clears",
+    stationUniqueId(), sb.printJson(answer.position), tostring(answer.medium),
+    sb.printJson(self.mediumStrikes), sb.printJson(MEDIUM_STRIKE_LIMIT))
+
+  if self.mediumStrikes >= MEDIUM_STRIKE_LIMIT then
+    self.mediumStrikes = 0
+    rehomeUnit("outside its own medium at "
+      .. sb.printJson(answer.position) .. " (reads " .. tostring(answer.medium)
+      .. ") for " .. tostring(ENVIRONMENT_INTERVAL * MEDIUM_STRIKE_LIMIT) .. "s")
+  end
 end
 
 --  What is left is a unit sitting still, away from its port, for HEALTH_INTERVAL
@@ -10840,6 +10922,16 @@ function update(dt)
   if self.environmentTimer <= 0 then
     self.environmentTimer = ENVIRONMENT_INTERVAL
     environmentCheck()
+
+    --  SAME TIMER, SEPARATE QUESTION. environmentCheck asks whether the PORT's
+    --  footprint suits the socketed chassis; mediumCheck asks whether the UNIT
+    --  is currently somewhere its chassis may be. They share a cadence because
+    --  they share a cause -- water moves -- and nothing else.
+    --
+    --  AFTER, NOT BEFORE. environmentCheck can retire the unit, and re-homing
+    --  one that is already being withdrawn would be two rescues racing over the
+    --  same entity.
+    mediumCheck()
   end
 
   --  THE DOOR NOW ALSO MEANS "AND SOMETHING COULD LIVE IN HERE".

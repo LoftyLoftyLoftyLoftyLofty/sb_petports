@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-08-30i chassis team sent by the port"
+local CONTRACT_BUILD_STAMP = "2026-08-31b out-of-medium report"
 
 local contractStamped = false
 
@@ -1033,6 +1033,48 @@ function petports_mediumAllows(position, bounds)
 
   if media.fly then return true, "air" end
   return false, "not submerged and this chassis cannot fly"
+end
+
+--  IS THIS UNIT CURRENTLY SOMEWHERE ITS CHASSIS MAY NOT BE?
+--
+--  ASKED BY THE PORT, on the environment timer, and the answer is a re-home. It
+--  replaces the escape clause that used to live in planMediumValid -- see the
+--  header there for the two versions of that clause and how each one became a
+--  licence to cross to a DIFFERENT body of water rather than a way back into
+--  the one the unit left.
+--
+--  THE UNIT IS NOT ASKED TO RESCUE ITSELF. A displaced unit wants to be at its
+--  port; the port can put it there instantly and for free; and rehomeUnit is the
+--  rescue every recovery ladder in this mod already ends with. Improvising a
+--  route back is strictly worse, and was measured going somewhere else entirely.
+--
+--  MEANINGLESS FOR A WALKER, AND IT SAYS SO RATHER THAN GUESSING.
+--  petports_mediumAllows short-circuits to true for a gravity-enabled chassis --
+--  its medium is physics, not permission -- so a bare boolean would report
+--  "fine" for every walker regardless of where it was standing, which is true
+--  today and would silently stay true if that ever stopped being so. `checked`
+--  keeps it honest: the port can tell "this unit is fine" from "this question
+--  does not apply to this unit".
+--
+--  RETURNS ONE TABLE, per the marshalling convention this file records twice.
+--  world.callScriptedEntity returns nil SILENTLY for a function the target does
+--  not define, so a bare boolean could not be told apart from an older unit
+--  script -- and failing closed on that would teleport working units after a
+--  partial install.
+function petports_outOfMedium()
+  if not petports_freeMover() then
+    return { checked = false, out = false, medium = "physics" }
+  end
+
+  local bounds = mcontroller.boundBox()
+  local position = mcontroller.position()
+
+  return {
+    checked = true,
+    out = not petports_mediumAllows(position, bounds),
+    medium = petports_mediumAt(position, bounds),
+    position = position
+  }
 end
 
 --  WHERE A FLYING UNIT SHOULD SIT TO WORK ON SOMETHING AT `position`.
