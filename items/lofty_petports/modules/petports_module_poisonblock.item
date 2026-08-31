@@ -1,0 +1,81 @@
+//  PETPORTS -- POISON BLOCK MODULE
+//
+//  THE FIRST MODULE THAT GRANTS SOMETHING A STATUS EFFECT CANNOT, and the reason
+//  petports_moduleLiquids exists.
+//
+//  A module has two channels and they are read at different times by different
+//  things:
+//
+//      petports_moduleEffects   pushed to a LIVE unit as status effects
+//      petports_moduleLiquids   read off THIS ITEM by the port, with no unit
+//
+//  The lamp module needed only the first. This one needs both, because the two
+//  halves of "poison immunity" are not the same kind of thing. Surviving poison
+//  is a property of a unit that exists. Being ALLOWED into poison is a property
+//  the petport has to know BEFORE it opens its door -- the habitat gate refuses
+//  to deploy a chassis into a liquid its monstertype avoids, and it decides that
+//  from the item, because there is no unit yet to ask. A permission carried in a
+//  status effect would grant immunity to a unit that was never spawned.
+//
+//  IT SUBTRACTS FROM THE CHASSIS AVOID LIST AND CANNOT ADD TO IT. Both the port
+//  and the unit apply this the same way and only ever remove entries, so a
+//  module can widen where a unit will go and can never strand one by forbidding
+//  the water it lives in.
+//
+//  NAMES MATCH petports_avoidLiquids ON THE CHASSIS, because the two sets are
+//  compared key against key. The aquatic and amphibious chassis both spell it
+//  "poison"; that spelling is resolved loosely against the liquid's name and its
+//  itemDrop at the point of use, so either form works, but the two SETS must
+//  agree with each other exactly.
+//
+//  THE TWO HALVES HAVE DIFFERENT AUDIENCES, and it is worth being exact about
+//  which chassis get what.
+//
+//  THE PERMISSION HALF IS FOR THE AQUATIC AND AMPHIBIOUS CHASSIS ONLY. Neither
+//  the flyer nor the drone declares an avoid list, because canSwim is false on
+//  both and ALL liquid is already refused -- a permission that subtracts from an
+//  empty set subtracts nothing.
+//
+//  THE IMMUNITY HALF IS FOR ALL FOUR, and it is not a consolation prize. Toxic
+//  rain applies the poison status effect through the WEATHER path, which has
+//  nothing to do with liquids or with swimming, so a flyer working a base on a
+//  toxic world needs this exactly as much as a swimmer in a pool does. That path
+//  was dead until 2026-08-30: every chassis shipped with
+//  appliesWeatherStatusEffects false, which made them accidentally immune to all
+//  weather and made this module liquid-only. The flag is true on all four now.
+
+{
+	"itemName" : "petports_module_poisonblock",
+	"price" : 400,
+	"rarity" : "Uncommon",
+
+	//  Shared with the lamp module, so the categories.config.patch label and the
+	//  petports_filtergroups.config subgroup that already exist cover this item
+	//  too. A new category would need both of those added or it sorts to Unsorted.
+	"category" : "petports_module",
+
+	//  THE ORIGINAL GREEN DIAMOND, INHERITED RATHER THAN COPIED. It was the lamp
+	//  module's icon first, back when there was only one module and the colour
+	//  meant nothing. Green belongs to poison, so the diamond moved here and the
+	//  lamp was recoloured pale yellow -- a hue rotation of the same three
+	//  shades, so the two read as one family at a glance and as different
+	//  modules in a slot.
+	"inventoryIcon" : "petports_module_poisonblock.png",
+
+	"description" : "A sealed filtration cartridge. Socket it into a unit and poison stops being a reason to stay out of the water.",
+	"shortdescription" : "Poison Block Module",
+
+	//  petports_no_upcycling KEEPS IT OUT OF THE CONVERTER, or a unit hauling
+	//  surplus to an upcycler turns the player's modules into treats.
+	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],
+
+	//  MAXSTACK 1 IS A REQUIREMENT. The pane moves modules with
+	//  player.swapSlotItem(), which returns the whole cursor stack; it refuses a
+	//  stack rather than trusting this field, so a stackable module would be
+	//  refused forever and look broken.
+	"maxStack" : 1,
+
+	"petports_moduleEffects" : [ "petports_module_poisonblock" ],
+
+	"petports_moduleLiquids" : [ "poison" ]
+}

@@ -242,7 +242,19 @@
       "statusProperties" : { "targetMaterialKind" : "robotic", "petports_fadeColor" : "ef91a9" },
 
       "appliesEnvironmentStatusEffects" : false,
-      "appliesWeatherStatusEffects" : false,
+      //  TRUE SO THAT WEATHER CAN ACTUALLY HURT A UNIT. It was false, which made
+      //  every petport chassis accidentally immune to toxic rain -- not by any
+      //  design, but because a blanket flag suppressed the whole category. That
+      //  made the poison module a liquid-only feature and left the toxic-planet
+      //  deploy route protected for a reason nobody chose and nothing recorded.
+      //
+      //  THIS ADMITS EVERY WEATHER EFFECT, NOT JUST POISON. There is no per-type
+      //  gate -- the flag is all or nothing -- so electrical storms, blizzards
+      //  and ember fall now reach these units too, and only poison has a module
+      //  answering it. That surface is accepted deliberately rather than
+      //  overlooked; the alternative was a baseline immunity stats block on all
+      //  four chassis, which reads as arbitrary the moment this note is lost.
+      "appliesWeatherStatusEffects" : true,
       "minimumLiquidStatusEffectPercentage" : 0.1,
 
       "primaryScriptSources" : [ "/stats/monster_primary.lua" ],

@@ -1157,7 +1157,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-08-30b door gated on the environment verdict"
+local PETPORT_BUILD_STAMP = "2026-08-30c module liquid permissions"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -3090,6 +3090,60 @@ function petportModuleEffects()
   return out
 end
 
+--  WHAT LIQUIDS DOES THIS MODULE UNLOCK?
+--
+--  A SECOND FIELD RATHER THAN MORE petports_moduleEffects ENTRIES, and the
+--  reason is that the two are read at different times by different things.
+--  Effects are pushed to a LIVE unit and held as status effects. A liquid
+--  permission has to be legible to the PORT, with no unit in the world, because
+--  it feeds the habitat gate -- and the gate is what decides whether a unit gets
+--  spawned at all. A poison module whose permission lived in a status effect
+--  would grant immunity to a unit the port had already refused to deploy.
+--
+--  NAMES, NOT IDS, matching petports_avoidLiquids on the chassis. The two sets
+--  are compared key against key, so they must be spelled the same way and are
+--  lowercased at both ends.
+local function moduleLiquidsOf(item)
+  if type(item) ~= "table" or item.name == nil then return {} end
+
+  if item.parameters and type(item.parameters.petports_moduleLiquids) == "table" then
+    return item.parameters.petports_moduleLiquids
+  end
+
+  local ok, resolved = pcall(root.itemConfig, { name = item.name, count = 1 })
+  if not ok or type(resolved) ~= "table" or type(resolved.config) ~= "table" then
+    return {}
+  end
+
+  local liquids = resolved.config.petports_moduleLiquids
+  if type(liquids) ~= "table" then return {} end
+  return liquids
+end
+
+--  Sorted and deduplicated for the same reasons petportModuleEffects is: this
+--  goes into the push signature, and two spellings of one set would push an
+--  update every time a player rearranged slots.
+function petportModuleLiquids()
+  if self.petData == nil or type(self.petData.modules) ~= "table" then return {} end
+
+  local seen = {}
+  local out = {}
+
+  for _, record in ipairs(self.petData.modules) do
+    if type(record) == "table" and record.item ~= nil then
+      for _, liquid in ipairs(moduleLiquidsOf(record.item)) do
+        if type(liquid) == "string" and not seen[liquid] then
+          seen[liquid] = true
+          table.insert(out, liquid)
+        end
+      end
+    end
+  end
+
+  table.sort(out)
+  return out
+end
+
 --  THE CATEGORY THE UNIT HOLDS THEM UNDER.
 --
 --  status.setPersistentEffects REPLACES EVERYTHING UNDER ONE CATEGORY, which is
@@ -3120,16 +3174,25 @@ function pushModuleEffects()
   end
 
   local effects = petportModuleEffects()
+  local liquids = petportModuleLiquids()
 
   local ok, encoded = pcall(sb.printJson, effects)
   if not ok then encoded = tostring(#effects) end
-  local signature = tostring(self.petId) .. "|" .. encoded
+
+  local okLiquids, encodedLiquids = pcall(sb.printJson, liquids)
+  if not okLiquids then encodedLiquids = tostring(#liquids) end
+
+  --  BOTH SETS ARE IN THE SIGNATURE. They travel together, so a change to
+  --  either has to re-push -- and a signature covering only the effects would
+  --  silently swallow a module swap that changed permissions and nothing else.
+  local signature = tostring(self.petId) .. "|" .. encoded .. "|" .. encodedLiquids
 
   if signature == self.pushedModuleEffects then return end
   self.pushedModuleEffects = signature
 
-  sb.logInfo("PETPORT %s pushing %s module effect(s) to unit %s: %s",
-    stationUniqueId(), sb.printJson(#effects), sb.printJson(self.petId), encoded)
+  sb.logInfo("PETPORT %s pushing %s module effect(s) and %s liquid permission(s) to unit %s: %s / %s",
+    stationUniqueId(), sb.printJson(#effects), sb.printJson(#liquids),
+    sb.printJson(self.petId), encoded, encodedLiquids)
 
   --  Defined in petports_contract.lua. A bare callScriptedEntity naming a
   --  function the target does not define returns nil SILENTLY rather than
@@ -3137,7 +3200,7 @@ function pushModuleEffects()
   --  effect that does not work -- hence the log line above, which fires
   --  whether or not the far end exists.
   world.callScriptedEntity(self.petId, "petports_setModuleEffects", effects,
-    MODULE_EFFECT_CATEGORY)
+    MODULE_EFFECT_CATEGORY, liquids)
 end
 
 --------------------------------------------------------------------------------
@@ -3442,8 +3505,15 @@ local function environmentCheck()
     --  nil FROM HERE IS "root.monsterParameters GAVE NOTHING", which is a
     --  tooling problem and not a statement about the terrain. Same rule as
     --  above: leave the port alone rather than brick it over a bad type name.
+    --  MODULE PERMISSIONS ARE PART OF THE QUESTION, and leaving them out here
+    --  would defeat the poison module entirely: the port would refuse to open
+    --  its door at a poison pool, so the unit that carries the immunity would
+    --  never be deployed to use it. The gate has to know what the socketed
+    --  modules grant, which is why the permission set is read from the ITEM and
+    --  not from a status effect on a unit that does not exist yet.
     verdict = petports_habitatVerdict(
-      petports_habitatCapabilitiesForType(self.petData.monsterType),
+      petports_habitatCapabilitiesForType(self.petData.monsterType,
+        petports_habitatPermittedSet(petportModuleLiquids())),
       wet, dry, liquids)
 
     if verdict == nil then

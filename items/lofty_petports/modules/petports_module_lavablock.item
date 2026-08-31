@@ -1,0 +1,60 @@
+//  PETPORTS -- LAVA BLOCK MODULE
+//
+//  THE SECOND MODULE ON THE TWO-CHANNEL SHAPE, AND IT COST NO PLUMBING. Poison
+//  block paid for petports_moduleLiquids; this file is the proof that the field
+//  generalises. An item, an effect, a script, an icon -- no engine-side change,
+//  no new port code, no new contract call.
+//
+//      petports_moduleEffects   pushed to a LIVE unit as status effects
+//      petports_moduleLiquids   read off THIS ITEM by the port, with no unit
+//
+//  BOTH LAVAS ARE PERMITTED, AND THAT IS A CHOICE. The aquatic and amphibious
+//  chassis avoid "lava", "corelava" and "poison"; this cancels the first two.
+//  lavaImmunity is a stat about lava as a substance rather than about a
+//  particular liquid id, so the immunity genuinely covers both and permitting
+//  only one would leave a unit refusing water it could safely occupy. If
+//  corelava should stay off-limits as a difficulty line rather than a safety
+//  one, deleting one string here is the whole change.
+//
+//  THE PERMISSION HALF IS FOR THE AQUATIC AND AMPHIBIOUS CHASSIS ONLY. Neither
+//  the flyer nor the drone declares an avoid list, because canSwim is false on
+//  both and ALL liquid is already refused -- a permission that subtracts from an
+//  empty set subtracts nothing.
+//
+//  THE IMMUNITY HALF IS FOR ALL FOUR. Unlike poison, which also arrives as toxic
+//  RAIN through the weather path, lava only ever arrives as a liquid -- so this
+//  module is narrower in reach than the poison one despite looking parallel. A
+//  flyer carrying it gains nothing until something puts it in lava.
+
+{
+	"itemName" : "petports_module_lavablock",
+	"price" : 400,
+	"rarity" : "Uncommon",
+
+	//  Shared with the other modules, so the categories.config.patch label and
+	//  the petports_filtergroups.config subgroup that already exist cover this
+	//  item too. A new category would need both added or it sorts to Unsorted.
+	"category" : "petports_module",
+
+	//  TEST ART. A hue rotation of the same diamond the other modules use --
+	//  distinct in a slot at a glance, which is the only bar it has to clear
+	//  until bespoke icons land.
+	"inventoryIcon" : "petports_module_lavablock.png",
+
+	"description" : "A sealed thermal shell. Socket it into a unit and lava stops being a reason to stay on the shore.",
+	"shortdescription" : "Lava Block Module",
+
+	//  petports_no_upcycling KEEPS IT OUT OF THE CONVERTER, or a unit hauling
+	//  surplus to an upcycler turns the player's modules into treats.
+	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],
+
+	//  MAXSTACK 1 IS A REQUIREMENT. The pane moves modules with
+	//  player.swapSlotItem(), which returns the whole cursor stack; it refuses a
+	//  stack rather than trusting this field, so a stackable module would be
+	//  refused forever and look broken.
+	"maxStack" : 1,
+
+	"petports_moduleEffects" : [ "petports_module_lavablock" ],
+
+	"petports_moduleLiquids" : [ "lava", "corelava" ]
+}

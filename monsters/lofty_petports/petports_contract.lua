@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-08-30d free movers need one uniform medium"
+local CONTRACT_BUILD_STAMP = "2026-08-30e module liquid permissions"
 
 local contractStamped = false
 
@@ -224,9 +224,32 @@ end
 --  has been wrong about a binding before, and a silent no-op looks exactly like
 --  a status effect that does not work. The log line below is what tells them
 --  apart.
-function petports_setModuleEffects(effects, category)
+--  `liquids` IS A LIST OF LIQUID NAMES SOCKETED MODULES HAVE UNLOCKED, computed
+--  by the port from the module ITEMS. It rides this call rather than getting one
+--  of its own for two reasons.
+--
+--  ONE COMPUTATION, TWO CONSUMERS. The port needs the set for its own habitat
+--  gate before a unit exists; the unit needs it for pathing and target
+--  selection. Sending what the port already worked out means the two cannot
+--  disagree about where this unit may go.
+--
+--  AND THE ARRIVAL IS THE INVALIDATION EVENT. Both caches cleared below latch on
+--  first read and never expire, so a permission that changed while a unit was
+--  alive would do nothing until it was re-socketed. There is no other hook that
+--  fires on a module change -- this call IS the change -- so clearing them here
+--  is not tidiness, it is the only place it can happen.
+function petports_setModuleEffects(effects, category, liquids)
   category = category or "petports_modules"
   effects = effects or {}
+
+  --  petportsAvoidLiquids is the SET this unit refuses.
+  --  petportsLiquidVerdict is the memo of per-id answers derived from it, and it
+  --  is the easy one to forget: it caches the VERDICT, not the list, so leaving
+  --  it would keep returning "denied" for poison from a set that no longer
+  --  contains poison.
+  self.petportsModuleLiquids = petports_habitatPermittedSet(liquids or {})
+  self.petportsAvoidLiquids = nil
+  self.petportsLiquidVerdict = nil
 
   local ok, err = pcall(status.setPersistentEffects, category, effects)
 
@@ -236,8 +259,8 @@ function petports_setModuleEffects(effects, category)
     return false
   end
 
-  sb.logInfo("UNIT module effects applied under %s: %s",
-    tostring(category), sb.printJson(effects))
+  sb.logInfo("UNIT module effects applied under %s: %s -- liquid permissions %s",
+    tostring(category), sb.printJson(effects), sb.printJson(liquids or {}))
   return true
 end
 
@@ -602,13 +625,36 @@ end
 --  accepted too for anyone working from the wiki table. An unmatched liquid logs
 --  what it actually resolved to, once, so a wrong entry is a one-cycle fix
 --  rather than a mystery.
+--  THE CHASSIS LIST MINUS WHAT MODULES HAVE UNLOCKED.
+--
+--  SUBTRACTIVE ONLY. A module can cancel an entry and cannot add one, so a
+--  module can widen where this unit will go and can never strand it by
+--  forbidding the water it lives in. Same rule as the port's overlay, and it has
+--  to be, because the port's habitat gate and this unit's pathing must agree
+--  about where it may be.
+--
+--  CACHED, AND CLEARED BY petports_setModuleEffects. The cache is what makes
+--  this cheap enough for the search paths that call it; the clear is what stops
+--  it outliving the permission set it was computed from.
 local function avoidedLiquids()
   if self.petportsAvoidLiquids ~= nil then return self.petportsAvoidLiquids end
 
-  self.petportsAvoidLiquids =
+  local avoided =
     petports_habitatAvoidedSet(config.getParameter("petports_avoidLiquids", {}))
 
-  return self.petportsAvoidLiquids
+  local permitted = self.petportsModuleLiquids
+  if permitted ~= nil and next(permitted) ~= nil then
+    for name in pairs(permitted) do
+      if avoided[name] then
+        avoided[name] = nil
+        sb.logInfo("UNIT module permission unlocks liquid %s -- it is no longer avoided",
+          tostring(name))
+      end
+    end
+  end
+
+  self.petportsAvoidLiquids = avoided
+  return avoided
 end
 
 --  Is this liquid one this chassis refuses to be in? Cached per id, because

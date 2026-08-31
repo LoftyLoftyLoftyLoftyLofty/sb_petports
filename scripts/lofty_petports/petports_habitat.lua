@@ -173,10 +173,11 @@ end
 --  flattened or nested is not documented, and looking in both costs one index.
 --
 --  CACHED PER TYPE. These are authored constants; nothing can change them for
---  the life of the world.
+--  the life of the world. THE MODULE OVERLAY IS NOT CACHED WITH THEM -- see
+--  petports_habitatCapabilitiesForType, which is the entry point callers use.
 local capabilityCache = {}
 
-function petports_habitatCapabilitiesForType(monsterType)
+local function typeCapabilities(monsterType)
 	if monsterType == nil then return nil end
 
 	local key = tostring(monsterType)
@@ -208,6 +209,48 @@ function petports_habitatCapabilitiesForType(monsterType)
 
 	capabilityCache[key] = caps
 	return caps
+end
+
+--  `permitted` IS A SET OF LIQUID NAMES A SOCKETED MODULE HAS UNLOCKED, as built
+--  by petports_habitatPermittedSet. nil means no modules, which is the common
+--  case and costs a table copy either way.
+--
+--  THE OVERLAY IS RECOMPUTED EVERY CALL AND THAT IS DELIBERATE. Folding it into
+--  the cache would mean keying on the type AND the permission set, and a cache
+--  keyed on one of the two is worse than no cache at all: two units of the same
+--  chassis with different modules would each get whichever answer was computed
+--  first, and the symptom is a module that does nothing until you re-socket it.
+--  The type read is the expensive half and it stays cached; the overlay is a
+--  walk of a set that is almost always empty and usually has one entry.
+--
+--  IT ONLY EVER SUBTRACTS. A module can remove a liquid from the avoid list and
+--  cannot add one, so a broken or hostile module item can widen where a unit
+--  will go but can never strand one by forbidding the water it lives in.
+function petports_habitatCapabilitiesForType(monsterType, permitted)
+	local caps = typeCapabilities(monsterType)
+	if caps == nil then return nil end
+	if permitted == nil or next(permitted) == nil then return caps end
+
+	local avoided = {}
+	for name in pairs(caps.avoided) do
+		if not permitted[name] then avoided[name] = true end
+	end
+
+	return
+	{
+		freeMover = caps.freeMover,
+		fly = caps.fly,
+		swim = caps.swim,
+		avoidLiquid = caps.avoidLiquid,
+		avoided = avoided
+	}
+end
+
+--  THE SAME LOWERCASING AS petports_habitatAvoidedSet, and it has to be the
+--  same, because these two sets are compared against each other by key. A
+--  module naming "Poison" must cancel a chassis avoiding "poison".
+function petports_habitatPermittedSet(list)
+	return petports_habitatAvoidedSet(list)
 end
 
 --  ---------------------------------------------------------------------------

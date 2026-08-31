@@ -1,0 +1,35 @@
+//  PETPORTS -- POISON BLOCK MODULE EFFECT
+//
+//  The status effect half of the poison module. Its script grants
+//  poisonStatusImmunity and nothing else; see the .lua for why the resistance
+//  stat vanilla pairs with it is left out.
+//
+//  THIS IS ONLY HALF THE MODULE. A status effect can stop poison hurting a unit
+//  that is standing in poison. It cannot get the unit there -- the petport
+//  refuses to deploy into a liquid the chassis avoids, and it decides that with
+//  no unit in the world to carry an effect. The other half is
+//  petports_moduleLiquids on the item, which the port reads directly.
+//
+//  NO icon AND NO label, UNLIKE vanilla's poisonblock. Those drive the status
+//  bar on a PLAYER. This is held by a monster under a persistent category, where
+//  nothing draws them, and inventing an icon path that does not exist is a
+//  missing-asset warning for no benefit. poisonblockaugment omits them too, for
+//  the same reason.
+//
+//  defaultDuration IS UNREAD ON THE PATH WE USE. The port applies this with
+//  status.setPersistentEffects, which holds it for as long as it is in the set.
+//  It is stated anyway, at vanilla's value, so that an effect applied some other
+//  way later behaves like the thing it was copied from rather than expiring
+//  instantly. Same reasoning as petports_module_light.
+
+{
+	"name" : "petports_module_poisonblock",
+
+	"effectConfig" : {},
+
+	"defaultDuration" : 60,
+
+	"scripts" : [
+		"petports_module_poisonblock.lua"
+	]
+}

@@ -42,164 +42,87 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-08-30 (pathing, panes and choreography)
+### What is built, as of 2026-08-30 (the environment gate and the first modules)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-A LONG SESSION ACROSS FOUR AREAS -- the arc mover, the last pane migration, the
-beacon icons, and spawn/despawn choreography. Anything below dated earlier than
-today was not re-verified and carries its previous session's confidence.
+A SESSION IN TWO HALVES. The first closed a hole in the spawn path that the
+previous session's choreography had opened. The second used what that produced
+to build the first two modules that grant something a status effect cannot.
 
 ---
 
-**THE ARC MOVER NO LONGER THROTTLES A JUMP TO THE PLANNER'S MIND-CHANGE.** A*
-changes its own vx partway through nearly every arc it draws -- 12 to 1 at the
-apex, held for the whole descent. The mover steered toward that, so a unit
-launched at 7.96 was braked to 1 in a single look with a quarter second of
-falling left, crossed its landing altitude 1.83 tiles short and fell twelve
-tiles. The launched velocity now holds for the entire arc, with the record's
-LIFETIME as the ownership guarantee. See `fact.pathing.plannervxdrop`,
-`fact.pathing.arcmoverthrottle`, `arch.pathing.solvelaunch`.
+**THE PORT NO LONGER OPENS ITS DOOR BEFORE IT KNOWS THE SPAWN WILL WORK.**
+`environmentCheck` used to return immediately unless a unit existed, because
+capability was a monstertype parameter and only the unit had read it. That was
+true of the ENTITY and never true of the TYPE. It now asks the unit when one is
+live and `root.monsterParameters` otherwise, so the verdict exists BEFORE the
+hull is told to open. See `dd.port.envpresence` and `fact.port.typecapabilities`.
 
-IT HAD BEEN HAPPENING ON ALMOST EVERY JUMP SINCE THE MOVER WAS WRITTEN, and
-solid terrain absorbed it every time. VERIFIED across three courses -- blocks,
-3-wide platforms, a single-wide death course -- plus tight tunnels and air
-pockets. Every jump landed, worst error 0.49 tiles, zero stale-record warnings.
+**THE LADDER MOVED TO A SHARED MODULE**, `petports_habitat.lua`, loaded by
+`require` on the object and by the scripts list on all four monstertypes -- the
+same dual route `petports_work.lua` uses. Two callers now ask the same question
+and the ORDER of the tests is the logic, so the order lives in one file.
 
-WHAT IS LEFT IN THE JUMP PATH is the arrival brake (`todo.pathing.brakefloor`,
-priority 2) and branch 1's ceiling overshoot, corrected in place in
-`arch.pathing.solvelaunch` and deliberately not changed.
+**A FREE MOVER NOW NEEDS ITS WHOLE FOOTPRINT TO BE ONE MEDIUM.** A flyer at a
+half-flooded 4x4 port was materialising under its own waterline, because the
+verdict asked whether the footprint offered dry ANYWHERE and `petSpawnOffset` is
+`[0, 0]` -- the middle. The comment justifying that had asserted a flyer would
+take the dry half; nothing ever chose a half. See `dd.port.envuniform`.
 
----
+**FLOODING AN OCCUPIED PORT EVACUATES ITS UNIT.** Emergent, not designed, and
+verified in game. It falls out of the verdict being re-asked every
+`ENVIRONMENT_INTERVAL` rather than at spawn time only -- so anything that makes
+the gate spawn-time-only removes it silently. Recorded as a consequence under
+`dd.port.envpresence`.
 
-**SPAWN AND DESPAWN ARE CHOREOGRAPHED.** A unit materialises out of a coloured
-dot and dematerialises back into one, modelled on vanilla's `monsterrelocate` --
-the only transition in the game whose look lives in the DIRECTIVE STRING rather
-than in particles, bespoke art or motion. `?fade` to the chassis colour, that
-blend morphing to white while `?scalenearest` collapses the unit, and a `?border`
-holding the colour throughout. Two effects over one script in
-`stats/effects/lofty_petports/`, direction picked by a `grow` flag.
-
-THE SEQUENCE IS NOW ORDERED. The hull door opens, and only on reaching the
-terminal `open` state does the unit spawn -- polled every tick while the door
-moves rather than on `RESPAWN_GRACE`, which read as a palpable pause. On the way
-out the door stays open until the unit is actually gone from the world, tracked
-by `self.fadingPetId` past `self.petId` and polled on `world.entityExists`
-rather than a timer.
-
-`petports_despawn` NO LONGER KILLS INLINE -- the dematerialise effect does, at
-the end of its ramp. Anything that assumed the unit was gone the moment that
-function returned must now poll.
-
-THE ONE-TICK POP TOOK THREE ATTEMPTS, recorded in `fact.unit.spawnrender`. A
-`callScriptedEntity` is always a tick late; a spawn parameter read in the
-monster's own init is better, but `addEphemeralEffect` hands off to the status
-controller and is not synchronous with the render; `animator.setAnimationState`
-is. The unit is hidden synchronously in a WRAPPED init and groundPet's next
-update self-heals it.
-
-THAT HIDE BORROWS THE SPINNER SHEET'S BLANK FRAME, a landmine with three
-dependants -- see `todo.art.invisibleframe`. It also fixed two OLDER silent bugs:
-`invisible` was aliased to the run strip, so units sleeping inside a target and
-units in vent transit had never actually been hidden.
-
-Colour is `petports_fadeColor`, a status property on each of the four
-monstertypes, currently the test value `ff00ff`. Sound is the capture pod's, on
-an effect-owned animation holding nothing but sounds.
-
-SCALE IS A DIRECTIVE, not a transformation group -- no animation edits and no
-wrapper around groundPet's update for the visual. Four candidates were read and
-rejected on the way here (capture, despawn, mech deploy, morphball) and each is
-recorded with why.
+**PULLING A LIQUID-PERMISSION MODULE RECALLS A UNIT STANDING IN THAT LIQUID.**
+NOT emergent -- this is the designed recall of `arch.unit.exitpaths` reached
+through a new trigger. The gate re-asks, the verdict flips, the existing
+withdrawal runs. Worth naming only because the trigger is new; the behaviour is
+the one that was always intended.
 
 ---
 
-**ALL FOUR PANES ARE ON THE SHARED STRING TABLE.** The upcycler was the last and
-is now migrated: 14 config literals plus roughly 26 runtime ones the backlog had
-compressed into "its runtime status line", including the whole ten-cause warning
-table. `Replace Me` is gone. `plural(count, word)` is gone -- counted nouns are
-`one`/`many` keys, because appending an "s" in code is English word formation.
+**MODULES NOW HAVE TWO CHANNELS.** `petports_moduleEffects` is pushed to a live
+unit as status effects, as before. `petports_moduleLiquids` is read off the ITEM
+by the port with no unit in the world, because the habitat gate is what decides
+whether a unit gets spawned at all -- a permission carried in a status effect
+would grant immunity to a unit that was never deployed. See `arch.module.liquids`.
 
-THE MIGRATION'S REAL LESSON: keys and a require are not a migration. The sweep
-call was missing, every widget rendered its declared `"--"`, and NOTHING WAS
-LOGGED -- which is the string table working as designed. Verified across all four
-panes that anything declaring keys also runs the sweep.
+**POISON BLOCK AND LAVA BLOCK BOTH SHIP AND BOTH ARE VERIFIED IN GAME.** Poison:
+the gate opens at a poison pool, the DoT is blocked, and the unit is recalled
+when the module comes out. Lava: verified in `lava` AND in `corelava`, including
+SWIM PATHING inside corelava -- which is the proof that the unit-side cache
+invalidation works, since a stale `petportsLiquidVerdict` would have left a unit
+floating unharmed but refusing to move.
 
-**ALL FOUR PANES HAVE FINISHED TITLE ICONS.** The two beacons are STATE-DRIVEN --
-on and off variants swapped when the enabled box is ticked, seeded from real
-state at init, one shared implementation. The route is `pane.setTitleIcon`; the
-title icon is owned by the Pane and is NOT in the addressable widget tree, so
-`widget.setImage` fails on it SILENTLY. Title padding is now consistent across
-all four -- it is leading spaces in the title string and nothing else reaches it
-(`fact.pane.titlepadding`).
+**LAVA NEEDED TWO STATS WHERE POISON NEEDED ONE.** `lavaImmunity` for the
+liquid's own damage and `fireStatusImmunity` for the burning DoT.
+`fireResistance` and `poisonResistance` are both deliberately NOT granted -- they
+are damage-TYPE resistances that would also blunt weapons, which is a combat buff
+nobody asked these modules for.
 
----
-
-**Core loop.** A petport places, opens, spawns a unit from a socketed item, and
-that state round-trips through the item across despawn, world reload and being
-carried to another world. Placement validation, leashing, recall and re-home are
-live. Multi-hop vent routing works end to end.
-
-**Four locomotion classes** -- ground, flyer, aquatic, amphibious -- all verified
-in game, including swimming a flooded tube to farm an air pocket.
-
-**Sorting, tidying, compaction, restock.** Deposit beacons route by tag and
-category; eviction runs the same predicate. Storage compacts itself, bucketed by
-parameters, BUT NEVER A MACHINE. Restock beacons handle several requests per
-crate.
-
-**Farming**, end to end -- discovery, harvest, collection, deposit, replant
-intents, seed withdrawal, replanting at arbitrary footprint, watering of dry
-tilled soil, all surviving vent traversal both ways. Animal harvesting is built
-and a submerged animal is reachable.
-
-**The upcycler's slot behaviour is finished.** One shuttle priority, charge
-before burner, weight-aware fit test, bulk versus paced by destination, mutual
-swap deadlock self-resolving, exempt items refused, one refusal ladder shared by
-pane and machine, non-treats collected out of output slots.
-
-**The patrol class of bug is closed twice over.** THE REORDERED BACKOFF LADDER IS
-STILL UNEXERCISED -- `todo.port.backoffladder`, priority 0.
-
-**Metrics.** Per-unit lifetime stats on `petData.stats`, persisted with the item.
-Tidy is logged and displayed nowhere; the rank belongs to Maxwell. The Stats tab
-is live.
-
-**Headpats.** One gate -- vanilla's 3s interaction window -- so the emote and the
-ledger cannot disagree.
-
-**Still not built.** Docking. The fuel system, so treats are made and harvested
-but never eaten. Vents do not cross a medium boundary. Liquid permissions from
-pet upgrades. Rename. Maxwell.
-
-**Art.** Bespoke: the unit body, the petport, the crosshairs, treat COLOURS, the
-upcycler's charge bin icon, and ALL FOUR PANE TITLE ICONS. Placeholder: the vent,
-the upcycler, the eight treat sprites, the four chassis colour strips, the rest
-of the petport pane art, the module icon, stats list fills and separators, the
-upcycler's running light, and the two identical vanilla checkboxes on a rule row.
-The unit has frames for `run` and nothing else, and NO BLANK FRAME OF ITS OWN.
-
-**The monsterpart is still named `drone_placeholder`.**
+**THE SECOND MODULE COST NO PLUMBING.** Lava block is an item, an effect, a
+script and an icon. That was the return on `petports_moduleLiquids`.
 
 ---
 
-**BUILD STAMPS -- EVERY LOAD-BEARING FILE NOW CARRIES ONE.**
+**`appliesWeatherStatusEffects` WAS FALSE ON ALL FOUR CHASSIS AND IS NOW TRUE.**
+The fleet had been accidentally immune to all weather, which made toxic rain a
+non-event and the poison module liquid-only. THE CONSEQUENCE IS ACCEPTED, NOT
+OVERLOOKED: the flag is all-or-nothing, so blizzards, electrical storms and ember
+fall now reach these units too and only poison has an answer. See
+`fact.unit.weatherflag`.
 
-    petports_petport.lua      2026-08-30a door waits for the unit to fade
-    petports_contract.lua     2026-08-30b dematerialise on despawn
-    petportsTaskAction.lua    2026-08-30a launched vx holds for the whole arc
-    beaconconfig.lua          2026-08-30c state-driven title icon
-    restockconfig.lua         2026-08-30c state-driven title icon
-    upcyclerconfig.lua        2026-08-30e string sweep actually runs
+**DRAW_PLAN IS OFF.** It was obscuring the port during multi-chassis testing. It
+is ONE vanilla flag with two consumers -- `self.debug` gates both groundPet's
+`drawDebugResources` and PathMover's `debugPath` -- so the plan lines went with
+the bars. Turn it back on for any session looking at plans.
 
-THE PORT AND THE CONTRACT HAD NEVER HAD ONE. The contract's is logged LAZILY,
-from the first contract call -- putting it at chunk scope threw on an unbound
-`sb` DURING CONTEXT CREATION and killed every unit in the world: 16 spawn
-attempts, 16 dead contexts, no pets at all. `petportsTaskAction`'s stamp is
-FIRST-ENTRY-ONLY, so a continuation log has no stamp line and is
-indistinguishable from a stale file by that signal alone.
+---
 
 **STILL OPEN: `moveOne` logs every hop, ungated.** 47 lines in 9 seconds.
 
@@ -209,12 +132,23 @@ its two lines.
 **STILL OPEN: a task can fail identically three times and nothing notices.** The
 unit genuinely moves, so the reject machinery cannot see it.
 
-**Debug flags, all ON, wanting a release pass** -- `TASK_DEBUG`, `VENT_DEBUG`,
-`DEBUG` in all four panes, `FLY_POINT_DEBUG`, `DRAW_PLAN`, `FLY_TELEMETRY`,
-`CARGO_TRACE`. `PETPORTS_FILTER_DEBUG` is OFF and should stay off. Deferred
+**STILL OPEN: dispatch does not consider chassis when choosing a task.** Aquatic
+units route to water crops on land and flyers route to submerged containers. Both
+are correct under the current rules and both are wasted trips. Named here because
+testing all four chassis at once made it obvious; not yet a backlog entry.
+
+**Debug flags wanting a release pass** -- `TASK_DEBUG`, `VENT_DEBUG`, `DEBUG` in
+all four panes, `FLY_POINT_DEBUG`, `FLY_TELEMETRY`, `CARGO_TRACE` are ON.
+`DRAW_PLAN` and `PETPORTS_FILTER_DEBUG` are OFF and should stay off. Deferred
 deliberately to a release preflight rather than trimmed piecemeal.
 
-**NOTHING IS COMMITTED.** The whole session sits in the working copy.
+**THE WORKING COPY IS COMMITTED THROUGH THE CHOREOGRAPHY WORK.** Everything in
+this session's two halves sits uncommitted on top of it.
+
+**LINE ENDINGS ARE NOISE IN `git status`.** The tree is CRLF and the index is LF,
+so untouched files report as wholly rewritten -- `petportsTaskAction.lua` shows
+10,910 changed lines while being byte-identical once normalised. A `.gitattributes`
+would stop a real diff being buried in it.
 
 ## ARCHITECTURE
 
@@ -1153,13 +1087,18 @@ programmatically whether a modded effect is beneficial is pattern-matching on
 names and fails the first time someone writes `moltenimmunity`. A list is
 honest about being a list.
 
-**Still to build: permissions from PET UPGRADES.** The intent is a pet
-equivalent of a poison block augment -- grant one and the unit works a poison
-ocean with no further configuration. That has to live in `petData` on the ITEM,
-because that is the only thing surviving despawn, unsocket and world reload, and
-it is already where per-unit state like `crosshairColors` lives. The resolved
-set is chassis defaults merged with item grants, cached alongside
-`petports_media()`.
+**BUILT 2026-08-30 -- see `arch.module.liquids`.** Poison block and lava block
+both ship. The prediction recorded here was half right and the half it got wrong
+is worth keeping.
+
+RIGHT: the grant lives on the ITEM, via a module on `petData`, because that is
+the only thing surviving despawn, unsocket and world reload.
+
+WRONG: "the resolved set is chassis defaults merged with item grants, cached
+alongside `petports_media()`" put the merge on the UNIT. It could not go there.
+The petport has to answer the same question with no unit in the world, because
+its habitat gate decides whether to spawn one at all -- so the PORT resolves the
+set and pushes it, and the unit consumes what it is given.
 
 ### Modules live on petData and the slot is a display
 `arch.module.slots` -- see also `dd.module.slotsbyrarity`, `fact.pane.itemslotbutton`
@@ -2454,6 +2393,52 @@ set two ways and push a redundant update.
 augments: the behaviour is carried by an asset that can be authored, patched or
 disabled without touching this mod's Lua.
 
+### A module has two channels, and a liquid permission cannot use the first
+`arch.module.liquids` -- see also `arch.module.effects`, `arch.locomotion.liquidpermissions`, `dd.port.envpresence`
+
+    petports_moduleEffects   pushed to a LIVE unit as status effects
+    petports_moduleLiquids   read off the ITEM by the port, with no unit
+
+**THE SECOND FIELD EXISTS BECAUSE THE FIRST CANNOT ANSWER IN TIME.** "Poison
+immunity" is two different things wearing one name. Surviving poison is a
+property of a unit that exists, and a status effect carries it. Being ALLOWED
+into poison is a property the PORT has to know BEFORE it opens its door -- the
+habitat gate refuses to deploy a chassis into a liquid its monstertype avoids,
+and it decides that with no entity in the world. A permission living in a status
+effect would grant immunity to a unit that was never spawned.
+
+**SUBTRACTIVE ONLY, ON BOTH SIDES.** A module removes entries from the chassis
+avoid list and can never add one. So a malformed or hostile module can widen
+where a unit will go and can never strand one by forbidding the water it lives
+in.
+
+**THE PERMISSION SET RIDES THE EXISTING PUSH** rather than getting a call of its
+own, and `pushModuleEffects`'s signature covers both sets. That gives one
+computation for two consumers -- the port needs it for its own gate, the unit for
+pathing and target selection -- and it makes cache invalidation free. The arrival
+of `petports_setModuleEffects` IS the change event; there is no other hook that
+fires on a module swap.
+
+**TWO CACHES MUST CLEAR ON RECEIPT AND ONE IS EASY TO MISS.**
+`petportsAvoidLiquids` is the set. `petportsLiquidVerdict` is a memo of per-id
+ANSWERS derived from it, so leaving it would keep returning "denied" for poison
+from a set that no longer contains poison. The symptom is a unit that survives a
+liquid perfectly well and refuses to path in it -- which is why swim pathing
+inside corelava was the test that proved this, not survival.
+
+**THE TYPE CAPABILITY CACHE IS SPLIT FOR THE SAME REASON.** The
+`root.monsterParameters` read stays cached per type; the module overlay is
+recomputed per call. A combined cache keyed on type alone would hand two units of
+one chassis with different modules whichever answer was computed first, and the
+symptom is a module that does nothing until it is re-socketed.
+
+**REACH DIFFERS BY MODULE AND IS NOT OBVIOUS.** The permission half only matters
+for the aquatic and amphibious chassis; the flyer and drone declare no avoid list
+because `canSwim` false already refuses all liquid, and subtracting from an empty
+set subtracts nothing. The IMMUNITY half of poison block matters for all four,
+because toxic rain arrives through the weather path. Lava block's does not --
+lava is only ever a liquid.
+
 ### The port owns an enabled switch and four participation groups
 `arch.port.switches` -- see also `dd.port.participationgroups`
 
@@ -3497,6 +3482,105 @@ it once, on its own, where a third arrival can find it first:
 FAILURES THIS MOD PRODUCES.** Ask whether the distance to the target is
 decreasing.
 
+### The door does not open until the port knows a unit can live there
+`dd.port.envpresence` -- see also `dd.port.envuniform`, `fact.port.typecapabilities`, `arch.module.liquids`, `arch.unit.exitpaths`
+
+**SUPERSEDES A DECISION THAT ONLY EVER EXISTED IN A CODE COMMENT**, at the socket
+branch of `petports_petport.lua`:
+
+    An unsuitable unit socketed into an unsuitable port still spawns and is
+    retired within ENVIRONMENT_INTERVAL. That flicker is deliberate -- it is once
+    per player action, and the retirement line says why, which is worth more than
+    a silent refusal to spawn.
+
+THE REASONING DID NOT BECOME WRONG. ITS INPUT CHANGED. That was written when a
+spawn was a one-frame pop and a despawn was an instant kill, and a flicker was a
+fair price for a log line explaining itself. The choreography made the flicker a
+PERFORMANCE: door opens, unit materialises, several seconds pass, unit
+dematerialises, door closes, forever, ending in nothing.
+
+**THE HALF THAT WAS RIGHT SURVIVES.** The refusal still says why -- one log line
+on the transition, and a pane diagnostic. `self.envRetired` is latched at the
+moment the verdict is set so the pane can tell "retired" from "never deployed";
+written unconditionally it would be true on the tick a unit is retired and false
+five seconds later, quietly rewriting a retirement as a refusal.
+
+**THREE THINGS HAD TO MOVE OR THE GATE BRICKS THE PORT:**
+
+  - the re-measure that cleared `envUnsuitable` lived INSIDE the `hullState ==
+    "open"` branch. Gate the door on the verdict and that code is unreachable
+    exactly when it is needed, so a flooded port would never recover. Recovery
+    moved onto the environment timer, which is where it belongs now that the
+    check needs no unit.
+  - the check moved ABOVE the door intent. Reading the verdict one line before
+    writing it made a fresh placement into bad terrain twitch the hull open and
+    shut.
+  - `self.environmentTimer` is zeroed on socket alongside `spawnTimer`. A verdict
+    arriving up to `ENVIRONMENT_INTERVAL` after the socket arrives after the door
+    has opened -- the same bug, moved rather than fixed.
+
+**A CONSEQUENCE NOBODY ASKED FOR, KEPT ON PURPOSE: FLOODING AN OCCUPIED PORT
+EVACUATES ITS UNIT.** Emergent rather than designed -- it exists only because the
+verdict is re-asked on a timer instead of at spawn. It is recorded here rather
+than as a `plan` entry because it was never intended and is not being promised;
+but a future change that makes the gate spawn-time-only would remove it without
+anything noticing, which is the sort of loss this document exists to prevent.
+
+Distinct from the module-pull case, which LOOKS the same and is not: a unit
+withdrawn when its liquid permission is removed is the ordinary recall of
+`arch.unit.exitpaths` reached through a new trigger, and that one was always the
+intent.
+
+**THE SPAWN GUARD STAYS EVEN THOUGH THE DOOR GATE MAKES IT NEARLY UNREACHABLE.**
+During a dematerialise the hull is held open by `unitPresent` while `self.petId`
+is already nil, which is exactly the shape the spawn block tests. Without its own
+`envUnsuitable` check it would deploy a replacement into the terrain that just
+retired the last one.
+
+### A free mover needs its whole footprint to be one medium
+`dd.port.envuniform` -- see also `dd.port.envpresence`, `dead.locomotion.pelagic`
+
+`portMedia` reports `wet` and `dry` as "at least one tile of the footprint is
+like this", so a port straddling a waterline reports BOTH. The ladder used to
+read that as suitable for either chassis, justified in a comment duplicated
+VERBATIM in two files:
+
+    A port half in the water offers BOTH, and that is the right answer for both
+    chassis -- a swimmer can sit in the flooded half, a flyer in the dry half,
+    and neither has to be told which.
+
+**NOBODY WAS EVER TOLD WHICH.** `spawnPet` spawns at `petSpawnOffset`, which is
+`[0, 0]` -- the middle of a 4x4 footprint. Liquid fills bottom-up, so at a
+half-flooded port the centre tile is under the waterline and the flyer
+materialised submerged, into a closed node set it cannot path out of. The
+sentence described a placement the code did not perform.
+
+**MEASURED IN GAME 2026-08-30**, and not caught after the fact either:
+`environmentCheck` asked the live unit the same footprint-level question, got
+`wet true, dry true, fly true` back, and returned ok. The unit was stuck and
+nothing retired it.
+
+**UNIFORMITY WAS CHOSEN OVER A POSITION SEARCH.** Picking a suitable tile and
+spawning there would have preserved the original intent, but it turns the verdict
+into a position search and gives every caller a point to keep in step with.
+Refusing a mixed footprint costs a port that is fifteen-sixteenths dry and buys a
+rule with no gap in it.
+
+**A CHASSIS THAT BOTH FLIES AND SWIMS IS TESTED FIRST** so uniformity never
+refuses one. None of the four is both; the ladder must not encode an accident of
+the current roster.
+
+**THE THRESHOLD IS INHERITED, NOT CHOSEN.** `wet` means fill at or above
+`ENVIRONMENT_SUBMERGED_FILL`, so a tile at 0.85 still reads dry and a flyer
+accepts it. That matches `PETPORTS_SUBMERGED_FILL` on the unit at the same 0.9,
+and the two agreeing is the property that matters.
+
+**THE DUPLICATED COMMENT IS THE LESSON.** The false premise was written out in
+full in `petports_habitat.lua` AND `petports_contract.lua`. Correcting one would
+have left the disproven version standing above a function that no longer did it
+-- prose drifting exactly the way the shared module exists to stop code drifting.
+Only the module states the rule now.
+
 ### Proliferation is intended
 `dd.port.proliferation`
 
@@ -3524,14 +3608,18 @@ What the config actually says, read out of `petports_drone.monstertype`:
     damageTeamType                        "ghostly"
     touchDamage                           0
     appliesEnvironmentStatusEffects       false
-    appliesWeatherStatusEffects           false
+    appliesWeatherStatusEffects           true     (was false until 2026-08-30)
     minimumLiquidStatusEffectPercentage   0.1
     healthRegen                           0.0
     maxHealth                             72
 
-LIQUID status effects apply from 10% submersion while environment and weather
-effects do not, which explains the observed lava deaths on its own, and
-`healthRegen` 0 means nothing a unit survives ever heals off.
+LIQUID status effects apply from 10% submersion, which explains the observed
+lava deaths on its own, and `healthRegen` 0 means nothing a unit survives ever
+heals off.
+
+**THE WEATHER FLAG CHANGED 2026-08-30 and the environment one did not.** Weather
+effects now reach these units; environment effects still do not. The three gates
+are independent -- see `fact.unit.weatherflag`.
 
 **UNVERIFIED: whether a hostile monster can damage a ghostly-team unit.** The
 intent recorded here is that units can be targeted, damaged and destroyed by
@@ -5009,6 +5097,62 @@ NOTE WHAT IS NOT THE PROBLEM, because it looks like it should be: `PathMover
 :move`'s return value. `approachPoint` never uses it as an arrival signal -- it
 only compares against `"running"` to pick an animation state. Arrival is decided
 by distance to the RAW target and nothing else. I got this wrong first.
+
+### `root.monsterParameters` answers chassis capability with no entity
+`fact.port.typecapabilities` -- see also `dd.port.envpresence`, `arch.locomotion.classes`
+
+An OBJECT script can read a monstertype's parameters. `petports_petport.lua`
+already did it twice, for `paneBodyKind` and `animalHarvestable`; the habitat
+gate is the third caller and the one that made it load-bearing.
+
+    root.monsterParameters(typeName)   ->  the monstertype's parameter table
+
+**CHECK BOTH LEVELS.** Whether the call returns `baseParameters` flattened or
+nested is not documented, and looking in both costs one index. The existing two
+callers already did this.
+
+**`movementSettings.gravityEnabled` ABSENT MEANS WALKER, WHICH MAKES THE TEST
+MATTER.** The unit asks `mcontroller.baseParameters().gravityEnabled`, which is
+not reachable from an object, but it is the same authored value. Verified across
+all four chassis: the two free movers set it `false` explicitly and the two
+walkers OMIT IT ENTIRELY.
+
+    freeMover = (movement.gravityEnabled == false)     correct
+    freeMover = not movement.gravityEnabled            reads a walker as a flyer
+
+**CACHE IT PER TYPE.** These are authored constants and nothing can change them
+for the life of the world. Do NOT cache anything overlaid on top of them keyed by
+type alone -- see `arch.module.liquids`.
+
+### `appliesWeatherStatusEffects` was false on every chassis, and that was accidental immunity
+`fact.unit.weatherflag` -- see also `dd.unit.destructible`, `arch.module.liquids`
+
+All four petport monstertypes shipped with:
+
+    appliesEnvironmentStatusEffects   false
+    appliesWeatherStatusEffects       false
+    minimumLiquidStatusEffectPercentage   0.1
+
+**THE THREE ARE INDEPENDENT GATES AND THAT IS THE FACT WORTH KEEPING.** Liquid
+harm reaches an entity with BOTH flags false -- vanilla's smoglin carries
+`appliesEnvironmentStatusEffects false` and still needs an explicit
+`lavaImmunity` stat, which would be dead weight otherwise. So liquid damage was
+always landing on our units while weather never was.
+
+**THE CONSEQUENCE WAS AN ACCIDENTAL IMMUNITY NOBODY CHOSE.** Toxic rain did
+nothing to a petport unit, with or without a poison module, which made the module
+liquid-only and the toxic-planet deploy route protected for a reason that was
+never a decision and was recorded nowhere.
+
+**THE FLAG IS TRUE ON ALL FOUR NOW, AND IT IS ALL OR NOTHING.** There is no
+per-effect gate, so blizzards, electrical storms and ember fall reach these units
+too, and only poison has a module answering it. That surface is accepted
+deliberately. The alternative considered and not taken was a baseline immunity
+stats block on all four chassis, which reads as arbitrary the moment the
+reasoning is lost.
+
+**PREDICTED, NOT MEASURED: which weather effects actually hurt.** The flag was
+flipped and poison rain confirmed; nothing else was tested.
 
 ### groundPet's `approachPoint` PASSES A DIRECTION INTO `avoidLiquid`
 `fact.pathing.approachliquid`

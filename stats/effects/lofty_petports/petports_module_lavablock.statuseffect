@@ -1,0 +1,31 @@
+//  PETPORTS -- LAVA BLOCK MODULE EFFECT
+//
+//  The status effect half of the lava module. Its script grants lavaImmunity and
+//  fireStatusImmunity; see the .lua for why fireResistance, which vanilla pairs
+//  with them, is left out.
+//
+//  THIS IS ONLY HALF THE MODULE, same as poison block. A status effect stops
+//  lava hurting a unit that is already standing in it. It cannot get the unit
+//  there -- the petport refuses to deploy into a liquid the chassis avoids, and
+//  it decides that with no unit in the world to carry an effect. The other half
+//  is petports_moduleLiquids on the item.
+//
+//  NO icon AND NO label. Those drive the status bar on a PLAYER; this is held by
+//  a monster under a persistent category, where nothing draws them.
+//
+//  defaultDuration IS UNREAD ON THE PATH WE USE -- the port applies this with
+//  status.setPersistentEffects, which holds it for as long as it is in the set.
+//  Stated anyway so an effect applied some other way later does not expire
+//  instantly. Same reasoning as petports_module_light and _poisonblock.
+
+{
+	"name" : "petports_module_lavablock",
+
+	"effectConfig" : {},
+
+	"defaultDuration" : 60,
+
+	"scripts" : [
+		"petports_module_lavablock.lua"
+	]
+}
