@@ -82,7 +82,7 @@
 --  delegate, and stays one.
 local vanillaSetJumpState = setJumpState
 
-local BUILD_STAMP = "2026-08-31c steer gate reset once, not per tick"
+local BUILD_STAMP = "2026-08-31d validation walks the string-pulled route"
 local stampLogged = false
 
 --  DELETE ME ONCE THE ANSWER IS IN THE LOG.
@@ -608,6 +608,58 @@ local function isFreeEdge(edge)
   return edge ~= nil and (edge.action == "Fly" or edge.action == "Swim")
 end
 
+--  WHICH WAYPOINT SHOULD THE UNIT STEER AT FROM `from`?
+--
+--  EXTRACTED SO THE MOVER AND THE PLAN VALIDATOR CANNOT DRIFT. It was inline in
+--  petportsFreeMover, and the validator did not model it at all -- it walked the
+--  RAW waypoint chain while the mover flew the STRING-PULLED one. Those are
+--  different routes, and validating the one the unit does not fly is how a
+--  perfectly good plan came to be refused: see planMediumValid.
+--
+--  FURTHEST FIRST, AND THAT ORDER IS THE OPTIMISATION.
+--
+--  Open water is the common case and it answers on the first candidate -- one
+--  sweep of about ten samples. Testing nearest-first would sweep every candidate
+--  every tick to reach the same answer. Cluttered terrain degrades to one sweep
+--  per candidate, which is the price of being in clutter.
+--
+--  `edgeAt(i)` RETURNS THE EDGE i AHEAD OF THE CURSOR, or nil. A function rather
+--  than an index because the mover has a cursor inside the finder and asks
+--  finder:lookAhead, while the validator is walking the edge list from outside
+--  and has no cursor to ask. The SELECTION RULE is the thing that has to be
+--  shared; how the caller finds an edge is its own business.
+--
+--  RETURNS nil WHEN NOTHING IS REACHABLE, and the caller decides what that
+--  means. For the mover it means "aim at the next waypoint"; for the validator
+--  it means "the next waypoint is the leg, so it has to be legal itself".
+local function aimAhead(from, edgeAt)
+  for i = FLY_LOOKAHEAD, 1, -1 do
+    local ahead = edgeAt(i)
+
+    --  Fly and Swim only. A plan that changes to a GROUND action mid-run is
+    --  not one to smooth across -- the mover for that action owns its own
+    --  approach.
+    if isFreeEdge(ahead)
+       and ahead.target ~= nil and ahead.target.position ~= nil then
+
+      local candidate = ahead.target.position
+      local span = world.distance(candidate, from)
+
+      --  flyPathClear TESTS GEOMETRY AND MEDIUM TOGETHER, so a shortcut it
+      --  approves is legal on both counts by construction. That is the
+      --  property the validator leans on: an approved shortcut needs no
+      --  further medium check, and the waypoints it skips need none either,
+      --  because the unit never goes to them.
+      if math.sqrt(span[1] * span[1] + span[2] * span[2]) <= FLY_AIM_RANGE
+         and flyPathClear(from, candidate) then
+        return candidate, i
+      end
+    end
+  end
+
+  return nil, 0
+end
+
 --------------------------------------------------------------------------------
 --  PLAN MEDIUM VALIDATION
 --------------------------------------------------------------------------------
@@ -627,6 +679,8 @@ end
 --  rainwater having sealed the route, is UNRESOLVED -- and prevention does not
 --  depend on knowing which, because a flyer that never gets wet never asks.
 --
+--  VALIDATE THE ROUTE THE UNIT WILL FLY, NOT THE ONE A* HANDED BACK.
+--
 --  ENDPOINTS WERE NOT ENOUGH, AND THE PREMISE THAT SAID THEY WERE IS RETIRED.
 --  It read:
 --
@@ -640,19 +694,37 @@ end
 --
 --  MEASURED 2026-08-31: an AQUATIC unit was given a plan that STARTED submerged
 --  in one pool and ENDED submerged in another, and travelled through the
---  player's base -- air -- in between. Nothing rejected it and the unit flew it
---  faithfully. The engine's own validity test is geometric, so a route between
---  two wet nodes through dry air is a route it considers sound; the medium is
---  ours to enforce and we were enforcing it at the wrong granularity.
+--  player's base -- air -- in between. The engine's own validity test is
+--  geometric, so a route between two wet nodes through dry air is a route it
+--  considers sound; the medium is ours to enforce and we were enforcing it at
+--  the wrong granularity.
 --
---  SO EVERY LEG IS SWEPT, not just its endpoint. flyMediumClear samples at the
---  same 0.8 interval with the same body box as the string-pull test, so the plan
---  check and the shortcut check cannot disagree about where a waterline is.
+--  AND THEN THE SWEEP WAS TOO STRICT, FOR THE MIRROR-IMAGE REASON. Sweeping the
+--  RAW waypoint chain validates a route the unit does not fly. A* contours the
+--  ground, so a plan crossing a shallow bar rises to follow it and BRUSHES THE
+--  SURFACE on the way over -- one or two waypoints reading air in an otherwise
+--  entirely submerged crossing. The mover skips exactly those: aimAhead finds a
+--  later waypoint with a clear line and steers at it, and the contour detour is
+--  never travelled. Observed in game: a good plan refused over a detour that
+--  would not have happened.
 --
---  ONCE PER PLAN, NOT PER TICK, AND THAT IS WHAT MAKES THE SWEEP AFFORDABLE. A
---  ninety-edge plan is roughly two hundred samples -- large for a per-tick cost
---  and unremarkable once, against a plan that will be flown for several seconds.
---  The per-plan gate is petportsPlanSig in the mover and it has to stay.
+--  SO THE WALK BELOW IS THE MOVER'S OWN WALK. Same aimAhead, same bounds, same
+--  order. Where a shortcut exists the leg IS the shortcut, and flyPathClear has
+--  already tested its geometry and its medium together -- the waypoints it skips
+--  need no check at all, because the unit never goes to them. Where no shortcut
+--  exists the mover aims at the next waypoint, so that waypoint and the leg into
+--  it must both be legal, which is what the old sweep tested.
+--
+--  IT IS AN APPROXIMATION IN ONE DIRECTION, AND THE DIRECTION IS STATED. The
+--  validator steps from WAYPOINT to waypoint; the mover asks from the unit's
+--  LIVE POSITION, which sits a fraction past each waypoint and drifts off the
+--  line. So a shortcut this accepts can fail at runtime. petportsFreeMover
+--  covers that case rather than leaving it to luck -- see the hold there.
+--
+--  ONCE PER PLAN, NOT PER TICK, AND THAT IS WHAT MAKES IT AFFORDABLE. The walk
+--  is bounded by FLY_LOOKAHEAD sweeps per step and skips whole runs of edges on
+--  success, so it costs less than the old per-edge sweep did. The per-plan gate
+--  is petportsPlanSig in the mover and it has to stay.
 
 --  THE ESCAPE CLAUSE IS GONE. A UNIT OUT OF ITS MEDIUM PLANS NOTHING, AND THE
 --  PORT SENDS IT HOME.
@@ -708,33 +780,69 @@ local function planMediumValid(finder)
         .. "and the port will re-home it", startMedium
   end
 
-  for index, edge in ipairs(finder.edges) do
-    local target = edge.target and edge.target.position
+  local edges = finder.edges
+  local index = 1
 
-    if target ~= nil then
-      local ok, why = petports_mediumAllows(target, bounds)
+  --  BOUNDED BY THE EDGE COUNT, NOT BY `while true`. Every branch below either
+  --  advances `index` or returns, so the loop terminates on its own -- but a
+  --  plan is engine data and a malformed one must not hang the unit's update.
+  for _ = 1, #edges do
+    if index > #edges then break end
 
-      if not ok then
-        return false, index, target, why, startMedium
-      elseif not flyMediumClear(from, target) then
-        --  THE ENDPOINT IS FINE AND THE LEG INTO IT IS NOT. This is the case
-        --  endpoint validation could not see and is the whole reason for the
-        --  sweep -- name it separately so the log says which check refused.
-        return false, index, target,
-          "legal in itself, but the leg into it crosses a medium this chassis "
-            .. "may not occupy", startMedium
+    --  THE MOVER'S OWN CHOICE, MADE THE MOVER'S OWN WAY. `index + i` is the
+    --  cursor arithmetic finder:lookAhead does internally; the selection rule
+    --  itself is shared rather than restated.
+    local shortcut, offset = aimAhead(from, function(i) return edges[index + i] end)
+
+    if shortcut ~= nil then
+      --  THE LEG IS THE SHORTCUT AND IT IS ALREADY LEGAL. flyPathClear tested
+      --  geometry and medium along it, so there is nothing left to ask -- and
+      --  the waypoints between here and there are not tested BECAUSE THE UNIT
+      --  DOES NOT VISIT THEM. That is the whole correction: a contour detour
+      --  that brushes the surface is not part of the route if it is skipped.
+      from = shortcut
+
+      --  RESUME FROM THE WAYPOINT THE SHORTCUT LANDED ON, USING THE OFFSET
+      --  aimAhead RETURNED. A first version scanned the edges for the matching
+      --  position instead, which meant comparing position tables by identity --
+      --  the trap this handoff records for mcontroller.position(). It happens to
+      --  hold here, because the table comes from the edge rather than a fresh
+      --  allocation, and "happens to hold" is not a property to build on. The
+      --  offset is not a second number that has to agree with the point: it is
+      --  the index the point was fetched with.
+      index = index + offset + 1
+    else
+      --  NO SHORTCUT, SO THE UNIT AIMS AT THE NEXT WAYPOINT AND ACTUALLY GOES
+      --  THERE. Both the point and the leg into it have to be legal, which is
+      --  exactly what the previous version of this check asked of every edge.
+      local edge = edges[index]
+      local target = edge and edge.target and edge.target.position
+
+      if target ~= nil then
+        local ok, why = petports_mediumAllows(target, bounds)
+
+        if not ok then
+          return false, index, target, why, startMedium
+        elseif not flyMediumClear(from, target) then
+          --  THE ENDPOINT IS FINE AND THE LEG INTO IT IS NOT. The case endpoint
+          --  validation could not see -- named separately so the log says which
+          --  check refused.
+          return false, index, target,
+            "legal in itself, but the leg into it crosses a medium this chassis "
+              .. "may not occupy", startMedium
+        end
+
+        from = target
       end
 
-      from = target
+      index = index + 1
     end
   end
 
   return true, nil, nil, nil, startMedium
 end
 
---  Cheap identity for "is this the same plan as last tick". Edge count plus the
---  final waypoint: a replan to the same target with the same shape is the same
---  plan for this purpose, and a genuinely new one differs in one or the other.
+
 local function planSignature(finder)
   if finder == nil or finder.edges == nil or #finder.edges == 0 then return nil end
 
@@ -808,35 +916,59 @@ function petportsFreeMover(pather)
     return "running"
   end
 
-  --  FURTHEST FIRST, AND THAT ORDER IS THE OPTIMISATION.
+  --  THE SELECTION RULE LIVES IN aimAhead, SHARED WITH planMediumValid. It was
+  --  inline here, and the validator did not model it -- which is how a plan the
+  --  mover would have string-pulled clean over a shallow bar came to be refused
+  --  for a contour detour it was never going to fly.
+  local aim, skip = aimAhead(here,
+    function(i) return finder ~= nil and finder.lookAhead and finder:lookAhead(i) or nil end)
+
+  --  NO SHORTCUT MEANS THE NEXT WAYPOINT IS THE LEG, AND THE VALIDATOR ONLY
+  --  ACCEPTED THIS PLAN BECAUSE IT COULD REACH SOMETHING FURTHER.
   --
-  --  Open air is the common case and it answers on the first candidate -- one
-  --  sweep of about ten samples. Testing nearest-first would sweep every
-  --  candidate every tick to reach the same answer. Cluttered terrain degrades
-  --  to one sweep per candidate, which is the price of being in clutter.
-  local aim = pather.edge.target.position
-  local skip = 0
+  --  THE TWO ASK FROM DIFFERENT PLACES AND THAT GAP IS REAL. planMediumValid
+  --  steps waypoint to waypoint; this asks from the LIVE position, which sits a
+  --  fraction past each waypoint -- measured at a constant 0.35 -- and drifts off
+  --  the line under airFriction. So a shortcut the validator approved can fail
+  --  here, and the fallback would be to aim at the very contour waypoint the
+  --  validator was relying on skipping. On a plan that grazes a waterline that
+  --  waypoint is in AIR, and taking it is the unit leaving the water on an
+  --  accepted plan -- the exact outcome this whole check exists to prevent.
+  --
+  --  SO IT HOLDS FOR A TICK RATHER THAN FLYING IT. Issuing no control costs one
+  --  tick of acceleration and nothing else: the next tick re-reads the position
+  --  and re-asks, and a shortcut that failed on drift alone will usually be back.
+  --  If it never comes back the unit stops making progress and the watchdog
+  --  fails the task, which is the correct end for a route it cannot legally fly.
+  --
+  --  ONLY WHEN THE NEXT WAYPOINT IS ITSELF ILLEGAL. A plan with no shortcut and
+  --  a legal next waypoint is the ordinary case -- clutter, tight corridors, the
+  --  first tick of a plan -- and must keep moving exactly as before.
+  if aim == nil then
+    --  NOT NAMED `next`. That shadows Lua's own next() for the rest of the
+    --  block, and this file calls it elsewhere -- a landmine for whoever adds
+    --  the second line to this branch.
+    local nextPoint = pather.edge.target.position
 
-  for i = FLY_LOOKAHEAD, 1, -1 do
-    local ahead = finder ~= nil and finder.lookAhead and finder:lookAhead(i) or nil
-
-    --  Fly and Swim only. A plan that changes to a GROUND action mid-run is not
-    --  one to smooth across -- the mover for that action owns its own approach.
-    if isFreeEdge(ahead)
-       and ahead.target ~= nil and ahead.target.position ~= nil then
-
-      local candidate = ahead.target.position
-      local span = world.distance(candidate, here)
-
-      if math.sqrt(span[1] * span[1] + span[2] * span[2]) <= FLY_AIM_RANGE
-         and flyPathClear(here, candidate) then
-        aim = candidate
-        skip = i
-        break
+    if not petports_mediumAllows(nextPoint, mcontroller.boundBox()) then
+      if pather.petportsFlyHeld ~= true then
+        pather.petportsFlyHeld = true
+        sb.logInfo("UNIT HOLDING at %s: no clear shortcut this tick and the next "
+          .. "waypoint %s is outside this chassis's medium. The plan was accepted "
+          .. "on the assumption that waypoint would be skipped -- waiting for the "
+          .. "shortcut rather than flying the detour",
+          sb.printJson(here), sb.printJson(nextPoint))
       end
+
+      pather.petportsFlySkip = nil
+      return "running"
     end
+
+    aim = nextPoint
+    skip = 0
   end
 
+  pather.petportsFlyHeld = nil
   pather.petportsFlySkip = skip
   pather.petportsFlyAim = aim
 

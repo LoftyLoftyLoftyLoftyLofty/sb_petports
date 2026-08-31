@@ -1171,7 +1171,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-08-31b mediumCheck re-homes a displaced unit"
+local PETPORT_BUILD_STAMP = "2026-08-31c chassis tether location"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -4600,6 +4600,67 @@ local function healthCheck()
 end
 
 
+--  WHERE SHOULD THIS PORT'S UNIT COME BACK TO?
+--
+--  ONE ANSWER, ONE CALLER TODAY, AND DELIBERATELY ITS OWN FUNCTION. `returnWork`
+--  is the leash and `diagnosticWork` is a filler errand; they want different
+--  things and conflating them is how the leash got a random point in the first
+--  place. This is home. Nothing else should use it and nothing else does.
+--
+--  THE FLOOR BRANCH IS THE OLD BEHAVIOUR, BUG INCLUDED, AND THAT IS ON PURPOSE.
+--  findStandingPoint picks its column with math.random and descends from the TOP
+--  of the rect, so it returns the highest ledge in an arbitrary column rather
+--  than the floor nearest the port -- see todo.pathing.standpointchoice. Fixing
+--  that is a change to WALKER recall behaviour and this is a change to swimmer
+--  and flyer recall behaviour; doing both in one build would make neither
+--  attributable when the next log comes back.
+local function homePosition()
+  local tether = PETPORTS_TETHER_FLOOR
+
+  if self.petData ~= nil and self.petData.monsterType ~= nil then
+    tether = petports_habitatTether(self.petData.monsterType)
+  end
+
+  --  THE PORT'S OWN POSITION, UNRESOLVED, AND THAT IS THE WHOLE FIX.
+  --
+  --  A swimmer or a flyer has no use for a floor, and every resolver this mod
+  --  owns answers "where can a body stand", which is the wrong question for
+  --  them. The port sits in the medium the chassis was gated into -- the
+  --  environment gate refuses to deploy a swimmer to a dry port at all -- so the
+  --  port's own position is by construction somewhere the unit may be.
+  --
+  --  NOT NUDGED TO A LEGAL BODY POSITION HERE. The unit does that itself:
+  --  approachTargetFor hands a "return" task's raw position to standableNear,
+  --  which for a free mover is petports_flyPointNear and already finds the
+  --  nearest spot the body fits, in a medium it may occupy, with sight of the
+  --  target. Resolving here as well would be the router-and-walker split the
+  --  handoff warns about, with the port's answer and the unit's disagreeing.
+  if tether == PETPORTS_TETHER_PORT then
+    return entity.position()
+  end
+
+  --  NOT BUILT. Named in the vocabulary because the field exists for it and a
+  --  chassis that wants it is planned; refusing to invent an untested resolver
+  --  for a chassis that does not exist yet is the same call as the rest of v1.0.
+  --  Falls back to the port rather than the floor, because anything asking for a
+  --  ceiling is a free mover and the floor is the answer least likely to suit it.
+  if tether == PETPORTS_TETHER_CEILING then
+    if not self.ceilingTetherWarned then
+      self.ceilingTetherWarned = true
+      sb.logInfo("PETPORT %s chassis %s asks to tether at the CEILING, which is not "
+        .. "implemented -- recalling to the port itself instead",
+        stationUniqueId(), tostring(self.petData and self.petData.monsterType))
+    end
+
+    return entity.position()
+  end
+
+  return findStandingPoint({
+    entity.position()[1] - 4, entity.position()[2] - 4,
+    entity.position()[1] + 4, entity.position()[2] + 4
+  }) or findStandingPoint(coverageRect())
+end
+
 local function returnWork()
   local rect = coverageRect()
 
@@ -4665,20 +4726,19 @@ local function returnWork()
     return nil
   end
 
-  --  RECALL TO A FIXED POINT, not a random one.
+  --  WHERE HOME IS DEPENDS ON THE CHASSIS. See petports_habitatTether.
   --
-  --  A random standing point each attempt gave the unit a different destination
-  --  every time, some of them unreachable, and made recall look flaky when the
-  --  unit was fine. The ground by the port is stable and is where we want it
-  --  anyway.
-  local position = findStandingPoint({
-    entity.position()[1] - 4, entity.position()[2] - 4,
-    entity.position()[1] + 4, entity.position()[2] + 4
-  }) or findStandingPoint(rect)
+  --  "RECALL TO A FIXED POINT, not a random one" was the intent of the previous
+  --  version of this block, and the code did not honour it: findStandingPoint
+  --  picks its column with math.random, so a walker got a different destination
+  --  on every attempt too. The comment is kept because the intent was right; the
+  --  floor branch below still has the defect and it is recorded, not fixed here.
+  local position = homePosition()
 
   if position == nil then
     --  No standable spot in our own rect is a different problem, and recall
-    --  cannot fix it either.
+    --  cannot fix it either. UNREACHABLE for a port-tethered chassis, which
+    --  always has an answer -- see homePosition.
     rehomeUnit("no standing point in rect to recall to")
     return nil
   end

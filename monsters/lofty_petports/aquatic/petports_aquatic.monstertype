@@ -209,6 +209,20 @@
     "petports_canFly" : false,
     "petports_canSwim" : true,
 
+    //  WHERE THIS CHASSIS TETHERS -- see petports_habitatTether.
+    //
+    //  strictPortTethering above decides WHETHER this unit comes home and holds.
+    //  This decides WHERE home is, and the two were one question only while
+    //  every chassis walked.
+    //
+    //  port / floor / ceiling. Absent reads as "floor", which is what every
+    //  chassis did before the field existed.
+    //  "port" BECAUSE A SWIMMER HAS NO USE FOR A FLOOR. The seabed under a
+    //  pool is a valid standing position and is not where this unit lives; the
+    //  port is inside the water by construction, since the environment gate
+    //  refuses to deploy this chassis to a dry one.
+    "petports_portTetheringLocationType" : "port",
+
     //  LIQUIDS THIS CHASSIS WILL NOT ENTER.
     //
     //  A DENY-LIST, MATCHED BY NAME. Starbound has 255 liquid slots and almost

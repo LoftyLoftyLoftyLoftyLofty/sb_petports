@@ -154,6 +154,15 @@
     //  down to make the choice deliberate, not to change it.
     "petports_swimCost" : 5,
 
+    //  WHERE THIS CHASSIS TETHERS -- see petports_habitatTether.
+    //
+    //  "floor" IS ALSO THE DEFAULT, and it is stated explicitly anyway. A walker
+    //  wanting the floor is a real decision rather than an omission, and the two
+    //  are indistinguishable when the line is absent -- which matters the day
+    //  somebody reads these four files side by side to work out which chassis
+    //  had been considered.
+    "petports_portTetheringLocationType" : "floor",
+
     "petBehavior" : "petBehavior",
 
     //  MUST match the port object's objectName exactly. groundPet.lua kills the

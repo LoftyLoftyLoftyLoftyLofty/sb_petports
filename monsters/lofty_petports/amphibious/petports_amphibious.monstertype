@@ -168,6 +168,15 @@
     //  swimCost 1 is the defensible one regardless of the outcome: this chassis
     //  is built to swim, so a stroke should not cost five paces.
     "petports_swimCost" : 1,
+
+    //  WHERE THIS CHASSIS TETHERS -- see petports_habitatTether.
+    //
+    //  "floor" IS ALSO THE DEFAULT, and it is stated explicitly anyway. A walker
+    //  wanting the floor is a real decision rather than an omission, and the two
+    //  are indistinguishable when the line is absent -- which matters the day
+    //  somebody reads these four files side by side to work out which chassis
+    //  had been considered.
+    "petports_portTetheringLocationType" : "floor",
     "petports_liquidJumpCost" : 2,
     //  maxFScore is NOT overridden here any more. 800 was measured as too tight
     //  for a route with four water crossings, and the shared default is now

@@ -254,6 +254,100 @@ function petports_habitatPermittedSet(list)
 end
 
 --  ---------------------------------------------------------------------------
+--  WHERE A CHASSIS TETHERS
+--  ---------------------------------------------------------------------------
+
+--  A CLOSED SET, for the same reason the causes above are one: anything reading
+--  a tether location has to handle all of them, and a literal at a call site is
+--  a value nobody can grep for.
+--
+--  WHAT THIS ANSWERS. `strictPortTethering` decides WHETHER a chassis comes home
+--  and holds; this decides WHERE home is. They were one question while every
+--  chassis walked -- home was "the floor under the port" and nothing else was
+--  expressible -- and they stopped being one question the moment a chassis had
+--  no use for a floor.
+--
+--  MEASURED 2026-08-31, and it is why this exists. `returnWork` resolved the
+--  recall target with `findStandingPoint`, which requires a solid tile below the
+--  candidate and picks its column with `math.random` across the coverage rect.
+--  With the port at [2525,1145] and an AQUATIC unit in the water beneath it, six
+--  recalls in four minutes aimed at
+--
+--      [2500.5,1163]  [2523.5,1158]  [2529.5,1158]
+--      [2553.5,1174]  [2554.5,1174]  [2556.5,1175]
+--
+--  -- seabed and ledges, three of them thirty tiles away. Every one of those is
+--  a VALID standing point and not one of them is where a swimmer lives.
+--
+--  PREFIXED, THOUGH ITS NEIGHBOUR IS NOT. `strictPortTethering` is vanilla's
+--  parameter and keeps vanilla's name; this one is ours, so it takes the
+--  petports_ prefix every other parameter this mod adds takes. A collision with
+--  a future engine or mod parameter costs more than the longer name does.
+PETPORTS_TETHER_PORT = "port"
+PETPORTS_TETHER_FLOOR = "floor"
+PETPORTS_TETHER_CEILING = "ceiling"
+
+--  THE DEFAULT IS "floor" AND THAT IS NOT A PREFERENCE, IT IS THE BEHAVIOUR
+--  EVERY CHASSIS ALREADY HAD. An absent parameter must mean "carry on as
+--  before", so a monstertype that has not been touched -- including one from a
+--  mod that has never heard of this field -- keeps the ground search it was
+--  written against.
+local DEFAULT_TETHER = PETPORTS_TETHER_FLOOR
+
+local KNOWN_TETHERS =
+{
+	[PETPORTS_TETHER_PORT] = true,
+	[PETPORTS_TETHER_FLOOR] = true,
+	[PETPORTS_TETHER_CEILING] = true
+}
+
+--  WHERE DOES THIS MONSTER TYPE CONSIDER HOME? Read from the TYPE rather than
+--  from a live unit, because the port asks this while deciding where to recall
+--  something to and the answer must not depend on a unit existing.
+--
+--  AN UNRECOGNISED VALUE FALLS BACK AND SAYS SO. A typo in a monstertype would
+--  otherwise silently become whatever the resolver's else-branch happens to do,
+--  and the symptom -- a unit recalled somewhere odd -- is exactly the symptom
+--  this field exists to fix, so it would read as the fix not working.
+local tetherCache = {}
+
+function petports_habitatTether(monsterType)
+	if monsterType == nil then return DEFAULT_TETHER end
+
+	local key = tostring(monsterType)
+	if tetherCache[key] ~= nil then return tetherCache[key] end
+
+	local ok, params = pcall(root.monsterParameters, key)
+	local value = nil
+
+	if ok and type(params) == "table" then
+		--  BOTH SHAPES, EXACTLY AS typeCapabilities DOES, AND FOR THE SAME
+		--  RECORDED REASON: whether root.monsterParameters returns baseParameters
+		--  flattened or nested is not documented, and looking in both costs one
+		--  index. Reading only the flat one here would have made this field
+		--  silently absent on every chassis -- which does not fail, it just
+		--  returns the default, so the symptom would have been "the fix did
+		--  nothing" with no line anywhere saying why.
+		value = params.petports_portTetheringLocationType
+
+		if value == nil and type(params.baseParameters) == "table" then
+			value = params.baseParameters.petports_portTetheringLocationType
+		end
+	end
+
+	if value ~= nil and not KNOWN_TETHERS[value] then
+		sb.logInfo("PETPORTS monster type %s declares petports_portTetheringLocationType %s, "
+			.. "which is not one of port/floor/ceiling -- falling back to %s",
+			key, tostring(value), DEFAULT_TETHER)
+		value = nil
+	end
+
+	value = value or DEFAULT_TETHER
+	tetherCache[key] = value
+	return value
+end
+
+--  ---------------------------------------------------------------------------
 --  THE LADDER
 --  ---------------------------------------------------------------------------
 

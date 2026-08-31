@@ -205,6 +205,23 @@
     "petports_canFly" : true,
     "petports_canSwim" : false,
 
+    //  WHERE THIS CHASSIS TETHERS -- see petports_habitatTether.
+    //
+    //  strictPortTethering above decides WHETHER this unit comes home and holds.
+    //  This decides WHERE home is, and the two were one question only while
+    //  every chassis walked.
+    //
+    //  port / floor / ceiling. Absent reads as "floor", which is what every
+    //  chassis did before the field existed.
+    //  "port" FOR THE SAME REASON AS THE AQUATIC CHASSIS, mirrored: a flyer
+    //  holds station in air, and the ground beneath its port is a place it would
+    //  have to descend to and could not stand on anyway.
+    //
+    //  A CEILING-DWELLING FLYER IS THE CASE THIS FIELD WAS ADDED FOR and is not
+    //  this chassis. When one exists it declares "ceiling" here and nothing else
+    //  changes.
+    "petports_portTetheringLocationType" : "port",
+
     "movementSettings" : {
 
       //  THE ONE LINE THAT MAKES THIS A DIFFERENT LOCOMOTION CLASS.
