@@ -132,6 +132,29 @@ its two lines.
 **STILL OPEN: a task can fail identically three times and nothing notices.** The
 unit genuinely moves, so the reject machinery cannot see it.
 
+**MEDIC GROUNDWORK IS DONE; THE TASK ITSELF IS NOT STARTED.** Units moved from
+the `ghostly` damage team to `friendly`, which took three rounds because
+`spawnPet` was overriding the monstertype -- see `fact.unit.spawnoverride`, the
+most reusable thing this session produced. The patient classifier is specified
+and fully exercised against a live census: five accept classes, three reject
+reasons, every row observed rather than inferred. See
+`arch.dispatch.medicpatients` and `fact.unit.damageteams`.
+
+**`petports_unit` IS A NEW REQUIRED CHASSIS FIELD.** Any third-party unit must
+declare it. Nothing else distinguishes a unit from a farm animal now that both
+are monster / friendly / team 2.
+
+**THE CENSUS IS SCAFFOLDING AND SHOULD BE DELETED** once the real patient scan
+exists -- `medicCensus`, `MEDIC_CENSUS_DEBUG`, `MEDIC_CENSUS_INTERVAL`. What
+survives is the entityQuery shape, not the function.
+
+**DECIDED, NOT YET BUILT:** the module is the medic switch rather than a fifth
+participation group; medic category settings ride on `petData` with the pet, not
+on the port; one medical good per trip, with scaling by adding pets; the heal TTL
+is network-wide and keyed by entity id; a patient is checked for health ONE MORE
+TIME on arrival and the unit does nothing if they recovered; two medics healing
+each other is acceptable because two minutes of regen outlasts the loop.
+
 **STILL OPEN: dispatch does not consider chassis when choosing a task.** Aquatic
 units route to water crops on land and flyers route to submerged containers. Both
 are correct under the current rules and both are wasted trips. Named here because
@@ -2439,6 +2462,50 @@ set subtracts nothing. The IMMUNITY half of poison block matters for all four,
 because toxic rain arrives through the weather path. Lava block's does not --
 lava is only ever a liquid.
 
+### What counts as a patient, and why no engine field alone can say
+`arch.dispatch.medicpatients` -- see also `fact.unit.damageteams`, `arch.module.liquids`
+
+Five accept classes and three reject reasons, all observed 2026-08-30:
+
+    petports_unit true                     -> unit
+    teamType ~= "friendly"                 -> reject (enemy, passive, ghostly)
+    entityType player                      -> player
+    entityType npc                         -> npc
+    friendly monster, team 0               -> podpet
+    friendly monster, otherwise            -> animal
+
+**THE MARKER IS TESTED FIRST AND THAT ORDER IS LOAD-BEARING.** A unit whose team
+somehow reads `ghostly` -- a modder copying old files, a spawn parameter creeping
+back -- is still recognised as ours rather than silently classed as a FISH, which
+is what `ghostly` means to everything else. The ordering was luck the first time
+and is deliberate now.
+
+**`petports_unit` EXISTS BECAUSE NO ENGINE FIELD DRAWS THE LINE.** Once units run
+on the friendly damage team they are byte-identical to a farm animal on every
+engine field -- `monster`, `friendly`, team 2 describes a Mooshi exactly as well.
+Without the marker every medic treats every other unit as livestock.
+
+**A NAME PREFIX WAS REJECTED.** Every chassis shipped here is called
+`petports_something` and the prefix would work today and stop working the moment
+somebody builds their own chassis on this, which is the intended path rather than
+an edge case. None of the existing chassis fields can substitute either:
+`petports_canFly`, `petports_canSwim` and `petports_avoidLiquid` all have
+DEFAULTS, so a plain vanilla monster answers them the way a chassis that omitted
+them would. Only a field with no meaning outside this mod distinguishes absence
+from default.
+
+**THE SIGHT TEST DOES NOT TRANSFER FROM NICEMICE.** `nicemice_hasSightOf` uses
+`entity.entityInSight`, which an object cannot call about two other entities, and
+`entity.position()` sits at a humanoid's FEET so a naive `lineTileCollision`
+between two things on one floor grazes it. Use `world.lineTileCollision` from the
+port with that offset in mind.
+
+**NICEMICE IS NOT A DEPENDENCY AND CANNOT BE CALLED.** Nicemice includes petports,
+not the reverse, so every `nicemice_*` helper has to be reimplemented in the
+petports namespace. What transfers is the REASONING, not the code -- and not all
+of it: `nicemice_isAlly` compares team NUMBER, which `fact.unit.damageteams`
+shows would be wrong here.
+
 ### The port owns an enabled switch and four participation groups
 `arch.port.switches` -- see also `dd.port.participationgroups`
 
@@ -3593,7 +3660,21 @@ a self-contained ship feature, and it is the reason the "Low" priority the
 roadmap assigns ship pets understates them.
 
 ### Units are destructible, and that is a departure
-`dd.unit.destructible`
+`dd.unit.destructible` -- see also `fact.unit.spawnoverride`, `fact.unit.damageteams`
+
+**RESOLVED 2026-08-30: THE TEAM IS NOW `friendly`, NOT `ghostly`.** The
+"UNVERIFIED" question below was answered by changing the answer. Ghostly sits
+outside damage resolution entirely -- useful while the fleet was being brought up
+and wrong once it matured. Ally detection also forced it: a ghostly unit's team
+matches nothing, so every medic candidate would have failed.
+
+**THE CONSEQUENCES LISTED BELOW ARE LIVE NOW, NOT HYPOTHETICAL.** In particular
+the port still respawns a replacement after `RESPAWN_GRACE` as though nothing
+happened, which this entry calls arguably wrong and which remains undecided.
+
+**IT TOOK THREE ROUNDS TO LAND** because `spawnPet` was overriding the
+monstertype -- see `fact.unit.spawnoverride`.
+
 
 Ship pets are effectively invulnerable furniture. These are not: a unit takes
 damage and DIES IN LAVA, and can be lost mid-task. Keeping that.
@@ -5123,6 +5204,86 @@ walkers OMIT IT ENTIRELY.
 **CACHE IT PER TYPE.** These are authored constants and nothing can change them
 for the life of the world. Do NOT cache anything overlaid on top of them keyed by
 type alone -- see `arch.module.liquids`.
+
+### A spawn parameter BEATS the monstertype, and makes a correct file inert
+`fact.unit.spawnoverride` -- see also `dd.unit.destructible`, `fact.unit.damageteams`
+
+`spawnPet` builds a parameter table for `world.spawnMonster`. Anything in it
+OVERRIDES the same key in the monstertype, silently and permanently.
+
+**MEASURED 2026-08-30, AT THE COST OF THREE TEST ROUNDS.** All four chassis were
+moved from `damageTeamType: "ghostly"` to `"friendly"` and nothing changed --
+because `spawnPet` was also passing `damageTeamType = "ghostly"` and overwrote
+the file on every spawn. The files were correct the whole time.
+
+**WHAT SEPARATED THE TWO WAS AN ACCIDENT WORTH REPEATING ON PURPOSE.** A brand
+new field, `petports_unit`, was added in the same session. It resolved through
+`root.monsterParameters` -- which reads the FILE -- while `world.entityDamageTeam`
+reported the ENTITY. One said the new asset was loaded; the other said the value
+was old. That contradiction is what pointed at spawn parameters instead of at
+the asset. A TYPE-LEVEL READ AND AN ENTITY-LEVEL READ OF THE SAME FIELD ARE A
+FREE DIAGNOSTIC and should be reached for whenever an asset edit appears not to
+take.
+
+**`persistent = true` HIDES IT FURTHER.** Units are spawned persistent, so they
+are SAVED INTO THE WORLD CHUNK and RESTORED rather than respawned when the player
+returns to a planet. A restored entity keeps its spawn-time values, so "drop onto
+the planet and look" does not re-run `spawnPet` at all. Only an unsocket/socket
+produces a genuinely new unit.
+
+**AND THE BUILD STAMP DOES NOT DISTINGUISH THEM.** A restored entity re-creates
+its script context and runs `init`, so it logs the CURRENT contract stamp. The
+stamp proves the SCRIPT is current; it says nothing about when the ENTITY was
+created. That is a real hole in the stamp as a diagnostic.
+
+**THE FIX WAS TO DELETE THE LINE, NOT CORRECT IT.** The value belongs to the
+chassis. Stating it in two places is how the two disagree, and a third-party
+chassis should be able to declare its own team without the spawner having an
+opinion. `initialStatus` / `initialStorage` are the other known instance of a
+spawn parameter that does not mean what it looks like -- see
+`dd.unit.itemispet`.
+
+### Damage teams, measured across every entity class that matters
+`fact.unit.damageteams` -- see also `arch.dispatch.medicpatients`, `fact.unit.spawnoverride`
+
+MEASURED 2026-08-30 by a census logging `world.entityType`, `world.entityDamageTeam`
+and `world.entityHealth` for everything in a coverage rect. Every row observed,
+none inferred:
+
+    entity           type      teamType    team
+    player           player    friendly    0
+    crew member      npc       friendly    0
+    villager NPC     npc       friendly    1
+    hostile NPC      npc       enemy       2
+    capture-pod pet  monster   friendly    0
+    farm animal      monster   friendly    2
+    hostile monster  monster   enemy       2
+    ambient critter  monster   passive     2
+    FISHING FISH     monster   ghostly     2
+    our units        monster   friendly    2
+
+**`damageTeamType` IS THE DISCRIMINATOR AND TEAM NUMBER IS NOT.** All five
+friendly classes span teams 0, 1 and 2, so any test comparing NUMBERS -- including
+the obvious "same team as our unit" -- catches at most one of them. A hostile
+monster and a farm animal are both team 2 and differ only in type.
+
+**A HOSTILE AND A FRIENDLY GUARD SHARE A TEAM NUMBER.** Breaking objects flips a
+guard's `damageTeamType` to hostile and leaves it on team 1. The friendly/hostile
+distinction works because the PLAYER is team 0 -- `damageTeamType` describes the
+relationship to team 0, not a general friend/foe label.
+
+**TEAM NUMBER CARRIES SIGNAL IN EXACTLY ONE PLACE:** among friendly MONSTERS, 0
+is a capture-pod pet inheriting its owner's team and 2 is a farm animal on the
+monster default.
+
+**FISHING FISH ARE `ghostly`**, which nobody predicted -- guesses were `passive`
+or `enemy`. It is the same value units carried until this session, so a stale
+ghostly unit would have been rejected as a fish, and the reason would have looked
+like a broken classifier rather than a stale team.
+
+**AMBIENT CRITTERS ARE `passive`** and exclude themselves by class rather than by
+luck, which was the specific outcome wanted -- nobody should be healing
+butterflies.
 
 ### `appliesWeatherStatusEffects` was false on every chassis, and that was accidental immunity
 `fact.unit.weatherflag` -- see also `dd.unit.destructible`, `arch.module.liquids`
@@ -7652,7 +7813,28 @@ re-resolve, never a stall. Cheap to separate and worth doing before it masks a
 real stall.
 
 ### Farm animals move and nothing re-resolves the target
-`todo.pathing.movingtarget` -- see also `todo.pathing.arrivedstall`
+`todo.pathing.movingtarget` -- see also `todo.pathing.arrivedstall`, `todo.farming.animalsmove`
+
+**THE COW FIX IS THE PLAYER FIX, AND THAT IS THE POINT OF THIS PARAGRAPH.** The
+medic task targets a WOUNDED ALLY -- a player, a tenant, a crew member -- and
+those are cows that move faster. Nothing about the re-resolve is
+animal-specific; the cached `stateData.groundTarget` goes stale for exactly the
+same reason and is corrected by exactly the same mechanism. So when this is
+built for animals it must be built at the TARGET-TRACKING layer and not inside
+the animal work generator, or the medic path will need it written a second time.
+
+**THE MEDIC PATIENT IS THE WORST CASE OF IT AND SHIPS ANYWAY.** A wounded player
+is specifically someone who is probably running, so the accepted cost -- one
+failed dispatch per wander -- lands harder there than anywhere else. That was
+accepted deliberately 2026-08-30 rather than blocking medic behind this entry:
+partial delivery beats no delivery, and a failed dispatch is already a
+self-correcting state. Do not read a high medic failure rate as a medic bug.
+
+**THE SPLASH SOFTENS IT MORE THAN IT LOOKS.** Delivery is an area projectile
+(see `ragestatusprojectile` as the pattern), not a touch, so the unit does not
+have to reach the patient's exact tile -- only close enough for the damagePoly to
+cover it. That widens the arrival tolerance for this task specifically and is a
+reason the failure rate may be tolerable here even before this entry is done.
 
 **TRIAGED 2026-08-30 -- WANTED, ESTIMATED 6 / 10.** The re-resolve itself is a 3; the cost is that a rebuild mid-flight discards the launch record and nothing steers the descent (`fact.pathing.arcmoverthrottle`), so THE RE-RESOLVE MUST NOT FIRE WHILE AIRBORNE and that gate has to be deliberate rather than emergent. The rest is the interaction with `arch.pathing.standablerank` caching and the probe results pushed to the port.
 

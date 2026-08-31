@@ -1,0 +1,63 @@
+//  PETPORTS -- MEDIC MODULE
+//
+//  THE FIRST MODULE THAT ADDS A TASK RATHER THAN CHANGING ONE.
+//
+//      petports_moduleEffects   pushed to a LIVE unit as status effects
+//      petports_moduleLiquids   read by the port, with no unit, for the gate
+//      petports_moduleFlags     read by the port, to change its own dispatch
+//
+//  It rides the same flags channel Oblivious opened, and the port reads
+//  `medic` there to decide whether medicWork may generate anything at all.
+//
+//  THE MODULE IS THE SWITCH, AND THERE IS NO FIFTH PARTICIPATION CHECKBOX. One
+//  port holds one unit, so a checkbox beside a module is the two-switches-for-
+//  one-behaviour trap that killed the farming module. No module, no medic work.
+//
+//  THE GRANULARITY LIVES ONE LEVEL DOWN, on petData: five patient classes --
+//  player, npc, podpet, animal, unit -- each of which can be switched off for
+//  THIS unit so a player can decide where one medic's supplies go. Those settings
+//  travel with the pet rather than with the port, because they describe how this
+//  medic behaves and should survive being carried somewhere else. They default
+//  to ON, so a module socketed into an existing unit works immediately rather
+//  than looking broken until five boxes are ticked.
+//
+//  IT CONSUMES medicalgoods, ONE PER TRIP. That is a vanilla trade good with
+//  almost no sink -- giving it one is the point rather than a side effect. One
+//  per trip is a balance decision: this is free automated healing, and a player
+//  who wants it to scale adds another pet rather than a bigger backpack.
+//
+//  IT DOES NOT NEED A STATUS EFFECT OF ITS OWN. The dose is delivered by
+//  petports_medicburst, whose statusEffects entry carries both the effect name
+//  and its duration -- so there is no petports_moduleEffects list here at all.
+//  This is the first module with none.
+
+{
+	"itemName" : "petports_module_medic",
+	"price" : 600,
+	"rarity" : "Uncommon",
+
+	//  Shared with the other modules, so the categories.config.patch label and
+	//  the petports_filtergroups.config subgroup that already exist cover this
+	//  item too. A new category would need both added or it sorts to Unsorted.
+	"category" : "petports_module",
+
+	//  TEST ART. Near-white with a faint red cast -- the medical read is the
+	//  white, not the red, and a fully red diamond sat too close to the lava
+	//  module in a slot.
+	"inventoryIcon" : "petports_module_medic.png",
+
+	"description" : "A field triage kit. Socket it into a unit and it will carry medical goods to anyone hurt nearby.",
+	"shortdescription" : "Medic Module",
+
+	//  petports_no_upcycling KEEPS IT OUT OF THE CONVERTER, or a unit hauling
+	//  surplus to an upcycler turns the player's modules into treats.
+	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],
+
+	//  MAXSTACK 1 IS A REQUIREMENT. The pane moves modules with
+	//  player.swapSlotItem(), which returns the whole cursor stack; it refuses a
+	//  stack rather than trusting this field, so a stackable module would be
+	//  refused forever and look broken.
+	"maxStack" : 1,
+
+	"petports_moduleFlags" : [ "medic" ]
+}

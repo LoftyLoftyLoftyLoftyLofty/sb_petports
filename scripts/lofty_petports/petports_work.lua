@@ -571,3 +571,133 @@ end
 function petports_routeKey(position, exitId)
   return petports_tileKey(position) .. "|" .. tostring(exitId)
 end
+
+--  IS THIS MONSTER TYPE ONE OF OUR UNITS?
+--
+--  A DECLARED PARAMETER, NOT A NAME PREFIX. Every chassis this mod ships is
+--  called petports_something, and checking for that prefix would work today and
+--  quietly stop working the moment somebody builds their own chassis on top of
+--  this -- which is the intended path, not an edge case. A convention nobody is
+--  forced to follow is not a check.
+--
+--  NONE OF THE EXISTING CHASSIS FIELDS CAN DO THIS JOB. A third-party unit
+--  already declares petports_canFly, petports_canSwim and petports_avoidLiquid,
+--  but all three have defaults, so a plain vanilla monster answers them exactly
+--  the way a chassis that omitted them would. Absence has to be distinguishable
+--  from a default, and only a field with no meaning outside this mod is.
+--
+--  WHAT IT IS FOR. Once units run on the `friendly` damage team they are
+--  indistinguishable from a farm animal by damage team alone -- both are
+--  monster / friendly / team 2 -- so the medic scan needs this to tell a
+--  wounded unit apart from a wounded Mooshi. They are different patient classes
+--  with different settings, not a distinction the engine can draw for us.
+--
+--  CACHED PER TYPE, and safe to be: this is authored and cannot change for the
+--  life of the world. root.monsterParameters is checked at both levels for the
+--  same undocumented-shape reason as everywhere else in this mod.
+local unitTypeCache = {}
+
+function petports_isUnitType(monsterType)
+	if monsterType == nil then return false end
+
+	local key = tostring(monsterType)
+	if unitTypeCache[key] ~= nil then return unitTypeCache[key] end
+
+	local ok, params = pcall(root.monsterParameters, key)
+	if not ok or type(params) ~= "table" then
+		--  NOT CACHED ON FAILURE. A read that threw is not an answer, and
+		--  remembering it would make one bad call permanent for the session.
+		return false
+	end
+
+	local base = type(params.baseParameters) == "table" and params.baseParameters or {}
+	local flag = params.petports_unit
+	if flag == nil then flag = base.petports_unit end
+
+	local verdict = (flag == true)
+	unitTypeCache[key] = verdict
+	return verdict
+end
+
+--------------------------------------------------------------------------------
+--  HEAL COOLDOWNS
+--------------------------------------------------------------------------------
+
+--  WHO HAS BEEN DOSED RECENTLY, SHARED ACROSS THE WHOLE NETWORK.
+--
+--  A world property rather than port-local state, for the same reason claims are.
+--  Two ports that cannot see each other's doses both dispatch to the same patient
+--  and the second delivery is a medical good spent on nothing -- and unlike a
+--  contested crop, nothing about the world changes to reveal the mistake.
+--
+--  A TTL, NOT A QUERY OF THE PATIENT. Asking whether an entity already carries
+--  the regen effect would be the direct question, and there is no reliable API
+--  for reading another entity's status effects across every class we treat --
+--  players, NPCs, farm animals and capture-pod pets are four different sorts of
+--  thing. Recording what we DID is something we can always answer.
+--
+--  KEYED BY ENTITY ID, which does not survive a world reload. That is correct
+--  here rather than merely tolerable: a reload means the buff is gone too, so a
+--  cooldown surviving it would suppress a dose that is genuinely needed.
+local HEAL_KEY = "petports_heals"
+
+function petports_healsAll()
+	return world.getProperty(HEAL_KEY) or {}
+end
+
+--  PRUNED ON EVERY READ-MODIFY, not on a timer. Ids of entities that died or
+--  left accumulate otherwise, and this table is replicated as a world property.
+--  Nicemice's buffCooldowns learned the same lesson in a local table.
+local function pruneHeals(heals)
+	local now = world.time()
+
+	for key, readyAt in pairs(heals) do
+		local id = tonumber(key)
+		if type(readyAt) ~= "number" or readyAt <= now
+		   or id == nil or not world.entityExists(id) then
+			heals[key] = nil
+		end
+	end
+
+	return heals
+end
+
+--  STRING KEYS THROUGHOUT. A table written to a world property comes back as
+--  JSON, and an integer key does not survive that round trip -- `heals[12]`
+--  misses a value stored under "12". Same trap as arch.module.slots.
+local function healKey(entityId)
+	return tostring(entityId)
+end
+
+function petports_healCooldownRemaining(entityId)
+	if entityId == nil then return 0 end
+
+	local heals = petports_healsAll()
+	local readyAt = heals[healKey(entityId)]
+	if type(readyAt) ~= "number" then return 0 end
+
+	return math.max(readyAt - world.time(), 0)
+end
+
+--  RECORDED WHEN THE DOSE IS ACTUALLY APPLIED, never at dispatch. A unit that is
+--  dispatched and then fails to arrive has healed nobody, and marking the patient
+--  at dispatch would lock them out for the full duration over a trip that never
+--  happened.
+function petports_healRecord(entityId, duration)
+	if entityId == nil then return false end
+
+	local heals = pruneHeals(petports_healsAll())
+	heals[healKey(entityId)] = world.time() + (duration or 0)
+	world.setProperty(HEAL_KEY, heals)
+
+	sb.logInfo("PETPORTS heal recorded for entity %s, next dose in %ss",
+		tostring(entityId), tostring(duration or 0))
+	return true
+end
+
+--  A DISPATCH RESERVATION IS A CLAIM, NOT A HEAL. Two ports choosing the same
+--  patient in the same tick is the claim system's job -- see petports_claimTake
+--  -- and this key is deliberately shaped to match one.
+function petports_healWorkId(entityId)
+	return "heal:" .. tostring(entityId)
+end

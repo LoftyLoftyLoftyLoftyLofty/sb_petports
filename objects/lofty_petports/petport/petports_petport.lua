@@ -1157,7 +1157,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-08-30d oblivious module and field union"
+local PETPORT_BUILD_STAMP = "2026-08-30j medic fetches its own dose"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -1719,6 +1719,38 @@ function init()
         tostring(self.task.item))
     end
 
+    --  A DOSE LANDED. Spend one medical good and start the network cooldown.
+    --
+    --  RECORDED HERE AND NOT AT DISPATCH, which is the whole reason the cooldown
+    --  is trustworthy. A unit dispatched to a patient it never reaches has healed
+    --  nobody, and marking them at dispatch would lock them out for two minutes
+    --  over a trip that failed.
+    --
+    --  COUNTED FROM THE REPORT, like watering. The unit returns `dosed` only on
+    --  the path where the burst actually spawned -- a patient who died, recovered
+    --  or walked out of reach reports done with no dose, and costs nothing.
+    if report.outcome == "done" and self.task ~= nil
+       and self.task.type == "medic" and self.task.id == report.id then
+      local dosed = tonumber(report.dosed) or 0
+
+      if dosed > 0 then
+        spendSeed(self.task.item)
+        petports_healRecord(report.patient or self.task.patient, MEDIC_DURATION)
+        metrics.add("dosed", dosed)
+
+        sb.logInfo("PETPORT %s medic finished: patient %s dosed, one %s spent, "
+          .. "next dose for them in %ss",
+          stationUniqueId(), sb.printJson(report.patient or self.task.patient),
+          tostring(self.task.item), sb.printJson(MEDIC_DURATION))
+      else
+        --  NOT A FAILURE AND NOT SILENT. The trip happened and nothing was
+        --  spent, which is the correct outcome but looks identical to a broken
+        --  medic in a log that does not say so.
+        sb.logInfo("PETPORT %s medic returned without dosing: %s",
+          stationUniqueId(), tostring(report.reason))
+      end
+    end
+
     --  The crop went in the ground. Spend the seed and retire the intent.
     if report.outcome == "done" and self.task ~= nil
        and self.task.type == "replant" and self.task.id == report.id then
@@ -1941,8 +1973,18 @@ function spawnPet()
     --  Never yanked around by relocation logic meant for wild creatures.
     relocatable = false,
 
-    damageTeamType = "ghostly",
-
+    --  NO damageTeamType HERE, DELIBERATELY -- THE CHASSIS OWNS IT.
+    --
+    --  This line used to read `damageTeamType = "ghostly"`, and a spawn
+    --  parameter BEATS THE MONSTERTYPE. So when all four chassis were moved to
+    --  `friendly` on 2026-08-30, nothing changed: the files were correct and
+    --  this overwrote them on every spawn. Freshly spawned units kept reporting
+    --  ghostly/2 while root.monsterParameters read the new value happily,
+    --  because one is entity-level and the other is type-level.
+    --
+    --  THE VALUE BELONGS TO THE CHASSIS, NOT TO THE SPAWNER. A third-party unit
+    --  should be able to declare its own team without this file having an
+    --  opinion, and stating it in two places is how the two disagree.
     --  How the pet reports home. It messages the petport rather than the
     --  petport polling it, which keeps the item current even if the pet dies
     --  while the player is watching something else.
@@ -3150,9 +3192,47 @@ end
 --  "oblivious" is the kind of thing that survives a rename by exactly one file.
 OBLIVIOUS_FLAG = "oblivious"
 
+--  THE MEDIC FLAG, AND WHAT A DOSE IS.
+--
+--  MEDIC_ITEM IS A LITERAL ITEM NAME, NOT A CATEGORY. "Medical Trade Goods"
+--  specifically -- a category would sweep in bandages and stim packs, which are
+--  things a player wants for themselves, and a medic quietly consuming those is
+--  a worse outcome than one that never runs.
+MEDIC_FLAG = "medic"
+MEDIC_ITEM = "medicalgoods"
+
+--  A TRADE GOOD WITH ALMOST NO VANILLA USE, GIVEN ONE. That is the design
+--  intent rather than an accident of naming: medicalgoods sits in vanilla as
+--  a sellable with no sink, and this makes a stockpile of it mean something.
+
+--  TWO MINUTES. Long enough that the network cooldown outlasts any plausible
+--  re-wounding, which is what makes two medics healing each other harmless --
+--  the loop cannot sustain itself because the first dose is still running.
+MEDIC_DURATION = 120
+--  VANILLA'S redstim, NOT AN EFFECT OF OUR OWN. The projectile's statusEffects
+--  entry carries its own duration, which beats the effect's defaultDuration, so
+--  a two-minute dose needs no new file. Named here anyway because the port logs
+--  it and the unit reports it -- a dose whose effect nobody can name is a dose
+--  nobody can debug.
+MEDIC_EFFECT = "redstim"
+MEDIC_PROJECTILE = "petports_medicburst"
+
+--  HOW FAR FROM A PATIENT COUNTS AS ARRIVED. Wider than a crate's 4, because the
+--  patient MOVES and the dose is an area burst rather than a touch -- see
+--  todo.pathing.movingtarget. Tolerance here is doing the work a re-resolve
+--  would otherwise have to.
+MEDIC_REACH = 6
+
 function petportOblivious()
   for _, flag in ipairs(petportModuleFlags()) do
     if flag == OBLIVIOUS_FLAG then return true end
+  end
+  return false
+end
+
+function petportMedic()
+  for _, flag in ipairs(petportModuleFlags()) do
+    if flag == MEDIC_FLAG then return true end
   end
   return false
 end
@@ -3253,6 +3333,7 @@ metrics.paneStats = function()
     moved = math.floor(stats.moved or 0),
     planted = math.floor(stats.planted or 0),
     watered = math.floor(stats.watered or 0),
+    dosed = math.floor(stats.dosed or 0),
     harvested = math.floor(stats.harvested or 0),
     livestock = math.floor(stats.livestock or 0),
     headpats = math.floor(stats.headpats or 0),
@@ -4102,6 +4183,120 @@ end
 --    it moved          anything covering HEALTH_MOVE between checks is alive
 --    no unit           nothing to judge
 --
+--  PATIENT CLASSES, AND THE ONE PLACE THEIR NAMES ARE SPELLED.
+--
+--  These are settings keys, so a rename here is a save-compat break -- they are
+--  listed once for the same reason the participation groups are.
+MEDIC_CLASSES = { "player", "npc", "podpet", "animal", "unit" }
+
+--  WHAT CLASS IS THIS ENTITY, IF ANY?
+--
+--  MEASURED, NOT GUESSED. Every branch below was observed in game 2026-08-30
+--  against a live census -- see fact.unit.damageteams for the full table. The
+--  three rules that survived contact:
+--
+--    damageTeamType IS THE DISCRIMINATOR. All five accept classes come back
+--    `friendly`, spread across teams 0, 1 and 2, so anything comparing team
+--    NUMBERS catches at most one of them. A hostile monster and a farm animal
+--    are both team 2 and differ only in type.
+--
+--    TEAM NUMBER CARRIES SIGNAL IN EXACTLY ONE PLACE: among friendly MONSTERS,
+--    0 is a capture-pod pet inheriting its owner's team, 2 is a farm animal on
+--    the monster default.
+--
+--    petports_unit IS THE ONLY UNIT TEST. On the friendly team our units are
+--    byte-identical to a Mooshi on every engine field -- monster, friendly,
+--    team 2 -- so without the marker every medic treats every other unit as
+--    livestock.
+--
+--  THE MARKER IS TESTED FIRST AND THAT ORDER IS LOAD-BEARING. `ghostly` is what
+--  FISHING FISH come back as, and it is what our own units carried until this
+--  session. A unit whose team somehow reads ghostly -- a modder copying old
+--  files, a spawn parameter creeping back -- is still recognised as ours rather
+--  than silently classed as a fish.
+local function medicClassOf(id)
+  local ok, kind = pcall(world.monsterType, id)
+  if not ok then kind = nil end
+
+  if petports_isUnitType(kind) then return "unit" end
+
+  local team = world.entityDamageTeam(id)
+  if team == nil or tostring(team.type) ~= "friendly" then
+    return nil, team and tostring(team.type) or "no team"
+  end
+
+  local entityKind = tostring(world.entityType(id))
+  if entityKind == "player" then return "player" end
+  if entityKind == "npc" then return "npc" end
+  if team.team == 0 then return "podpet" end
+  return "animal"
+end
+
+--  IS THIS CLASS SWITCHED ON FOR THIS UNIT?
+--
+--  ON petData, NOT ON THE PORT, unlike the four participation groups. Those
+--  describe what a PORT contributes to the network; these describe how a
+--  player wants one medic's supplies allocated, and that preference should
+--  travel with the pet when it is carried to another port.
+--
+--  DEFAULTS ON WHEN ABSENT, so a medic module socketed into an existing unit
+--  works immediately rather than appearing broken until five boxes are ticked.
+function petportMedicTreats(class)
+  if self.petData == nil then return false end
+
+  local settings = self.petData.medic
+  if type(settings) ~= "table" then return true end
+  return settings[class] ~= false
+end
+
+--  EVERY TREATABLE PATIENT IN COVERAGE, WORST FIRST.
+--
+--  WORST FIRST RATHER THAN NEAREST, which is a departure from every other task
+--  in this mod and is inherited deliberately from nicemice_resolveHealTarget. A
+--  medic walking past someone at 90% to reach someone at 20% is correct; a
+--  hauler walking past the near crate is not.
+local function medicPatients()
+  local rect = coverageRect()
+
+  --  MONSTER IS IN THE FILTER AND IS THE WHOLE POINT. Two of the five classes
+  --  -- farm animals and capture-pod pets -- are monsters, and Nicemice's
+  --  equivalent query asks for npc and player only.
+  local candidates = world.entityQuery({rect[1], rect[2]}, {rect[3], rect[4]},
+    { includedTypes = { "npc", "player", "monster" } })
+
+  local out = {}
+
+  for _, id in ipairs(candidates) do
+    local class = medicClassOf(id)
+
+    if class ~= nil and petportMedicTreats(class) then
+      local health = world.entityHealth(id)
+
+      --  NOT AT FULL HEALTH, with no threshold invented. A fraction was
+      --  considered and rejected: the trigger is "wounded", and a percentage
+      --  is a balance number nobody asked for.
+      if type(health) == "table" and health[2] ~= nil and health[2] > 0
+         and health[1] < health[2] then
+
+        --  ALREADY DOSED IS NOT A PATIENT. The cooldown is network-wide, so
+        --  this also stops a second port dispatching to someone our unit is
+        --  already walking toward.
+        if petports_healCooldownRemaining(id) <= 0 then
+          table.insert(out, {
+            id = id,
+            class = class,
+            ratio = health[1] / health[2],
+            position = world.entityPosition(id)
+          })
+        end
+      end
+    end
+  end
+
+  table.sort(out, function(a, b) return a.ratio < b.ratio end)
+  return out
+end
+
 --  What is left is a unit sitting still, away from its port, for HEALTH_INTERVAL
 --  x HEALTH_STALL_LIMIT. In a working fleet that state does not occur.
 --
@@ -7856,6 +8051,149 @@ end
 --  NEAREST CRATE, THEN ITS REQUESTS IN ORDER. petports_beaconsFor already
 --  sorts by distance, so a unit holding something two crates both want goes to
 --  the closer one.
+--  TASK -- MEDICAL DELIVERY
+--
+--  ONE MEDICAL GOOD PER TRIP, and that is a balance decision rather than a
+--  limitation. This is free automated healing; a player who wants it to scale
+--  adds another pet. Carrying a stack would make one medic cover a whole base
+--  and delete the reason to build a second.
+--
+--  THE MODULE IS THE SWITCH. There is no fifth participation group, because one
+--  port holds one unit and a checkbox plus a module is the two-switches-for-one-
+--  behaviour trap that killed the farming module. No medic module, no medic work.
+--
+--  THE PATIENT MOVES, AND THAT IS ACCEPTED. `todo.pathing.movingtarget` is
+--  unbuilt: the approach position is resolved once and a wounded player is the
+--  worst case of a stale target in this whole mod. Partial delivery beats none,
+--  and a failed dispatch already self-corrects. DO NOT READ A HIGH FAILURE RATE
+--  HERE AS A MEDIC BUG.
+--
+--  THE SPLASH SOFTENS IT. Delivery is an area projectile rather than a touch, so
+--  the unit does not have to reach the patient's exact tile -- only close enough
+--  for the damage poly to cover it. That widens arrival tolerance for this task
+--  specifically.
+local function medicWork()
+  --  OBLIVIOUS IS CHECKED HERE AND NOT IN findWork. The four participation
+  --  groups are zeroed there, but medic is not one of them -- it has no group,
+  --  because the module is its switch. So it needs its own check or an
+  --  oblivious medic keeps working.
+  if petportOblivious() then return nil, "oblivious" end
+  if not petportMedic() then return nil, "no medic module socketed" end
+
+  --  HELD BEFORE ASKED FOR. Unlike water, which is withdrawn per run, the unit
+  --  carries its dose -- so no patient is worth choosing until there is
+  --  something to give them.
+  local carried = nil
+  if self.petData ~= nil and type(self.petData.cargo) == "table" then
+    for _, stack in ipairs(self.petData.cargo) do
+      if stack.name == MEDIC_ITEM then
+        carried = stack
+        break
+      end
+    end
+  end
+
+  --  NOTE: not carrying a dose is NOT a reason to stop. The fetch leg below is
+  --  what turns an empty-handed medic into one holding a medical good, and its
+  --  absence is why the first build of this never dispatched anything.
+
+  local patients = medicPatients()
+  if #patients == 0 then return nil, "no treatable patient in coverage" end
+
+  --  NO DOSE IN HAND? GO AND GET ONE. This leg was missing from the first
+  --  build and the symptom was total silence: medicWork required the unit to
+  --  ALREADY be carrying medicalgoods, nothing ever fetched them, so the
+  --  generator returned nil forever and never logged a reason.
+  --
+  --  IT IS IN THIS GENERATOR RATHER THAN withdrawWork DELIBERATELY. That one is
+  --  driven entirely by replant intents -- it fetches a seed because a tile is
+  --  waiting for it -- and medic has no intent table. Keeping both legs here
+  --  means one place knows the whole task: fetch when empty, deliver when
+  --  loaded.
+  --
+  --  ONLY WHEN THERE IS A PATIENT. Fetching a dose speculatively would leave a
+  --  unit holding a medical good it has nobody to give to, blocking the cargo
+  --  slot that hauling and harvesting need.
+  if carried == nil then
+    local containerId = containerWithSeed(MEDIC_ITEM)
+
+    if containerId == nil then
+      return nil, string.format("%s patient(s) waiting, but no %s in network storage",
+        #patients, MEDIC_ITEM)
+    end
+
+    local fetchId = "medicfetch:" .. stationUniqueId()
+    local failure = self.workFailures[fetchId]
+
+    if failure ~= nil and (failure["until"] or 0) > world.time() then
+      return nil, "medic fetch backed off"
+    end
+
+    sb.logInfo("PETPORT %s MEDIC fetch: %s patient(s) waiting, collecting one %s from %s",
+      stationUniqueId(), sb.printJson(#patients), tostring(MEDIC_ITEM),
+      sb.printJson(containerId))
+
+    --  A `withdraw` TASK, REUSING THE SEED MACHINERY WHOLESALE. The unit-side
+    --  handler takes one of `seed` out of `target` and puts it in cargo; it has
+    --  no opinion about what the item is for. Naming the field `seed` is
+    --  inherited rather than chosen -- see todo below if it ever gets renamed.
+    return {
+      id = fetchId,
+      type = "withdraw",
+      port = stationUniqueId(),
+      target = containerId,
+      seed = MEDIC_ITEM,
+      position = world.entityPosition(containerId)
+    }
+  end
+
+  for _, patient in ipairs(patients) do
+    local workId = petports_healWorkId(patient.id)
+    local failure = self.workFailures[workId]
+    local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
+
+    if not backedOff and claimFree(workId) then
+      --  APPROACH A STANDABLE SPOT NEAR THEM, not their exact position. An
+      --  entity position is its CENTRE and a humanoid's is at its feet, so
+      --  neither is somewhere a unit can finish a path -- the same reasoning
+      --  restock delivery uses for a crate.
+      local stand = standingPointNear(patient.position, MEDIC_REACH)
+
+      if stand ~= nil then
+        sb.logInfo("PETPORT %s MEDIC dispatch: patient %s class %s at %s%% health, "
+          .. "approach %s",
+          stationUniqueId(), sb.printJson(patient.id), patient.class,
+          sb.printJson(math.floor(patient.ratio * 100)), sb.printJson(stand))
+
+        return {
+          id = workId,
+          type = "medic",
+          port = stationUniqueId(),
+
+          --  THE ENTITY ID TRAVELS, NOT JUST THE POSITION. Arrival re-reads
+          --  health from the entity, because a patient who recovered on the
+          --  way should not cost a medical good.
+          patient = patient.id,
+          patientClass = patient.class,
+
+          item = MEDIC_ITEM,
+          effect = MEDIC_EFFECT,
+          duration = MEDIC_DURATION,
+          projectile = MEDIC_PROJECTILE,
+
+          position = stand
+        }
+      end
+
+      sb.logInfo("PETPORT %s MEDIC patient %s SKIPPED: no standable spot within %s tiles of %s",
+        stationUniqueId(), sb.printJson(patient.id), sb.printJson(MEDIC_REACH),
+        sb.printJson(patient.position))
+    end
+  end
+
+  return nil, string.format("%s patient(s), none actionable", #patients)
+end
+
 local function restockDeliverWork()
   if self.petData == nil or self.petData.cargo == nil then return nil end
   if #self.petData.cargo == 0 then return nil end
@@ -9021,6 +9359,33 @@ local function findWork()
   --  be recalled wanders out of coverage and stays there.
   local recall = returnWork()
   if dispatchable(recall) ~= nil then return recall end
+
+  --  MEDIC SITS DIRECTLY BELOW RECALL AND ABOVE EVERYTHING ELSE.
+  --
+  --  BELOW RECALL because a stranded unit cannot reach a patient either, and the
+  --  leash has to stay the first thing tested.
+  --
+  --  ABOVE CARGO, WHICH IS A DEPARTURE. Every other task defers to a unit
+  --  holding a load, on the reasoning that hoarding is worse than fetching. A
+  --  wounded ally outranks a stack of ore: the crop will still be dry in thirty
+  --  seconds and the patient may not be there. This is the only place in the
+  --  ladder where urgency beats tidiness.
+  --
+  --  IT GATES ITSELF. There is no participation group for medic -- the module is
+  --  the switch -- so unlike the four below, this is not wrapped in a flag. It
+  --  returns nil immediately when no medic module is socketed.
+  local dose, noDose = medicWork()
+  if dispatchable(dose) ~= nil then return dose end
+
+  --  SAID OUT LOUD, CHANGE-GATED. The first build of this returned nil for
+  --  three different reasons and logged none of them, so a medic that could
+  --  never fetch a dose was indistinguishable from a medic with nothing to do.
+  --  Gated on the reason CHANGING so a port with no patients does not print a
+  --  line every scan forever.
+  if noDose ~= nil and noDose ~= self.medicReason then
+    self.medicReason = noDose
+    sb.logInfo("PETPORT %s medic idle: %s", stationUniqueId(), tostring(noDose))
+  end
 
   --  CARGO OUTRANKS COLLECTION. A unit holding a load has exactly one job, and
   --  letting it pick up more first is how a unit ends up hoarding instead of

@@ -131,7 +131,7 @@ local TASK_DEBUG = true
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-08-30a launched vx holds for the whole arc"
+local BUILD_STAMP = "2026-08-30b medic arrival and dose"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -556,6 +556,17 @@ local WATER_DROP_HEIGHT = 1.0
 
 --  How close the unit must be to a tile before watering it.
 local WATER_REACH = 4.0
+
+--  HOW CLOSE COUNTS AS ARRIVED AT A PATIENT. Wider than WATER_REACH because a
+--  tile does not move and a patient does -- see todo.pathing.movingtarget, which
+--  is unbuilt, so the approach position was resolved once and the patient has
+--  been walking ever since. The dose is an AREA burst covering ten tiles, so
+--  tolerance here is doing the work a re-resolve would otherwise have to.
+--
+--  MUST NOT EXCEED THE BURST'S HALF-WIDTH. petports_medicburst uses a +/-40px
+--  poly, five tiles from centre, so a unit that "arrived" further than that
+--  spends a medical good on a burst that does not reach.
+local MEDIC_REACH = 5.0
 
 --  How close the unit has to be to poke an animal.
 --
@@ -2517,6 +2528,14 @@ local function report(stateData, outcome, reason, cargo)
       --  handed out, so a sweep that ended early is not charged for tiles it
       --  never reached.
       watered = task.watered,
+
+      --  Whether a dose was actually delivered. Same contract as `watered`: the
+      --  port spends one medicalgoods from THIS number, so every early return in
+      --  the medic branch -- patient gone, patient recovered, patient out of
+      --  reach -- costs the player nothing.
+      dosed = task.dosed,
+      patient = task.patient,
+
       unit = entity.uniqueId()
     })
   end
@@ -4553,7 +4572,7 @@ function petportsTaskAction.update(dt, stateData)
     approachTo = approachTargetFor(stateData, target) or target
   elseif task.type == "collect" or task.type == "harvest"
      or task.type == "replant" or task.type == "water"
-     or task.type == "animal" then
+     or task.type == "animal" or task.type == "medic" then
     approachTo = approachTargetFor(stateData, target)
 
     if approachTo == nil then
@@ -4972,6 +4991,87 @@ function petportsTaskAction.update(dt, stateData)
     report(stateData, "failed", string.format(
       "poked %s and it is still ready (%s) -- dropMonsterHarvest did not run",
       sb.printJson(task.target), tostring(after)))
+    return true
+  end
+
+  if task.type == "medic" then
+    --  THE PATIENT IS RE-CHECKED ON ARRIVAL, AND THAT IS THE POINT OF CARRYING
+    --  AN ENTITY ID RATHER THAN A POSITION.
+    --
+    --  Every other task targets something that cannot heal itself. A patient
+    --  can: by a bandage, by another medic, by regeneration they already had,
+    --  or by simply having been at 99% when the port looked. Spending a medical
+    --  good on someone who recovered while the unit walked is the one waste this
+    --  task can actually prevent, so it checks twice.
+    if task.patient == nil or not world.entityExists(task.patient) then
+      report(stateData, "done", string.format(
+        "patient %s is gone -- no dose spent", sb.printJson(task.patient)))
+      return true
+    end
+
+    --  DONE, NOT FAILED, WHEN THE PATIENT RECOVERED. A failure feeds the backoff
+    --  ladder and would penalise this port for an outcome that is GOOD: someone
+    --  got better. The distinction matters because the ladder is what protects
+    --  the network from a target it genuinely cannot service.
+    local health = world.entityHealth(task.patient)
+
+    if type(health) ~= "table" or health[2] == nil or health[2] <= 0 then
+      report(stateData, "done", string.format(
+        "patient %s reports no health -- no dose spent", sb.printJson(task.patient)))
+      return true
+    end
+
+    if health[1] >= health[2] then
+      report(stateData, "done", string.format(
+        "patient %s recovered on the way (%s/%s) -- no dose spent",
+        sb.printJson(task.patient), tostring(health[1]), tostring(health[2])))
+      return true
+    end
+
+    local here = mcontroller.position()
+    local there = world.entityPosition(task.patient)
+    local gap = world.magnitude(here, there)
+
+    --  FAILED, NOT DONE, WHEN OUT OF REACH -- this one IS a failure, because the
+    --  patient is still hurt and nothing was delivered. The backoff ladder
+    --  should see it, and re-dispatch is the correct response.
+    if gap > MEDIC_REACH then
+      report(stateData, "failed", string.format(
+        "arrived but patient %s is %s away (reach %s) -- likely moved while walking",
+        sb.printJson(task.patient), sb.printJson(gap), sb.printJson(MEDIC_REACH)))
+      return true
+    end
+
+    --  CAST AT THE PATIENT, NOT AT THE UNIT. The burst is an area, but centring
+    --  it on the patient is what makes MEDIC_REACH and the poly half-width
+    --  independent -- otherwise the effective coverage is the difference between
+    --  them and shrinks every time either is tuned.
+    local ok, err = pcall(world.spawnProjectile,
+      task.projectile or "petports_medicburst", there, entity.id(), {0, 0}, false, {})
+
+    if not ok then
+      report(stateData, "failed", string.format(
+        "spawnProjectile failed at patient %s: %s",
+        sb.printJson(task.patient), tostring(err)))
+      return true
+    end
+
+    sb.logInfo("UNIT medic DOSE patient %s (%s) at %s: health %s/%s, gap %s, effect %s for %ss",
+      sb.printJson(task.patient), tostring(task.patientClass), sb.printJson(there),
+      tostring(health[1]), tostring(health[2]), sb.printJson(gap),
+      tostring(task.effect), tostring(task.duration))
+
+    --  `dosed` IS WHAT THE PORT CHARGES ON, exactly as `watered` is. The port
+    --  spends one medicalgoods per dose ACTUALLY delivered, so every early
+    --  return above costs the player nothing.
+    --  ON THE TASK, NOT IN THE `cargo` ARGUMENT. report()'s fourth parameter is
+    --  cargo specifically; counters ride as task fields and are lifted into the
+    --  message, the way task.watered is.
+    task.dosed = 1
+
+    report(stateData, "done", string.format(
+      "dosed patient %s at %s/%s health", sb.printJson(task.patient),
+      tostring(health[1]), tostring(health[2])))
     return true
   end
 

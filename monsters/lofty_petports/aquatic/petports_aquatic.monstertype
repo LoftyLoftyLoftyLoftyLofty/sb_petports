@@ -51,7 +51,36 @@
 
   "baseParameters" : {
     "persistent" : true,
-    "damageTeamType" : "ghostly",
+    //  FRIENDLY SINCE 2026-08-30. It was "ghostly", which sits OUTSIDE damage
+    //  resolution entirely -- useful while the fleet was being brought up and
+    //  wrong now. dd.unit.destructible always recorded units as MEANT to be
+    //  destructible and flagged the ghostly question as unverified; this is
+    //  that question being answered by changing the answer.
+    //
+    //  IT IS ALSO WHAT MAKES ALLY DETECTION POSSIBLE. The medic task picks a
+    //  patient by comparing damage teams, and a ghostly unit's team matches
+    //  nothing -- so every candidate would have failed the ally test and the
+    //  medic would never have found anyone to heal.
+    //
+    //  CONSEQUENCES ARE LIVE NOW, NOT HYPOTHETICAL: a unit can be killed
+    //  mid-task, its claim is left for the TTL to collect, and the port
+    //  respawns a replacement after RESPAWN_GRACE as though nothing happened.
+    //  dd.unit.destructible calls that last one arguably wrong and undecided.
+    "damageTeamType" : "friendly",
+
+    //  THE MARKER THAT SAYS "THIS IS A PETPORTS UNIT".
+    //
+    //  Read by petports_isUnitType. It exists because once these run on the
+    //  friendly damage team they are indistinguishable from a farm animal --
+    //  monster / friendly / team 2 describes a Mooshi exactly as well as it
+    //  describes this. The medic scan has to tell a wounded unit from a
+    //  wounded cow, and no engine field draws that line.
+    //
+    //  ANY THIRD-PARTY CHASSIS MUST DECLARE THIS. Checking for a
+    //  petports_ name prefix would have worked for the four types shipped
+    //  here and quietly failed for everyone building on top of this, which
+    //  is the intended path rather than an edge case.
+    "petports_unit" : true,
 
     "scripts" : [
       "/monsters/pets/groundPet.lua",
