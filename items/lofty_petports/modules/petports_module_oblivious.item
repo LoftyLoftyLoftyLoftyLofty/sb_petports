@@ -1,0 +1,69 @@
+//  PETPORTS -- OBLIVIOUS MODULE
+//
+//  THE THIRD CHANNEL, AND THE FIRST THAT CHANGES WHAT THE PORT DOES RATHER THAN
+//  WHAT THE UNIT IS.
+//
+//      petports_moduleEffects   pushed to a LIVE unit as status effects
+//      petports_moduleLiquids   read by the port, with no unit, for the gate
+//      petports_moduleFlags     read by the port, to suppress its own dispatch
+//
+//  NOTHING HERE IS PUSHED ANYWHERE. Obliviousness is not a property of the unit;
+//  it is an instruction to the dispatcher, and findWork is the dispatcher. A
+//  status effect would put state on the unit that the unit never reads.
+//
+//  NAMED FOR VANILLA'S OBLIVIOUS COLLAR, WHOSE MECHANISM DOES NOT TRANSFER. That
+//  collar pacifies a capture-pod pet by setting its damageTeam to "ghostly" --
+//  and every petport chassis is ALREADY ghostly by default, so vanilla's actual
+//  effect is our baseline and would be a no-op. What carries over is the
+//  player's intuition: a collar that makes a pet stop doing the thing pets do.
+//  Ours stops it working instead of stops it fighting.
+//
+//  IT IS NOT THE PORT'S ENABLED SWITCH, AND THE DIFFERENCE IS THE FEATURE.
+//  Unticking the port closes the door and despawns the unit. This leaves it
+//  deployed, visible and idle -- a pet rather than a worker. One port holds one
+//  unit, so the two states are reachable two ways and that overlap is accepted
+//  deliberately; the visible outcomes are different enough that a player will
+//  not confuse them.
+//
+//  RECALL AND DEPOSIT STILL WORK, and by construction rather than by exception.
+//  returnWork is ungated because it is the leash; depositWork is ungated because
+//  putting down what you are already holding is finishing rather than starting.
+//  So socketing this mid-haul makes a unit place its cargo and walk home instead
+//  of standing in a field holding a stack forever.
+//
+//  THE PARTICIPATION CHECKBOXES ARE NOT REWRITTEN. They are the player's setting
+//  and the pane mirrors them; this suppresses the dispatch, not the preference,
+//  so pulling the module restores exactly what was there. The pane says so with
+//  an `info` diagnostic, or four ticked boxes above an idle unit would read as a
+//  broken dispatcher.
+
+{
+	"itemName" : "petports_module_oblivious",
+	"price" : 250,
+	"rarity" : "Common",
+
+	//  Shared with the other modules, so the categories.config.patch label and
+	//  the petports_filtergroups.config subgroup that already exist cover this
+	//  item too. A new category would need both added or it sorts to Unsorted.
+	"category" : "petports_module",
+
+	//  TEST ART. Charcoal -- the same diamond desaturated and darkened rather
+	//  than hue-rotated, because "off duty" has no hue. Distinct in a slot at a
+	//  glance, which is the only bar it has to clear until bespoke icons land.
+	"inventoryIcon" : "petports_module_oblivious.png",
+
+	"description" : "A dormancy shunt. Socket it into a unit and it stops taking work, without stopping being a unit.",
+	"shortdescription" : "Oblivious Module",
+
+	//  petports_no_upcycling KEEPS IT OUT OF THE CONVERTER, or a unit hauling
+	//  surplus to an upcycler turns the player's modules into treats.
+	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],
+
+	//  MAXSTACK 1 IS A REQUIREMENT. The pane moves modules with
+	//  player.swapSlotItem(), which returns the whole cursor stack; it refuses a
+	//  stack rather than trusting this field, so a stackable module would be
+	//  refused forever and look broken.
+	"maxStack" : 1,
+
+	"petports_moduleFlags" : [ "oblivious" ]
+}

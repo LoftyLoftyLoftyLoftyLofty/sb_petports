@@ -1157,7 +1157,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-08-30c module liquid permissions"
+local PETPORT_BUILD_STAMP = "2026-08-30d oblivious module and field union"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -2877,6 +2877,22 @@ end
 local function paneDiagnostics()
   local out = {}
 
+  --  SAID OUT LOUD BECAUSE THE CHECKBOXES STILL LOOK ACTIVE. Oblivious
+  --  suppresses dispatch without rewriting the player's participation settings,
+  --  so without this line the pane shows ticked boxes and a unit doing nothing,
+  --  which is indistinguishable from the dispatcher being broken.
+  --
+  --  "info" RATHER THAN "warn" OR "error". Nothing is wrong; the player asked
+  --  for this. DIAG_TINT has carried an `info` grey since it was written and
+  --  this is its first user -- the icon is the same warning glyph multiplied by
+  --  the tint, so a neutral colour is the whole difference.
+  if petportOblivious() then
+    table.insert(out, paneDiag("info", "Oblivious",
+      "An Oblivious Module is socketed, so this unit takes no dispatched work. "
+      .. "It will still come home and put down anything it is already carrying. "
+      .. "Remove the module to put it back on duty."))
+  end
+
   --  TWO WORDINGS, AND THE DIFFERENCE IS NOT COSMETIC. The port refuses to open
   --  its door on an unsuitable environment now, so the common case is a unit
   --  that was NEVER DEPLOYED -- and telling a player their pet "has been
@@ -3038,16 +3054,16 @@ function petportIsModuleItem(item)
   return ok and has == true
 end
 
---  WHAT DOES THIS MODULE GRANT?
+--  WHAT DOES THIS MODULE DECLARE UNDER `field`?
 --
 --  Parameters first, then the item config, matching how petportModuleSlots reads
---  its own field -- so an instance of a module can carry different effects from
+--  its own field -- so an instance of a module can carry different values from
 --  its item file, which is the hook a future upgrade or randomisation path needs.
-local function moduleEffectsOf(item)
+local function moduleFieldOf(item, field)
   if type(item) ~= "table" or item.name == nil then return {} end
 
-  if item.parameters and type(item.parameters.petports_moduleEffects) == "table" then
-    return item.parameters.petports_moduleEffects
+  if item.parameters and type(item.parameters[field]) == "table" then
+    return item.parameters[field]
   end
 
   local ok, resolved = pcall(root.itemConfig, { name = item.name, count = 1 })
@@ -3055,21 +3071,32 @@ local function moduleEffectsOf(item)
     return {}
   end
 
-  local effects = resolved.config.petports_moduleEffects
-  if type(effects) ~= "table" then return {} end
-  return effects
+  local value = resolved.config[field]
+  if type(value) ~= "table" then return {} end
+  return value
 end
 
---  THE UNION ACROSS EVERY SOCKETED SLOT, DEDUPLICATED AND SORTED.
+--  THE UNION OF ONE FIELD ACROSS EVERY SOCKETED SLOT, DEDUPLICATED AND SORTED.
 --
---  SORTED SO THE SIGNATURE IS STABLE. Two modules swapped between slots grant
---  the same set, and an unsorted list would spell it two different ways and push
---  a redundant update every time a player rearranged their slots.
+--  ONE FUNCTION FOR THREE FIELDS, and it is generic because the third one was
+--  about to be the third copy of an identical loop. Modules declare three lists
+--  and they are read by different things at different times --
 --
---  DEDUPLICATED BECAUSE setPersistentEffects TAKES A SET. Two lamp modules are a
---  player wasting a slot, not a brighter unit, and that is the honest outcome --
---  stacking would need per-effect knowledge this layer does not have.
-function petportModuleEffects()
+--      petports_moduleEffects   pushed to a LIVE unit as status effects
+--      petports_moduleLiquids   read by the port, with no unit, for the gate
+--      petports_moduleFlags     read by the port, to suppress its own dispatch
+--
+--  -- but the SHAPE is identical in all three cases, and three copies of one
+--  loop is how they end up subtly disagreeing about nil handling.
+--
+--  SORTED SO SIGNATURES ARE STABLE. Two modules swapped between slots grant the
+--  same set, and an unsorted list would spell it two ways and push a redundant
+--  update every time a player rearranged their slots.
+--
+--  DEDUPLICATED. Two lamp modules are a player wasting a slot, not a brighter
+--  unit, and that is the honest outcome -- stacking would need per-entry
+--  knowledge this layer does not have.
+local function moduleFieldUnion(field)
   if self.petData == nil or type(self.petData.modules) ~= "table" then return {} end
 
   local seen = {}
@@ -3077,10 +3104,10 @@ function petportModuleEffects()
 
   for _, record in ipairs(self.petData.modules) do
     if type(record) == "table" and record.item ~= nil then
-      for _, effect in ipairs(moduleEffectsOf(record.item)) do
-        if type(effect) == "string" and not seen[effect] then
-          seen[effect] = true
-          table.insert(out, effect)
+      for _, entry in ipairs(moduleFieldOf(record.item, field)) do
+        if type(entry) == "string" and not seen[entry] then
+          seen[entry] = true
+          table.insert(out, entry)
         end
       end
     end
@@ -3090,8 +3117,10 @@ function petportModuleEffects()
   return out
 end
 
---  WHAT LIQUIDS DOES THIS MODULE UNLOCK?
---
+function petportModuleEffects()
+  return moduleFieldUnion("petports_moduleEffects")
+end
+
 --  A SECOND FIELD RATHER THAN MORE petports_moduleEffects ENTRIES, and the
 --  reason is that the two are read at different times by different things.
 --  Effects are pushed to a LIVE unit and held as status effects. A liquid
@@ -3103,45 +3132,29 @@ end
 --  NAMES, NOT IDS, matching petports_avoidLiquids on the chassis. The two sets
 --  are compared key against key, so they must be spelled the same way and are
 --  lowercased at both ends.
-local function moduleLiquidsOf(item)
-  if type(item) ~= "table" or item.name == nil then return {} end
-
-  if item.parameters and type(item.parameters.petports_moduleLiquids) == "table" then
-    return item.parameters.petports_moduleLiquids
-  end
-
-  local ok, resolved = pcall(root.itemConfig, { name = item.name, count = 1 })
-  if not ok or type(resolved) ~= "table" or type(resolved.config) ~= "table" then
-    return {}
-  end
-
-  local liquids = resolved.config.petports_moduleLiquids
-  if type(liquids) ~= "table" then return {} end
-  return liquids
+function petportModuleLiquids()
+  return moduleFieldUnion("petports_moduleLiquids")
 end
 
---  Sorted and deduplicated for the same reasons petportModuleEffects is: this
---  goes into the push signature, and two spellings of one set would push an
---  update every time a player rearranged slots.
-function petportModuleLiquids()
-  if self.petData == nil or type(self.petData.modules) ~= "table" then return {} end
+--  BEHAVIOUR FLAGS THE PORT ACTS ON ITSELF. Nothing here is pushed anywhere:
+--  these change what the PORT does, not what the unit is, so sending them would
+--  be state the unit holds and never reads.
+function petportModuleFlags()
+  return moduleFieldUnion("petports_moduleFlags")
+end
 
-  local seen = {}
-  local out = {}
+--  DOES A SOCKETED MODULE TAKE THIS UNIT OFF THE DUTY ROSTER?
+--
+--  Named rather than compared inline because findWork is not the only place that
+--  will ever ask -- the pane says so too, and a second spelling of the string
+--  "oblivious" is the kind of thing that survives a rename by exactly one file.
+OBLIVIOUS_FLAG = "oblivious"
 
-  for _, record in ipairs(self.petData.modules) do
-    if type(record) == "table" and record.item ~= nil then
-      for _, liquid in ipairs(moduleLiquidsOf(record.item)) do
-        if type(liquid) == "string" and not seen[liquid] then
-          seen[liquid] = true
-          table.insert(out, liquid)
-        end
-      end
-    end
+function petportOblivious()
+  for _, flag in ipairs(petportModuleFlags()) do
+    if flag == OBLIVIOUS_FLAG then return true end
   end
-
-  table.sort(out)
-  return out
+  return false
 end
 
 --  THE CATEGORY THE UNIT HOLDS THEM UNDER.
@@ -8977,10 +8990,30 @@ local function findWork()
   --  dispatched should not be run: several scan containers or the world, and
   --  paying for that to discard the answer is the kind of cost that only shows
   --  up on a large base.
-  local doHauling = petportParticipates("hauling")
-  local doSorting = petportParticipates("sorting")
-  local doFarming = petportParticipates("farming")
-  local doMachines = petportParticipates("machines")
+  --  OBLIVIOUS TAKES THE UNIT OFF THE ROSTER WITHOUT TOUCHING THE CHECKBOXES.
+  --
+  --  It ZEROES THE FOUR GROUPS HERE rather than inside petportParticipates,
+  --  deliberately. Those config values are the PLAYER'S setting and the pane
+  --  mirrors them; rewriting them would make the pane lie about what the player
+  --  chose, and pulling the module would then have to restore something. The
+  --  module suppresses the dispatch, not the preference.
+  --
+  --  RECALL AND DEPOSIT SURVIVE IT, BY CONSTRUCTION RATHER THAN BY EXCEPTION.
+  --  returnWork is ungated because it is the leash -- a unit that cannot be
+  --  recalled wanders out of coverage and stays there -- and depositWork is
+  --  ungated because putting down what you are already holding is finishing, not
+  --  starting. So a unit that goes oblivious mid-haul places its cargo and walks
+  --  home, rather than standing in a field holding a stack forever.
+  --
+  --  THAT IS ALSO WHY THIS IS NOT petportEnabled. Unticking the port closes the
+  --  door and despawns; this leaves the unit deployed, visible and idle, which
+  --  is the whole point of the module.
+  local oblivious = petportOblivious()
+
+  local doHauling = not oblivious and petportParticipates("hauling")
+  local doSorting = not oblivious and petportParticipates("sorting")
+  local doFarming = not oblivious and petportParticipates("farming")
+  local doMachines = not oblivious and petportParticipates("machines")
 
   --  Before anything else: a unit that has strayed cannot reach work anyway.
   --

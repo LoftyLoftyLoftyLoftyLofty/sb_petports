@@ -7490,6 +7490,89 @@ BURN, IT SHOULD BE BEEPING. The machine already knows the state -- the furnace
 door logs it -- it just cannot be seen or heard from outside, and a machine
 quietly not-burning is indistinguishable from a machine quietly done.
 
+### A recall with nowhere to stand says nothing to the player
+`todo.port.nostandpoint` -- see also `todo.pathing.standpointchoice`, `todo.unit.complaints`, `arch.port.reporthandler`
+
+**TRIAGED 2026-08-30 -- BACKLOG, NO PRIORITY SET.**
+
+`returnWork` calls `findStandingPoint` twice -- an 8x8 box on the port, then the
+full coverage rect -- and when BOTH return nil it calls `rehomeUnit("no standing
+point in rect to recall to")`. That is a log line and a teleport. The pane says
+nothing.
+
+**A TELEPORT IS THE LOUDEST THING THE PORT DOES AND IT IS CURRENTLY SILENT.** A
+player watching a unit blink home has no way to learn that its port is somewhere
+a unit cannot stand, which is a placement problem they could fix in ten seconds
+if anyone told them. The machinery exists -- `paneDiagnostics` and `paneDiag`,
+with an `info` / `warn` / `error` tint -- so this is a condition to track and one
+insert, not new plumbing.
+
+**IT MUST BE A LIVE CONDITION, NOT A TALLY**, per the note above
+`paneDiagnostics`: it has to clear when a standing point becomes findable again,
+or filling in a floor leaves the warning up forever.
+
+### `findStandingPoint` returns the highest point in a random column
+`todo.pathing.standpointchoice` -- see also `todo.port.nostandpoint`, `fact.pathing.floatingtarget`, `arch.port.coverage`
+
+**TRIAGED 2026-08-30 -- BACKLOG, NO PRIORITY SET. NOT YET OBSERVED FAILING**,
+because the path that would expose it is gated off -- see below.
+
+    for y = rect[4], rect[2], -1
+      if world.pointTileCollision(below) and not world.pointTileCollision(here)
+
+Two properties, both fine in the case it was written for and neither obviously
+right in general:
+
+  - **it descends from the TOP**, so it returns the highest ledge in the column
+    rather than the floor nearest the port
+  - **the column x is `math.random()` across the whole rect**, which for the
+    64-wide coverage fallback is anywhere within 32 tiles
+
+So for a port in a deep pool sunk into terrain, the coverage fallback resolves to
+the dry surface off to one side rather than the seabed underneath. That is a
+VALID standing point -- it is simply the wrong one.
+
+**IT IS SAFE IN THE DIRECTION THAT MATTERS, WHICH IS WHY THIS IS NOT URGENT.**
+The test requires `pointTileCollision(below)`, which liquid never satisfies, so
+this can never return a free-floating point in open water -- `fact.pathing.liquidstandable`
+does not reach here, because this is the PORT's own resolver and not
+`validStandingPosition`. It is stricter than the pathfinder, so it can only fail
+to find a point the pathfinder would have accepted, never invent one it would
+reject.
+
+**DEPTH IS NOT THE TRIGGER, AND THE OBVIOUS FIX IS ALREADY IN PLACE.** "Search
+network coverage" was the first proposed answer; the coverage rect IS the
+existing fallback and reaches 32 tiles vertically, so a pool 20 or 30 deep is
+already within reach. The defect is which point gets chosen, not how far it
+looks.
+
+**WHY NOTHING HAS BEEN SEEN IN GAME:** `returnWork` returns nil for a unit that
+is `inside` coverage and not `stranded`, so an amphibious unit floating in its
+own pool is never recalled and never asks for a standing point at all. Verified
+2026-08-30 with a port under twelve tiles of water. The resolver only runs on the
+leash and the diagnostic filler.
+
+### A unit that cannot find somewhere to stand should say so itself
+`todo.unit.complaints` -- see also `plan.pane.carriedindicator`, `todo.port.nostandpoint`
+
+**TRIAGED 2026-08-30 -- BACKLOG, NO PRIORITY SET. BLOCKED ON THE BUBBLE.**
+
+`plan.pane.carriedindicator` describes a bubble above a unit showing a carried
+ITEM icon, generalising to a TASK icon. This is a third consumer: a COMPLAINT.
+"I have nowhere to stand" is the first one worth saying, because it is a
+condition the unit discovers and the port only infers.
+
+**THE PORT DIAGNOSTIC AND THE BUBBLE ARE NOT THE SAME FEATURE**, and building one
+does not close the other. The pane tells a player who has already opened the
+port; the bubble tells a player walking past a unit doing nothing. The second is
+how you find out WHICH of a dozen units is the unhappy one.
+
+**INHERITS THE OPT-IN RULE** from `plan.pane.carriedindicator` -- a base running a
+dozen units with permanent bubbles overhead is the vanilla ship-pet clutter this
+mod exists to avoid. A complaint may deserve different defaults from a carried
+item, since a complaint is rare and actionable where a carried icon is constant;
+undecided.
+
 ### The backoff ladder reorder is unexercised
 `todo.port.backoffladder` -- see also `arch.port.reporthandler`
 
