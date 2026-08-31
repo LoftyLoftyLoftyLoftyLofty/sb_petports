@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-08-31c standing point delegates"
+local CONTRACT_BUILD_STAMP = "2026-08-31e half in the water is out"
 
 local contractStamped = false
 
@@ -714,7 +714,28 @@ function petports_mediumAt(position, bounds)
   local bottom = math.floor(position[2] + bounds[2])
   local top = math.ceil(position[2] + bounds[4]) - 1
 
-  local submerged = true
+  --  THREE ANSWERS, NOT TWO. This used to accumulate one `submerged` flag with
+  --  an AND, which answers "is ALL of me in water" and calls everything else
+  --  air. A body straddling a waterline is not air. The flyer was cleared to
+  --  hover at the surface inside the flooded half of a shipping container with
+  --  its bottom row submerged, and the physics did the rest: buoyancy on the wet
+  --  half, none on the dry, and it slid under and stuck.
+  --
+  --  "mixed" IS A REAL ANSWER and petports_mediumAllows refuses it for a free
+  --  mover, because a chassis that cannot swim must be clear of the water and
+  --  one that cannot leave it must be under. Neither wants to be half in.
+  --
+  --  WALKERS ARE UNAFFECTED. petports_mediumAllows returns early for a gravity
+  --  chassis -- its medium is physics, and wading is a thing walkers do -- and
+  --  that early return sits below the "forbidden" check, which still fires.
+  --
+  --  THE THRESHOLD IS STILL PETPORTS_SUBMERGED_FILL. A row at half fill counts
+  --  as dry here, so a body resting in shallow water reads as air and is
+  --  allowed. That is unchanged behaviour and NOT known to be right -- it is
+  --  simply not what the container measured, and widening it to "any liquid at
+  --  all" would ground a flyer in rain. If a unit is later seen dragging through
+  --  shallows, this is the line to revisit.
+  local submerged, anySubmerged = true, false
 
   for row = bottom, top do
     local level = world.liquidAt({ x, row + 0.5 })
@@ -727,10 +748,16 @@ function petports_mediumAt(position, bounds)
       return "forbidden"
     end
 
-    if fill < PETPORTS_SUBMERGED_FILL then submerged = false end
+    if fill < PETPORTS_SUBMERGED_FILL then
+      submerged = false
+    else
+      anySubmerged = true
+    end
   end
 
-  return submerged and "swim" or "air"
+  if submerged then return "swim" end
+  if anySubmerged then return "mixed" end
+  return "air"
 end
 
 --  Point version of petports_mediumAt, same three states.
@@ -1031,6 +1058,14 @@ function petports_mediumAllows(position, bounds)
     return false, "submerged and this chassis cannot swim"
   end
 
+  --  HALF IN IS OUT, FOR EVERY FREE MOVER. A flyer here has buoyancy on one half
+  --  of its body and none on the other and slides under; a swimmer here is
+  --  hauling itself against the surface. There is no chassis this is right for,
+  --  so it is refused before the fly/swim split rather than inside it.
+  if medium == "mixed" then
+    return false, "straddling the waterline, which no free-moving chassis can hold"
+  end
+
   if media.fly then return true, "air" end
   return false, "not submerged and this chassis cannot fly"
 end
@@ -1276,7 +1311,7 @@ local function logFlySpan(position, bounds)
   report("X", col, openCol, left, right, width)
 end
 
-function petports_flyPointNear(position, radius)
+function petports_flyPointNear(position, radius, mediumVerified)
   if position == nil then return nil end
   if mcontroller.baseParameters().gravityEnabled then return nil end
 
@@ -1291,7 +1326,36 @@ function petports_flyPointNear(position, radius)
   --  nearest usable spot, and for an out-of-medium target every answer it can
   --  give is wrong. Letting it run produced a unit that hovered under a crate
   --  it could not reach and reported the work done.
+  --
+  --  IT SAMPLES ONE POINT, WHICH IS ONLY ENOUGH FOR A POINT TARGET. An OBJECT
+  --  has a footprint, and a footprint can straddle a waterline: a shipping
+  --  container with its bottom half flooded is reachable by a swimmer from below
+  --  and a flyer from above, and both are legitimate. Asked about its origin
+  --  tile -- which sits in the flooded half -- this refused the flyer outright
+  --  and said "no position near it can help" while five open air tiles sat
+  --  directly above, inside the search radius. Measured on crate 204 at
+  --  [2553,1147]: the flyer stalled holding one unstackable beacon it had
+  --  nowhere to put, while the aquatic and amphibious units worked the same
+  --  container all session.
+  --
+  --  SO THE CALLER MAY VOUCH INSTEAD OF THIS GUESSING. `mediumVerified` means a
+  --  caller has already run the medium ladder over the target's REAL footprint
+  --  -- petports_habitatAnyPointSuits over world.objectSpaces, port-side, which
+  --  is the question this cannot ask from a single tile. When it has, the search
+  --  runs and finds the touchable face.
+  --
+  --  NOTHING THAT CANNOT VOUCH LOSES THE GUARD. Medic and animal work call the
+  --  same resolver deliberately WITHOUT a medium check, because a patient or a
+  --  Mooshi has moved by the time the unit arrives and a verdict about a stale
+  --  point buys nothing. Those still get the veto, and so does every call the
+  --  unit makes to re-resolve its own destination on arrival. Removing it
+  --  outright would hand the hover-and-report bug straight back to them.
   local targetOk, targetWhy = petports_targetAllowed(position)
+
+  if mediumVerified then
+    targetOk = true
+    targetWhy = (targetWhy or "medium") .. ", and the caller vouched for the footprint"
+  end
 
   if not targetOk then
     if FLY_POINT_DEBUG then
@@ -1417,9 +1481,11 @@ end
 --  CALLED BARE. If petportsTaskAction.lua is not in the monstertype's scripts
 --  list this raises on the first resolve, which is the intent -- see the export
 --  note beside petports_standablePoint.
-function petports_standingPointNear(position, radius)
+--  `mediumVerified` is passed by the port when it has already run the medium
+--  ladder over the target's own footprint. See the note in petports_flyPointNear.
+function petports_standingPointNear(position, radius, mediumVerified)
   if position == nil then return nil end
-  return petports_standablePoint(position, nil, radius)
+  return petports_standablePoint(position, nil, radius, mediumVerified)
 end
 
 --  WHERE THIS UNIT PARKS WHEN IT IS AT HOME.

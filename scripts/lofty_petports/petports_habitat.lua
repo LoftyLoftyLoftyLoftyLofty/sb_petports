@@ -593,6 +593,52 @@ function petports_habitatMedia(points)
 	return wet, dry, liquids
 end
 
+--  CAN THIS CHASSIS WORK AT ANY PART OF THIS FOOTPRINT?
+--
+--  THE WHOLE-FOOTPRINT LADDER IS FOR A HOME, NOT A TARGET, and running it over a
+--  target was a category error. petports_habitatVerdict asks "can this chassis
+--  LIVE in all of this", because a port's unit must occupy its whole footprint;
+--  MIXED_MEDIUM is a real refusal there. A crate is different: the unit has to
+--  touch it, not live in it, so a container with its top half in air and its
+--  bottom half in water is a perfectly good destination for a swimmer AND for a
+--  flyer -- each works the end it can reach.
+--
+--  MEASURED, NOT HYPOTHETICAL. A half-submerged shipping container at [2553,1147]
+--  was refused by the aquatic unit and the flyer on every scan while the
+--  amphibious one carried the entire base. Both refusals were correct answers to
+--  the wrong question.
+--
+--  PER TILE, ACCEPT ON THE FIRST YES. Over a single-point sample this is
+--  identical to the whole-footprint ladder -- one tile cannot straddle anything
+--  -- so item drops, livestock and tile work are unaffected.
+--
+--  A FORBIDDEN LIQUID REFUSES ITS OWN TILE AND NOT THE OBJECT. A crate with one
+--  corner in lava and the rest in water is still workable from the water, and
+--  the unit's own standing search is what actually keeps it out of the lava --
+--  petports_standablePoint refuses a point in a liquid the chassis avoids. This
+--  ladder decides which targets are worth offering; that one decides where the
+--  body goes.
+--
+--  THE FIRST REFUSAL IS THE ONE REPORTED when nothing suits, because a wholly dry
+--  crate refuses every tile for the same reason and the first one says it as well
+--  as the last. MIXED_MEDIUM becomes unreachable through this path, which is the
+--  point.
+function petports_habitatAnyPointSuits(caps, points)
+	if points == nil or #points == 0 then return { ok = true } end
+
+	local firstRefusal = nil
+
+	for _, point in ipairs(points) do
+		local wet, dry, liquids = petports_habitatMedia({ point })
+		local verdict = petports_habitatVerdict(caps, wet, dry, liquids)
+
+		if verdict == nil or verdict.ok then return verdict or { ok = true } end
+		if firstRefusal == nil then firstRefusal = verdict end
+	end
+
+	return firstRefusal
+end
+
 --  The tile centres an object occupies, in world coordinates.
 --
 --  world.objectSpaces IS AVAILABLE TO ANYTHING IN A WORLD CONTEXT and takes any

@@ -1177,7 +1177,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-08-31f eligibility gate keyed by target"
+local PETPORT_BUILD_STAMP = "2026-08-31k the vouch rides on the task"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -4005,10 +4005,15 @@ end
 --  and it is here only so a port with no unit socketed still produces something
 --  rather than nil. Anything dispatched to a unit should go through this
 --  function, not findStandingPoint directly.
-local function standingPointNear(position, radius)
+--  `mediumVerified` travels to the unit, where petports_flyPointNear stands its
+--  single-point veto down for it. Only servicePointNear passes it, and only
+--  because targetSuits has just run the medium ladder over the target's real
+--  footprint. See the note in petports_flyPointNear for what the veto is for and
+--  why it is not simply deleted.
+local function standingPointNear(position, radius, mediumVerified)
   if self.petId ~= nil and world.entityExists(self.petId) then
     local ok, resolved = pcall(world.callScriptedEntity, self.petId,
-      "petports_standingPointNear", position, radius or 4)
+      "petports_standingPointNear", position, radius or 4, mediumVerified)
 
     if ok and resolved ~= nil then return resolved end
 
@@ -4101,8 +4106,10 @@ local function targetSuits(position, entityId)
     points = { { position[1], position[2] } }
   end
 
-  local wet, dry, liquids = petports_habitatMedia(points)
-  local verdict = petports_habitatVerdict(caps, wet, dry, liquids)
+  --  ANY TILE, NOT EVERY TILE. See petports_habitatAnyPointSuits: the port's own
+  --  environment gate still runs the whole-footprint ladder, because a unit must
+  --  LIVE in its home, and this one only has to REACH its work.
+  local verdict = petports_habitatAnyPointSuits(caps, points)
 
   if verdict == nil or verdict.ok then return true end
 
@@ -4173,9 +4180,15 @@ end
 --  of petports_targetAllowed -- and the medium test is a handful of
 --  world.liquidAt calls against a standing search, so it goes first.
 --
---  RETURNS THE STANDING POINT, because every caller needs it as the dispatch
---  position. A nil means refused, for either reason, and the reason has already
---  been said in the log by whichever half refused.
+--  RETURNS THE STANDING POINT AND THE REASON IT DID NOT.
+--
+--  A nil means refused, and the SECOND RETURN SAYS WHICH HALF REFUSED. Callers
+--  print their own SKIPPED line and every one of them used to assert "no
+--  standable spot within N tiles", which was true when this call was
+--  standingPointNear and stopped being true the moment a medium test went in
+--  front of it: 77 lines in one session blamed standability for what was really
+--  a half-submerged crate. A message that names the wrong cause is worse than no
+--  message, because it sends the next reader to measure the wrong thing.
 --
 --  MOVING TARGETS DO NOT COME HERE. A patient or an animal gets the reach test
 --  alone -- see the note in animalWork.
@@ -4184,10 +4197,21 @@ local function servicePointNear(label, entityId, position, radius)
 
   if not suits then
     targetRefused(label, why)
-    return nil
+    return nil, why
   end
 
-  return standingPointNear(position, radius or 4)
+  --  VOUCHING, AND ONLY BECAUSE targetSuits JUST RAN. The unit's own resolver
+  --  keeps a single-point veto that cannot see a straddling footprint, and the
+  --  line above is the footprint answer it is missing. Passing true anywhere
+  --  targetSuits has NOT run would be a lie that costs a hovering unit.
+  local stand = standingPointNear(position, radius or 4, true)
+
+  if stand == nil then
+    return nil, string.format("no standable spot within %s tiles",
+      tostring(radius or 4))
+  end
+
+  return stand
 end
 
 local function findStandingPoint(rect)
@@ -4497,6 +4521,8 @@ local function collectionWork(mergeOnly)
 
   return {
     id = "drop:" .. best,
+    --  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
+    mediumVerified = true,
     type = "collect",
     port = stationUniqueId(),
     target = best,
@@ -5561,12 +5587,13 @@ local function upcyclerWork()
     --  Stand next to it, not on it -- same reason as a deposit crate, and
     --  resolved by the unit for the same reason: a point the unit cannot occupy
     --  fails the last leg of the route and therefore the whole plan.
-    local stand = servicePointNear("upcycler " .. tostring(machine.id),
+    local stand, standWhy = servicePointNear("upcycler " .. tostring(machine.id),
       machine.id, machine.position, 4)
 
     if stand == nil then
-      sb.logInfo("PETPORT %s upcycler %s SKIPPED: no standable spot within 4 tiles of %s",
-        stationUniqueId(), sb.printJson(machine.id), sb.printJson(machine.position))
+      sb.logInfo("PETPORT %s upcycler %s SKIPPED: %s of %s",
+        stationUniqueId(), sb.printJson(machine.id), tostring(standWhy),
+        sb.printJson(machine.position))
     else
       sb.logInfo("PETPORT %s upcycling to %s at %s: room for %s, %s tile(s) away (%s candidate(s), %s)",
         stationUniqueId(), tostring(machine.kind), sb.printJson(machine.position),
@@ -5581,6 +5608,8 @@ local function upcyclerWork()
         --  MUST MATCH the workId the backoff check above computes, or a
         --  recorded failure is filed under a key nothing ever looks up.
         id = "upcycle:" .. tostring(machine.id),
+        --  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
+        mediumVerified = true,
         type = "upcycle",
         target = machine.id,
         position = stand,
@@ -5676,12 +5705,13 @@ local function depositWork()
       --  validStandingPosition before pathing starts, which fails the last leg
       --  of the route and therefore the entire plan -- the unit does not move at
       --  all, and the log reads as a vent failure rather than a bad target.
-      local stand = servicePointNear("crate " .. tostring(beacon.id),
+      local stand, standWhy = servicePointNear("crate " .. tostring(beacon.id),
         beacon.id, beacon.position, 4)
 
       if stand == nil then
-        sb.logInfo("PETPORT %s deposit target %s SKIPPED: no standable spot within 4 tiles of %s",
-          stationUniqueId(), sb.printJson(beacon.id), sb.printJson(beacon.position))
+        sb.logInfo("PETPORT %s deposit target %s SKIPPED: %s of %s",
+          stationUniqueId(), sb.printJson(beacon.id), tostring(standWhy),
+          sb.printJson(beacon.position))
       else
 
         return {
@@ -5705,6 +5735,8 @@ local function depositWork()
           --  Container id stays in the string for readability in claims and
           --  logs; the port id is what makes it non-exclusive.
           id = "deposit:" .. tostring(beacon.id) .. "@" .. stationUniqueId(),
+          --  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
+          mediumVerified = true,
           type = "deposit",
           target = beacon.id,
           position = stand,
@@ -7756,6 +7788,8 @@ local function harvestWork()
 
 	return {
 		id = "harvest:" .. best.id,
+		--  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
+		mediumVerified = true,
 		type = "harvest",
 		port = stationUniqueId(),
 		target = best.id,
@@ -7936,6 +7970,33 @@ local function carriedWaterFor(run)
 	return nil
 end
 
+--  CAN THIS CHASSIS WATER THE HEAD OF THIS RUN?
+--
+--  THE SPACE ABOVE THE SOIL, NOT THE SOIL. A tilled tile is solid foreground, so
+--  world.liquidAt over it always reads zero and a check aimed there would pass
+--  every chassis every time. The tile above is where liquid actually sits and
+--  where the unit stands, so it is both the honest sample and the dispatch
+--  position -- one expression rather than two that must stay equal.
+--
+--  THE HEAD OF THE RUN ONLY. A run that crosses a waterline is a farm somebody
+--  deliberately built half under water, and a tile that already has liquid on it
+--  is not a tile that needs a bucket. If one ever shows up in a log, the fix is
+--  to truncate the run to its eligible prefix -- which rewrites the task rather
+--  than filtering it, and is a different shape of change.
+--
+--  ASKED BY BOTH LEGS, which is the whole reason it is a function. waterWork
+--  asked it and withdrawWaterWork did not, so the fetch leg hauled liquid across
+--  the base for runs the place leg then refused. That is the replant split
+--  again, and worse: a run refused on MEDIUM records no failure, so the backoff
+--  coupling added for replant cannot see it. There is nothing to back off from.
+--  The only thing that stops it is asking the same question before fetching.
+local function waterRunWorkable(run, tile)
+	if run == nil or tile == nil then return false end
+
+	return targetEligible("water run " .. tostring(run.key),
+		{ tile[1] + 0.5, tile[2] + 1.5 }, nil)
+end
+
 --  Sweep a dry run, one tile per unit of liquid carried.
 --
 --  ABOVE DEPOSIT, for the same reason replant is: a unit holding water that
@@ -7979,30 +8040,31 @@ local function waterWork()
 				end
 			end
 
-			sb.logInfo("PETPORT %s WATER dispatch: %s tile(s) of %s in run, "
-				.. "%s carried, from %s to %s",
-				stationUniqueId(), sb.printJson(#tiles), sb.printJson(#run.tiles),
-				sb.printJson(stack.count or 1), sb.printJson(tiles[1]),
-				sb.printJson(tiles[#tiles]))
-
-			--  THE SPACE ABOVE THE SOIL, NOT THE SOIL. A tilled tile is solid
-			--  foreground, so world.liquidAt over it always reads zero and a
-			--  check aimed there would pass every chassis every time. The tile
-			--  above is where liquid actually sits and where the unit stands, so
-			--  it is both the honest sample and the dispatch position -- one
-			--  expression rather than two that must stay equal.
+			--  THE GATE BEFORE THE ANNOUNCEMENT. This log used to sit above the
+			--  check, so a port with six dry runs and an aquatic unit announced
+			--  six WATER dispatches per scan and dispatched none of them. A line
+			--  that says "dispatch" about work that is about to be refused is
+			--  worse than no line: it is the first thing a reader searches for.
 			--
-			--  THE HEAD OF THE RUN ONLY. A run that crosses a waterline is a
-			--  farm somebody deliberately built half under water, and a tile
-			--  that already has liquid on it is not a tile that needs a bucket.
-			--  If one ever shows up in a log, the fix is to truncate the run to
-			--  its eligible prefix -- which rewrites the task rather than
-			--  filtering it, and is a different shape of change.
-			local head = { tiles[1][1] + 0.5, tiles[1][2] + 1.5 }
+			--  `runHead` AND NOT `head`, because `head` is already a DISTANCE in
+			--  this scope, a dozen lines up, and a second local of that name
+			--  shadowing it worked only by accident of the distance being
+			--  consumed before the shadow was declared.
+			--
+			--  See waterRunWorkable for why this samples the tile ABOVE the soil.
+			local runHead = tiles[1]
 
-			if targetEligible("water run " .. tostring(run.key), head, nil) then
+			if waterRunWorkable(run, runHead) then
+				sb.logInfo("PETPORT %s WATER dispatch: %s tile(s) of %s in run, "
+					.. "%s carried, from %s to %s",
+					stationUniqueId(), sb.printJson(#tiles), sb.printJson(#run.tiles),
+					sb.printJson(stack.count or 1), sb.printJson(tiles[1]),
+					sb.printJson(tiles[#tiles]))
+
 				return {
 					id = workId,
+					--  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
+					mediumVerified = true,
 					type = "water",
 					port = stationUniqueId(),
 					tiles = tiles,
@@ -8011,7 +8073,7 @@ local function waterWork()
 					previousMod = run.mod,
 					newMod = want.newMod,
 					tint = want.tint,
-					position = head
+					position = { runHead[1] + 0.5, runHead[2] + 1.5 }
 				}
 			end
 		end
@@ -8436,6 +8498,8 @@ local function replantWork()
 
 	return {
 		id = "replant:" .. key,
+		--  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
+		mediumVerified = true,
 		type = "replant",
 		port = stationUniqueId(),
 		target = key,
@@ -8477,7 +8541,15 @@ local function withdrawWaterWork()
 			local failure = self.workFailures[workId]
 			local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
 
-			if not backedOff and claimFree(workId)
+			--  BEFORE THE CRATE SCAN, because the crate is irrelevant if the
+			--  destination is not workable. waterWork approaches the run from
+			--  whichever end is nearer, so either end being workable is enough
+			--  to be worth fetching for; asking about both is what waterWork
+			--  itself will do when it picks the end.
+			local reachableEnd = waterRunWorkable(run, run.tiles[1])
+				or waterRunWorkable(run, run.tiles[#run.tiles])
+
+			if not backedOff and reachableEnd and claimFree(workId)
 			   and claimFree("water:" .. tostring(run.key)) then
 				local wanted = math.min(#run.tiles, WATER_CARRY)
 
@@ -8503,6 +8575,8 @@ local function withdrawWaterWork()
 
 								return {
 									id = workId,
+									--  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
+									mediumVerified = true,
 									type = "withdraw",
 									port = stationUniqueId(),
 									target = beacon.id,
@@ -8550,6 +8624,33 @@ local function withdrawWork()
 			local failure = self.workFailures[workId]
 			local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
 
+			--  A BACKED-OFF PLACE LEG BACKS OFF ITS FETCH LEG TOO.
+			--
+			--  The two halves carry different work ids, so they carried
+			--  different backoff entries, and a replant that had failed left its
+			--  withdraw completely eligible. Measured: a unit fetched one
+			--  oculemonseed for intent 2506,1184, could not place it, deposited
+			--  it back into the crate it came from, found its cargo empty, and
+			--  fetched the same seed again -- nine times in thirty seconds, one
+			--  cycle every three, until another port took the intent. The
+			--  withdraw leg never failed, so its own backoff never engaged; only
+			--  the leg it was fetching for had given up.
+			--
+			--  THE CLAIM CHECK BELOW ALREADY CONSULTS THIS KEY. Reading
+			--  "replant:"..key for claims and not for failures was the whole gap:
+			--  the code already knew the sibling leg existed and asked it only
+			--  half a question.
+			--
+			--  FETCHING IS NOT FREE. Manufacturing cargo for a leg that will not
+			--  run costs a round trip, blocks the single cargo slot, and -- since
+			--  deposit outranks nothing that could clear it -- puts the stack
+			--  straight back where it came from. Idling is the better failure.
+			local placeFailure = self.workFailures["replant:" .. key]
+			local placeBackedOff = placeFailure ~= nil
+				and (placeFailure["until"] or 0) > world.time()
+
+			if placeBackedOff then backedOff = true end
+
 			--  BOTH LEGS ARE CHECKED, and the first one is the fix for a
 			--  livelock rather than belt-and-braces.
 			--
@@ -8575,6 +8676,8 @@ local function withdrawWork()
 				if containerId ~= nil then
 					return {
 						id = "withdraw:" .. key,
+						--  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
+						mediumVerified = true,
 						type = "withdraw",
 						port = stationUniqueId(),
 						target = containerId,
@@ -8595,7 +8698,8 @@ local function withdrawWork()
 	--  way a dry unit is routed around rather than stalling the port. A player
 	--  who stops stocking a seed gets a bare tile, not a stuck network.
 	return nil, string.format(
-		"%s replant intent(s), none actionable (no seed in storage, or claimed)",
+		"%s replant intent(s), none actionable (no seed in storage, claimed, "
+		.. "or the replant leg has backed off)",
 		wanted)
 end
 
@@ -8776,6 +8880,8 @@ local function medicWork()
     --  inherited rather than chosen -- see todo below if it ever gets renamed.
     return {
       id = fetchId,
+      --  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
+      mediumVerified = true,
       type = "withdraw",
       port = stationUniqueId(),
       target = containerId,
@@ -8864,12 +8970,12 @@ local function restockDeliverWork()
             and world.containerItemsCanFit(beacon.id, carried) or nil
 
           if fits == nil or fits > 0 then
-            local stand = servicePointNear("request crate " .. tostring(beacon.id),
+            local stand, standWhy = servicePointNear("request crate " .. tostring(beacon.id),
               beacon.id, beacon.position, 4)
 
             if stand == nil then
-              sb.logInfo("PETPORT %s restock delivery to %s SKIPPED: no standable spot within 4 tiles of %s",
-                stationUniqueId(), sb.printJson(beacon.id),
+              sb.logInfo("PETPORT %s restock delivery to %s SKIPPED: %s of %s",
+                stationUniqueId(), sb.printJson(beacon.id), tostring(standWhy),
                 sb.printJson(beacon.position))
             else
               sb.logInfo("PETPORT %s delivering %s x%s to request crate %s (has %s of %s)",
@@ -8888,6 +8994,8 @@ local function restockDeliverWork()
                 --  strand them mid-shuffle.
                 id = "restockput:" .. tostring(beacon.id)
                   .. ":" .. tostring(request.item) .. "@" .. stationUniqueId(),
+                --  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
+                mediumVerified = true,
                 type = "deposit",
                 target = beacon.id,
 
@@ -9080,6 +9188,8 @@ local function restockFetchWork()
 
                 return {
                   id = workId,
+                  --  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
+                  mediumVerified = true,
                   type = "withdraw",
                   port = stationUniqueId(),
                   target = source.id,
@@ -9292,12 +9402,12 @@ local function tidyWork()
             elseif not roomFor then
               full = full + 1
             else
-              local stand = servicePointNear("crate " .. tostring(source.id),
+              local stand, standWhy = servicePointNear("crate " .. tostring(source.id),
                 source.id, source.position, 4)
 
               if stand == nil then
-                sb.logInfo("PETPORT %s tidy source %s SKIPPED: no standable spot within 4 tiles of %s",
-                  stationUniqueId(), sb.printJson(source.id),
+                sb.logInfo("PETPORT %s tidy source %s SKIPPED: %s of %s",
+                  stationUniqueId(), sb.printJson(source.id), tostring(standWhy),
                   sb.printJson(source.position))
               else
                 sb.logInfo("PETPORT %s tidying %s x%s out of %s (slot %s)",
@@ -9307,6 +9417,8 @@ local function tidyWork()
 
                 return {
                   id = workId,
+                  --  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
+                  mediumVerified = true,
                   type = "tidy",
                   target = source.id,
                   item = misfit.name,
@@ -9532,12 +9644,12 @@ local function drainWork()
                           and (failure["until"] or 0) > world.time()
 
                         if not backedOff and claimFree(workId) then
-                          local stand = servicePointNear("crate " .. tostring(source.id),
+                          local stand, standWhy = servicePointNear("crate " .. tostring(source.id),
                             source.id, source.position, 4)
 
                           if stand == nil then
-                            sb.logInfo("PETPORT %s drain source %s SKIPPED: no standable spot within 4 tiles of %s",
-                              stationUniqueId(), sb.printJson(source.id),
+                            sb.logInfo("PETPORT %s drain source %s SKIPPED: %s of %s",
+                              stationUniqueId(), sb.printJson(source.id), tostring(standWhy),
                               sb.printJson(source.position))
                           else
                             sb.logInfo("PETPORT %s draining %s x%s out of %s (slot %s) for %s at %s -- network holds %s, threshold %s, machine input room %s",
@@ -9560,6 +9672,8 @@ local function drainWork()
                               --  log can tell housekeeping from feeding a
                               --  machine, which are very different things to
                               --  find a unit doing.
+                              --  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
+                              mediumVerified = true,
                               type = "drain",
                               target = source.id,
                               item = rule.item,
@@ -9823,12 +9937,12 @@ local function fuelWork()
                 and (failure["until"] or 0) > world.time()
 
               if not backedOff and claimFree(workId) then
-                local stand = servicePointNear("machine " .. tostring(machine.id),
+                local stand, standWhy = servicePointNear("machine " .. tostring(machine.id),
                   machine.id, machine.position, 4)
 
                 if stand == nil then
-                  sb.logInfo("PETPORT %s fuel source %s SKIPPED: no standable spot within 4 tiles of %s",
-                    stationUniqueId(), sb.printJson(machine.id),
+                  sb.logInfo("PETPORT %s fuel source %s SKIPPED: %s of %s",
+                    stationUniqueId(), sb.printJson(machine.id), tostring(standWhy),
                     sb.printJson(machine.position))
                 else
                   sb.logInfo("PETPORT %s collecting %s %s from machine %s",
@@ -9837,6 +9951,8 @@ local function fuelWork()
 
                   return {
                     id = workId,
+                    --  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
+                    mediumVerified = true,
                     type = "fuel",
                     target = machine.id,
                     item = held.name,
@@ -9928,12 +10044,12 @@ local function compactWork()
           local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
 
           if not backedOff and claimFree(workId) then
-            local stand = servicePointNear("crate " .. tostring(source.id),
+            local stand, standWhy = servicePointNear("crate " .. tostring(source.id),
               source.id, source.position, 4)
 
             if stand == nil then
-              sb.logInfo("PETPORT %s compaction of %s SKIPPED: no standable spot within 4 tiles of %s",
-                stationUniqueId(), sb.printJson(source.id),
+              sb.logInfo("PETPORT %s compaction of %s SKIPPED: %s of %s",
+                stationUniqueId(), sb.printJson(source.id), tostring(standWhy),
                 sb.printJson(source.position))
             else
               sb.logInfo("PETPORT %s compacting %s: %s item(s) split across more slots than needed",
@@ -9946,6 +10062,8 @@ local function compactWork()
                 --  fine and is how "tidy" already works: its dispatch falls
                 --  through to the generic walk-and-stand path. The port does
                 --  the container work when the arrival is reported.
+                --  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
+                mediumVerified = true,
                 type = "compact",
                 target = source.id,
                 position = stand,
@@ -10264,13 +10382,31 @@ local function findWork()
     return reason .. "; " .. optedOut
   end
 
+  --  BOTH LEGS OF A TWO-LEG JOB, NOT WHICHEVER CAME FIRST.
+  --
+  --  Replanting and watering each run as a fetch rung and a place rung, and
+  --  this used to join them with `or`. The fetch reason is set on essentially
+  --  every scan, so the place reason was unreachable -- which is how a port
+  --  spent thirty seconds withdrawing one oculemonseed and depositing it back
+  --  into the crate it came from while its summary line said only "2 replant
+  --  intent(s), none actionable", the FETCH rung's reason, about a fetch that
+  --  was succeeding every time. The rung that was refusing never spoke.
+  --
+  --  They answer different questions -- "can I place what I am holding" versus
+  --  "can I fetch what I am missing" -- so an `or` between them was wrong even
+  --  before it hid anything.
+  local function bothLegs(place, fetch, quiet)
+    if place ~= nil and fetch ~= nil then return place .. ", and " .. fetch end
+    return place or fetch or quiet
+  end
+
   --  Both reasons, because "no drops in network coverage" alone reads as though
   --  the port never looked at the farm.
   if noCrop ~= nil then
     return nil, withOptOut(tostring(why or "collection not run")
       .. "; " .. tostring(noCrop)
-      .. "; " .. tostring(noFetch or noPutBack or "no replant work")
-      .. "; " .. tostring(noWet or noFetchWater or "no watering work")
+      .. "; " .. tostring(bothLegs(noPutBack, noFetch, "no replant work"))
+      .. "; " .. tostring(bothLegs(noWet, noFetchWater, "no watering work"))
       .. "; " .. tostring(noBeast or "no animal work")
       .. "; " .. tostring(noStock or "no restock work")
       .. "; " .. tostring(noFuel or "no fuel to collect")

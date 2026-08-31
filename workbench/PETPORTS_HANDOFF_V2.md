@@ -42,101 +42,101 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-08-31 (a session that was entirely pathing, and closes it)
+### What is built, as of 2026-08-31 (dispatch eligibility, and five bugs of one shape)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-ONE SUBJECT, START TO FINISH: keeping a chassis in the medium it belongs in, and
-then agreeing on where it lives. It began as a two-line fix and took six test
-rounds. **EVERY BUG CLOSED THIS SESSION WAS OURS, NOT THE ENGINE'S**, in each
-case after an engine cause had been suspected first. That is the single most
-useful thing to carry forward.
+ONE SUBJECT: whether a task should be offered to the unit that is holding it.
+todo.dispatch.eligibility was priority 1 and is CLOSED; it now stands as
+`arch.dispatch.eligibility`. It took six test rounds and the fix was fifteen
+lines; the other five rounds were bugs the fix exposed,
+every one of them a variant of the same mistake -- **ASKING A WHOLE-FOOTPRINT
+QUESTION ABOUT A TARGET, OR A ONE-POINT QUESTION ABOUT A BODY.** That distinction
+is the durable thing from this session and it is written up as
+`arch.dispatch.anytile`.
 
 ---
 
-**AN AQUATIC UNIT NO LONGER LEAVES THE WATER.** Verified against a deliberately
-adversarial rig -- an ocean planet with a ten-thick wall of drain objects holding
-an air gap open, which is a buildable steady state and not a transient. It was
-TWO holes and both were needed: the blind-steer fallback tested medium at the
-DESTINATION ONLY and put the unit in the air; the escape clause in plan
-validation then licensed any plan that ended in water, including one crossing to
-a different pool. `arch.pathing.mediumenforcement`, `dead.pathing.escapeclause`.
+**A CHASSIS IS NO LONGER OFFERED WORK IT CANNOT DO.** `arch.dispatch.eligibility`.
+Seventeen call sites across fifteen work types, all asking one predicate that is
+the same ladder the environment gate runs. Verified in game: an aquatic unit at a
+dry farm reports `0 backed off, 0 gone, 12 in a medium this chassis cannot work
+in` and stays home, where it used to dispatch, fail, and stutter-step the leash on
+a 2.9-second cycle.
 
-**THE ESCAPE CLAUSE IS GONE, NOT BOUNDED.** A displaced unit plans nothing;
-`petports_outOfMedium` reports it and the port's `mediumCheck` re-homes after two
-polls. Improvising a route back was, twice, a licence to go somewhere else.
+**THE PREDICATE WAS ALREADY WRITTEN.** `petports_habitatVerdict` encodes every
+rule this needed. The function that LOOKED right -- `petports_targetAllowed` --
+would have refused an amphibious unit every submerged target, because it reads
+`petports_media()`, whose `swim` defaults false, and the amphibious chassis
+declares neither flag. It had never run for a walker in its life.
 
-**VALIDATION WALKS THE ROUTE THE UNIT FLIES.** `aimAhead` is shared between mover
-and validator, so a contour detour that would be string-pulled away is no longer
-grounds for refusing an otherwise submerged crossing.
+**A TARGET NEEDS ANY TILE; A BODY NEEDS EVERY TILE.** `arch.dispatch.anytile`.
+Running the home ladder over a half-submerged shipping container refused it to
+both the swimmer and the flyer while the amphibious unit carried the entire base.
+Running the body ladder over one point cleared a flyer to hover on the waterline
+with its bottom half submerged, and it slid under and stuck. The two failures
+look unrelated and are the same sentence with the quantifier flipped.
 
-**AMPHIBIOUS UNITS RESPECT SUBMERGED PLATFORMS.** `fact.pathing.platformfloor` --
-`world.pointTileCollision` does not report platforms by default, so the descend
-guard was discarding every candidate `findGroundPosition` handed it. 27090
-rejections and a unit that never moved, against one resolve and twenty-four tiles
-in 3.6 seconds after.
+**THE MEDIUM AT A BODY IS THREE-VALUED NOW.** `arch.pathing.mediummixed`.
+`petports_mediumAt` ANDed its rows into one flag, so it answered "am I ENTIRELY
+in water" and called everything else air. `mixed` is refused for every free
+mover -- there is no chassis a waterline is right for.
 
-**THERE IS ONE RESOLVER FOR "WHERE DOES A UNIT STAND" AND THE PORT ASKS IT.**
-`arch.pathing.oneanchor`. Three functions answered that question and no two
-agreed, so a unit's own tether and the port's recall aimed at different points
-computed by different code. Verified in game: the recall dispatched to the exact
-point the tether resolves to.
+**THE PORT VOUCHES FOR A FOOTPRINT THE UNIT CANNOT SEE.** `arch.dispatch.vouch`.
+`petports_flyPointNear`'s single-point veto is load-bearing and was NOT deleted;
+it now takes `mediumVerified` from the one caller that has run the footprint
+ladder. Everything that cannot vouch keeps the guard.
 
-**WHERE A CHASSIS TETHERS IS AUTHORED.** `petports_portTetheringLocationType` --
-`port`, `floor` or `ceiling`. Aquatic and flyer take `port`; the walkers take
-`floor`. `ceiling` is declared and NOT built, for a planned chassis.
-
-**`fact.pathing.watercrossed` RESOLVED IN FAVOUR OF THE RECORD.** The 2026-08-30
-observation that looked like it disproved `dead.locomotion.pelagic` did not:
-every crossing plan STARTED IN AIR, where air-to-water routing is legal, and our
-own fallback had put the unit there. `dd.port.envuniform`'s premise is restored.
-
-**PATHING IS CLOSED FOR NOW, DELIBERATELY -- `dd.pathing.enginelimits`.** What
-remains is mostly vanilla's, is not reliably reproducible, and in at least one
-shape is not reachable from Lua: a poison clump inside a body of water cannot be
-routed around, because `swimCost` is a scalar over all liquid and validation can
-only refuse. Fixing that means rebuilding the pathfinder to work around the
-pathfinder. **THE NEXT SESSION IS CONTENT** -- the remaining backlog between here
-and 1.0. Pathing reopens on a reproducible case with a lever on our side of the
-C++ boundary, and not otherwise.
+**A TWO-LEG JOB MUST ASK ONE QUESTION.** `arch.dispatch.twolegs`. Three separate
+instances found in one session -- replant, medic, watering. Each had a fetch leg
+and a place leg with different work ids, so a refused place leg left its fetch
+leg fully eligible and the unit hauled cargo it could not put down.
 
 ---
 
 **KNOWN OPEN, IN THE ORDER THEY WILL BITE:**
 
-- `todo.dispatch.eligibility` -- the port dispatches targets the chassis cannot
-  service. Presents as a leash that stutter steps on a 2.9-second cycle and reads
-  as a pathing fault. The latest log adds a second face: five harvest failures on
-  crops that resolved fine and simply could not be REACHED, so eligibility needs
-  reachability and not only chassis medium.
-- `arch.pathing.originnudge` -- 42 of 42 A* failures in one log reported the
-  origin node as tile-centre invalid. Untouched all session, and the reason the
-  plan-level medium check has still never been the thing that bit.
-- `todo.pathing.leashreplan` -- every resumption of the leash pays a full cold
-  search. Fixing eligibility hides this rather than fixing it.
-- The medic path through `columnsFor` is unexercised: `MEDIC_REACH` 6 is the only
-  caller wanting a wider range than the default, and no patients existed in the
-  verifying session.
-- `todo.pathing.standpointchoice` and `todo.port.nostandpoint` both survive but
-  shrink -- they are properties of `findStandingPoint`, now only reachable with
-  no unit socketed.
+- An amphibious unit walks off a submerged ledge and sinks instead of
+  transitioning to swimming. **OBSERVED BY THE AUTHOR 2026-08-31, NOT YET A
+  BACKLOG ENTRY.** Probably the source of most of `todo.dispatch.sourcebackoff`'s
+  nine measured failures.
+- `todo.dispatch.sourcebackoff` -- backoff is keyed by work id, but an
+  unreachable SOURCE is a property of the crate. One bad crate is retried once
+  per outstanding run.
+- `arch.pathing.originnudge` -- untouched again this session.
+- `todo.pathing.leashreplan` -- survives, and eligibility no longer hides it,
+  because the leash is no longer being interrupted every 2.9 seconds.
+- The medic path through `columnsFor` is STILL unexercised. No patients existed
+  in any verifying session this week.
+- `todo.pathing.standpointchoice` and `todo.port.nostandpoint` unchanged.
 
 **Debug flags wanting a release pass** -- `TASK_DEBUG`, `VENT_DEBUG`, `DEBUG` in
 all four panes, `FLY_POINT_DEBUG`, `FLY_TELEMETRY`, `CARGO_TRACE` are ON.
 `DRAW_PLAN` and `PETPORTS_FILTER_DEBUG` are OFF and should stay off. Deferred to
-a release preflight rather than trimmed piecemeal. **TASK_DEBUG is the loud one:
-the descend diagnostics alone were 27090 lines in one failing log.**
+a release preflight rather than trimmed piecemeal.
+
+**BUILD STAMPS AT THE END OF THIS SESSION.** `petports_petport.lua` at
+`2026-08-31k the vouch rides on the task`; `petports_contract.lua` at
+`2026-08-31e half in the water is out`; `petportsTaskAction.lua` at
+`2026-08-31d withdraw resolves its approach point`. `petports_habitat.lua` has no
+stamp and changed alongside them.
+
+**THE LAST CHANGE OF THE SESSION IS UNTESTED IN GAME.** `31k` / `31d` closes the
+unit-side half of `arch.dispatch.vouch` and was written after the last verifying
+log. Everything above it is verified; this is not.
 
 **THE WORKING COPY IS COMMITTED THROUGH THE CHOREOGRAPHY WORK.** The environment
-gate, the first modules, and all of this session sit uncommitted on top of it.
+gate, the first modules, and both of the last two sessions sit uncommitted on top
+of it.
 
 **LINE ENDINGS ARE NOISE IN `git status`, AND THE TREE IS MIXED.** CRLF:
 `petportsTaskAction.lua`, `petports_contract.lua`. LF: `petports_flyapproach.lua`,
 `petports_petport.lua`. `petports_habitat.lua` is the only Lua file indented with
-TABS. Edits must preserve what they find; a `.gitattributes` would stop a real
-diff being buried in the noise.
+TABS -- and `petports_petport.lua` is MIXED BY REGION, tabs in the farming
+generators and two spaces elsewhere. Edits must preserve what they find at the
+point they land, not what the file mostly uses.
 
 ## ARCHITECTURE
 
@@ -2751,6 +2751,207 @@ The port's handler just counts. It is the documented future home of the
 stuck-cargo drop: cargo lives on petData, so the port is the only party that
 can ever decide "drop it" versus "pat".
 
+### Dispatch eligibility -- one predicate, seventeen call sites
+`arch.dispatch.eligibility` -- see also `arch.dispatch.anytile`, `arch.pathing.mediumenforcement`, `dd.port.envpresence`
+
+**BUILT AND VERIFIED IN GAME 2026-08-31.** Closes todo.dispatch.eligibility
+(retired), which was priority 1.
+
+The port used to filter candidates on ripeness, claims, backoff and existence and
+never ask whether THIS CHASSIS could service one. Nine of fifteen work types had
+a reach test; six had nothing at all.
+
+**THE QUESTION IS ASKED PORT-SIDE, AT NO CROSS-ENTITY COST.**
+`petports_habitatCapabilitiesForType` caches on `root.monsterParameters` per
+monsterType, so eligibility costs one `world.liquidAt` per sampled tile and no
+`callScriptedEntity`. That is what makes it affordable INSIDE the candidate loop
+rather than on the winner -- which matters, because refusing the winner declines
+the whole rung and a swimmer with one dry crop nearest and four submerged behind
+it would harvest nothing.
+
+**IT READS THE ITEM, NOT THE UNIT.** A port whose environment refuses the spawn
+still holds the item and still knows the chassis, which is the same argument that
+moved the habitat ladder into `petports_habitat.lua` in the first place. Modules
+are part of the question -- `petportModuleLiquids` is threaded exactly as
+`environmentCheck` threads it, or a poison-immune unit lives at a poison pool and
+is refused every target in it.
+
+**OBJECTS ARE SAMPLED BY `world.objectSpaces`; EVERYTHING ELSE BY ONE TILE.**
+Crops, crates and machines are all objects, so one call answers for all of them.
+Item drops, livestock and patients are points, and a point cannot straddle
+anything.
+
+**MOVING TARGETS GET THE REACH TEST AND NOT THE MEDIUM TEST.** A patient or a
+Mooshi has moved by the time the unit arrives, so a medium verdict about the
+dispatch-time position buys nothing. `standingPointNear` already answers
+per-chassis for free -- free movers resolve through `petports_flyPointNear`,
+walkers through the ground search. `animalWork` was the only moving-target
+generator without it.
+
+**`return` AND `diag` ARE EXEMPT.** A medium gate on the leash strands a
+displaced unit, which is the failure `dead.pathing.escapeclause` closed by
+re-homing instead.
+
+**THE TILE ABOVE THE SOIL, FOR TILE WORK.** Tilled soil is solid foreground, so
+`world.liquidAt` over it always reads zero and a check aimed there passes every
+chassis every time -- and worse, reports "air", which is a REFUSAL for an aquatic
+unit. Watering and replanting both sample `+1.5`. Replanting originally sampled
+`+0.5` and would have turned away the only chassis that could work a submerged
+farm.
+
+**IT IS A VISIBLE BEHAVIOUR CHANGE AND THE PANE STILL DOES NOT SAY SO.** A unit
+that used to fail noisily at a dry farm now ignores it silently. Until the pane
+explains it, the `SKIPPING` log line is the only place a player chasing a still
+pet can find out why.
+
+### A target needs ANY tile; a body needs EVERY tile
+`arch.dispatch.anytile` -- see also `arch.dispatch.eligibility`, `arch.pathing.mediummixed`, `dd.port.envuniform`
+
+**THE SINGLE MOST USEFUL SENTENCE FROM 2026-08-31.** Two bugs that look unrelated
+are this one sentence with the quantifier flipped, and both shipped in the same
+session because the distinction had never been named.
+
+**RUNNING THE BODY RULE OVER A TARGET.** `petports_habitatVerdict` asks "can this
+chassis LIVE in all of this", which is right for a port -- the unit must occupy
+its whole footprint, and `MIXED_MEDIUM` is a real refusal there. Applied to a
+half-submerged shipping container it refused the crate outright to the aquatic
+unit AND the flyer, while the amphibious one carried the whole base. A crate does
+not have to be lived in. It has to be TOUCHED, and each of them could touch an
+end. `petports_habitatAnyPointSuits` runs the verdict per tile and accepts on the
+first yes.
+
+**RUNNING THE TARGET RULE OVER A BODY.** `petports_flyPointNear` vetoes on
+`petports_targetAllowed`, which samples ONE point. For a straddling object that
+point is the origin tile, which sits in the flooded half, so it refused the flyer
+and said "no position near it can help" while five open air tiles sat directly
+above it inside the search radius.
+
+**THE TELL IS WHICH THING THE QUESTION IS ABOUT.** A position the unit's body
+will occupy needs every tile to agree. A thing in the world the unit will reach
+toward needs one tile to agree. Both ladders exist and both are correct; picking
+the wrong one produces a refusal that is a correct answer to a question nobody
+asked.
+
+**IT IS NOT SYMMETRIC BETWEEN HOME AND WORK.** The port's environment gate still
+runs the whole-footprint ladder unchanged, and must -- see `dd.port.envuniform`,
+whose reasoning is untouched and now explicitly scoped to a home.
+
+### The port vouches for a footprint the unit cannot see
+`arch.dispatch.vouch` -- see also `arch.dispatch.anytile`, `arch.pathing.oneanchor`
+
+**THE VETO WAS NOT DELETED, AND THE AUTHOR'S FIRST INSTRUCTION WAS TO DELETE IT.**
+Its header records the bug it exists for: a unit that hovered under a crate it
+could not reach and reported the work done. Removing it hands that bug back to
+`medicWork` and `animalWork`, which call the same resolver deliberately WITHOUT a
+port-side medium check because their targets move.
+
+**THE INFORMATION IS ON THE WRONG SIDE OF THE ENTITY BOUNDARY.** The veto cannot
+be made correct from a position alone -- it needs the target's extent, and only
+the port has that. So the port passes `mediumVerified` through
+`world.callScriptedEntity`, and the veto stands down for it:
+
+    servicePointNear  ->  standingPointNear  ->  petports_standingPointNear
+                      ->  petports_standablePoint / standableNear
+                      ->  petports_flyPointNear
+
+**EXACTLY ONE CALLER VOUCHES**, and only because `targetSuits` has just run the
+footprint ladder on the line above. Passing true anywhere else is a lie that
+costs a hovering unit. A pre-flight check asserts the chain is intact end to end
+and that the count of vouching callers is one.
+
+**THE VOUCH ALSO RIDES ON THE TASK, AND THAT IS A SECOND HALF THE FIRST ROUND
+MISSED.** The port vouches on ITS OWN query and then dispatches a raw position;
+the unit re-resolves that on arrival through `approachTargetFor` with no vouch,
+so the veto refused the crate the port had just cleared. Measured: **1122**
+unit-side `flypoint DECLINED [2553,1147] outright` in one session against one
+container. `mediumVerified` is now set by the generator that ran the ladder and
+read by `approachTargetFor`, so it is absent on exactly the four types that never
+ran one -- `animal`, `medic`, `return`, `diag` -- and those keep the veto.
+
+**AND A THIRD HALF, WHICH IS THE ONE WORTH REMEMBERING.** Making the resolve
+SUCCEED did not make anything USE it. `withdraw` was not in the list of task
+types that take a resolved approach point, because that list was written when
+every raw-position task was a drop or a crop; the four withdraw generators
+dispatch `world.entityPosition(containerId)`, an ORIGIN, which for a
+half-submerged crate is in the flooded half. So the flyer approached a position
+it cannot occupy and the progress watchdog struck it. **BOTH EDITS WERE NEEDED
+AND EITHER ALONE LOOKS LIKE A COMPLETE FIX**, which is why the verification pass
+that found this asked "is it applied to the medic fetch too" rather than "does it
+work".
+
+**THE MEDIC FETCH WAS THE QUESTION THAT FOUND IT.** Its fetch leg routes through
+`containerWithSeed`, so it was covered port-side from the start -- and it shares
+the unit-side gap with every other withdraw, which is what the question exposed.
+
+### The medium at a body is three-valued
+`arch.pathing.mediummixed` -- see also `arch.dispatch.anytile`, `arch.pathing.mediumenforcement`
+
+`petports_mediumAt` walks the body's tile rows and used to AND them into a single
+`submerged` flag, so it answered "is ALL of me in water" and reported everything
+else as `air`. A body straddling a waterline is not air.
+
+**MEASURED AT THE CONTAINER, 2026-08-31.** A 1.6-tall body centred at y 1149.8
+spans rows 1149 and 1150. The flyer's own search proves row 1149 is flooded and
+row 1150 is not:
+
+    #2  grid [2553,1147.8]  rows 1147+1148  -> submerged, refused
+    #10 grid [2553,1148.8]  rows 1148+1149  -> submerged, refused
+    #24 grid [2553,1149.8]  rows 1149+1150  -> ACCEPTED
+
+It parked there with half of itself under water, took buoyancy on the wet half
+and none on the dry, and slid under. After: `#24` is refused as `mixed` and the
+search accepts `[2553,1150.8]`, a full tile clear.
+
+**`mixed` IS REFUSED BEFORE THE FLY/SWIM SPLIT.** There is no chassis a waterline
+is right for -- a flyer sinks and a swimmer hauls itself against the surface.
+
+**WALKERS ARE UNAFFECTED.** `petports_mediumAllows` returns early for a gravity
+chassis, and that early return sits below the `forbidden` check. Wading stays
+legal.
+
+**TWO SAMPLERS DISAGREEING ABOUT ONE COORDINATE WAS THE VISIBLE SYMPTOM.** The
+box test accepted `[2553,1149.8]` and forty lines later the point test declined
+the same coordinate. Both were self-consistent; between them they cleared a
+position neither would have picked alone.
+
+**THE THRESHOLD IS STILL `PETPORTS_SUBMERGED_FILL`.** A row at half fill counts
+as dry, so a body in shallow water still reads as air. Unchanged, and NOT known
+to be right -- widening it to "any liquid at all" would ground a flyer in rain.
+If a unit is seen dragging through shallows, that is the line.
+
+### A two-leg job must ask one question
+`arch.dispatch.twolegs` -- see also `arch.dispatch.eligibility`, `todo.dispatch.sourcebackoff`
+
+**THREE INSTANCES FOUND IN ONE SESSION, ALL THE SAME SHAPE.** A fetch leg and a
+place leg carry different work ids, therefore different claims and different
+backoff entries, so a place leg that refuses leaves its fetch leg fully eligible.
+The unit hauls cargo it cannot put down, deposits it back where it came from, and
+starts over.
+
+    withdrawWork      / replantWork        seed
+    medicWork fetch   / medicWork deliver  dose
+    withdrawWaterWork / waterWork          liquid
+
+**MEASURED ON THE SEED, 2026-08-31.** Nine withdraws and twelve deposits of one
+`oculemonseed` into the crate it came from, one cycle every three seconds, until
+another port took the intent.
+
+**BACKOFF COUPLING IS NOT ENOUGH ON ITS OWN.** `withdrawWork` now reads the
+replant leg's `workFailures`, which it could always have done -- it already
+consulted `"replant:"..key` for CLAIMS and not for failures, asking the sibling
+leg half a question. But a leg refused on MEDIUM records no failure at all, so
+watering needed the stronger form: `waterRunWorkable` is one function BOTH legs
+call, and the fetch leg asks it before it scans crates.
+
+**THE MEDIC'S FETCH LEG WAS UNCHECKED WHILE ITS DELIVERY LEG WAS CHECKED**, in
+the same generator, on the same trip. A medic could verify it could reach a
+patient and then be sent to a crate it could not. Both legs now route through
+`containerWithSeed`, which skips a source it cannot reach and keeps looking.
+
+**A REASON STRING IS PART OF THE FIX.** `containerWithSeed` returning nil no
+longer means "the network has none"; it means "none this unit can get to", and
+the medic's decline text had to stop asserting the stronger claim.
+
 ### Medium enforcement -- four gates, and validation must model the mover
 `arch.pathing.mediumenforcement` -- see also `dd.pathing.coststeering`, `fact.pathing.edgespan`, `dead.pathing.escapeclause`, `arch.unit.exitpaths`
 
@@ -3806,6 +4007,14 @@ full in `petports_habitat.lua` AND `petports_contract.lua`. Correcting one would
 have left the disproven version standing above a function that no longer did it
 -- prose drifting exactly the way the shared module exists to stop code drifting.
 Only the module states the rule now.
+
+**SCOPED 2026-08-31, NOT SUPERSEDED. THIS IS A RULE ABOUT A HOME.** Everything
+above stands for a port, where the unit MUST occupy the whole footprint. It was
+then applied to dispatch targets, where it is wrong -- a crate is touched, not
+inhabited -- and it refused a half-submerged shipping container to both the
+swimmer and the flyer. Targets run `petports_habitatAnyPointSuits` instead. See
+`arch.dispatch.anytile`, which is the distinction this entry was missing rather
+than a correction to it.
 
 ### Proliferation is intended
 `dd.port.proliferation`
@@ -8296,54 +8505,54 @@ Invisible in practice; if it ever shows in a log or profiler, gate re-attempts
 on the reagent slot's count changing. Three lines, filed rather than done
 because unmeasured cost does not buy code.
 
-### Dispatch does not consider the chassis, and it costs a stutter step
-`todo.dispatch.eligibility` -- see also `arch.pathing.mediumenforcement`, `todo.pathing.leashreplan`
+### An unreachable source is backed off per work item, not per source
+`todo.dispatch.sourcebackoff` -- see also `arch.dispatch.twolegs`, `arch.dispatch.eligibility`
 
-**MEASURED 2026-08-31 -- PRIORITY 1. It was named in `status` for a session as
-"not yet a backlog entry"; it now has a number attached and a visible symptom.**
+**MEASURED 2026-08-31 -- BACKLOG, LOW PRIORITY. It self-limits as runs get
+served, so it costs trips and not correctness.**
 
-The port filters farmables on ripeness, claims, backoff and existence. It never
-asks whether THIS CHASSIS can reach one. An aquatic unit is therefore dispatched
-to dry crops, declines at `petports_flyPointNear`, and fails the task two seconds
-later on the settle grace.
+Nine `fetchwater` failures in one session, every one `no net progress`, every one
+heading for `[2553,1147]` -- one crate -- across five distinct work ids:
 
-**THE SYMPTOM IS NOT A WASTED TRIP, IT IS A LEASH THAT NEVER FINISHES.** With
-five ripe crops rotating against a 10-second per-target backoff, one is always
-eligible, and the cycle is exact:
+    fetchwater:2500,1183   fetchwater:2524,1183   fetchwater:2500,1162
+    fetchwater:2500,1157   fetchwater:2500,1152
 
-    11:54:56.204  dispatched harvest:158
-    11:54:58.153  failed: no standable position near [2500,1158] after 2s
-    11:54:58.155  entering task state for leash      <- fresh pather, cold A*
-    11:54:59.126  dispatched harvest:187
-    11:55:01.205  failed
-    11:55:01.206  entering task state for leash      <- fresh pather, cold A*
+`self.workFailures` is keyed by work id, but "this crate cannot be reached" is a
+property of the CRATE. Each dry run therefore gets its own ladder against the
+same unreachable source, and with a dozen runs outstanding the ladder never
+bites. Same shape as `arch.dispatch.twolegs` one level up: the thing that failed
+and the thing being backed off are not the same object.
 
-Every 2.9 seconds. The unit got roughly one second of homeward travel per cycle
-and re-planned the whole way home between each: eight accepted plans marching
-2480 -> 2477 -> 2488 -> 2499 -> 2511 -> 2522, of 57, 48, 36, 25, 14 and 3 edges.
-It reads in game as stutter stepping and looks like a pathing fault. It is not.
+**ELIGIBILITY CANNOT CLOSE THIS.** `servicePointNear` passed the crate -- medium
+fine, standing point fine. What failed was the route, which
+`arch.dispatch.union` deliberately does not pay for per candidate. The lever is
+the backoff key, not the filter.
 
-**THE PORT ALREADY KNOWS HOW TO ASK.** Containers get
-`if standingPointNear(crate.position, 4) == nil then` skip; medic patients get
-the same with `MEDIC_REACH`. Farmables and animals were never given it.
+**THE ATTRIBUTION ABOVE WAS WRONG AND IS CORRECTED HERE.** This entry first
+blamed the amphibious ledge fault. It was not that: ALL NINE failures belong to
+the FLYER's port and none to the amphibious one, and the cause was
+`arch.dispatch.vouch`'s second half -- the unit was approaching the container's
+raw submerged origin because `withdraw` did not resolve an approach point. The
+nine failures are therefore already fixed, and this entry now has NO measurement
+behind it. **IT IS KEPT AS A REASONED CONCERN, NOT AN OBSERVED FAULT**, and
+should be closed if the next log does not reproduce it.
 
-**DELIBERATELY NOT FIXED AS A THIRD COPY.** Bolting a per-chassis check onto
-`harvestWork` would be the third spelling of one question. The intended shape is
-network-wide eligibility filtering across all units, which subsumes all three
-call sites and also covers the mirror case -- a flyer dispatched to a submerged
-container.
-
-**IT WILL BE A VISIBLE BEHAVIOUR CHANGE.** An aquatic unit will ignore a dry farm
-promptly and silently rather than failing at it noisily. That is correct, and
-`petports_targetAllowed` already records that it belongs in the aquatic item
-description -- but nothing in the pane says so today.
+**THE LESSON IS THE ATTRIBUTION, NOT THE ENTRY.** Two faults were live in the
+same log -- a ledge fault the author had seen with his own eyes, and this one --
+and the seen one absorbed the blame for failures it had nothing to do with. The
+per-port split was one `grep -o | awk | sort | uniq -c` away and was not run
+until the next session asked a different question.
 
 ### The leash re-searches the whole way home on every resumption
-`todo.pathing.leashreplan` -- see also `todo.dispatch.eligibility`, `arch.pathing.originnudge`
+`todo.pathing.leashreplan` -- see also `arch.dispatch.eligibility`, `arch.pathing.originnudge`
 
 **OBSERVED 2026-08-31 -- BACKLOG, NO PRIORITY SET. Recorded separately from
-`todo.dispatch.eligibility` because fixing that one HIDES this one rather than
-fixing it.**
+todo.dispatch.eligibility (retired, built as `arch.dispatch.eligibility`) because
+fixing that one HIDES this one rather than fixing it.**
+
+**STILL OPEN AFTER ELIGIBILITY SHIPPED, AS PREDICTED.** The interruptions are
+gone, so the symptom is gone and the cost is not. Nothing here has been
+measured since.
 
 Every entry into the task state calls `freshPather`, which builds a new
 `PathMover` and starts a cold A* search. That is correct and deliberate --
@@ -8686,6 +8895,21 @@ whatever the search lands on.
 `petports_paneheck.py` now catches all three shapes -- undefined constants,
 undefined calls, and block balance -- and balance is checked FIRST because it is
 the only one that catches a file the engine cannot parse.
+
+**SECOND INSTANCE 2026-08-31, AND THE RULE WAS ALREADY WRITTEN HERE.** Moving a
+helper above its first caller by index slicing landed one character inside a
+comment marker and ate a dash from two lines. One became `---  CAN THIS...`,
+which is silent. The other became `-  Sweep a dry run...`, **which is a parse
+error, not a comment** -- that file would not have loaded. Block balance does not
+catch it, and neither did any check in place at the time.
+
+**A LINE STARTING WITH A SINGLE DASH IS NOW A PRE-FLIGHT FINDING.** Cheap, exact,
+and it catches both halves of that failure -- the fatal one and the silent one.
+Worth folding into `petports_luacheck.py`.
+
+**THE SHAPE TO NOTICE: A SLICE THAT LANDS OFF BY ONE IS NOT A BAD MATCH, IT IS A
+GOOD MATCH AT THE WRONG OFFSET.** `str_replace` has no offset to be wrong about.
+Every rule in this entry has now been learned twice.
 
 ### Logging discipline, learned the hard way
 `proc.tooling.logging`

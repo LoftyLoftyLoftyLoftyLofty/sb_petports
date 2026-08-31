@@ -131,7 +131,7 @@ local TASK_DEBUG = true
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-08-31b one standable resolver"
+local BUILD_STAMP = "2026-08-31d withdraw resolves its approach point"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -2679,14 +2679,17 @@ end
 --  findStandingPoint on the port is demoted to the no-unit-exists fallback its
 --  own header always said it was. `radius` exists because the port asks wider
 --  than a task does.
-local function standableNear(position, searchUp, radius)
+local function standableNear(position, searchUp, radius, mediumVerified)
   --  A FREE-MOVING CHASSIS OWNS THIS ANSWER OUTRIGHT, INCLUDING THE nil.
   --  Same correction as petports_standingPointNear -- read the note there for
   --  the measurement. Short version: nil from petports_flyPointNear now means
   --  REFUSED as well as "not a flyer", and falling through to the ground search
   --  handed an aquatic unit a dry-land target one line after it declined one.
   if petports_freeMover() then
-    local flyPoint = petports_flyPointNear(position, radius)
+    --  `mediumVerified` is only meaningful to this branch: the ground search
+    --  below decides medium by physics, and will not stand a walker in a liquid
+    --  it avoids regardless of who vouches for what.
+    local flyPoint = petports_flyPointNear(position, radius, mediumVerified)
 
     if TASK_DEBUG then
       sb.logInfo("UNIT fly point for %s -> %s",
@@ -2987,16 +2990,35 @@ local function approachTargetFor(stateData, rawPosition)
   local task = stateData.task
   local homeward = task ~= nil and task.type == "return"
 
+  --  THE PORT'S VOUCH, ARRIVING WITH THE WORK.
+  --
+  --  Most task types dispatch a RAW target position and leave the unit to
+  --  resolve its own approach point -- see the note in restockFetchWork. That
+  --  re-resolution runs petports_flyPointNear's single-point veto, which cannot
+  --  see a footprint, so a half-submerged crate the port vetted and cleared was
+  --  refused here on arrival: 1122 outright declines against one container in
+  --  one session, and every fetchwater failure in it belonged to the flyer while
+  --  the swimmer serviced the same crate without trouble.
+  --
+  --  `mediumVerified` is set by the generator that ran the footprint ladder, so
+  --  it is absent on exactly the tasks that never ran one -- `animal`, `medic`,
+  --  `return` and `diag` -- and those keep the veto. See arch.dispatch.vouch.
+  --
+  --  NOT APPLIED TO THE HOMEWARD BRANCH, which is `return`, which never carries
+  --  it. Written as a lookup rather than a branch so the leash cannot acquire a
+  --  vouch by accident later.
+  local verified = task ~= nil and task.mediumVerified or nil
+
   if homeward then
-    stateData.groundTarget = standableNear(rawPosition, 0)
+    stateData.groundTarget = standableNear(rawPosition, 0, nil, verified)
 
     if stateData.groundTarget == nil then
       sb.logInfo("UNIT no floor beneath %s -- falling back to an unbiased search",
         sb.printJson(rawPosition))
-      stateData.groundTarget = standableNear(rawPosition)
+      stateData.groundTarget = standableNear(rawPosition, nil, nil, verified)
     end
   else
-    stateData.groundTarget = standableNear(rawPosition)
+    stateData.groundTarget = standableNear(rawPosition, nil, nil, verified)
   end
 
   return stateData.groundTarget
@@ -4656,11 +4678,31 @@ function petportsTaskAction.update(dt, stateData)
   --  Falls back to the raw target rather than the nil path below: that path is
   --  for a drop still falling and ends in a failure report, and a leash must
   --  never fail.
+  --  `withdraw` JOINED THIS LIST 2026-08-31, AND FOR THE SAME REASON `return`
+  --  DID. Every other type here dispatches a RAW target position; the ones NOT
+  --  here -- deposit, upcycle, tidy, drain, fuel, compact -- carry a standing
+  --  point the port already resolved, and re-resolving one of those would run
+  --  the search against an answer that is already correct.
+  --
+  --  The four withdraw generators dispatch `world.entityPosition(containerId)`,
+  --  the container's ORIGIN, and that origin sits in the flooded half of a
+  --  half-submerged crate. So the flyer was told to approach a position it
+  --  cannot occupy, approachPoint never arrived, and the progress watchdog
+  --  struck it: nine `fetchwater` failures reading `moved 0 in 10s heading for
+  --  [2553,1147]`, which is the RAW origin and not any resolved point. The
+  --  swimmer serviced the same crate seven times, because for it that tile is
+  --  a legal place to be.
+  --
+  --  THE VOUCH IS WHAT MAKES THIS WORK AND IS NOT SUFFICIENT ON ITS OWN. Without
+  --  `task.mediumVerified` the resolve here returns nil for a straddling crate;
+  --  without this list entry the resolve happens and its answer is discarded.
+  --  Both were needed.
   if task.type == "return" then
     approachTo = approachTargetFor(stateData, target) or target
   elseif task.type == "collect" or task.type == "harvest"
      or task.type == "replant" or task.type == "water"
-     or task.type == "animal" or task.type == "medic" then
+     or task.type == "animal" or task.type == "medic"
+     or task.type == "withdraw" then
     approachTo = approachTargetFor(stateData, target)
 
     if approachTo == nil then
