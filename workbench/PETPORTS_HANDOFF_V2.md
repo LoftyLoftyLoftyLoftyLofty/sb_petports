@@ -113,9 +113,19 @@ recall is unchanged, `math.random` column and all -- see
 `todo.pathing.standpointchoice`. Changing swimmer and walker recall in one build
 would have made neither attributable.
 
-**AMPHIBIOUS AND SUBMERGED PLATFORMS IS THE NEXT SUBJECT** and is not yet
-characterised. `todo.pathing.submergedplatform` holds the 2026-08-30 observation
-and its one live hypothesis.
+**AMPHIBIOUS AND SUBMERGED PLATFORMS IS FIXED AND VERIFIED.**
+`fact.pathing.platformfloor` -- `world.pointTileCollision` does not report
+platforms by default, so the descend guard in `standableNear` was discarding
+every candidate `findGroundPosition` handed it. 27090 rejections and a unit that
+never moved, against one resolve and twenty-four tiles in 3.6 seconds after.
+Neither hypothesis recorded in the original entry was right.
+
+**THE PORT-SIDE RESOLVER STILL HAS THAT DEFECT, AND TWO OTHERS**, which is only
+half the problem: `todo.pathing.oneanchor` records that THREE different functions
+answer "where does the unit stand near its port" and no two agree, and that the
+unit's own leash and the port's recall aim at different points computed by
+different code. Raised by the author 2026-08-31; deliberately not fixed in the
+same build that changed swimmer and flyer recall.
 
 **Debug flags wanting a release pass** -- `TASK_DEBUG`, `VENT_DEBUG`, `DEBUG` in
 all four panes, `FLY_POINT_DEBUG`, `FLY_TELEMETRY`, `CARGO_TRACE` are ON.
@@ -6525,6 +6535,111 @@ written; it was not.
 recorded engine fact was, both times it has happened in this mod, our own code
 producing a state the engine never produced. Suspect the mod before the record.
 
+### `world.pointTileCollision` DOES NOT SEE PLATFORMS BY DEFAULT
+`fact.pathing.platformfloor` -- see also `fact.pathing.collisionkinds`, `fact.pathing.liquidstandable`, `todo.pathing.oneanchor`
+
+**OPENED 2026-08-30 AS `todo.pathing.submergedplatform`. RESOLVED 2026-08-31, AND
+THE MECHANISM WAS NEITHER OF THE TWO HYPOTHESES THE ENTRY RECORDED.** It was not
+`validStandingPosition` being too permissive underwater, and it was not the
+home-point resolver. It was TWO PREDICATES DISAGREEING ABOUT WHAT FLOOR IS.
+
+**THE SYMPTOM.** An amphibious unit leashing to a submerged port at
+`[2535,1152]`, with platforms about two tiles beneath it, stalled in place
+forever:
+
+    ground spot [2532.5,1149.8] is floating and no floor below it
+    ... all seven columns, 27090 rejections in one log
+    UNIT no floor beneath [2535,1152] -- falling back to an unbiased search
+
+**BOTH HALVES WERE WORKING AS DESIGNED.** `findGroundPosition` FOUND the
+platforms -- `1149.8` in every column is the platform row -- because
+`validStandingPosition` accepts a platform as ground. The descend guard in
+`standableNear` then threw all seven away, because it asked
+`world.pointTileCollision` whether there was floor below and that call, with its
+default collision kinds, DOES NOT REPORT PLATFORMS.
+
+**THE PROOF THAT THE DEFAULT EXCLUDES THEM IS INDIRECT AND SUFFICIENT.** There is
+no measurement of what the default set IS -- `findStandingPoint` in
+`petports_petport.lua` still carries an "UNVERIFIED" note on exactly that
+question. But `petportsTaskAction` passes `{"Platform"}` explicitly to
+`world.rectTileCollision` in three places for the drop-through logic, and every
+one of those would be redundant if platforms came back by default.
+
+**THE FIX IS A NAMED SET, NOT A DEFAULT.** `STANDABLE_TILE_SET` is
+`{ "Block", "Slippery", "Platform" }`, passed to BOTH `pointTileCollision` calls
+in the guard -- the one deciding whether to descend and the one deciding where to
+stop. They have to move together; disagreeing about what floor is would be a new
+bug rather than a fix. `Dynamic` is excluded because it is doors, `Null` because
+an unloaded chunk is an absence rather than a surface.
+
+**VERIFIED IN GAME 2026-08-31.** One resolve, no retries, twenty-four tiles in
+3.6 seconds:
+
+    entering task state for leash at [2511.67,1152.8]
+    standable for [2535,1152] -> [2535.5,1148.8] (column offset 0, dist 3.24)
+    on station at [2535.53,1148.8] (port [2535,1152])
+
+Columns `2532`, `2537` and `2538` still report no floor. That is CORRECT and not
+residual: the platform run is `2533`-`2536` and those three are past its ends.
+
+**THE GENERAL LESSON, WHICH IS WHY THIS IS A FACT AND NOT A CHANGELOG.** Two
+predicates that both answer "is there ground here" and disagree will not fail
+loudly -- the stricter one silently discards what the looser one found, and the
+symptom appears at neither. `fact.pathing.ongroundtest` records the same shape
+between `validStandingPosition` and the engine's `onGround`. When a resolver
+finds candidates and something downstream rejects all of them, suspect the pair
+before either half.
+
+### DYNAMIC COLLISION IS DOORS. IT IS NOT CRATES, AND THIS MOD HAS GUESSED OTHERWISE THREE TIMES
+`fact.pathing.collisionkinds` -- see also `fact.pathing.originnode`, `proc.pathing.readsource`, `fact.pathing.liquidstandable`
+
+**AUTHORITATIVE, FROM THE AUTHOR, 2026-08-31.** The only objects in Starbound
+with `Dynamic` collision are DOORS. Not crates, not containers, not objects in
+general.
+
+**RECORDED AS A FACT BECAUSE THE CORRECTION KEEPS NOT STICKING.** "Crates are
+Dynamic" has been asserted three separate times in this project -- twice in
+reasoning that reached the author, once written straight into a code comment as
+settled fact hours after the entry warning about it was read. Each time it was
+plausible, each time it was wrong, and each time the argument built on it looked
+sound. `proc.pathing.readsource` already lists it among five wrong engine
+theories; that entry evidently is not where anyone looks. This is.
+
+**THE COLLISION KINDS, AND WHAT USES THEM HERE:**
+
+    Block       terrain, and crate tops -- see below
+    Slippery    ice
+    Platform    platforms, which support from above and can be dropped through
+    Dynamic     DOORS
+    Null        unloaded or out of world; an absence, not a surface
+
+**IT SETTLES AN AMBIGUITY THIS DOCUMENT WAS ALREADY CARRYING.**
+`fact.pathing.originnode` measured a crate perch with two probes: it collides
+with `{Null, Block, Dynamic, Platform}` and NOT with `{Platform}` alone, and
+concluded "so it is Block or Dynamic". WITH DYNAMIC RULED OUT THAT RESOLVES TO
+**BLOCK**. A crate top is a solid surface: a unit stands on it, and nothing drops
+through it.
+
+**AND IT CONTRADICTS A CODE COMMENT THAT IS NOW MARKED.**
+`petports_flyapproach.lua`, above the conditional `controlDown`, attributed a
+measured stall -- amphibious unit on a crate, planning one tile below itself,
+velocity pinned for ten seconds -- to "the crate is a platform". If the crate is
+Block, `controlDown` could not have cleared that stall, because nothing drops
+through a Block. THE HOLD IS STILL CORRECT FOR REAL PLATFORMS, which is what
+vanilla holds it for; the attribution is wrong, and the crate stall is therefore
+UNEXPLAINED rather than fixed. The comment says so now.
+
+**WHY THE GUESS IS SO ATTRACTIVE, so it can be recognised next time.** "Dynamic"
+reads as "an object rather than terrain", and a crate is obviously an object. The
+word describes COLLISION THAT CHANGES AT RUNTIME -- which is a door opening --
+and not object-ness. Anything reasoning from the name will land on the same wrong
+answer.
+
+**THE CHEAP PROBE, since the argument is never worth having twice.** Two
+`world.rectTileCollision` calls over the same region, one with the full set and
+one with `{Platform}` alone. That is what settled the perch, it needs no repro,
+and it is faster than the sentence asserting the guess.
+
 ### A* PLAN EDGES ARE NOT ONE TILE APART, AND THE CODE SAID BOTH
 `fact.pathing.edgespan` -- see also `arch.pathing.mediumenforcement`, `fact.pathing.nyquist`
 
@@ -7917,33 +8032,6 @@ mod exists to avoid. A complaint may deserve different defaults from a carried
 item, since a complaint is rare and actionable where a carried icon is constant;
 undecided.
 
-### An amphibious unit will not path to platforms under its own submerged port
-`todo.pathing.submergedplatform` -- see also `fact.pathing.liquidstandable`, `fact.pathing.watercrossed`
-
-**OBSERVED 2026-08-30, NOT YET INVESTIGATED.**
-
-An amphibious unit -- gravity-ENABLED, `petports_avoidLiquid` false -- was seen
-struggling to reach platforms beneath its own submerged port.
-
-**A HYPOTHESIS, LABELLED AS ONE.** `fact.pathing.liquidstandable` records that
-`validStandingPosition` treats ANY liquid as standable when `avoidLiquid` is
-false. If that holds here, every submerged tile is a valid destination, the
-platform underneath has no special appeal, and the pather may be satisfied long
-before it arrives anywhere useful. THE DISPROOF IS CHEAP: if the unit is
-reaching a valid-but-useless point rather than failing to find one, the logs
-will show arrivals rather than path failures.
-
-**THE PAIRING WITH `fact.pathing.watercrossed` IS OFF THE TABLE.** That one
-looked like the same fact from the other side -- a gravity-disabled actor
-crossing a boundary it should not, against a gravity-enabled one treating a
-boundary as absent -- and it resolved to our own blind-steer fallback rather than
-to anything about boundaries. This entry is now on its own and the hypothesis
-below is the only live one.
-
-**NOT THE HOME-POINT RESOLVER.** `findStandingPoint` requires
-`pointTileCollision` below and cannot return a floating point -- see
-`todo.pathing.standpointchoice`. This is the PATHER, not the leash.
-
 ### The backoff ladder reorder is unexercised
 `todo.port.backoffladder` -- see also `arch.port.reporthandler`
 
@@ -8106,6 +8194,64 @@ Invisible in practice; if it ever shows in a log or profiler, gate re-attempts
 on the reagent slot's count changing. Three lines, filed rather than done
 because unmeasured cost does not buy code.
 
+### Three resolvers answer "where does the unit stand near its port", and they disagree
+`todo.pathing.oneanchor` -- see also `arch.pathing.aimpoint`, `todo.pathing.standpointchoice`, `todo.port.nostandpoint`, `arch.port.tetherlocation`
+
+**RAISED 2026-08-31 BY THE AUTHOR, FROM THE RIGHT QUESTION: if the port already
+computes where an idle unit stands, why is the leash computing it again?** It is
+worse than two. There are THREE, and no two of them agree.
+
+    standableNear                 petportsTaskAction, on the UNIT
+                                  ranks all seven columns by true distance,
+                                  DESCENDS to a floor under a floating
+                                  submerged point, knows platforms are floor
+
+    petports_standingPointNear    petports_contract, on the UNIT,
+                                  called BY THE PORT via callScriptedEntity
+                                  first-fit by column, NO descend step, so
+                                  underwater it returns a floating point
+
+    findStandingPoint             petports_petport, on the PORT
+                                  random column, descends from the TOP of the
+                                  rect, cannot see platforms at all
+
+**WHICH ONE RUNS DEPENDS ON WHICH LEASH FIRED, AND THERE ARE TWO OF THOSE TOO.**
+The UNIT's own tether (`petports_leashTask`, running constantly under
+`strictPortTethering`) carries the RAW port position and resolves it with
+`standableNear`. The PORT's recall (`returnWork`, which fires only when the unit
+is stranded or outside the network) resolves with `homePosition`. So a unit
+walking home on its own initiative and the same unit being recalled aim at
+different points, computed by different code, with different bugs.
+
+**THE DOCTRINE ALREADY EXISTS AND IS NOT BEING FOLLOWED.** `arch.pathing.aimpoint`
+is "the router and the walker must aim at the same point". The header above
+`standingPointNear` in `petports_petport.lua` says outright that the fallback is
+KNOWN TO BE WRONG and that "anything dispatched to a unit should go through this
+function, not `findStandingPoint` directly". `returnWork` was the one caller
+violating it. `arch.port.tetherlocation` fixed that for swimmers and flyers by
+removing the resolve entirely -- home is the port -- and left the `floor` branch
+on `findStandingPoint`, so the divergence survives for exactly the two walking
+chassis.
+
+**THE SHAPE OF THE FIX, AND IT IS MOSTLY DELETION.** The unit owns the answer;
+`standableNear` is the one that has been debugged; the port asks for it and
+caches nothing. That means `petports_standingPointNear` gains the descend step or
+becomes a wrapper over `standableNear`, `homePosition`'s floor branch asks the
+unit, and `findStandingPoint` shrinks to what its own header says it is -- the
+no-unit-exists fallback, never a dispatch target.
+
+**WHAT MAKES IT MORE THAN TIDYING.** `findStandingPoint`'s random column is
+already recorded as `todo.pathing.standpointchoice`; its platform blindness is
+`fact.pathing.platformfloor` unfixed on the port side; and `todo.port.nostandpoint`
+is the pane diagnostic for when it returns nil. All three are properties of a
+resolver that should not be answering this question at all. Fixing the ownership
+closes or shrinks the lot.
+
+**NOT DONE IN THE SESSION THAT FOUND IT**, deliberately: it changes walker recall,
+and the same build had just changed swimmer and flyer recall. Two chassis classes
+of recall behaviour in one build makes neither attributable when the log comes
+back.
+
 ### Dispatch does not consider the chassis, and it costs a stutter step
 `todo.dispatch.eligibility` -- see also `arch.pathing.mediumenforcement`, `todo.pathing.leashreplan`
 
@@ -8224,7 +8370,7 @@ case that SUCCEEDS and diff them -- not to theorise about the failure. Ask what
 the working version of this looks like, and make one.
 
 ### Read the source before theorising about the source
-`proc.pathing.readsource`
+`proc.pathing.readsource` -- see also `fact.pathing.collisionkinds`
 
 THIS SESSION PRODUCED FIVE WRONG THEORIES ABOUT ENGINE BEHAVIOUR, AND
 `StarPlatformerAStar.cpp` ANSWERED EVERY ONE OF THEM OUTRIGHT.
@@ -8234,7 +8380,11 @@ THIS SESSION PRODUCED FIVE WRONG THEORIES ABOUT ENGINE BEHAVIOUR, AND
                                                   plans an Arc. It succeeds.
     "crates are Dynamic" / "crates are Platform"
                                                -> two probes in the log settled
-                                                  it and neither guess was needed
+                                                  it and neither guess was needed.
+                                                  ASSERTED AGAIN 2026-08-31, in a
+                                                  code comment, which is why it
+                                                  now has its own entry:
+                                                  fact.pathing.collisionkinds
     "swimCost makes water attractive"          -> it is a MULTIPLIER; at 5 water
                                                   costs 5x a walk. Backwards.
     "smallJumpMultiplier is a minimum arc"     -> it is a second jump height

@@ -1003,7 +1003,18 @@ function petportsFreeMover(pather)
   --  MEASURED: an amphibious unit standing on the very crate it was delivering
   --  to, planning "Swim edge 1 of 3, dst [2509,1148.8]" one tile below itself,
   --  velocity pinned, onGround true, for the full ten seconds until the progress
-  --  watchdog failed the task. The crate is a platform.
+  --  watchdog failed the task.
+  --
+  --  "THE CRATE IS A PLATFORM" WAS NEVER PROBED FOR THIS OBJECT. It is an
+  --  inference from the stall, not a measurement of the crate, and a DIFFERENT
+  --  crate in the origin-node investigation measured as Block or Dynamic --
+  --  Block, once fact.pathing.collisionkinds rules out Dynamic. Whether all
+  --  containers share a collision kind is not something this mod has checked.
+  --
+  --  THE HOLD DOES NOT REST ON IT. controlDown while descending is vanilla's own
+  --  behaviour in flyInGeneralDirection, held unconditionally there for exactly
+  --  this hazard; the conditional below is that precedent with a gravity-enabled
+  --  chassis accounted for. It is right for platforms whatever this crate was.
   --
   --  VANILLA'S ANSWER IS THE FIRST LINE OF flyInGeneralDirection --
   --  mcontroller.controlDown() held unconditionally, every tick, so platforms

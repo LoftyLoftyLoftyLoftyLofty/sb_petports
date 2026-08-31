@@ -131,7 +131,7 @@ local TASK_DEBUG = true
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-08-30b medic arrival and dose"
+local BUILD_STAMP = "2026-08-31a platforms count as floor"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -2591,6 +2591,41 @@ end
 --  down from the given position testing validStandingPosition at each step, and
 --  aligns feet to the tile row below via
 --  math.ceil(position[2]) - (bounds[2] % 1).
+--  WHAT COUNTS AS SOMETHING A WALKER CAN REST ON.
+--
+--  EXISTS BECAUSE world.pointTileCollision's DEFAULT SET DOES NOT INCLUDE
+--  PLATFORMS, and the descend guard below was asking it whether there was floor
+--  under a submerged candidate. There is no direct proof of what the default IS
+--  -- findStandingPoint in petports_petport.lua carries an "UNVERIFIED" note on
+--  exactly that question -- but there is proof of what it is NOT: this file
+--  calls world.rectTileCollision(region, {"Platform"}) in three places for the
+--  drop-through logic, and every one of them would be redundant if platforms
+--  came back by default.
+--
+--  MEASURED 2026-08-31, an AMPHIBIOUS unit leashing to a submerged port at
+--  [2535,1152] with platforms about two tiles beneath it:
+--
+--      ground spot [2532.5,1149.8] is floating and no floor below it
+--      ground spot [2533.5,1149.8] is floating and no floor below it
+--      ... all seven columns, 27090 rejections in one log
+--
+--  findGroundPosition FOUND the platforms -- 1149.8 in every column is the
+--  platform row -- because validStandingPosition accepts a platform as ground.
+--  The guard then threw all seven away and the unit stalled with no home to go
+--  to. THE TWO PREDICATES DISAGREED ABOUT WHAT FLOOR IS.
+--
+--  Dynamic is NOT in this set, and the reason is simpler than the one first
+--  written here. DYNAMIC COLLISION IN STARBOUND IS DOORS. Not crates, not
+--  containers, not objects generally -- see fact.pathing.collisionkinds, which
+--  exists because this mod has now guessed "crates are Dynamic" three times.
+--  A door is not somewhere to resolve a home to, so it has no business in a set
+--  that answers "can a walker rest on this".
+--
+--  Null is NOT in it either. An unloaded chunk is not floor; it is an absence of
+--  information, and treating it as somewhere to stand would resolve homes into
+--  regions nothing has confirmed exist.
+local STANDABLE_TILE_SET = { "Block", "Slippery", "Platform" }
+
 local GROUND_SEARCH_DOWN = -6
 local GROUND_SEARCH_UP = 4
 
@@ -2760,14 +2795,16 @@ local function standableNear(position, searchUp)
     --  ever worked pays one predicate and exits.
     if usable and not petports_freeMover()
        and petports_mediumAtPoint({ resolved[1], resolved[2] }) == "swim"
-       and not world.pointTileCollision({ resolved[1], resolved[2] - 1.0 }) then
+       and not world.pointTileCollision({ resolved[1], resolved[2] - 1.0 },
+             STANDABLE_TILE_SET) then
 
       local floor = nil
 
       for drop = 1, math.abs(GROUND_SEARCH_DOWN) do
         local lower = { resolved[1], resolved[2] - drop }
 
-        if world.pointTileCollision({ lower[1], lower[2] - 1.0 }) then
+        if world.pointTileCollision({ lower[1], lower[2] - 1.0 },
+           STANDABLE_TILE_SET) then
           local fits, standable = pcall(validStandingPosition, lower,
             petports_avoidLiquid())
 
@@ -2775,8 +2812,9 @@ local function standableNear(position, searchUp)
             floor = lower
           end
 
-          --  STOP AT THE FIRST SOLID TILE either way. Past it we are inside
-          --  the seabed, and a deeper hit would be a different cave.
+          --  STOP AT THE FIRST STANDABLE TILE either way. Past it we are inside
+          --  the seabed -- or under a platform -- and a deeper hit would be a
+          --  different cave.
           break
         end
       end
