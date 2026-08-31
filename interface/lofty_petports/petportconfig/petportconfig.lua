@@ -34,7 +34,7 @@ local DEBUG = true
 --  Bump on every change to this file. A pane has no visible version and a stale
 --  copy is indistinguishable from an unfixed one -- which cost a cycle on the
 --  upcycler before the stamp existed.
-local PANE_BUILD_STAMP = "2026-08-29y wider dividers"
+local PANE_BUILD_STAMP = "2026-08-30e crew row"
 
 local PANE_STATE_KEY = "petports_paneState"
 
@@ -174,6 +174,61 @@ local GROUP_WIDGET = {
 	machines = "groupMachines"
 }
 
+--  THE SETTINGS LIST, DESCRIBED RATHER THAN DRAWN.
+--
+--  Each entry says what a row IS; buildSettingsRows turns the applicable ones
+--  into list items. Adding a setting is an entry here plus a string key, with
+--  no config edit and no geometry -- which is the whole reason this is a list.
+--
+--  `owner` NAMES THE MESSAGE, NOT THE STORAGE. Some of these end up on the port
+--  and some on the pet, and that split is invisible to a player and should stay
+--  that way. The pane's job is to send the right message; where the port files
+--  it is the port's business.
+--
+--  `needs` IS A MODULE FLAG OR nil. nil means the chassis provides it and every
+--  unit has it. A flag means the row exists only while that module is socketed
+--  -- and only APPLIES while socketed, which the port enforces independently.
+--
+--  `sep` MARKS THE START OF A MODULE BLOCK. Each module's settings are preceded
+--  by a divider so a player can see which module brought what.
+local SETTING_ROWS = {
+	{ key = "carried", owner = "toggles", needs = nil,
+	  label = "petport.setting.carried", tip = "petport.tip.carried" },
+
+	{ sep = true, needs = "medic", label = "petport.setting.medicblock" },
+
+	{ key = "player", owner = "medic", needs = "medic",
+	  label = "petport.setting.medicplayer", tip = "petport.tip.medicplayer" },
+	{ key = "crew", owner = "medic", needs = "medic",
+	  label = "petport.setting.mediccrew", tip = "petport.tip.mediccrew" },
+	{ key = "npc", owner = "medic", needs = "medic",
+	  label = "petport.setting.medicnpc", tip = "petport.tip.medicnpc" },
+	{ key = "podpet", owner = "medic", needs = "medic",
+	  label = "petport.setting.medicpodpet", tip = "petport.tip.medicpodpet" },
+	{ key = "animal", owner = "medic", needs = "medic",
+	  label = "petport.setting.medicanimal", tip = "petport.tip.medicanimal" },
+	{ key = "unit", owner = "medic", needs = "medic",
+	  label = "petport.setting.medicunit", tip = "petport.tip.medicunit" }
+}
+
+--  Which message carries each owner's set, and where the pane reads it back.
+local SETTING_MESSAGE = {
+	toggles = "petports_setToggles",
+	medic = "petports_setMedic"
+}
+
+--  Row art. The 180 family at its native 16, not the stats list's regenerated
+--  _11 -- a checkbox does not fit in eleven pixels.
+local SETTINGS_ROW = "/interface/lofty_petports/shared/row_180.png"
+local SETTINGS_ROW_ALT = "/interface/lofty_petports/shared/row_180_alt.png"
+local SETTINGS_ROW_CLEAR = "/interface/lofty_petports/shared/row_180_clear.png"
+
+--  PLACEHOLDER SEPARATOR, matching the stats list's: a dashed rule in a dull
+--  yellow-orange so it reads as "divider, art pending" rather than as a setting
+--  whose label failed to resolve.
+local SETTINGS_SEPARATOR_TEXT = string.rep("-", 40)
+local SETTINGS_SEPARATOR_COLOR = { 184, 148, 64 }
+
 
 --  Widgets owned by each tab. Membership lives here rather than in the config
 --  so showTab has exactly one list to be wrong about.
@@ -192,7 +247,10 @@ local TAB_MEMBERS = {
 	--  sits beside happens to be.
 	tabSettings = {
 		"renameButton",
-		"setCarried", "setCarriedLabel"
+		--  THE LIST IS ONE WIDGET NOW, where the pet toggles used to be several.
+		--  Its ROWS are not members of anything -- they do not exist until
+		--  paintSettings builds them.
+		"settingsScroll"
 	},
 	tabStats = {
 		--  ONE WIDGET, AND ITS VISIBILITY IS NOT THE ONLY GUARD. Whether
@@ -720,6 +778,19 @@ end
 local paneModules = {}
 local paneModuleSlotCount = 0
 
+--  CACHED AT MODULE LEVEL FOR THE SAME REASON paneModuleSlotCount IS: showTab
+--  runs on a click, with no state in hand, and has to be able to re-apply a
+--  conditional that refresh last computed. A local inside refresh cannot be
+--  read from there.
+--  WHAT THE LIST NEEDS THAT refresh's LOCAL `state` CANNOT PROVIDE. showTab runs
+--  on a click with no state in hand, same reason paneModuleSlotCount exists.
+--
+--  paneModuleFlags IS A SET, NOT A LIST, because every lookup here asks "is this
+--  flag present" and a list would make each row a linear scan.
+local paneModuleFlags = {}
+local paneSettings = {}
+local paneHasUnit = false
+
 --  Wire format out. See petports_petport.lua's MODULES section: a Lua table with
 --  a hole converts to a Json OBJECT with string keys, so a slot-indexed array
 --  loses a module the first time the item round-trips. A record list is sparse
@@ -750,6 +821,111 @@ end
 --  every member of the outgoing tab wholesale, which is right; what it cannot
 --  do is stop a later repaint from disagreeing with it. The paint has to carry
 --  the condition itself.
+--  Row path per list index, and what each index means. Rebuilt only when the
+--  applicable set changes; the steady state repaints checked marks in place.
+local settingsRowPaths = {}
+local settingsRowKeys = {}
+local settingsSignature = nil
+
+--  WHICH ROWS APPLY TO THIS UNIT RIGHT NOW.
+--
+--  A row with `needs` survives only while that module flag is present. The port
+--  enforces the same thing independently -- a stale checkbox cannot make a
+--  desocketed module work -- so this is presentation, not permission.
+local function applicableSettingRows()
+	local out = {}
+
+	for _, row in ipairs(SETTING_ROWS) do
+		if row.needs == nil or paneModuleFlags[row.needs] then
+			table.insert(out, row)
+		end
+	end
+
+	return out
+end
+
+--  THE VALUE A ROW SHOULD SHOW, defaulting to ON when absent.
+--
+--  Matches the port: petportMedicTreats reads `~= false`, so a unit whose
+--  settings table has never been written treats everybody. A module socketed
+--  into an existing unit works immediately rather than looking broken until
+--  every box is ticked.
+local function settingValue(row)
+	local store = paneSettings[row.owner] or {}
+	return store[row.key] ~= false
+end
+
+--  REBUILT ONLY WHEN THE SET CHANGES, repainted otherwise.
+--
+--  clearListItems invokes the list's own callback -- measured on the beacon
+--  panes -- so a rebuild on every poll would have the repaint firing the thing
+--  that asked for it. The signature is the applicable rows, not their values.
+local function paintSettings()
+	local showing = (activeTab == "tabSettings")
+	widget.setVisible("settingsScroll", showing and paneHasUnit)
+
+	if not showing or not paneHasUnit then return end
+
+	local rows = applicableSettingRows()
+
+	local names = {}
+	for _, row in ipairs(rows) do table.insert(names, row.label) end
+	local signature = table.concat(names, "|")
+
+	if signature ~= settingsSignature then
+		settingsSignature = signature
+		widget.clearListItems("settingsScroll.settingsList")
+		settingsRowPaths = {}
+		settingsRowKeys = {}
+
+		--  PARITY RESETS AT EACH SEPARATOR so every module's block starts on
+		--  the base shade, exactly as the stats list does.
+		local stripe = false
+
+		for i, row in ipairs(rows) do
+			local rowId = widget.addListItem("settingsScroll.settingsList")
+			local rowPath = "settingsScroll.settingsList." .. rowId
+
+			settingsRowPaths[i] = rowPath
+			settingsRowKeys[i] = row
+
+			if row.sep then
+				stripe = false
+				widget.setImage(rowPath .. ".rowBG", SETTINGS_ROW_CLEAR)
+				widget.setText(rowPath .. ".settingLabel", SETTINGS_SEPARATOR_TEXT)
+				widget.setFontColor(rowPath .. ".settingLabel", SETTINGS_SEPARATOR_COLOR)
+
+				--  A DIVIDER IS NOT A CONTROL. Both interactive widgets go away
+				--  rather than being left checked and inert, which would invite
+				--  a click that does nothing.
+				widget.setVisible(rowPath .. ".settingCheck", false)
+				widget.setVisible(rowPath .. ".rowButton", false)
+			else
+				widget.setImage(rowPath .. ".rowBG",
+					stripe and SETTINGS_ROW_ALT or SETTINGS_ROW)
+				stripe = not stripe
+
+				widget.setText(rowPath .. ".settingLabel", petports_stringOr(row.label, "--"))
+				widget.setVisible(rowPath .. ".settingCheck", true)
+				widget.setVisible(rowPath .. ".rowButton", true)
+
+				--  THE ROW INDEX, ON BOTH INTERACTIVE WIDGETS. A member callback
+				--  gets the leaf name -- identical for every row -- so only the
+				--  widget data can say which row fired.
+				widget.setData(rowPath .. ".settingCheck", i)
+				widget.setData(rowPath .. ".rowButton", i)
+			end
+		end
+	end
+
+	--  THE STEADY STATE TOUCHES CHECKED MARKS ONLY.
+	for i, row in ipairs(rows) do
+		if not row.sep and settingsRowPaths[i] ~= nil then
+			widget.setChecked(settingsRowPaths[i] .. ".settingCheck", settingValue(row))
+		end
+	end
+end
+
 local function paintModuleSlots()
 	local showing = (activeTab == "tabDetails")
 
@@ -813,6 +989,26 @@ local function nextModuleToken()
 end
 
 local function paintModules(state)
+	--  FLAGS AS A SET, and the mirror sends a list. Built here once rather than
+	--  in applicableSettingRows, which runs per paint.
+	paneModuleFlags = {}
+	for _, flag in ipairs(state.moduleFlags or {}) do
+		paneModuleFlags[flag] = true
+	end
+
+	paneSettings = {
+		toggles = state.toggles or {},
+		medic = state.medic or {}
+	}
+
+	--  state.hasUnit, NOT hasUnit. This block lives in paintModules, which takes
+	--  `state` -- the bare local belongs to refresh and is not in scope here, so
+	--  it read as nil and paintSettings hid the list on every paint. The list
+	--  never appeared once.
+	paneHasUnit = state.hasUnit == true
+
+	paintSettings()
+
 	paneModuleSlotCount = math.max(0, math.min(MODULE_SLOTS, state.moduleSlots or 0))
 
 	if moduleWriteToken ~= nil then
@@ -1003,6 +1199,7 @@ local function showTab(which)
 	--  know the count. Re-applying the count here means the correction does not
 	--  depend on the caller remembering to force a refresh afterwards.
 	paintModuleSlots()
+	paintSettings()
 
 	dbg("tab -> %s", which)
 end
@@ -1038,6 +1235,11 @@ local function showEmpty()
 	livePetId = nil
 	paneModules = {}
 	paneModuleSlotCount = 0
+
+	paneModuleFlags = {}
+	paneSettings = {}
+	paneHasUnit = false
+	settingsSignature = nil
 	moduleWriteToken = nil
 
 	widget.setText("petName", petports_stringOr("petport.nounit"))
@@ -1777,11 +1979,9 @@ end
 --  What is left describes DISPLAY, which is the right shape for this tab: both
 --  remaining toggles change what the player sees and neither changes what the
 --  unit does.
-function settingToggled()
-	tell("petports_setToggles", {
-		carried = widget.getChecked("setCarried")
-	})
-end
+--  settingToggled IS GONE. The pet toggles moved into settingsList, so the one
+--  fixed checkbox that used to live on this tab is now a row like any other and
+--  settingsRowClicked sends its message.
 
 --  CLAIM MARKERS. A PORT SETTING, so it sits in the port band and writes its
 --  own message rather than riding along with the pet toggles.
@@ -1805,6 +2005,43 @@ end
 --  FIRE AND FORGET. The port rewrites the mirror and the next poll repaints
 --  these from what it actually stored, so a refused toggle moves the box back
 --  on its own. Nothing here guesses at an outcome.
+--  ONE CALLBACK FOR THE WHOLE LIST, registered at runtime -- see init.
+--
+--  BOTH THE BOX AND THE ROW LAND HERE. The box is checkable so a click on it has
+--  already flipped it; the row button is not, so a click on the row has to flip
+--  the box itself. `from` distinguishes them, and it is the leaf name the engine
+--  passes as arg 1 -- the only thing that differs between the two widgets, since
+--  the row index arrives identically in arg 2.
+function settingsRowClicked(from, index)
+	local i = tonumber(index)
+	if i == nil then return end
+
+	local row = settingsRowKeys[i]
+	local path = settingsRowPaths[i]
+	if row == nil or row.sep or path == nil then return end
+
+	if from ~= "settingCheck" then
+		widget.setChecked(path .. ".settingCheck",
+			not widget.getChecked(path .. ".settingCheck"))
+	end
+
+	--  THE WHOLE SET FOR THAT OWNER, NOT THE ONE THAT MOVED -- same reasoning as
+	--  groupToggled. Reading every row back is self-correcting: a box that
+	--  somehow drifted from the port is brought back into line by the next click
+	--  on any row sharing its owner.
+	--
+	--  FIRE AND FORGET. The port rewrites the mirror and the next poll repaints
+	--  from what it actually stored, so a refused toggle moves the box back.
+	local set = {}
+	for j, other in ipairs(settingsRowKeys) do
+		if not other.sep and other.owner == row.owner and settingsRowPaths[j] ~= nil then
+			set[other.key] = widget.getChecked(settingsRowPaths[j] .. ".settingCheck")
+		end
+	end
+
+	tell(SETTING_MESSAGE[row.owner], set)
+end
+
 function groupToggled()
 	local set = {}
 	for _, group in ipairs(GROUPS) do
@@ -1833,6 +2070,20 @@ function init()
 	--  tab that happens to open first.
 	petports_applyStrings()
 	sweepTips()
+
+	--  ROW CALLBACKS, REGISTERED BEFORE ANY ROW EXISTS.
+	--
+	--  MUST happen before the first addListItem and MUST NOT appear in
+	--  scriptWidgetCallbacks. ListWidget parses its template with a parser that
+	--  has never heard of pane-level callbacks, so a row naming one throws
+	--  inside addListItem -- at CONSTRUCTION, taking the whole pane down rather
+	--  than failing at click. The pre-flight cannot catch this: from its side an
+	--  unregistered row callback looks exactly like a correctly absent one.
+	--
+	--  BOTH ROW WIDGETS SHARE ONE HANDLER. The box carries the tooltip and the
+	--  row carries the hover; which one fired is arg 1.
+	widget.registerMemberCallback("settingsScroll.settingsList",
+		"settingsRowClicked", settingsRowClicked)
 
 	showTab("tabDetails")
 	refresh(true)

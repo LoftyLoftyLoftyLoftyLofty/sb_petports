@@ -1,0 +1,69 @@
+//  PETPORTS -- CAMOUFLAGE MODULE
+//
+//  HIDDEN AND STILL WORKING. That is the whole distinction from the Oblivious
+//  Module, which sits in the same flags channel and does the opposite: oblivious
+//  takes a unit OFF the duty roster and leaves it visible; this one takes it out
+//  of danger and leaves it working.
+//
+//      petports_moduleEffects   pushed to a LIVE unit as status effects
+//      petports_moduleLiquids   read by the port, with no unit, for the gate
+//      petports_moduleFlags     read by the port AND, since this module, by the
+//                               unit -- see below
+//
+//  IT USES BOTH CHANNELS AND NEEDS NO STATUS EFFECT FILE. camouflage75 is
+//  vanilla's own, already named and already tuned; the module just asks for it.
+//  75% is a first try -- if it reads too solid or too faint, vanilla ships other
+//  strengths under the same naming and this is a one-word change.
+//
+//  THE FLAG IS THE FIRST ONE A UNIT EVER READS. Every flag before this was acted
+//  on entirely by the PORT, because it changed what the dispatcher did. A damage
+//  team can only be set through monster.setDamageTeam, which exists on the unit
+//  and not on the object -- so flags now ride the module push alongside effects
+//  and liquid permissions rather than growing a second wire.
+//
+//  GHOSTLY IS THE SAME TEAM VANILLA'S OBLIVIOUS COLLAR USES to pacify a pet, and
+//  it takes the unit out of damage resolution entirely -- nothing hunts it and
+//  nothing can hit it. The chassis team is captured before this file touches it
+//  and restored when the module comes out.
+//
+//  A CAMOUFLAGED UNIT IS STILL A VALID PATIENT, and that is not luck. Ghostly is
+//  also what FISHING FISH come back as, so a naive classifier would reject one.
+//  The medic scan tests petports_unit BEFORE it looks at the damage team,
+//  precisely so a unit that reads ghostly is still recognised as ours. See
+//  arch.dispatch.medicpatients; this module is the case that ordering protects.
+
+{
+	"itemName" : "petports_module_camouflage",
+	"price" : 350,
+	"rarity" : "Uncommon",
+
+	//  Shared with the other modules, so the categories.config.patch label and
+	//  the petports_filtergroups.config subgroup that already exist cover this
+	//  item too. A new category would need both added or it sorts to Unsorted.
+	"category" : "petports_module",
+
+	//  TEST ART. Translucent silver with a cyan catch on the highlight -- the
+	//  translucency is the read, and the cyan keeps it from being mistaken for
+	//  the charcoal Oblivious diamond at a glance.
+	"inventoryIcon" : "petports_module_camouflage.png",
+
+	"description" : "A refraction sheath. The unit fades from sight and stops registering as a target, and carries on working regardless.",
+	"shortdescription" : "Camouflage Module",
+
+	//  petports_no_upcycling KEEPS IT OUT OF THE CONVERTER, or a unit hauling
+	//  surplus to an upcycler turns the player's modules into treats.
+	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],
+
+	//  MAXSTACK 1 IS A REQUIREMENT. The pane moves modules with
+	//  player.swapSlotItem(), which returns the whole cursor stack; it refuses a
+	//  stack rather than trusting this field, so a stackable module would be
+	//  refused forever and look broken.
+	"maxStack" : 1,
+
+	//  35, NOT 75. camouflage75 read as too solid in game -- the unit was
+	//  obviously still there. Vanilla ships the family at several strengths
+	//  under this naming, so tuning this is one word.
+	"petports_moduleEffects" : [ "camouflage35" ],
+
+	"petports_moduleFlags" : [ "camouflage" ]
+}

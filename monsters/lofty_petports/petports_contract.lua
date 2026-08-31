@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-08-30e module liquid permissions"
+local CONTRACT_BUILD_STAMP = "2026-08-30i chassis team sent by the port"
 
 local contractStamped = false
 
@@ -238,9 +238,15 @@ end
 --  alive would do nothing until it was re-socketed. There is no other hook that
 --  fires on a module change -- this call IS the change -- so clearing them here
 --  is not tidiness, it is the only place it can happen.
-function petports_setModuleEffects(effects, category, liquids)
+--  `flags` ARE NEW ON THIS CALL and did not travel when the channel was opened.
+--  Oblivious is read entirely port-side, so the original design said flags never
+--  reach a unit. Camouflage changes that: a damage team can only be set through
+--  monster.*, which the port does not have.
+function petports_setModuleEffects(effects, category, liquids, flags, baseTeam)
   category = category or "petports_modules"
   effects = effects or {}
+
+  petports_applyModuleFlags(flags or {}, baseTeam)
 
   --  petportsAvoidLiquids is the SET this unit refuses.
   --  petportsLiquidVerdict is the memo of per-id answers derived from it, and it
@@ -815,6 +821,102 @@ end
 --  "NEITHER, this chassis can legally occupy nothing" warning -- which is
 --  meaningless for a walker, whose flags are the meaningless defaults. The old
 --  ladder only reached it inside the free-mover branch and this keeps that true.
+--  THE CHASSIS TEAM, READ FROM THE MONSTER TYPE.
+--
+--  TWO EARLIER VERSIONS OF THIS ASKED THE ENTITY AND BOTH WERE WRONG.
+--
+--  The first read entity.damageTeam() lazily, and Lua's short-circuit meant it
+--  was never called while camouflage was on -- so the "default" was captured on
+--  UNSOCKET, after the team had already been changed to ghostly.
+--
+--  The second captured it eagerly, before any change, which fixed that and was
+--  still wrong for a reason no ordering can fix: units are spawned PERSISTENT.
+--  A unit saved to the world chunk while camouflaged is RESTORED with ghostly
+--  baked in rather than respawned, so entity.damageTeam() reports ghostly as the
+--  chassis default however early it is asked. Measured 2026-08-30 -- a restored
+--  unit sat at ghostly/0 through repeated socket and unsocket cycles, logging
+--  nothing at all, because the change gate saw have == want every time.
+--
+--  THE TYPE CANNOT BE CORRUPTED BY A SAVE. petports_chassisTeam reads the
+--  monstertype, which is what the unit WOULD have been spawned with -- see
+--  fact.unit.spawnoverride for the same type/entity split deciding two other
+--  bugs in this mod.
+--  SENT BY THE PORT, which resolves it from the monster type. The unit does not
+--  look it up: monster.type() is an API this mod has never used, and a lookup
+--  that failed would fall back to entity.damageTeam() -- the exact untrustworthy
+--  source the whole exercise exists to avoid.
+--
+--  CACHED so a push that omits it -- an older port, a partial install -- does not
+--  strand the unit on whatever it currently has.
+local function baseTeam(sent)
+  if type(sent) == "table" and sent.type ~= nil then
+    self.petportsBaseTeam = sent
+  end
+
+  if self.petportsBaseTeam ~= nil then return self.petportsBaseTeam end
+
+  --  LAST RESORT, AND KNOWN TO BE UNRELIABLE. A restored persistent unit that
+  --  was saved while camouflaged reports ghostly here.
+  return entity.damageTeam()
+end
+
+--  UNIT-SIDE MODULE FLAGS. Everything the PORT can act on itself stays there;
+--  this is only for what needs monster.* callbacks.
+--
+--  CAMOUFLAGE GOES GHOSTLY, which is the same team vanilla's Oblivious Collar
+--  uses to pacify a pet -- and, measured 2026-08-30, the team FISHING FISH sit
+--  on. It takes the unit out of damage resolution entirely so nothing hunts it.
+--
+--  IT DOES NOT STOP THE UNIT WORKING, unlike the oblivious module. Hidden and
+--  busy is the point.
+--
+--  A CAMOUFLAGED UNIT IS STILL A VALID PATIENT, and that is not luck: the medic
+--  classifier tests petports_unit BEFORE it looks at the damage team, precisely
+--  so a unit that reads ghostly is recognised as ours rather than as a fish.
+--  See arch.dispatch.medicpatients -- this is the case that ordering protects.
+function petports_applyModuleFlags(flags, sentBaseTeam)
+  local set = {}
+  for _, flag in ipairs(flags or {}) do set[flag] = true end
+
+  --  CAPTURED FIRST, UNCONDITIONALLY, AND THE ORDER IS THE FIX.
+  --
+  --  This used to read `set.camouflage and {ghostly} or baseTeam()`, and Lua
+  --  short-circuits: with camouflage on, baseTeam() was NEVER CALLED. A unit
+  --  whose first push already had the module -- a world reload, a respawn after
+  --  death, anything that rebuilds the unit with camo socketed -- then captured
+  --  its "chassis default" for the first time on UNSOCKET, by which point
+  --  entity.damageTeam() returns the ghostly value it was changed to. It cached
+  --  ghostly as the default and restored the unit to ghostly, permanently, while
+  --  logging that it had restored the default.
+  --
+  --  Calling it here means the capture always happens BEFORE this function has
+  --  changed anything, which is the only moment the answer is trustworthy.
+  local base = baseTeam(sentBaseTeam)
+
+  local want = set.camouflage and { type = "ghostly", team = 0 } or base
+  local have = entity.damageTeam()
+
+  --  CHANGE-GATED. setDamageTeam every push would rewrite the team on every
+  --  module rearrangement, and this call runs whenever the signature moves.
+  if have ~= nil and want ~= nil
+     and tostring(have.type) == tostring(want.type)
+     and have.team == want.team then
+    return
+  end
+
+  local ok, err = pcall(monster.setDamageTeam, want)
+
+  if not ok then
+    sb.logInfo("UNIT setDamageTeam FAILED for %s: %s", sb.printJson(want), tostring(err))
+    return
+  end
+
+  sb.logInfo("UNIT damage team %s -> %s (%s)",
+    have and (tostring(have.type) .. "/" .. tostring(have.team)) or "nil",
+    tostring(want.type) .. "/" .. tostring(want.team),
+    set.camouflage and "camouflage module socketed" or "chassis default restored")
+end
+
 function petports_capabilities()
   local freeMover = petports_freeMover()
   local media = freeMover and petports_media() or {}

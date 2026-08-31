@@ -1157,7 +1157,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-08-30j medic fetches its own dose"
+local PETPORT_BUILD_STAMP = "2026-08-30q port resolves the chassis team"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -1511,6 +1511,44 @@ function init()
     self.workTimer = 0
 
     sb.logInfo("PETPORT %s participation: %s", stationUniqueId(), sb.printJson(set))
+    return true
+  end))
+
+  --  MEDIC PATIENT CLASSES, WRITTEN TO petData AND NOT TO A CONFIG PARAMETER.
+  --
+  --  The four participation groups live on the PORT via object.setConfigParameter
+  --  because they describe what this port contributes to the network. These
+  --  describe how ONE MEDIC's supplies are allocated, so they belong to the pet
+  --  and have to survive being carried to a different port.
+  --
+  --  ABSENT MEANS ALL ON, and the write below is the first thing that creates
+  --  the table. petportMedicHeals reads `settings[class] ~= false`, so a unit
+  --  that has never had this pane touched treats everybody -- a module socketed
+  --  into an existing unit works immediately rather than looking broken until
+  --  five boxes are ticked.
+  message.setHandler("petports_setMedic", simpleHandler(function(payload)
+    if type(payload) ~= "table" then return false end
+    if self.petData == nil then return false end
+
+    local set = {}
+    for _, class in ipairs(MEDIC_CLASSES) do
+      set[class] = payload[class] ~= false
+    end
+
+    self.petData.medic = set
+
+    --  self.dirty, exactly as petports_setToggles does. An earlier draft of this
+    --  invented a self.petDataDirty that does not exist and asserted no flag was
+    --  needed -- both wrong. writeBackToItem is gated on this.
+    self.dirty = true
+    self.paneSignature = nil
+
+    --  ZEROED SO AN OPT-IN IS PROMPT, matching participation. Ticking a class
+    --  back on should be looked at now rather than on whatever was left of the
+    --  work timer.
+    self.workTimer = 0
+
+    sb.logInfo("PETPORT %s medic classes: %s", stationUniqueId(), sb.printJson(set))
     return true
   end))
 
@@ -3199,6 +3237,11 @@ OBLIVIOUS_FLAG = "oblivious"
 --  things a player wants for themselves, and a medic quietly consuming those is
 --  a worse outcome than one that never runs.
 MEDIC_FLAG = "medic"
+
+--  CAMOUFLAGE. Read by the UNIT, not by this file -- it changes the unit's
+--  damage team, which needs monster.* callbacks the port does not have. Named
+--  here anyway so the one place flags are spelled stays one place.
+CAMOUFLAGE_FLAG = "camouflage"
 MEDIC_ITEM = "medicalgoods"
 
 --  A TRADE GOOD WITH ALMOST NO VANILLA USE, GIVEN ONE. That is the design
@@ -3269,23 +3312,55 @@ function pushModuleEffects()
   local effects = petportModuleEffects()
   local liquids = petportModuleLiquids()
 
+  --  FLAGS TRAVEL NOW TOO, WHICH THEY DID NOT WHEN THE CHANNEL WAS OPENED.
+  --  Oblivious is read entirely port-side -- it changes what the DISPATCHER
+  --  does -- so the original comment said flags are never pushed anywhere.
+  --  Camouflage broke that: changing a unit's damage team needs monster.*,
+  --  which only the unit has. The flags go down the same wire as everything
+  --  else rather than growing a second one.
+  local flags = petportModuleFlags()
+
+  --  THE CHASSIS TEAM TRAVELS WITH THE FLAGS, computed here rather than looked
+  --  up by the unit.
+  --
+  --  The unit needs it to undo camouflage, and it cannot work it out for itself:
+  --  entity.damageTeam() is corrupted on a restored persistent unit -- see
+  --  petports_chassisTeam -- and monster.type() is an API this mod has never
+  --  used, so a unit-side lookup that failed would fall back to exactly the
+  --  untrustworthy source the lookup exists to avoid.
+  --
+  --  THE PORT KNOWS THE TYPE FOR CERTAIN. petData.monsterType is what it spawned
+  --  the unit FROM. Same split as liquid permissions: the port resolves, the
+  --  unit consumes.
+  local baseTeam = petports_chassisTeam(self.petData and self.petData.monsterType)
+
   local ok, encoded = pcall(sb.printJson, effects)
   if not ok then encoded = tostring(#effects) end
 
   local okLiquids, encodedLiquids = pcall(sb.printJson, liquids)
   if not okLiquids then encodedLiquids = tostring(#liquids) end
 
+  local okFlags, encodedFlags = pcall(sb.printJson, flags)
+  if not okFlags then encodedFlags = tostring(#flags) end
+
+  --  NOT IN THE SIGNATURE. It is derived from the monster type, which cannot
+  --  change for the life of a socketed unit, so including it could only ever
+  --  add churn -- and a push that fires for another reason carries it anyway.
+
   --  BOTH SETS ARE IN THE SIGNATURE. They travel together, so a change to
   --  either has to re-push -- and a signature covering only the effects would
   --  silently swallow a module swap that changed permissions and nothing else.
   local signature = tostring(self.petId) .. "|" .. encoded .. "|" .. encodedLiquids
+    .. "|" .. encodedFlags
 
   if signature == self.pushedModuleEffects then return end
   self.pushedModuleEffects = signature
 
-  sb.logInfo("PETPORT %s pushing %s module effect(s) and %s liquid permission(s) to unit %s: %s / %s",
-    stationUniqueId(), sb.printJson(#effects), sb.printJson(#liquids),
-    sb.printJson(self.petId), encoded, encodedLiquids)
+  sb.logInfo("PETPORT %s pushing to unit %s -- %s effect(s) %s, %s liquid(s) %s, %s flag(s) %s",
+    stationUniqueId(), sb.printJson(self.petId),
+    sb.printJson(#effects), encoded,
+    sb.printJson(#liquids), encodedLiquids,
+    sb.printJson(#flags), encodedFlags)
 
   --  Defined in petports_contract.lua. A bare callScriptedEntity naming a
   --  function the target does not define returns nil SILENTLY rather than
@@ -3293,7 +3368,7 @@ function pushModuleEffects()
   --  effect that does not work -- hence the log line above, which fires
   --  whether or not the far end exists.
   world.callScriptedEntity(self.petId, "petports_setModuleEffects", effects,
-    MODULE_EFFECT_CATEGORY, liquids)
+    MODULE_EFFECT_CATEGORY, liquids, flags, baseTeam)
 end
 
 --------------------------------------------------------------------------------
@@ -3426,6 +3501,23 @@ function mirrorPaneState(dt)
       task = self.task and self.task.type or "idle",
       diagnostics = paneDiagnostics(),
       moduleSlots = petportModuleSlots(),
+
+      --  MEDIC. Two fields, and they answer different questions: whether the
+      --  five patient boxes should EXIST at all, and what they should read.
+      --
+      --  isMedic IS DERIVED FROM THE SOCKETED MODULE, not stored. It is exactly
+      --  petportMedic(), the same test medicWork gates on, so a pane showing
+      --  the boxes and a port generating the work can never disagree.
+      --  THE FLAG SET, NOT A BOOLEAN PER MODULE. The pane's settings list keys
+      --  each row on the flag that reveals it, so sending the raw list means a
+      --  future module needs no new mirror field -- only a row entry and a
+      --  string. isMedic would have been the first of N such booleans.
+      moduleFlags = petportModuleFlags(),
+
+      --  BOTH PET-OWNED SETTING STORES. The pane does not care which message
+      --  files which; it reads them back to paint the boxes it drew.
+      toggles = (self.petData and self.petData.toggles) or nil,
+      medic = (self.petData and self.petData.medic) or nil,
       modules = self.petData.modules,
 
       --  THE ECHO. The pane stamps every module write and refuses to overwrite
@@ -4187,7 +4279,7 @@ end
 --
 --  These are settings keys, so a rename here is a save-compat break -- they are
 --  listed once for the same reason the participation groups are.
-MEDIC_CLASSES = { "player", "npc", "podpet", "animal", "unit" }
+MEDIC_CLASSES = { "player", "crew", "npc", "podpet", "animal", "unit" }
 
 --  WHAT CLASS IS THIS ENTITY, IF ANY?
 --
@@ -4227,12 +4319,34 @@ local function medicClassOf(id)
 
   local entityKind = tostring(world.entityType(id))
   if entityKind == "player" then return "player" end
-  if entityKind == "npc" then return "npc" end
+
+  --  TEAM 0 SPLITS CREW FROM EVERY OTHER FRIENDLY NPC, and it is a mechanism
+  --  rather than a coincidence: crew inherit the PLAYER's team so friendly fire
+  --  cannot hit them, while villagers, tenants and guards sit on team 1.
+  --  Measured 2026-08-30 -- a crew mechanic came back friendly/0 and a villager
+  --  friendly/1 in the same census.
+  --
+  --  THEY ARE SEPARATE CLASSES BECAUSE THEY ARE SEPARATE DECISIONS. Crew are
+  --  worth medical goods to almost everybody; ordinary NPCs can sleep in a bed
+  --  and heal for free, so spending a trade good on one is a choice a player
+  --  may well decline.
+  if entityKind == "npc" then
+    if team.team == 0 then return "crew" end
+    return "npc"
+  end
+
+  --  Same team-0 rule, different meaning: a capture-pod pet also inherits its
+  --  owner's team, while a farm animal sits on the monster default.
   if team.team == 0 then return "podpet" end
   return "animal"
 end
 
 --  IS THIS CLASS SWITCHED ON FOR THIS UNIT?
+--
+--  NAMED "HEALS", NOT "TREATS". A TREAT is the flavor system's word in this
+--  mod -- petports_flavors.config, the feed slot on the Details tab -- so a
+--  medic function called "treats" reads as being about food. The pane hit the
+--  same collision: its five rows said "Treat players" and now say "Heal".
 --
 --  ON petData, NOT ON THE PORT, unlike the four participation groups. Those
 --  describe what a PORT contributes to the network; these describe how a
@@ -4241,7 +4355,7 @@ end
 --
 --  DEFAULTS ON WHEN ABSENT, so a medic module socketed into an existing unit
 --  works immediately rather than appearing broken until five boxes are ticked.
-function petportMedicTreats(class)
+function petportMedicHeals(class)
   if self.petData == nil then return false end
 
   local settings = self.petData.medic
@@ -4269,7 +4383,7 @@ local function medicPatients()
   for _, id in ipairs(candidates) do
     local class = medicClassOf(id)
 
-    if class ~= nil and petportMedicTreats(class) then
+    if class ~= nil and petportMedicHeals(class) then
       local health = world.entityHealth(id)
 
       --  NOT AT FULL HEALTH, with no threshold invented. A fraction was
@@ -10684,6 +10798,36 @@ function update(dt)
     end
   end
 
+--  WHAT THE WORLD THINKS THIS UNIT'S DAMAGE TEAM IS.
+--
+--  AN INDEPENDENT READ, AND THAT IS THE ENTIRE POINT. The unit logs its own
+--  transitions from entity.damageTeam() inside petports_applyModuleFlags -- that
+--  is what the unit BELIEVES. This is world.entityDamageTeam from outside, which
+--  is what everything else in the world actually resolves against.
+--
+--  THE TWO DISAGREEING IS A REAL FAILURE MODE, not a hypothetical: the same
+--  type-level versus entity-level split is what exposed spawnPet overriding the
+--  monstertype -- see fact.unit.spawnoverride. A unit that logs "chassis default
+--  restored" while the world still sees ghostly looks identical, from the unit's
+--  side, to a restore that worked.
+--
+--  CHANGE-GATED, so a settled unit costs one line at spawn and nothing after.
+local function teamWatch()
+  if self.petId == nil or not world.entityExists(self.petId) then
+    self.watchedTeam = nil
+    return
+  end
+
+  local team = world.entityDamageTeam(self.petId)
+  local seen = team and (tostring(team.type) .. "/" .. tostring(team.team)) or "nil"
+
+  if seen ~= self.watchedTeam then
+    sb.logInfo("PETPORT %s unit %s damage team AS THE WORLD SEES IT: %s (was %s)",
+      stationUniqueId(), sb.printJson(self.petId), seen, tostring(self.watchedTeam))
+    self.watchedTeam = seen
+  end
+end
+
   --  HEALTH. The slow backstop for a unit that is stuck with no work to fail
   --  at. See healthCheck for why the interval and the stall limit are what they
   --  are -- the limit is set by cold-cache route probing, not by patience.
@@ -10692,6 +10836,9 @@ function update(dt)
     self.healthTimer = HEALTH_INTERVAL
     healthCheck()
   end
+
+  --  Cheap and change-gated; see teamWatch.
+  teamWatch()
 
   --  Spawn, or respawn after an unload/death.
   --

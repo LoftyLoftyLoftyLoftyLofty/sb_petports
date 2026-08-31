@@ -78,6 +78,25 @@
 					"specification" : "pinkgas"
 				}
 			]
+		},
+
+		//  THE RED STIM NOISES, so a dose SOUNDS like the thing a player already
+		//  knows -- the same reasoning as borrowing the status pod's particles.
+		//
+		//  TWO SEPARATE ACTIONS, NOT ONE WITH TWO OPTIONS. A single sound action
+		//  picks ONE entry from its options at random; these are meant to layer,
+		//  the injection under the power-up.
+		//
+		//  ON REAP RATHER THAN ON SPAWN because a projectile has no spawn hook.
+		//  timeToLive is 0.25, so the gap is a quarter second and reads as
+		//  simultaneous with the burst.
+		{
+			"action" : "sound",
+			"options" : [ "/sfx/statuseffects/stimuse.ogg" ]
+		},
+		{
+			"action" : "sound",
+			"options" : [ "/sfx/statuseffects/powerup.ogg" ]
 		}
 	],
 
@@ -99,7 +118,27 @@
 	//  to outlast the network heal cooldown's usefulness: two medics treating
 	//  each other cannot loop, because the first dose is still running when the
 	//  cooldown expires.
+	//  A DOSE IS A MEDKIT, NOT A BANDAGE. One medical trade good is expensive --
+	//  far more so than the bandages a player makes by the stack -- and paying
+	//  that for regeneration alone was the same benefit for a much rarer item.
+	//  These four are what a player expects a proper medkit to do.
+	//
+	//  TWO SECONDS IS NOT A TYPO AND MUST NOT BE "FIXED" UPWARDS. A block effect
+	//  at duration 2 exists to CLEANSE, not to protect: it strips a burning,
+	//  frozen, shocked or poisoned status already running and then expires. A
+	//  long duration would turn a heal into blanket elemental immunity, which is
+	//  a combat buff nobody asked this module for -- the same line the poison and
+	//  lava modules draw when they refuse to grant damage-type resistances.
+	//
+	//  THE REGEN IS THE ONE THAT LASTS. 120 seconds, and it has to outlive the
+	//  network heal cooldown's usefulness so two medics treating each other
+	//  cannot loop -- see petports_healRecord.
 	"statusEffects" : [
-		{ "effect" : "redstim", "duration" : 120 }
+		{ "effect" : "redstim", "duration" : 120 },
+
+		{ "effect" : "fireblock", "duration" : 2 },
+		{ "effect" : "iceblock", "duration" : 2 },
+		{ "effect" : "electricblock", "duration" : 2 },
+		{ "effect" : "poisonblock", "duration" : 2 }
 	]
 }

@@ -701,3 +701,54 @@ end
 function petports_healWorkId(entityId)
 	return "heal:" .. tostring(entityId)
 end
+
+--  THE DAMAGE TEAM A CHASSIS IS AUTHORED WITH.
+--
+--  READ FROM THE TYPE, NEVER FROM THE ENTITY, and that is the whole point of
+--  this function. Camouflage swaps a unit to `ghostly` and has to be able to put
+--  it back, so something must remember what "back" is.
+--
+--  ASKING THE ENTITY DOES NOT WORK, AND WAS MEASURED NOT TO 2026-08-30. Units
+--  are spawned persistent, so a unit saved to the world chunk while camouflaged
+--  is RESTORED with ghostly baked in rather than respawned -- and every read of
+--  entity.damageTeam(), at init or later, then reports ghostly as the default.
+--  The unit cached it, the change gate saw have == want forever, and socketing
+--  the module became a silent no-op with no log line at all.
+--
+--  THIS IS THE THIRD TIME THE TYPE/ENTITY SPLIT HAS DECIDED SOMETHING. It
+--  exposed spawnPet overriding the monstertype, it settled that the marker file
+--  had loaded, and it is the only trustworthy source here. See
+--  fact.unit.spawnoverride.
+--
+--  TEAM NUMBER DEFAULTS TO 2 because that is what every monster in the
+--  2026-08-30 census reported -- our four chassis, Mooshi, Fluffalo, poptops and
+--  critters alike. A chassis that states its own overrides this.
+local chassisTeamCache = {}
+
+function petports_chassisTeam(monsterType)
+	if monsterType == nil then return nil end
+
+	local key = tostring(monsterType)
+	if chassisTeamCache[key] ~= nil then return chassisTeamCache[key] end
+
+	local ok, params = pcall(root.monsterParameters, key)
+	if not ok or type(params) ~= "table" then return nil end
+
+	local base = type(params.baseParameters) == "table" and params.baseParameters or {}
+
+	local function read(name, fallback)
+		local value = params[name]
+		if value == nil then value = base[name] end
+		if value == nil then return fallback end
+		return value
+	end
+
+	local team =
+	{
+		type = tostring(read("damageTeamType", "friendly")),
+		team = tonumber(read("damageTeam", 2)) or 2
+	}
+
+	chassisTeamCache[key] = team
+	return team
+end

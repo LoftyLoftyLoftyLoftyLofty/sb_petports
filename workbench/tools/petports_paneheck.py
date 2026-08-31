@@ -235,17 +235,49 @@ def check(lua_path, cfg_path, band):
 
 	used = set()
 
-	def walk(node):
+	#  ROW CALLBACKS ARE THE INVERSE RULE AND MUST NOT BE REPORTED.
+	#
+	#  A widget inside a list's listTemplate is built by ListWidget's own parser,
+	#  which has never heard of scriptWidgetCallbacks. Naming one there makes
+	#  addListItem throw at CONSTRUCTION and the pane never opens -- so for row
+	#  widgets, ABSENCE from scriptWidgetCallbacks is correct and presence is the
+	#  bug. They are registered at runtime with widget.registerMemberCallback.
+	#
+	#  Reported the other way round instead: a row callback that the script never
+	#  registers is the failure worth catching, and it is checked below.
+	row_used = set()
+
+	def walk(node, in_template=False):
 		if isinstance(node, dict):
 			for k, v in node.items():
 				if k in ('callback', 'rightClickCallback') and isinstance(v, str):
-					used.add(v)
-				walk(v)
+					(row_used if in_template else used).add(v)
+				walk(v, in_template or k == 'listTemplate')
 		elif isinstance(node, list):
 			for v in node:
-				walk(v)
+				walk(v, in_template)
 
 	walk(gui)
+
+	#  A ROW CALLBACK MUST BE REGISTERED IN LUA, and registerMemberCallback is
+	#  the only way to do it. Missing registration is a click that silently does
+	#  nothing -- quieter than the construction throw, and harder to find.
+	#  SCANNED FROM THE RAW SOURCE, NOT `clean`. strip_lua removes string
+	#  literals, and the registered name IS a string literal -- searching the
+	#  stripped text reports every correctly registered callback as missing.
+	#  Found by this check firing on the upcycler, which registers both of its.
+	registered = set(re.findall(
+		r'registerMemberCallback\s*\([^,]+,\s*["\']([\w]+)["\']', src))
+
+	#  `null` IS A PLACEHOLDER, NOT A CALLBACK -- the same exclusion the
+	#  pane-level check makes just below.
+	for name in sorted(row_used - {'null', 'close'}):
+		if name not in registered:
+			findings.append(f"ROW CALLBACK UNREGISTERED  {name}  named inside a "
+				f"listTemplate, never passed to widget.registerMemberCallback")
+		if name in swc:
+			findings.append(f"ROW CALLBACK IN swc        {name}  is a row callback "
+				f"AND named in scriptWidgetCallbacks -- throws at CONSTRUCTION")
 	for name in sorted(used - swc - {'null', 'close'}):
 		findings.append(f"CALLBACK UNWIRED    {name}  named by a widget, absent from "
 		                f"scriptWidgetCallbacks -- throws at CONSTRUCTION")
