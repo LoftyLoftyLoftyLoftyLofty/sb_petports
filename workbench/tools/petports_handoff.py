@@ -27,6 +27,45 @@ Checks:
   4  Topic segment is in the closed vocabulary.
   5  Every `see also` resolves to a tag that exists.
   6  Entries sit under the section their category names.
+  7  No `arch` entry declares itself unbuilt.
+  8  Every `plan` entry carries a date.
+  9  Every tag cited in a BODY resolves too, not just in `see also`.
+
+CHECKS 7 TO 9 EXIST BECAUSE 1 TO 6 CHECK SHAPE AND NOT TRUTH. On 2026-08-31 a
+fully well-formed entry describing a family of "filter beacons" was found in
+ARCHITECTURE, having entered the document on 2026-08-23 and survived the v2
+carve-up intact. It passed every check above: unique tag, valid category, valid
+topic, resolving references, filed under the section its `arch.` prefix demands.
+It was also a design that had been superseded months earlier by filters living
+on the two beacons that actually exist. Nothing structural was ever going to
+catch it -- but its second line said "SPECIFIED, NOT BUILT" while sitting in the
+section reserved for what IS built, and that is greppable.
+
+  7  is the direct catch for that class. ARCH is for what exists; a design that
+     announces itself unbuilt belongs in PLAN, where the rot table expects it to
+     graduate or be abandoned. Anchored to the start of a paragraph so that a
+     note about one unbuilt PART of a built system -- "`ceiling` is declared and
+     not built" in arch.port.tetherlocation -- does not trip it.
+
+  8  is the slow version of the same thing. A plan with no date has no age, and
+     an entry with no age cannot be seen to have rotted. THE DATE MUST RECORD A
+     REVIEW THAT HAPPENED. Stamping entries to clear this check is the same
+     failure as fabricating a build stamp, and it converts the one tool that
+     could have caught the filter beacons into the thing that hides the next one.
+
+  9  is the gap check 5 left open. `see also` was validated and body prose was
+     not, so a reference invented mid-paragraph resolved to nothing and said so
+     to nobody. Found one on the first run. The category prefix is what
+     distinguishes a tag from an ordinary dotted expression, so `edge.source.x`
+     and `self.state.update` are ignored and `todo.pathing.whatever` is not.
+
+     A RETIRED TAG IS WRITTEN WITHOUT BACKTICKS, which is the convention this
+     check forces and it is the right one. An entry folded into another leaves
+     prose behind naming what it used to be called -- "opened as
+     todo.pathing.submergedplatform (retired)" -- and that is history, not a
+     reference. Backticks claim it resolves. Bare text still greps, since the
+     two-direction grep matches strings and not markup, so nothing is lost by
+     dropping them and a false reference is gained by keeping them.
 
 Also prints a census, which doubles as a progress readout while the v1
 document is being carved up: entries per category, and per topic.
@@ -62,6 +101,22 @@ TOPICS = {
 
 TAG_RE = re.compile(r'`([a-z]+)\.([a-z]+)\.([a-z0-9]+)`')
 SEEALSO_RE = re.compile(r'see also\s+(.*)$', re.I)
+
+#  ANCHORED TO THE START OF A LINE, AND THAT ANCHOR IS THE WHOLE PRECISION.
+#
+#  "SPECIFIED, NOT BUILT." opening a paragraph is a claim about the ENTRY.
+#  "**`ceiling` IS DECLARED AND NOT BUILT.**" mid-entry is a claim about one
+#  PART of a built system, which is legitimate in ARCHITECTURE. Unanchored, this
+#  pattern flags both; anchored, it flags only the first. Leading markdown
+#  emphasis is allowed through because the document bolds its shouted claims.
+UNBUILT_RE = re.compile(r'^\**(?:SPECIFIED,\s+)?NOT\s+(?:YET\s+)?BUILT\b', re.M)
+
+#  Any ISO date anywhere in the body satisfies check 8. Deliberately loose: the
+#  document already dates its markers a dozen different ways ("TRIAGED
+#  2026-08-30", "DONE 2026-08-30", "MEASURED 2026-08-31"), and prescribing one
+#  spelling would mean rewriting entries to satisfy a linter rather than to say
+#  something. The check is that the entry has an AGE, not that it has a keyword.
+DATE_RE = re.compile(r'\b20\d\d-\d\d-\d\d\b')
 
 
 def parse(path):
@@ -104,11 +159,31 @@ def parse(path):
 				'cat': cat, 'topic': topic,
 				'section': section,
 				'refs': refs,
+				'tagline': i + offset,
 			})
 
 		i += 1
 
+	attach_bodies(lines, entries)
 	return entries, findings
+
+
+#  THE BODY IS EVERYTHING BETWEEN THE TAG LINE AND THE NEXT HEADING OF ANY
+#  LEVEL. `####` subsections belong to the entry above them -- vent pipes lives
+#  under arch.vent.routing that way -- so only `##` and `###` terminate.
+def attach_bodies(lines, entries):
+	for e in entries:
+		start = e['tagline'] + 1
+		end = start
+
+		while end < len(lines):
+			line = lines[end]
+			if line.startswith('### ') or line.startswith('## '):
+				break
+			end += 1
+
+		e['body'] = '\n'.join(lines[start:end])
+		e['bodyline'] = start
 
 
 def check(entries, findings):
@@ -136,12 +211,41 @@ def check(entries, findings):
 			                f"filed under '{e['section']}', category says "
 			                f"'{want}'")
 
+		if e['cat'] == 'arch':
+			m = UNBUILT_RE.search(e['body'])
+			if m:
+				at = e['bodyline'] + e['body'][:m.start()].count('\n') + 1
+				findings.append(f"UNBUILT ARCH  {e['tag']}  line {at} -- "
+				                f"declares itself not built while filed under "
+				                f"ARCHITECTURE; this belongs in PLAN")
+
+		if e['cat'] == 'plan' and not DATE_RE.search(e['body']):
+			findings.append(f"UNDATED PLAN  {e['tag']}  line {e['line']} -- "
+			                f"no date in the body, so this design has no age "
+			                f"and cannot be seen to have gone stale")
+
 	known = set(seen)
 	for e in entries:
 		for r in e['refs']:
 			if r not in known:
 				findings.append(f"DANGLING REF  {e['tag']}  line {e['line']} -- "
 				                f"see also '{r}' does not exist")
+
+		#  WHAT MAKES A DOTTED TOKEN A TAG IS THE CATEGORY PREFIX, and nothing
+		#  else would work. The document is full of backticked three-part
+		#  expressions that are code -- `edge.source.position`,
+		#  `self.state.update` -- and they match TAG_RE exactly. Requiring the
+		#  first segment to be one of the ten categories separates them
+		#  cleanly: measured over the whole document it admits 138 real
+		#  references and rejects every code expression.
+		for line_no, line in enumerate(e['body'].split('\n')):
+			for m in TAG_RE.finditer(line):
+				ref = f'{m.group(1)}.{m.group(2)}.{m.group(3)}'
+
+				if m.group(1) in CATEGORIES and ref not in known:
+					findings.append(f"DANGLING BODY {e['tag']}  "
+					                f"line {e['bodyline'] + line_no + 1} -- "
+					                f"cites '{ref}', which does not exist")
 
 	return findings
 

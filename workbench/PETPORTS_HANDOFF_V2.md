@@ -234,42 +234,6 @@ request crate, never both. That falls out of the existing scan rather than being
 enforced anywhere — and it is slot-order dependent if someone puts both in one
 crate: no error, no warning, the top one wins.
 
-### Filter beacons -- slot order is the syntax
-`arch.beacon.slotorder` -- see also `arch.filter.matchers`
-
-SPECIFIED, NOT BUILT. A container's behaviour should be readable as an ORDERED
-CHAIN of beacons rather than a single flag, with the container's own slot order
-supplying the sequence:
-
-    slot 0   deposit beacon          this crate is a deposit target
-    slot 1   allow-all beacon        default: take anything
-    slot 2   deny-specific beacon    ...except these
-
-The result is a crate that accepts everything on a denylist basis. Swap the last
-two and it is an allowlist. Rules compose in the order the player arranged them,
-which is a thing a player can see and rearrange with a mouse, rather than a
-config screen they have to be told exists.
-
-**Nothing blocks this except the filter lists themselves** -- how an allow or
-deny beacon acquires the items it names. Candidates, none chosen: dropping an
-item onto the beacon, a configure-on-use screen (the beacon is already an
-`.activeitem` for exactly this reason), or reading the names off a second
-container. To be experimented with rather than designed on paper.
-
-**TWO THINGS IN `scanContainers` HAVE TO CHANGE FIRST, and both are
-load-bearing.** It walks `world.containerItems` with `pairs` -- correct for
-skipping the holes empty slots leave, WRONG for ordering, and pairs order is
-nondeterministic, so slot order is currently not observed at all. Collect the
-keys, sort them numerically, then walk. And it `break`s at the FIRST beacon it
-finds, which is right while one beacon decides a container and wrong the moment
-a chain exists.
-
-**A filter beacon is not a behaviour beacon.** Only the first beacon in the
-chain names what a container IS; the rest modify it. If `beaconBehaviorOf`
-returns a behaviour for a filter, then a crate holding only a deny beacon
-becomes a deposit target by accident. Filters want their own config key, or a
-value the container scan recognises as a modifier rather than a role.
-
 ### Task 3 — collecting item drops
 `arch.cargo.collect`
 
@@ -2020,6 +1984,54 @@ correct, but the MEANING of reaching it has changed: vents were offered,
 considered, and none helped. A unit landing there repeatedly is now genuinely
 unreachable rather than merely unrouted.
 
+### Spawn and despawn are choreographed, and the door gates the spawn
+`arch.port.choreography` -- see also `fact.unit.spawnrender`, `todo.art.invisibleframe`
+
+BUILT 2026-08-30, GRADUATED FROM PLAN 2026-08-31. Replaces two plan entries,
+plan.art.capturepodfade and plan.art.doorchoreography (both retired), which
+described this as intent. It shipped whole -- the fade, the door gating, and the
+ordering between them -- so the intent entries were removed rather than left to
+read as outstanding work.
+
+**THE COMPLETION SIGNAL IS A POLL, NOT A TIMER.** The plan named this as the one
+unsolved piece: `opening` and `closing` are `"mode" : "transition"` with a
+`transition` target, so the animator advances itself and tells nobody. Both
+options were on the table and the timed one was rejected for the reason the plan
+gave -- a hardcoded duration goes stale the moment the frame count or
+`animationCycle` is retuned. The spawn block tests the TERMINAL state instead:
+
+    if animator.animationState("hullState") ~= "open" then
+      self.spawnTimer = DOOR_POLL
+
+**A PORT WHOSE DOOR NEVER REACHES `open` NEVER SPAWNS, AND THAT IS CORRECT** --
+that is a port that is closed. The environment gate rides the same fact: an
+unsuitable port's hull never opens, so the spawn branch below is unreachable
+while the verdict stands rather than being separately guarded.
+
+**`DOOR_POLL` IS 0.0 AND IS NOT `RESPAWN_GRACE`.** They answer different
+questions. RESPAWN_GRACE is a backoff against a port that cannot spawn retrying
+in a tight loop; a door still moving is not a failure and needs no backoff, only
+a wait of known short duration. Sharing the grace was MEASURED AS A PALPABLE
+DELAY -- a ten-frame transition finishes somewhere inside the window and the
+remainder is dead time, so the hatch visibly opened and then the port sat there.
+Polling every tick is affordable only because the door test is the FIRST thing in
+the block, so a not-yet-open door costs one string compare.
+
+**THE THREE STATE TYPES MOVE TOGETHER.** `setAnimationStateForAllHullComponents`
+drives `hullState`, `doorState` and `interiorState` from one call; `hullState` is
+the one the spawn gate reads.
+
+**THE DESPAWN SIDE WAS THE DELICATE HALF AND IT RESOLVED INTO A HOLD.** The hull
+is held open by `unitPresent` while a retired unit fades, so the door outlives
+the unit going away. That window is also why the spawn branch still tests
+`self.envUnsuitable`: `self.petId` is already nil while the fade runs, so a port
+whose terrain just retired a unit would otherwise deploy a replacement into it.
+
+**THE FADE ITSELF IS `fact.unit.spawnrender`** -- three attempts, and the
+finding that `animator.setAnimationState` is the only thing reachable from a
+monster's init that is guaranteed in place before a frame is drawn. That entry
+is the technical record and is not repeated here.
+
 ### Vent routing
 `arch.vent.routing`
 
@@ -2127,57 +2139,6 @@ rather than a passenger on a rect change. `pruneRouteCache` drops only edges
 naming vents that no longer exist, NOT a blanket clear -- deliberate asymmetry
 with the coverage path, since a rewiring invalidates no walkability fact and a
 cold cache costs 45+ seconds.
-
-#### Vent pipes -- making the hop visible
-
-SPECIFIED, NOT BUILT. A wired object that superficially resembles a pipe,
-chained between vents. A unit entering a vent wired directly to another vent
-travels instantly, as today. A unit entering a vent wired to a PIPE lights each
-pipe in the run in sequence, so the player watches it go in one end, follows it
-along the wall, and sees it come out the other.
-
-This is characterisation more than mechanism, and it is worth building for that
-alone: ambient traversal that LOOKS purposeful is most of the Axiom Verge
-feeling, and a teleport that produces a unit out of nowhere gives all of it
-back.
-
-**A vent has to classify what is on the end of each wire.** Today `collectIds`
-gathers partner ids and `refreshPartners` filters them by comparing
-`world.entityName` against its own `objectName`. With pipes in the world a wire
-route resolves to one of three things: another vent (a destination), a pipe (one
-leg of a route toward a destination), or something else entirely -- a player
-wiring a vent to a lightbulb, which that validation already exists to catch.
-
-**A pipe run terminating in a vent is an EDGE**, and it has to enter the route
-cache as the same kind of fact a direct vent-to-vent link is, or the planner
-never learns the destination is reachable. What differs is the traversal, not
-the topology. A pipe run terminating in nothing is not an edge, and should fail
-closed the way a mis-wired vent already does rather than silently offering a
-route to a dead end.
-
-**Pipes need residency, but only their own tiles.** A vent holds a 12-tile rect
-because a unit ARRIVES there and needs a script running to catch it. A pipe holds
-a unit in transit and needs only the tiles it occupies to stay loaded, so its
-per-object cost is far below a vent's. That distinction matters because a long
-decorative run is exactly the thing players will build a lot of -- see the
-existing note about vent residency scaling with vent count.
-
-**TASK LIFETIME IMPLICATIONS, and they are the real work here.** Vent travel is
-instantaneous today, so nothing in the task layer has any notion of a unit being
-in transit. A pipe run has DURATION, and during it:
-
-  - the unit is somewhere that is neither its origin nor its destination, and
-    `mcontroller.position()` will say so
-  - `TASK_DEADLINE` keeps counting, and a long enough run eats it
-  - the leash, the recall ladder and both stall detectors read position and
-    motion, and a unit inside a pipe is motionless somewhere unexpected
-  - the port's claim needs refreshing throughout, or the trip outlives the claim
-
-The cheapest shape is probably that the unit LEAVES the world for the duration
-and the pipe run owns the animation, with the task suspended rather than
-running. That is a guess. The alternative -- the unit exists and is moved along
-the run -- touches every item on that list and wants measuring before it is
-chosen over the other.
 
 #### The route graph
 
@@ -4231,41 +4192,6 @@ Blocked on art. Worth noting the spinner is already factored out into
 `monsters/lofty_petports/shared/`, precisely so unit types can share that layer
 without sharing a body.
 
-### Fade the unit in and out like a capture pod
-`plan.art.capturepodfade`
-
-Socketing and unsocketing currently pop. Vanilla's capture pod has a release and
-recall effect that players already read as "a creature is arriving or leaving",
-and mirroring it costs no new vocabulary.
-
-Pairs with the door choreography -- see `plan.art.doorchoreography` -- since both
-want the same completion signal, and neither should be built without the other or
-the sequencing fights itself.
-
-### The petport door is decoration and should be choreography
-`plan.art.doorchoreography`
-
-The port has `closed`, `opening`, `open` and `closing` states across three
-stateTypes -- hull, door and interior -- with a real ten-frame cycle behind the
-transitions, and all four currently mean nothing more than "is an item
-socketed". They should be part of the SPAWN PIPELINE: socket an item, the door
-plays `opening`, and the unit spawns at the now-open mouth when that animation
-completes, rather than beside the object a tick after the item lands.
-
-**The missing piece is a completion signal, not the animation.** `opening` and
-`closing` are declared `"mode" : "transition"` with a `transition` target, so
-the animator advances itself into `open` or `closed` without being told. The
-script therefore has to either time the cycle itself or poll the animation state
-to know when the mouth is actually open -- and a hardcoded duration goes stale
-the moment the frame count or `animationCycle` changes, which is exactly the
-kind of number that gets retuned during a polish pass.
-
-The reverse is the recall path and is more delicate, since `petports_despawn` is
-death with the funeral suppressed and the door has to outlive the unit going
-away. Sequencing there is unresolved, and note the port ALSO respawns a unit on
-its own after `RESPAWN_GRACE` -- so any spawn choreography has to be reachable
-from that path too, not only from a player socketing an item.
-
 ### Networked storage reading
 `plan.fuel.storageread`
 
@@ -4353,7 +4279,7 @@ do everything the moment it exists has no shape. Choosing which units get which
 modules is the management decision the whole design is trying to create, and it
 only exists if a unit cannot have all of them at once.
 
-### Network control — filter beacons
+### Network control — segregation
 `plan.network.control` -- see also `arch.port.switches`, `dd.port.participationgroups`
 
 What makes a LARGE deployment governable, and everything above assumes large
@@ -4366,18 +4292,82 @@ work generators do not fit a pane band and nobody thinks in generators. Watering
 farming group and cannot be switched off on its own. If that turns out to matter,
 splitting farming is the change, not per-task boxes.
 
-**FILTER BEACONS, IN TWO FAMILIES, ARE STILL OUTSTANDING.** Filters apply IN
-ORDER, using the
-container's own slot order as the syntax:
+**ITEM FILTERING IS BUILT AND IS NOT A BEACON.** A filter lives on the beacon
+that is already there, as `petports_beaconFilter` on the item, edited in that
+beacon's own pane, with the matchers and last-match-wins ordering in
+`petports_filters.lua`. See `arch.filter.matchers`.
 
-  - **Item filters** -- allow and deny lists over item descriptors, the original
-    spec.
-  - **Network filters** -- a PARALLEL beacon set governing which networks may
-    interact with a container's contents at all.
+**WHAT REMAINS IS NETWORK SEGREGATION, AND IT IS A UI ADDITION TO THE TWO PANES
+THAT EXIST.** The deposit and restock beacon panes gain a network id widget when
+segregation is implemented. That is what answers "whose crate is this" -- a crate
+is claimed by naming a network on the beacon already in it, not by adding a
+second beacon beside it.
 
-The second is the one that makes shared bases work. Item filters answer "what
-belongs in this crate"; network filters answer "whose crate is this". Those are
-different questions and a player will eventually need both.
+**THERE ARE TWO BEACONS, DEPOSIT AND RESTOCK, AND THERE WILL NOT BE MORE.** An
+earlier design proposed a family of filter beacons chained by container slot
+order, which is why `scanContainers` sorts its slot keys. That sort is worth
+keeping for the reason recorded in `arch.beacon.restock` -- two behaviour
+beacons in one crate must not swap roles between scans -- but the chain it was
+written for is not coming. Recorded because the design outlived its own
+supersession once already.
+
+### Vent pipes -- making the hop visible
+`plan.vent.pipes` -- see also `arch.vent.routing`, `todo.vent.entrysites`
+
+**MOVED OUT OF `arch.vent.routing` ON 2026-08-31.** It was a `#### ` subsection
+inside the vent ARCHITECTURE entry while declaring itself unbuilt, which is the
+same filing error that let a superseded beacon design sit in ARCHITECTURE for
+eight days. The vents that work stay in `arch.vent.routing`; this is the part
+that does not exist yet. Content unchanged by the move.
+
+A wired object that superficially resembles a pipe,
+chained between vents. A unit entering a vent wired directly to another vent
+travels instantly, as today. A unit entering a vent wired to a PIPE lights each
+pipe in the run in sequence, so the player watches it go in one end, follows it
+along the wall, and sees it come out the other.
+
+This is characterisation more than mechanism, and it is worth building for that
+alone: ambient traversal that LOOKS purposeful is most of the Axiom Verge
+feeling, and a teleport that produces a unit out of nowhere gives all of it
+back.
+
+**A vent has to classify what is on the end of each wire.** Today `collectIds`
+gathers partner ids and `refreshPartners` filters them by comparing
+`world.entityName` against its own `objectName`. With pipes in the world a wire
+route resolves to one of three things: another vent (a destination), a pipe (one
+leg of a route toward a destination), or something else entirely -- a player
+wiring a vent to a lightbulb, which that validation already exists to catch.
+
+**A pipe run terminating in a vent is an EDGE**, and it has to enter the route
+cache as the same kind of fact a direct vent-to-vent link is, or the planner
+never learns the destination is reachable. What differs is the traversal, not
+the topology. A pipe run terminating in nothing is not an edge, and should fail
+closed the way a mis-wired vent already does rather than silently offering a
+route to a dead end.
+
+**Pipes need residency, but only their own tiles.** A vent holds a 12-tile rect
+because a unit ARRIVES there and needs a script running to catch it. A pipe holds
+a unit in transit and needs only the tiles it occupies to stay loaded, so its
+per-object cost is far below a vent's. That distinction matters because a long
+decorative run is exactly the thing players will build a lot of -- see the
+existing note about vent residency scaling with vent count.
+
+**TASK LIFETIME IMPLICATIONS, and they are the real work here.** Vent travel is
+instantaneous today, so nothing in the task layer has any notion of a unit being
+in transit. A pipe run has DURATION, and during it:
+
+  - the unit is somewhere that is neither its origin nor its destination, and
+    `mcontroller.position()` will say so
+  - `TASK_DEADLINE` keeps counting, and a long enough run eats it
+  - the leash, the recall ladder and both stall detectors read position and
+    motion, and a unit inside a pipe is motionless somewhere unexpected
+  - the port's claim needs refreshing throughout, or the trip outlives the claim
+
+The cheapest shape is probably that the unit LEAVES the world for the duration
+and the pipe run owns the animation, with the task suspended rather than
+running. That is a guess. The alternative -- the unit exists and is moved along
+the run -- touches every item on that list and wants measuring before it is
+chosen over the other.
 
 ### The carried-item indicator
 `plan.pane.carriedindicator`
@@ -6659,7 +6649,8 @@ producing a state the engine never produced. Suspect the mod before the record.
 ### `world.pointTileCollision` DOES NOT SEE PLATFORMS BY DEFAULT
 `fact.pathing.platformfloor` -- see also `fact.pathing.collisionkinds`, `fact.pathing.liquidstandable`, `arch.pathing.oneanchor`
 
-**OPENED 2026-08-30 AS `todo.pathing.submergedplatform`. RESOLVED 2026-08-31, AND
+**OPENED 2026-08-30 AS todo.pathing.submergedplatform (retired). RESOLVED
+2026-08-31, AND
 THE MECHANISM WAS NEITHER OF THE TWO HYPOTHESES THE ENTRY RECORDED.** It was not
 `validStandingPosition` being too permissive underwater, and it was not the
 home-point resolver. It was TWO PREDICATES DISAGREEING ABOUT WHAT FLOOR IS.
@@ -7831,7 +7822,7 @@ emptied and re-placed. Seen in game.
 ### Two vent entry sites, only one hardened
 `todo.vent.entrysites`
 
-**TRIAGED 2026-08-30 -- PRIORITY 7, BUT DEFERRED UNTIL PIPES.** The highest-priority item on the backlog and still not next: both entry sites should run the SAME validation rather than site A being hardened alone, and vent pipes rewrite what a hop IS -- see the pipes subsection under the vent architecture. Hardening entry site B against the current instantaneous model would be work done twice.
+**TRIAGED 2026-08-30 -- PRIORITY 7, BUT DEFERRED UNTIL PIPES.** The highest-priority item on the backlog and still not next: both entry sites should run the SAME validation rather than site A being hardened alone, and vent pipes rewrite what a hop IS -- see `plan.vent.pipes`. Hardening entry site B against the current instantaneous model would be work done twice.
 
 `petportsTaskAction` calls `petports_ventTravel` from two places -- "already
 touching" and "walked to it via approachPoint". The fail-closed hardening went on
@@ -8014,16 +8005,6 @@ expensive once there are several variants.
 Work out how names above monsters are driven and whether ours can carry one. Then
 a "display unit name" checkbox on the pet Settings tab, ON by default, beside the
 rename button -- the two belong together and neither means much without the other.
-
-### Petport spawn choreography
-`todo.port.choreography` -- see also `plan.art.capturepodfade`, `plan.art.doorchoreography`
-
-**DONE 2026-08-30.** Spawn and despawn are choreographed -- the fade, the door gating, and the ordering between them. See `status.port.inventory` and `fact.unit.spawnrender`. WHAT SHIPPED IS THE TRANSITION, NOT THE WHOLE SEQUENCE: `plan.art.capturepodfade` and `plan.art.doorchoreography` describe more than the fade. Kept rather than deleted because other entries name it.
-
-A unit currently appears and disappears instantly. The fade is already specified
-in `plan.art.capturepodfade` and the door in `plan.art.doorchoreography`; this is
-the note that they are one job and want doing together, since both fire on the
-same two events.
 
 ### Error state on the petport itself
 `todo.port.errorindicator`
