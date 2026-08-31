@@ -197,7 +197,6 @@ function petportParticipation()
   return {
     hauling = petportParticipates("hauling"),
     sorting = petportParticipates("sorting"),
-    farming = petportParticipates("farming"),
     machines = petportParticipates("machines")
   }
 end
@@ -1157,7 +1156,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-08-30q port resolves the chassis team"
+local PETPORT_BUILD_STAMP = "2026-08-30r farming is a module"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -1495,10 +1494,13 @@ function init()
   message.setHandler("petports_setParticipation", simpleHandler(function(payload)
     if type(payload) ~= "table" then return false end
 
+    --  NO farming KEY. It moved to the farming MODULE on 2026-08-30 and is
+    --  stored on petData, not here -- see FARMING_CLASSES. A stored value from
+    --  before that is simply never read again; nothing merges it forward,
+    --  because the port-level switch no longer means anything.
     local set = {
       hauling = payload.hauling ~= false,
       sorting = payload.sorting ~= false,
-      farming = payload.farming ~= false,
       machines = payload.machines ~= false
     }
 
@@ -1526,6 +1528,27 @@ function init()
   --  that has never had this pane touched treats everybody -- a module socketed
   --  into an existing unit works immediately rather than looking broken until
   --  five boxes are ticked.
+  --  FARMING ACTIVITIES. Same shape and same reasoning as petports_setMedic:
+  --  written to petData so the preference travels with the pet, absent meaning
+  --  all on, self.dirty so writeBackToItem persists it.
+  message.setHandler("petports_setFarming", simpleHandler(function(payload)
+    if type(payload) ~= "table" then return false end
+    if self.petData == nil then return false end
+
+    local set = {}
+    for _, class in ipairs(FARMING_CLASSES) do
+      set[class] = payload[class] ~= false
+    end
+
+    self.petData.farming = set
+    self.dirty = true
+    self.paneSignature = nil
+    self.workTimer = 0
+
+    sb.logInfo("PETPORT %s farming activities: %s", stationUniqueId(), sb.printJson(set))
+    return true
+  end))
+
   message.setHandler("petports_setMedic", simpleHandler(function(payload)
     if type(payload) ~= "table" then return false end
     if self.petData == nil then return false end
@@ -3242,6 +3265,21 @@ MEDIC_FLAG = "medic"
 --  damage team, which needs monster.* callbacks the port does not have. Named
 --  here anyway so the one place flags are spelled stays one place.
 CAMOUFLAGE_FLAG = "camouflage"
+
+--  FARMING IS A MODULE NOW, NOT A PORT SWITCH.
+--
+--  It used to be the fourth participation group, alongside hauling, sorting and
+--  machines -- a PORT setting, because the port dispatches. That split was drawn
+--  at "is this universally available to a pet", and farming stopped being
+--  universal the moment it needed the granularity below. No module, no farming.
+--
+--  THE FOUR CLASSES ARE PLAYER-FACING ACTIVITIES, NOT GENERATORS. Six generators
+--  are gated by them, because two of the activities own a fetch leg: watering
+--  owns withdrawWaterWork and replanting owns withdrawWork, the same way the
+--  medic task owns its own trip to the crate. Nobody ticks a box for "go and get
+--  a seed" -- that is part of replanting, not a decision beside it.
+FARMING_FLAG = "farming"
+FARMING_CLASSES = { "harvest", "water", "replant", "animals" }
 MEDIC_ITEM = "medicalgoods"
 
 --  A TRADE GOOD WITH ALMOST NO VANILLA USE, GIVEN ONE. That is the design
@@ -3278,6 +3316,27 @@ function petportMedic()
     if flag == MEDIC_FLAG then return true end
   end
   return false
+end
+
+function petportFarming()
+  for _, flag in ipairs(petportModuleFlags()) do
+    if flag == FARMING_FLAG then return true end
+  end
+  return false
+end
+
+--  IS THIS FARMING ACTIVITY SWITCHED ON FOR THIS UNIT?
+--
+--  ON petData, exactly like the medic classes and for the same reason: it
+--  describes how one PET behaves and should travel with it to another port.
+--  Defaults ON when absent, so socketing the module into an existing unit starts
+--  farming immediately rather than looking broken until four boxes are ticked.
+function petportFarmingDoes(class)
+  if self.petData == nil then return false end
+
+  local settings = self.petData.farming
+  if type(settings) ~= "table" then return true end
+  return settings[class] ~= false
 end
 
 --  THE CATEGORY THE UNIT HOLDS THEM UNDER.
@@ -3518,6 +3577,7 @@ function mirrorPaneState(dt)
       --  files which; it reads them back to paint the boxes it drew.
       toggles = (self.petData and self.petData.toggles) or nil,
       medic = (self.petData and self.petData.medic) or nil,
+      farming = (self.petData and self.petData.farming) or nil,
       modules = self.petData.modules,
 
       --  THE ECHO. The pane stamps every module write and refuses to overwrite
@@ -9464,7 +9524,13 @@ local function findWork()
 
   local doHauling = not oblivious and petportParticipates("hauling")
   local doSorting = not oblivious and petportParticipates("sorting")
-  local doFarming = not oblivious and petportParticipates("farming")
+  --  FARMING SPLITS INTO FOUR, GATED BY THE MODULE RATHER THAN BY THE PORT.
+  local farming = not oblivious and petportFarming()
+
+  local doHarvest = farming and petportFarmingDoes("harvest")
+  local doWater = farming and petportFarmingDoes("water")
+  local doReplant = farming and petportFarmingDoes("replant")
+  local doAnimals = farming and petportFarmingDoes("animals")
   local doMachines = not oblivious and petportParticipates("machines")
 
   --  Before anything else: a unit that has strayed cannot reach work anyway.
@@ -9515,14 +9581,14 @@ local function findWork()
   --  nothing in the log looking like an error because every individual task
   --  succeeded.
   local putBack, noPutBack
-  if doFarming then putBack, noPutBack = replantWork() end
+  if doReplant then putBack, noPutBack = replantWork() end
   if dispatchable(putBack) ~= nil then return putBack end
 
   --  WATER SITS WITH REPLANT, ABOVE DEPOSIT, and for exactly the same reason:
   --  a unit carrying liquid that matches dry soil is mid-job, and deposit fires
   --  on ANY cargo.
   local wet, noWet
-  if doFarming then wet, noWet = waterWork() end
+  if doWater then wet, noWet = waterWork() end
   if dispatchable(wet) ~= nil then return wet end
 
   --  RESTOCK DELIVERY SITS HERE FOR THE THIRD TIME OVER. A unit holding a stack
@@ -9611,24 +9677,24 @@ local function findWork()
   --  them, deposit runs because deposit outranks collect, come back, harvest
   --  the next one.
   local crop, noCrop
-  if doFarming then crop, noCrop = harvestWork() end
+  if doHarvest then crop, noCrop = harvestWork() end
   if dispatchable(crop) ~= nil then return crop end
 
   --  BESIDE CROP HARVESTING, below collection, for the same reason: an animal
   --  that is ready stays ready, where a drop on the ground is on a despawn
   --  timer. Nothing is lost by clearing the ground first.
   local beast, noBeast
-  if doFarming then beast, noBeast = animalWork() end
+  if doAnimals then beast, noBeast = animalWork() end
   if dispatchable(beast) ~= nil then return beast end
 
   --  Fetching is the lowest-priority thing a unit can do: it is the only work
   --  that MANUFACTURES cargo rather than clearing something. See withdrawWork.
   local fetch, noFetch
-  if doFarming then fetch, noFetch = withdrawWork() end
+  if doReplant then fetch, noFetch = withdrawWork() end
   if dispatchable(fetch) ~= nil then return fetch end
 
   local fetchWater, noFetchWater
-  if doFarming then fetchWater, noFetchWater = withdrawWaterWork() end
+  if doWater then fetchWater, noFetchWater = withdrawWaterWork() end
   if dispatchable(fetchWater) ~= nil then return fetchWater end
 
   --  RESTOCKING SITS ABOVE TIDYING AND BELOW EVERYTHING ELSE. It manufactures
@@ -9701,7 +9767,19 @@ local function findWork()
   local off = {}
   if not doHauling then table.insert(off, "hauling") end
   if not doSorting then table.insert(off, "sorting") end
-  if not doFarming then table.insert(off, "farming") end
+  --  FARMING REPORTS ITS OWN REASON, because "does not participate in farming"
+  --  is now three different situations: no module, the module with this activity
+  --  unticked, or the port switched off entirely. A player chasing a still pet
+  --  needs to know which.
+  if not farming then
+    table.insert(off, petportFarming() and "farming (port off)" or "farming (no module)")
+  else
+    for _, class in ipairs(FARMING_CLASSES) do
+      if not petportFarmingDoes(class) then
+        table.insert(off, "farming: " .. class)
+      end
+    end
+  end
   if not doMachines then table.insert(off, "machines") end
 
   local optedOut = nil

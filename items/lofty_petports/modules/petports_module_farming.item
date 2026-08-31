@@ -1,0 +1,58 @@
+//  PETPORTS -- FARMING MODULE
+//
+//  FARMING USED TO BE A PORT SWITCH AND IS NOW A MODULE.
+//
+//  It was the fourth participation group, beside hauling, sorting and machines
+//  -- a PORT setting, because the port dispatches. That split was drawn at "is
+//  this universally available to any pet", and farming stopped being universal
+//  the moment it wanted the granularity below. No module, no farming.
+//
+//  THE PORT-LEVEL CHECKBOX IS GONE, not hidden. Two switches for one behaviour
+//  is the trap that killed the first version of this module, and leaving a dead
+//  box in the port band would have been exactly that.
+//
+//  FOUR ACTIVITIES, SIX GENERATORS. Watering and replanting each own their fetch
+//  leg -- withdrawWaterWork and withdrawWork -- because nobody ticks a box for
+//  "go and get a seed". Fetching is part of replanting, not a decision beside
+//  it, the same way the medic's trip to the crate belongs to healing.
+//
+//  SETTINGS RIDE ON petData, NOT ON THE PORT, so they travel with the pet when
+//  it is carried to another port. Absent means all four on, so socketing this
+//  into an existing unit starts farming immediately rather than looking broken
+//  until four boxes are ticked.
+//
+//  PULLING IT MID-TASK IS SAFE. A unit carrying a seed or a bucket simply holds
+//  cargo, and depositWork is ungated -- it puts the load in a box and comes home.
+//  A replant intent left standing in the network is not cleared: the tile is
+//  still bare and still wants a seed, so the intent is correct and waits for
+//  farming to come back.
+
+{
+	"itemName" : "petports_module_farming",
+	"price" : 500,
+	"rarity" : "Uncommon",
+
+	//  Shared with the other modules, so the categories.config.patch label and
+	//  the petports_filtergroups.config subgroup that already exist cover this
+	//  item too. A new category would need both added or it sorts to Unsorted.
+	"category" : "petports_module",
+
+	//  TEST ART. Earth brown, muted and darker than the lava module so the two
+	//  warm diamonds do not read alike in a slot.
+	"inventoryIcon" : "petports_module_farming.png",
+
+	"description" : "A husbandry package. Socket it into a unit and it will work the crops and the livestock around its port.",
+	"shortdescription" : "Farming Module",
+
+	//  petports_no_upcycling KEEPS IT OUT OF THE CONVERTER, or a unit hauling
+	//  surplus to an upcycler turns the player's modules into treats.
+	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],
+
+	//  MAXSTACK 1 IS A REQUIREMENT. The pane moves modules with
+	//  player.swapSlotItem(), which returns the whole cursor stack; it refuses a
+	//  stack rather than trusting this field, so a stackable module would be
+	//  refused forever and look broken.
+	"maxStack" : 1,
+
+	"petports_moduleFlags" : [ "farming" ]
+}

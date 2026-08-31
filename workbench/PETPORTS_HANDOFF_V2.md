@@ -155,6 +155,25 @@ is network-wide and keyed by entity id; a patient is checked for health ONE MORE
 TIME on arrival and the unit does nothing if they recovered; two medics healing
 each other is acceptable because two minutes of regen outlasts the loop.
 
+**MODULES ARE THE SESSION'S OTHER HALF AND ALL OF THEM ARE VERIFIED IN GAME.**
+Poison block, lava block (including corelava, with swim pathing inside it),
+oblivious, medic, camouflage and farming. The module system now has three
+channels -- effects to a live unit, liquid permissions read off the item by the
+port, and flags read by the port AND, since camouflage, by the unit. Settings
+that belong to a module live on `petData` and are edited through a dynamic list
+in the pane, so a new module is rows plus strings and no pane surgery.
+
+**FARMING IS A MODULE NOW AND THE PORT-LEVEL CHECKBOX IS DELETED.** Four
+activities -- harvest, water, replant, animals -- over six generators, because
+watering and replanting each own their fetch leg. `GROUPS` is down to hauling,
+sorting and machines.
+
+**TWO PATHING ANOMALIES WERE OBSERVED AND NOT INVESTIGATED**, deliberately, at
+the end of a long session: `todo.pathing.watercrossed` and
+`todo.pathing.submergedplatform`. THE FIRST CONTRADICTS A RECORDED FINDING that
+two other entries lean on, and both of those now carry a caveat pointing at it.
+Measure before tuning anything.
+
 **STILL OPEN: dispatch does not consider chassis when choosing a task.** Aquatic
 units route to water crops on land and flyers route to submerged containers. Both
 are correct under the current rules and both are wasted trips. Named here because
@@ -3626,6 +3645,13 @@ sentence described a placement the code did not perform.
 `environmentCheck` asked the live unit the same footprint-level question, got
 `wet true, dry true, fly true` back, and returned ok. The unit was stuck and
 nothing retired it.
+
+**ITS PREMISE IS UNDER CHALLENGE AS OF 2026-08-30 -- SEE
+`todo.pathing.watercrossed`.** A gravity-disabled unit was observed crossing the
+water boundary in both directions, which is the traversal "a closed node set it
+cannot path out of" says is impossible. The RULE below may well survive; the
+REASON above may not. Do not cite this entry's closed-set claim as settled until
+that is measured.
 
 **UNIFORMITY WAS CHOSEN OVER A POSITION SEARCH.** Picking a suitable tile and
 spawning there would have preserved the original intent, but it turns the verdict
@@ -7565,6 +7591,13 @@ reachable from this mod's setup is unknown; the pelagic attempt failed because
 water is a closed node set for a GRAVITY-DISABLED actor, and a sinker is
 gravity-enabled, so it is a different question rather than the same one answered.
 
+**THAT CLOSED-SET CLAIM IS UNDER CHALLENGE AS OF 2026-08-30 -- SEE
+`todo.pathing.watercrossed`.** An aquatic unit was watched leaving the water,
+flying through air, and entering a different puddle. If the finding was narrower
+than recorded -- true of the pelagic movement parameters rather than of
+gravity-disabled actors generally -- then the sinker question changes shape too,
+because the two are no longer different questions.
+
 ### Names for the chassis
 `todo.unit.names`
 
@@ -7733,6 +7766,66 @@ dozen units with permanent bubbles overhead is the vanilla ship-pet clutter this
 mod exists to avoid. A complaint may deserve different defaults from a carried
 item, since a complaint is rare and actionable where a carried icon is constant;
 undecided.
+
+### A gravity-disabled unit CROSSED the water boundary, which the record says it cannot
+`todo.pathing.watercrossed` -- see also `dead.locomotion.pelagic`, `dd.port.envuniform`, `fact.pathing.liquidstandable`
+
+**OBSERVED 2026-08-30, NOT YET INVESTIGATED. THIS CONTRADICTS A RECORDED
+FINDING AND THE FINDING IS LOAD-BEARING IN TWO PLACES.**
+
+An AQUATIC unit -- gravity-disabled, canSwim true, canFly false -- was watched
+pathing OUT of one body of water, taking a valid flight path through AIR around
+some platforms, and entering a different puddle.
+
+**WHAT THE RECORD SAYS.** `dead.locomotion.pelagic` failed because "water is a
+closed node set for a GRAVITY-DISABLED actor", and `dd.port.envuniform` quotes
+the same fact as its justification: a flyer materialised mid-footprint went
+"into a closed node set it cannot path out of". The traversal above is exactly
+the one both entries say is impossible.
+
+**TWO READINGS AND THEY LEAD DIFFERENT PLACES.** Either the closed-set finding
+was always NARROWER than it was written down as -- specific to the pelagic
+movement parameters rather than to gravity-disabled actors in general -- or
+something changed. The only engine-level change to these units this session was
+`ghostly` to `friendly`, which has no obvious path to affecting pathing, so the
+first is the likelier bet. IT IS A BET, NOT A CONCLUSION.
+
+**WHAT IS AT STAKE IF THE FIRST IS TRUE.** `dd.port.envuniform` refuses to
+deploy a free mover into a mixed footprint, and its entire stated reason is that
+a submerged flyer would be permanently stuck. If a gravity-disabled actor can
+cross the boundary, that reason is wrong. THE RULE MAY STILL BE RIGHT -- it is
+simple and has no gap, and the position-search alternative was rejected on its
+own merits -- but a rule justified by a false premise is worse than a wrong
+rule, because nobody can tell which part to keep.
+
+**DO NOT TUNE ANYTHING BEFORE MEASURING THIS.** The first job is to establish
+what a gravity-disabled actor can actually traverse, and both entries above are
+downstream of the answer.
+
+### An amphibious unit will not path to platforms under its own submerged port
+`todo.pathing.submergedplatform` -- see also `fact.pathing.liquidstandable`, `todo.pathing.watercrossed`
+
+**OBSERVED 2026-08-30, NOT YET INVESTIGATED.**
+
+An amphibious unit -- gravity-ENABLED, `petports_avoidLiquid` false -- was seen
+struggling to reach platforms beneath its own submerged port.
+
+**A HYPOTHESIS, LABELLED AS ONE.** `fact.pathing.liquidstandable` records that
+`validStandingPosition` treats ANY liquid as standable when `avoidLiquid` is
+false. If that holds here, every submerged tile is a valid destination, the
+platform underneath has no special appeal, and the pather may be satisfied long
+before it arrives anywhere useful. THE DISPROOF IS CHEAP: if the unit is
+reaching a valid-but-useless point rather than failing to find one, the logs
+will show arrivals rather than path failures.
+
+**IT MAY BE THE SAME FACT FROM THE OTHER SIDE** as
+`todo.pathing.watercrossed` -- one is a gravity-disabled actor crossing a
+boundary it should not, the other a gravity-enabled one treating a boundary as
+absent. Worth investigating together rather than separately.
+
+**NOT THE HOME-POINT RESOLVER.** `findStandingPoint` requires
+`pointTileCollision` below and cannot return a floating point -- see
+`todo.pathing.standpointchoice`. This is the PATHER, not the leash.
 
 ### The backoff ladder reorder is unexercised
 `todo.port.backoffladder` -- see also `arch.port.reporthandler`

@@ -34,7 +34,7 @@ local DEBUG = true
 --  Bump on every change to this file. A pane has no visible version and a stale
 --  copy is indistinguishable from an unfixed one -- which cost a cycle on the
 --  upcycler before the stamp existed.
-local PANE_BUILD_STAMP = "2026-08-30e crew row"
+local PANE_BUILD_STAMP = "2026-08-30f farming module rows"
 
 local PANE_STATE_KEY = "petports_paneState"
 
@@ -162,7 +162,10 @@ local TAB_WIDGETS = { "tabDetails", "tabSettings", "tabStats" }
 --
 --  Ordered as they are laid out -- hauling, sorting / farming, machines -- so
 --  reading this is reading the pane.
-local GROUPS = { "hauling", "sorting", "farming", "machines" }
+--  FARMING LEFT THIS LIST ON 2026-08-30. It became a module and its four
+--  activities are rows in the settings list, stored on petData -- see
+--  SETTING_ROWS. Three port groups remain.
+local GROUPS = { "hauling", "sorting", "machines" }
 
 --  Widget name per group. Derived rather than tabulated would mean
 --  "group" .. "hauling" and a capitalisation rule; two of these are wanted as
@@ -170,7 +173,6 @@ local GROUPS = { "hauling", "sorting", "farming", "machines" }
 local GROUP_WIDGET = {
 	hauling = "groupHauling",
 	sorting = "groupSorting",
-	farming = "groupFarming",
 	machines = "groupMachines"
 }
 
@@ -208,13 +210,25 @@ local SETTING_ROWS = {
 	{ key = "animal", owner = "medic", needs = "medic",
 	  label = "petport.setting.medicanimal", tip = "petport.tip.medicanimal" },
 	{ key = "unit", owner = "medic", needs = "medic",
-	  label = "petport.setting.medicunit", tip = "petport.tip.medicunit" }
+	  label = "petport.setting.medicunit", tip = "petport.tip.medicunit" },
+
+	{ sep = true, needs = "farming", label = "petport.setting.farmingblock" },
+
+	{ key = "harvest", owner = "farming", needs = "farming",
+	  label = "petport.setting.farmharvest", tip = "petport.tip.farmharvest" },
+	{ key = "water", owner = "farming", needs = "farming",
+	  label = "petport.setting.farmwater", tip = "petport.tip.farmwater" },
+	{ key = "replant", owner = "farming", needs = "farming",
+	  label = "petport.setting.farmreplant", tip = "petport.tip.farmreplant" },
+	{ key = "animals", owner = "farming", needs = "farming",
+	  label = "petport.setting.farmanimals", tip = "petport.tip.farmanimals" }
 }
 
 --  Which message carries each owner's set, and where the pane reads it back.
 local SETTING_MESSAGE = {
 	toggles = "petports_setToggles",
-	medic = "petports_setMedic"
+	medic = "petports_setMedic",
+	farming = "petports_setFarming"
 }
 
 --  Row art. The 180 family at its native 16, not the stats list's regenerated
@@ -998,7 +1012,8 @@ local function paintModules(state)
 
 	paneSettings = {
 		toggles = state.toggles or {},
-		medic = state.medic or {}
+		medic = state.medic or {},
+		farming = state.farming or {}
 	}
 
 	--  state.hasUnit, NOT hasUnit. This block lives in paintModules, which takes
