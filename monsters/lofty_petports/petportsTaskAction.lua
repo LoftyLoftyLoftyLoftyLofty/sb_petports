@@ -131,7 +131,7 @@ local TASK_DEBUG = true
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-08-31a platforms count as floor"
+local BUILD_STAMP = "2026-08-31b one standable resolver"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -2629,8 +2629,33 @@ local STANDABLE_TILE_SET = { "Block", "Slippery", "Platform" }
 local GROUND_SEARCH_DOWN = -6
 local GROUND_SEARCH_UP = 4
 
---  Column offsets to try, nearest first.
-local COLUMN_SEARCH = { 0, 1, -1, 2, -2, 3, -3 }
+--  Column offsets to try, nearest first. THREE IS THE DEFAULT AND WAS THE ONLY
+--  VALUE until this became the one resolver -- the port asks for wider searches
+--  around machines and patients, so the range is a parameter now.
+local COLUMN_RADIUS = 3
+
+--  MEMOISED PER RADIUS, and the reason is not the allocation. The ORDER is the
+--  answer in a first-fit search -- `petports_flyPointNear`'s header records what
+--  ring-ordering cost when it was arbitrary -- so building it in one place means
+--  a caller cannot accidentally hand over a differently ordered set and get a
+--  differently biased result from the same function.
+local columnCache = {}
+
+local function columnsFor(radius)
+	radius = math.floor(radius or COLUMN_RADIUS)
+	if radius < 0 then radius = 0 end
+
+	if columnCache[radius] ~= nil then return columnCache[radius] end
+
+	local offsets = { 0 }
+	for i = 1, radius do
+		table.insert(offsets, i)
+		table.insert(offsets, -i)
+	end
+
+	columnCache[radius] = offsets
+	return offsets
+end
 
 --  Somewhere a ground unit can stand, near a drop.
 --
@@ -2647,14 +2672,21 @@ local COLUMN_SEARCH = { 0, 1, -1, 2, -2, 3, -3 }
 --  statement about which SURFACE to stand on, and a flyer is not standing on
 --  one. petports_flyPointNear returns nil for a ground unit, so the whole
 --  existing path below is untouched.
-local function standableNear(position, searchUp)
+--
+--  THIS IS NOW THE ONLY RESOLVER FOR "WHERE DOES A UNIT STAND NEAR A POINT".
+--  There were three -- see arch.pathing.oneanchor for what each one got wrong --
+--  and the other two are gone: petports_standingPointNear delegates here, and
+--  findStandingPoint on the port is demoted to the no-unit-exists fallback its
+--  own header always said it was. `radius` exists because the port asks wider
+--  than a task does.
+local function standableNear(position, searchUp, radius)
   --  A FREE-MOVING CHASSIS OWNS THIS ANSWER OUTRIGHT, INCLUDING THE nil.
   --  Same correction as petports_standingPointNear -- read the note there for
   --  the measurement. Short version: nil from petports_flyPointNear now means
   --  REFUSED as well as "not a flyer", and falling through to the ground search
   --  handed an aquatic unit a dry-land target one line after it declined one.
   if petports_freeMover() then
-    local flyPoint = petports_flyPointNear(position)
+    local flyPoint = petports_flyPointNear(position, radius)
 
     if TASK_DEBUG then
       sb.logInfo("UNIT fly point for %s -> %s",
@@ -2718,7 +2750,7 @@ local function standableNear(position, searchUp)
   local bestOffset = nil
   local bestDistance = nil
 
-  for _, offset in ipairs(COLUMN_SEARCH) do
+  for _, offset in ipairs(columnsFor(radius)) do
     local x = math.floor(position[1] + offset) + 0.5
 
     --  petports_avoidLiquid(), NOT a hardcoded false. This resolver and the one
@@ -2871,10 +2903,28 @@ local function standableNear(position, searchUp)
   end
 
   sb.logInfo("UNIT no standable column near %s within %s columns (up %s, down %s)",
-    sb.printJson(position), sb.printJson(#COLUMN_SEARCH),
+    sb.printJson(position), sb.printJson(#columnsFor(radius)),
     sb.printJson(searchUp), sb.printJson(GROUND_SEARCH_DOWN))
   return nil
 end
+
+--  THE ONE RESOLVER, EXPORTED UNDER A PREFIXED NAME.
+--
+--  A monster's scripts share one Lua environment, so this is reachable from
+--  petports_contract.lua even though that file loads FIRST -- the delegate there
+--  runs at call time, by which point every chunk has executed.
+--
+--  EXPORTED RATHER THAN MOVED, because everything it depends on lives here:
+--  COLUMN_RADIUS, GROUND_SEARCH_DOWN, STANDABLE_TILE_SET, TASK_DEBUG. Moving the
+--  function to contract would mean moving four constants and leaving the task
+--  side reaching across for them, which trades one split for another.
+--
+--  NOT nil-GUARDED AT ITS CALL SITES, deliberately. A unit whose monstertype
+--  omits this file should RAISE, loudly, on the first resolve -- the same rule
+--  the moveSwim binding follows in freshPather, and for the same reason the
+--  handoff records: a guarded call to a file nobody loaded is silent and costs a
+--  session.
+petports_standablePoint = standableNear
 
 --  Where the unit should be heading right now.
 --

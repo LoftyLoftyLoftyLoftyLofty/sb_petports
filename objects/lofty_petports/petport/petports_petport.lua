@@ -1171,7 +1171,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-08-31c chassis tether location"
+local PETPORT_BUILD_STAMP = "2026-08-31d home point asks the unit"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -3993,6 +3993,33 @@ local function standingPointNear(position, radius)
   return nil
 end
 
+--  WHERE WOULD THIS UNIT PARK, IF IT WALKED HOME BY ITSELF?
+--
+--  A SEPARATE QUESTION RATHER THAN standingPointNear WITH MORE ARGUMENTS, and
+--  the reason is the boundary. Threading a `searchUp` through meant calling
+--  world.callScriptedEntity with a nil in the MIDDLE of the argument list --
+--  `(position, nil, 0)` -- and whether that boundary preserves an embedded nil
+--  or truncates the list there is not something this mod has measured. A
+--  truncated list would silently drop the homeward bias and put the unit on the
+--  port's roof, which is the exact bug this change exists to remove, arriving by
+--  a route nobody would look at.
+--
+--  IT ALSO NAMES THE RIGHT THING. The port does not want "a ground search with
+--  these parameters"; it wants "your home point". The parameters are the unit's
+--  business and they now live in exactly one place.
+local function homePointNear()
+  if self.petId == nil or not world.entityExists(self.petId) then return nil end
+
+  local ok, resolved = pcall(world.callScriptedEntity, self.petId,
+    "petports_homePointNear", entity.position())
+
+  if ok and resolved ~= nil then return resolved end
+
+  sb.logInfo("PETPORT %s unit could not resolve a home point at %s (called %s)",
+    stationUniqueId(), sb.printJson(entity.position()), tostring(ok))
+  return nil
+end
+
 local function findStandingPoint(rect)
   for _ = 1, 12 do
     local x = math.floor(rect[1] + math.random() * (rect[3] - rect[1])) + 0.5
@@ -4655,6 +4682,30 @@ local function homePosition()
     return entity.position()
   end
 
+  --  ASK THE UNIT. IT OWNS THIS ANSWER AND THE PORT NEVER DID.
+  --
+  --  This is the same call, with the same arguments, that the unit's own leash
+  --  makes for itself -- `standableNear(portPosition, 0)` through
+  --  approachTargetFor. Identical inputs into identical code, so the recall and
+  --  the tether cannot resolve to different points. They did before: the tether
+  --  descended to the floor under the port while the recall took a random column
+  --  and the highest ledge in it, up to thirty tiles away.
+  --
+  --  searchUp 0 IS THE HOMEWARD BIAS AND IT IS NOT OPTIONAL HERE. findGroundPosition
+  --  tests UP BEFORE DOWN at every step, so an unbiased resolve puts the unit on
+  --  the port's own roof -- measured, [1203,728] resolving to [1203.5,731.875].
+  --
+  --  radius LEFT nil ON PURPOSE, so the unit's own default applies. Naming a
+  --  number here would be a constant that has to be kept equal to one in another
+  --  file, which is the drift this whole change exists to remove.
+  local asked = homePointNear()
+  if asked ~= nil then return asked end
+
+  --  NO UNIT TO ASK. findStandingPoint is the fallback its own header always
+  --  said it was, and it is KNOWN WRONG in three ways -- random column, descends
+  --  from the top of the rect, cannot see platforms. It is here so a port with
+  --  nothing socketed still produces something rather than nil, and it is no
+  --  longer on the path any live unit takes home.
   return findStandingPoint({
     entity.position()[1] - 4, entity.position()[2] - 4,
     entity.position()[1] + 4, entity.position()[2] + 4

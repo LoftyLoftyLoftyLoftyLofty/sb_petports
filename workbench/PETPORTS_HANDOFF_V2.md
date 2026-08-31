@@ -120,12 +120,13 @@ every candidate `findGroundPosition` handed it. 27090 rejections and a unit that
 never moved, against one resolve and twenty-four tiles in 3.6 seconds after.
 Neither hypothesis recorded in the original entry was right.
 
-**THE PORT-SIDE RESOLVER STILL HAS THAT DEFECT, AND TWO OTHERS**, which is only
-half the problem: `todo.pathing.oneanchor` records that THREE different functions
-answer "where does the unit stand near its port" and no two agree, and that the
-unit's own leash and the port's recall aim at different points computed by
-different code. Raised by the author 2026-08-31; deliberately not fixed in the
-same build that changed swimmer and flyer recall.
+**AND THE THREE-WAY RESOLVER SPLIT UNDERNEATH IT IS CLOSED.**
+`arch.pathing.oneanchor` -- three functions answered "where does a unit stand
+near its port" and no two agreed, so the unit's own tether and the port's recall
+aimed at different points computed by different code. `standableNear` is now the
+single implementation, the other two delegate to it, and `findStandingPoint` is
+demoted to the no-unit-exists fallback its own header always said it was.
+UNTESTED IN GAME AS OF THIS WRITING.
 
 **Debug flags wanting a release pass** -- `TASK_DEBUG`, `VENT_DEBUG`, `DEBUG` in
 all four panes, `FLY_POINT_DEBUG`, `FLY_TELEMETRY`, `CARGO_TRACE` are ON.
@@ -2852,6 +2853,75 @@ corridors, the first tick of any plan -- and moves exactly as before.
 runs of edges on success, so it is cheaper than the per-edge sweep it replaced.
 It is affordable only because it runs ONCE PER PLAN. The `petportsPlanSig` gate
 has to stay.
+
+### One resolver owns "where does a unit stand", and the port asks it
+`arch.pathing.oneanchor` -- see also `arch.pathing.aimpoint`, `fact.pathing.platformfloor`, `todo.pathing.standpointchoice`, `arch.port.tetherlocation`
+
+**RAISED BY THE AUTHOR 2026-08-31 FROM THE RIGHT QUESTION: if the port already
+computes where an idle unit stands, why is the leash computing it again?** The
+answer was worse than two. There were THREE, and no two agreed:
+
+    standableNear                 petportsTaskAction, on the UNIT
+                                  columns ranked by true distance, DESCENDS to a
+                                  floor under a floating submerged point, knows
+                                  platforms are floor
+
+    petports_standingPointNear    petports_contract, on the UNIT, called BY THE
+                                  PORT -- first-fit by column, NO descend step,
+                                  so underwater it returned a floating point
+
+    findStandingPoint             petports_petport, on the PORT
+                                  random column, descends from the TOP of the
+                                  rect, cannot see platforms at all
+
+**AND TWO LEASHES CHOOSING BETWEEN THEM.** The unit's own tether runs constantly
+under `strictPortTethering`, carries the raw port position, and resolves with
+`standableNear`. The port's `returnWork` fires only when the unit is stranded or
+outside the network, and resolved with `findStandingPoint`. So a unit walking
+home on its own initiative and the same unit being recalled aimed at different
+points, computed by different code, with different bugs.
+
+**THE DOCTRINE ALREADY EXISTED.** `arch.pathing.aimpoint` is "the router and the
+walker must aim at the same point", and the header above `standingPointNear` in
+`petports_petport.lua` said outright that anything dispatched to a unit should go
+through it rather than `findStandingPoint`. `returnWork` was the one caller
+violating its own file's rule.
+
+**WHAT IT IS NOW.** `standableNear` is the single implementation, exported as
+`petports_standablePoint`. `petports_standingPointNear` is a delegate.
+`petports_homePointNear` is a second delegate that pins `searchUp` to 0. The
+port's `homePosition` asks the unit and only falls back to `findStandingPoint`
+when NO UNIT EXISTS -- which is what that function's own header always claimed it
+was for.
+
+**THE HOMEWARD BIAS LIVES ON THE UNIT, NOT IN THE ARGUMENTS.** `findGroundPosition`
+tests UP BEFORE DOWN at every step, so an unbiased resolve puts a unit on its
+port's roof -- measured, a port at `[1203,728]` resolving to `[1203.5,731.875]`.
+Both home paths now reach `petports_standablePoint(portPosition, 0)` and cannot
+diverge.
+
+**A DEDICATED FUNCTION RATHER THAN AN ARGUMENT, AND THE REASON IS THE BOUNDARY.**
+The obvious shape was `petports_standingPointNear(position, radius, searchUp)`
+with the port passing `(position, nil, 0)` -- a nil in the MIDDLE of a
+`world.callScriptedEntity` argument list. Whether that boundary preserves an
+embedded nil or truncates there is NOT MEASURED, and a truncation would silently
+drop the homeward bias and put the unit on the roof: the exact bug being fixed,
+arriving by a route nobody would look at. `petports_homePointNear` takes one
+argument and asks the question the port actually has.
+
+**THE COLUMN RANGE IS A PARAMETER NOW.** `COLUMN_SEARCH` was a fixed
+`{0,1,-1,2,-2,3,-3}`; the port asks wider for machines and wider still for
+patients (`MEDIC_REACH`), so `columnsFor(radius)` builds and memoises the ordered
+set. MEMOISED FOR THE ORDER, NOT THE ALLOCATION -- in a first-fit search the order
+IS the answer, and building it in one place stops a caller handing over a
+differently ordered set and getting a differently biased result from the same
+function.
+
+**WHAT THIS CLOSED.** `arch.pathing.oneanchor`, and the port-side half of
+`fact.pathing.platformfloor` -- no live unit reaches the platform-blind resolver
+any more. `todo.pathing.standpointchoice` and `todo.port.nostandpoint` survive but
+shrink: both are properties of `findStandingPoint`, which is now only reachable
+with no unit socketed.
 
 ### Where a chassis tethers is authored, not inferred
 `arch.port.tetherlocation` -- see also `dd.port.envuniform`, `todo.pathing.standpointchoice`
@@ -6536,7 +6606,7 @@ recorded engine fact was, both times it has happened in this mod, our own code
 producing a state the engine never produced. Suspect the mod before the record.
 
 ### `world.pointTileCollision` DOES NOT SEE PLATFORMS BY DEFAULT
-`fact.pathing.platformfloor` -- see also `fact.pathing.collisionkinds`, `fact.pathing.liquidstandable`, `todo.pathing.oneanchor`
+`fact.pathing.platformfloor` -- see also `fact.pathing.collisionkinds`, `fact.pathing.liquidstandable`, `arch.pathing.oneanchor`
 
 **OPENED 2026-08-30 AS `todo.pathing.submergedplatform`. RESOLVED 2026-08-31, AND
 THE MECHANISM WAS NEITHER OF THE TWO HYPOTHESES THE ENTRY RECORDED.** It was not
@@ -8193,64 +8263,6 @@ take-and-return every few ticks until the charge drains the reagent slot.
 Invisible in practice; if it ever shows in a log or profiler, gate re-attempts
 on the reagent slot's count changing. Three lines, filed rather than done
 because unmeasured cost does not buy code.
-
-### Three resolvers answer "where does the unit stand near its port", and they disagree
-`todo.pathing.oneanchor` -- see also `arch.pathing.aimpoint`, `todo.pathing.standpointchoice`, `todo.port.nostandpoint`, `arch.port.tetherlocation`
-
-**RAISED 2026-08-31 BY THE AUTHOR, FROM THE RIGHT QUESTION: if the port already
-computes where an idle unit stands, why is the leash computing it again?** It is
-worse than two. There are THREE, and no two of them agree.
-
-    standableNear                 petportsTaskAction, on the UNIT
-                                  ranks all seven columns by true distance,
-                                  DESCENDS to a floor under a floating
-                                  submerged point, knows platforms are floor
-
-    petports_standingPointNear    petports_contract, on the UNIT,
-                                  called BY THE PORT via callScriptedEntity
-                                  first-fit by column, NO descend step, so
-                                  underwater it returns a floating point
-
-    findStandingPoint             petports_petport, on the PORT
-                                  random column, descends from the TOP of the
-                                  rect, cannot see platforms at all
-
-**WHICH ONE RUNS DEPENDS ON WHICH LEASH FIRED, AND THERE ARE TWO OF THOSE TOO.**
-The UNIT's own tether (`petports_leashTask`, running constantly under
-`strictPortTethering`) carries the RAW port position and resolves it with
-`standableNear`. The PORT's recall (`returnWork`, which fires only when the unit
-is stranded or outside the network) resolves with `homePosition`. So a unit
-walking home on its own initiative and the same unit being recalled aim at
-different points, computed by different code, with different bugs.
-
-**THE DOCTRINE ALREADY EXISTS AND IS NOT BEING FOLLOWED.** `arch.pathing.aimpoint`
-is "the router and the walker must aim at the same point". The header above
-`standingPointNear` in `petports_petport.lua` says outright that the fallback is
-KNOWN TO BE WRONG and that "anything dispatched to a unit should go through this
-function, not `findStandingPoint` directly". `returnWork` was the one caller
-violating it. `arch.port.tetherlocation` fixed that for swimmers and flyers by
-removing the resolve entirely -- home is the port -- and left the `floor` branch
-on `findStandingPoint`, so the divergence survives for exactly the two walking
-chassis.
-
-**THE SHAPE OF THE FIX, AND IT IS MOSTLY DELETION.** The unit owns the answer;
-`standableNear` is the one that has been debugged; the port asks for it and
-caches nothing. That means `petports_standingPointNear` gains the descend step or
-becomes a wrapper over `standableNear`, `homePosition`'s floor branch asks the
-unit, and `findStandingPoint` shrinks to what its own header says it is -- the
-no-unit-exists fallback, never a dispatch target.
-
-**WHAT MAKES IT MORE THAN TIDYING.** `findStandingPoint`'s random column is
-already recorded as `todo.pathing.standpointchoice`; its platform blindness is
-`fact.pathing.platformfloor` unfixed on the port side; and `todo.port.nostandpoint`
-is the pane diagnostic for when it returns nil. All three are properties of a
-resolver that should not be answering this question at all. Fixing the ownership
-closes or shrinks the lot.
-
-**NOT DONE IN THE SESSION THAT FOUND IT**, deliberately: it changes walker recall,
-and the same build had just changed swimmer and flyer recall. Two chassis classes
-of recall behaviour in one build makes neither attributable when the log comes
-back.
 
 ### Dispatch does not consider the chassis, and it costs a stutter step
 `todo.dispatch.eligibility` -- see also `arch.pathing.mediumenforcement`, `todo.pathing.leashreplan`

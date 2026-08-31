@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-08-31b out-of-medium report"
+local CONTRACT_BUILD_STAMP = "2026-08-31c standing point delegates"
 
 local contractStamped = false
 
@@ -1393,55 +1393,63 @@ function petports_flyPointNear(position, radius)
   return nil
 end
 
+--  THE PORT'S ENTRY POINT, AND IT IS NOW A DELEGATE.
+--
+--  IT USED TO BE A SECOND IMPLEMENTATION AND THAT WAS THE BUG. It ran its own
+--  first-fit column search over findGroundPosition and had NO DESCEND STEP, so
+--  underwater -- where validStandingPosition calls every point standable for a
+--  chassis that does not avoid liquid -- it handed back a point hanging in open
+--  water. standableNear in petportsTaskAction.lua grew the descend fix, the
+--  distance ranking across columns and the platform-aware floor test; this one
+--  grew none of them, and the port has been asking the wrong one of the two.
+--
+--  See `arch.pathing.oneanchor`: there were THREE functions answering "where
+--  does a unit stand near this point" and no two agreed. This is one of the two
+--  that had to go.
+--
+--  THE FREE-MOVER BRANCH WENT WITH IT, and its reasoning is preserved in
+--  standableNear because both copies had it and both were right: a free-moving
+--  chassis owns this answer outright INCLUDING THE nil, because nil from
+--  petports_flyPointNear means REFUSED as well as "not a flyer". Falling through
+--  to a ground search handed an aquatic unit a dry-land standing spot one line
+--  after it had declined the target for being dry.
+--
+--  CALLED BARE. If petportsTaskAction.lua is not in the monstertype's scripts
+--  list this raises on the first resolve, which is the intent -- see the export
+--  note beside petports_standablePoint.
 function petports_standingPointNear(position, radius)
   if position == nil then return nil end
-  radius = radius or 4
-
-  --  A FREE-MOVING CHASSIS OWNS THIS ANSWER OUTRIGHT, INCLUDING THE nil.
-  --
-  --  This used to be "try the flyer answer, fall through to the ground one",
-  --  which was correct while nil could only mean "not a flyer". It stopped being
-  --  correct the moment petports_flyPointNear gained a REFUSAL: nil now also
-  --  means "I am a free mover and this target is not workable by me", and
-  --  falling through turns that refusal into a ground answer one line later.
-  --
-  --  MEASURED, and it is exactly as silly as it sounds:
-  --
-  --    UNIT flypoint DECLINED [2501.5,1158.5]: target is not submerged and this
-  --      chassis cannot leave the water
-  --    UNIT standable for [2501.5,1158.5] -> [2501.5,1158.8] (column offset 0)
-  --
-  --  An aquatic unit refused a dry crop and was handed a dry-land standing spot
-  --  on the next line. It then spent twenty seconds failing to path there,
-  --  burned its progress strikes, and the port re-dispatched on a ten-second
-  --  loop forever.
-  --
-  --  A ground unit never enters this branch, so the path that has always worked
-  --  is untouched.
-  if petports_freeMover() then
-    return petports_flyPointNear(position, radius)
-  end
-
-  for offset = 0, radius do
-    for _, dx in ipairs(offset == 0 and { 0 } or { -offset, offset }) do
-      --  Tile centre. findGroundPosition only resolves the y.
-      local x = math.floor(position[1] + dx) + 0.5
-
-      local ground = findGroundPosition({ x, position[2] }, -radius, radius,
-        petports_avoidLiquid())
-
-      --  Same forbidden-liquid gate as standableNear in petportsTaskAction --
-      --  the two resolvers must agree, and a denied liquid is the one thing
-      --  petports_mediumAllows refuses for a walking chassis.
-      if ground ~= nil and validStandingPosition(ground, false)
-         and petports_mediumAllows({ ground[1], ground[2] }) then
-        return { ground[1], ground[2] }
-      end
-    end
-  end
-
-  return nil
+  return petports_standablePoint(position, nil, radius)
 end
+
+--  WHERE THIS UNIT PARKS WHEN IT IS AT HOME.
+--
+--  THE PORT ASKS THIS, AND IT IS THE SAME CALL THE UNIT'S OWN LEASH MAKES FOR
+--  ITSELF. approachTargetFor resolves a "return" task with
+--  `standableNear(rawPosition, 0)`; this is that call with the port's position.
+--  Identical inputs into identical code, so the port's recall and the unit's
+--  tether cannot resolve to different points -- which they did, for as long as
+--  there were two resolvers. See `arch.pathing.oneanchor`.
+--
+--  searchUp 0 IS THE HOMEWARD BIAS AND IT LIVES HERE, ON THE UNIT, rather than
+--  being passed in. findGroundPosition tests UP BEFORE DOWN at every step, so an
+--  unbiased resolve puts the unit on the port's own roof -- measured, a port at
+--  [1203,728] resolving to [1203.5,731.875], 3.875 tiles up, while the floor
+--  beneath it was fine.
+--
+--  A DEDICATED FUNCTION RATHER THAN AN ARGUMENT ON petports_standingPointNear,
+--  because the alternative was a nil in the MIDDLE of a callScriptedEntity
+--  argument list and this mod has not measured whether that boundary preserves
+--  one. It also names the question the port is actually asking.
+--
+--  NO radius, SO THE UNIT'S OWN DEFAULT APPLIES. A number here would be a
+--  constant needing to stay equal to one in another file, which is the drift
+--  this change exists to remove.
+function petports_homePointNear(position)
+  if position == nil then return nil end
+  return petports_standablePoint(position, 0)
+end
+
 
 function petports_setVents(vents)
   local summary = {}
