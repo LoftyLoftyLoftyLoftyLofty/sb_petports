@@ -131,7 +131,7 @@ local TASK_DEBUG = true
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-01e the ledge two tiles ahead is not either"
+local BUILD_STAMP = "2026-09-01g arrived is a sign, not a distance"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -323,8 +323,40 @@ local JUMP_LEVEL_TOLERANCE = 1.0
 --  samples instead of one. 2.5 tiles of run-in is enough to shed the speed
 --  without making ordinary walking look sluggish -- it only applies with a jump
 --  immediately ahead.
-local JUMP_APPROACH_SLOWDOWN = 2.5
-local JUMP_APPROACH_SPEED = 3.0
+--
+--  CONTEXT-GLOBAL, NOT local, AND THE SWIM MOVER IS WHY. petportsFreeMover
+--  lives in petports_flyapproach.lua and needs the same two numbers for the
+--  same reason -- see the brake in that file. A local here would read as a nil
+--  global there and the comparison would silently never fire, which is the trap
+--  petports_objectPointNear was moved into this file to avoid. Both files load
+--  into one monster context and the read happens at CALL time, so load order
+--  does not matter. Costs nothing and returns two slots against MAXVARS.
+JUMP_APPROACH_SLOWDOWN = 2.5
+JUMP_APPROACH_SPEED = 3.0
+
+--  HOW FAR A SWIMMER WILL CHASE ITS OWN JUMP POINT.
+--
+--  The walk-back recovery below is gated on onGround, which is never true for a
+--  unit swimming at a waterline, so a swimmer that overshoots its jump source
+--  has no recovery at all -- and, because an amphibious chassis is held up
+--  ENTIRELY by the swim mover's thrust, a mover that issues nothing is a mover
+--  that drops it. Measured 2026-09-01: handover at srcDist 0.557, the radius
+--  test one tick later at 1.194, and the unit fell 21 tiles to the lakebed.
+--
+--  4.0 IS SIZED BY THE SINK, NOT BY TASTE. The first look after handover sees
+--  about 1.2 tiles of gap; at terminal -22 and a script delta of 5 the unit can
+--  drop 1.8 tiles between looks. Four tiles leaves at least one whole look of
+--  margin after the first, and is still short enough that a unit further out
+--  than this is not "just past its jump point" -- it is somewhere else, and
+--  chasing a point it was never near is guessing.
+--
+--  BEYOND IT, LETTING THE UNIT SINK IS THE CORRECT ANSWER, which is worth
+--  stating because it looks like the bug. The grounded-stall check in update()
+--  is the ONLY thing that can replan a unit parked on a Jump edge, and it
+--  requires onGround -- so holding station in open water would wait forever on
+--  a detector that cannot fire. Sinking terminates in a floor, a stall and a
+--  replan. It is slow and it is ugly and it converges.
+local JUMP_SWIM_CHASE = 4.0
 
 --  How far ahead to read the planned arc when working out how high the jump
 --  actually has to go. Arcs run a few dozen sample edges; this only has to
@@ -385,13 +417,54 @@ local JUMP_ARC_CLEARANCE = 0.5
 --  matter how often this script runs.
 local PHYSICS_DT = 1 / 60
 
---  HOW CLOSE TO THE LANDING'S COLUMN COUNTS AS ARRIVING.
+--  ARRIVAL IS A SIGN TEST, NOT A DISTANCE. -- REPLACES LAND_BRAKE_REACH 0.5
 --
---  SIZED BY THE MOVER'S CADENCE, NOT BY TASTE. This action runs at script delta
---  5, so the arc mover sees one tick in five and the unit moves up to
---  0.67 tiles between looks at walkSpeed 8. A reach much under that can be
---  stepped straight over; much beyond it starts braking mid-arc.
-local LAND_BRAKE_REACH = 0.5
+--  THE OLD TEST WAS `math.abs(here[1] - landing[1]) <= 0.5`, which asks "am I
+--  near the landing's column" and NOT "have I got there". Those differ in
+--  exactly the case that matters: a unit still travelling TOWARD the landing is
+--  near it, and braking then removes the only velocity that could finish the
+--  crossing.
+--
+--  MEASURED THREE TIMES, 2026-09-01, at two different sites:
+--
+--      here [2535.59,1150.56]  landing [2536,1149.8]   0.41 short, 0.76 high
+--      here [2523.40,1160.80]  landing [2523,1160.8]   0.40 short, level
+--      here [2523.40,1160.80]  landing [2523,1160.8]   0.40 short, level
+--
+--  All three braked, dropped vertically and landed on the lip of a step-up
+--  instead of on it. The one firing in the same log that was CORRECT had the
+--  unit at the landing exactly -- `here [2531,1152.8] landing [2531,1152.8]`.
+--  Signed distance separates those four cases and absolute distance cannot.
+--
+--  WHY THE OLD SHAPE SURVIVED REVIEW. todo.pathing.brakefloor triaged this as a
+--  note rather than a defect on the argument that a 1.6-wide body braked half a
+--  tile short still overlaps the landing tile. True, and it named two things
+--  that would break it -- a narrower chassis, a bigger reach. It missed a third:
+--  OVERLAP ONLY SAVES A LANDING WHOSE NEIGHBOURING TILE IS AT THE SAME HEIGHT.
+--  Onto a step up, short means falling down the side of it.
+--
+--  THE EPSILON EXISTS FOR THE EXACT-ARRIVAL CASE, which is a real reading and
+--  not float noise -- the successful brake above had a signed distance of
+--  precisely 0. Small enough that neither measured failure (0.40, 0.41) is
+--  anywhere near it.
+local LAND_BRAKE_ARRIVED = 0.05
+
+--  AND HOW FAR PAST THE LANDING THE BRAKE IS STILL WORTH APPLYING.
+--
+--  A far-side bound is needed because the near-side one is gone. Sized to ONE
+--  LOOK plus margin: at script delta 5 and speeds up to 12, the unit covers
+--  about 1.0 tiles between looks, so a brake that refused anything past 1.0
+--  could be stepped clean over by a fast arc -- the same one-sample problem the
+--  jump takeoff radius has. Past this the arc has failed at something other than
+--  its last tenth of a tile and stopping the unit dead is not the repair.
+local LAND_BRAKE_OVERRUN = 1.5
+
+--  BELOW THIS HORIZONTAL SPEED THE UNIT IS NOT GOING ANYWHERE, and the sign of
+--  its velocity carries no information about which side of the landing it is
+--  heading for. Reported velocity is a friction sampling artifact at rest -- the
+--  logs are full of a resting unit reading [0,-1.5353] -- so this is a band
+--  rather than a comparison against zero.
+local LAND_BRAKE_STATIONARY = 0.1
 
 --  And how far ABOVE the landing still counts, so a pass-over five tiles up on
 --  the way to something else is not mistaken for an arrival.
@@ -1836,6 +1909,10 @@ function petportsJumpMover(pather)
     --  Only on the ground: airborne on a Jump edge means something else has
     --  gone wrong, and adding thrust to it would make the landing worse rather
     --  than better.
+    --
+    --  THAT REASONING IS ABOUT AIR, AND LIQUID IS A THIRD STATE IT DOES NOT
+    --  COVER -- see the swim arm below. Kept as written for the air case, which
+    --  it is still right about.
     if mcontroller.onGround() then
       local toSource = source[1] - mcontroller.position()[1]
       local levelGap = math.abs(source[2] - mcontroller.position()[2])
@@ -1884,12 +1961,70 @@ function petportsJumpMover(pather)
             sb.printJson(gap))
         end
       end
+
+    --  THE SAME RECOVERY, FOR A UNIT THAT IS IN WATER RATHER THAN ON A FLOOR.
+    --
+    --  A swimmer at a waterline is never onGround, so every line above is
+    --  unreachable for it and this function did nothing at all -- which for a
+    --  chassis with no buoyancy is not "nothing", it is a 21-tile fall. The
+    --  surface hold on an amphibious unit is produced ENTIRELY by
+    --  petportsFreeMover's controlApproachVelocity, once per tick, so the first
+    --  tick on a Jump edge is the first tick with no thrust and the unit starts
+    --  down. See JUMP_SWIM_CHASE for the measurement.
+    --
+    --  GRAVITY-ENABLED ONLY. A free mover does not sink when nothing pushes it
+    --  and does not get handed Jump edges in the first place; leaving it out
+    --  keeps this arm to the chassis that demonstrated the fault.
+    --
+    --  ANY WATER IN THE BODY, NOT FULL SUBMERSION. petports_mediumAt answers
+    --  "mixed" for a body straddling a waterline, and that is exactly where
+    --  this failed -- a 1.6-tall body centred at 1149.81 spans a wet row and a
+    --  dry one. Asking only for "swim" would miss the measured case entirely.
+    --
+    --  NO JUMP_LEVEL_TOLERANCE HERE, DELIBERATELY. That rule exists because
+    --  walking cannot change what floor you are on, so a source four tiles down
+    --  is evidence of a bad plan rather than something to approach. Swimming
+    --  changes both axes, so a source above or below is simply somewhere to
+    --  swim to, and the bound that matters is DISTANCE.
+    --
+    --  NO controlDown, unlike the free mover's descent case. That hold exists
+    --  because A* routes down through platforms; this is not following a plan
+    --  edge, it is a correction back to a point the unit was at a tick ago, and
+    --  no platform can have appeared underneath it in between.
+    elseif mcontroller.baseParameters().gravityEnabled
+           and gap <= JUMP_SWIM_CHASE then
+      local medium = petports_mediumAt(mcontroller.position())
+
+      if medium == "swim" or medium == "mixed" then
+        local delta = world.distance(source, mcontroller.position())
+        local length = math.sqrt(delta[1] * delta[1] + delta[2] * delta[2])
+
+        if length > 0.0001 then
+          --  THE SAME ACTUATION THE SWIM MOVER USES, INCLUDING THE FORCE. Two
+          --  functions pushing one body through water with different forces
+          --  would make the approach depend on which one happened to be
+          --  driving, and the handover between them is the whole bug.
+          local force = mcontroller.baseParameters().liquidJumpProfile.jumpControlForce
+
+          mcontroller.controlApproachVelocity(
+            { delta[1] / length * JUMP_APPROACH_SPEED,
+              delta[2] / length * JUMP_APPROACH_SPEED }, force)
+        end
+
+        if not pather.petportsSwimmingToJump then
+          pather.petportsSwimmingToJump = true
+          sb.logInfo("UNIT swimming back to jump point %s from %s (gap %s, medium %s)",
+            sb.printJson(source), sb.printJson(mcontroller.position()),
+            sb.printJson(gap), tostring(medium))
+        end
+      end
     end
 
     return "running"
   end
 
   pather.petportsWalkingToJump = nil
+  pather.petportsSwimmingToJump = nil
   pather.petportsWrongLevel = nil
 
   --  Everything from here down is vanilla's takeoff, unmodified.
@@ -2163,6 +2298,44 @@ function petportsArcMover(pather)
   if mcontroller.onGround() and not mcontroller.liquidMovement() then
     local nextEdge = pather.finder:lookAhead(1) or {}
 
+    --  TOUCHDOWN IS THE ONLY UNAMBIGUOUS ARRIVAL, AND IT IS WHERE THE
+    --  DON'T-SLIDE-OFF GUARANTEE BELONGS.
+    --
+    --  The airborne brake above is a prediction and can be stepped over: the
+    --  window is one look wide and a fast arc covers a whole tile between looks.
+    --  Now that it correctly refuses to fire before the unit has arrived, the
+    --  cases it declines have to be caught somewhere, and the ground is the only
+    --  place that cannot be wrong about it.
+    --
+    --  WHY BOTH, RATHER THAN ONLY THIS ONE. Between the engine registering
+    --  contact and this script's next look, up to 0.083s pass -- a tenth of a
+    --  tile short of a full tile at walkSpeed 8. On a SINGLE-TILE platform that
+    --  is the whole margin, so the airborne brake earns its place by usually
+    --  getting there first and this is the backstop for when it does not.
+    --
+    --  NOT WHILE RISING. There is exactly one grounded tick per takeoff where
+    --  the launch velocity is applied and onGround has not gone false yet --
+    --  measured at [3768,1010.8] with velocity [0,48.314]. Braking there would
+    --  cancel the jump on the tick it was made, so a launch must be allowed to
+    --  leave. `vel[2] <= 0` is the same test the skip logic in update() uses to
+    --  decide an arc is over, deliberately, so the two agree about what a
+    --  landing is.
+    --
+    --  ZEROED OUTRIGHT, LIKE THE AIRBORNE BRAKE. The branch below returns
+    --  BEFORE the friction assignments, so groundFriction is still the chassis
+    --  value here and the unit has something to hold against; and where the next
+    --  edge is a Land, moveLand's controlApproachXVelocity(0, groundForce) picks
+    --  it up on the following tick. Zeroing rather than approaching zero is what
+    --  makes it independent of a groundForce this mod does not declare.
+    if vel[2] <= 0 and not pather.petportsLanding then
+      pather.petportsLanding = true
+      mcontroller.setVelocity({ 0, vel[2] })
+
+      sb.logInfo("UNIT ARCMOVER touchdown stop at %s vel %s: on the ground with the arc over, "
+        .. "next edge %s -- killing horizontal velocity",
+        sb.printJson(here), sb.printJson(vel), tostring(nextEdge.action))
+    end
+
     --  Vanilla's escape, kept as-is: on the LAST arc edge, hand over to
     --  whatever follows. Worth knowing this is why the bug needs two or more
     --  arc edges left at touchdown -- land holding the last one and vanilla
@@ -2241,18 +2414,47 @@ function petportsArcMover(pather)
   --
   --  THE PLAN AGREES: the Land edge is a zero-length marker whose dst velocity
   --  is null. Stopping is what a Land MEANS.
+  --  THE TRIGGER IS "HAVE I ARRIVED", NOT "AM I NEAR". See LAND_BRAKE_ARRIVED.
+  --
+  --  `ahead` is the distance to the landing MEASURED ALONG THE DIRECTION OF
+  --  TRAVEL: positive while the landing is still in front, zero at it, negative
+  --  once past.
+  --
+  --  A UNIT WITH NO HORIZONTAL VELOCITY IS TREATED AS ARRIVED, and that is a
+  --  branch rather than a consequence of the sign expression. Signing by
+  --  `vel[1] >= 0` would call a landing to the RIGHT of a motionless unit "still
+  --  ahead" and refuse to brake forever, on the strength of a velocity that is
+  --  not going to close anything. There is nothing left to protect when nothing
+  --  is moving, so the brake may fire -- and it is a no-op on a vx already at
+  --  zero, which is why this reads as pedantry until the latch is considered.
+  --
+  --  THIS IS WHERE THE BRAKE WAS ORIGINALLY EARNED, AND THAT CASE STILL FIRES.
+  --  The five-lap slide-off was a unit at `[2493,1155.8]` with the Land target
+  --  at exactly that point -- `ahead` 0, inside the epsilon, braked. What no
+  --  longer fires is the brake on a unit that has not got there yet.
   local landing = plannedLanding(pather)
+  local ahead = nil
+
+  if landing ~= nil then
+    if math.abs(vel[1]) < LAND_BRAKE_STATIONARY then
+      ahead = 0
+    else
+      ahead = (landing[1] - here[1]) * ((vel[1] > 0) and 1 or -1)
+    end
+  end
 
   if landing ~= nil and not pather.petportsLanding and vel[2] < 0
-    and math.abs(here[1] - landing[1]) <= LAND_BRAKE_REACH
+    and ahead <= LAND_BRAKE_ARRIVED
+    and ahead >= -LAND_BRAKE_OVERRUN
     and here[2] <= landing[2] + LAND_BRAKE_CEILING then
 
     pather.petportsLanding = true
     mcontroller.setVelocity({ 0, vel[2] })
 
-    sb.logInfo("UNIT ARCMOVER arrived at landing %s from %s vel %s -- killing horizontal "
+    sb.logInfo("UNIT ARCMOVER arrived at landing %s from %s vel %s (ahead %s) -- killing horizontal "
       .. "velocity so the unit does not slide off it",
-      sb.printJson(landing), sb.printJson(here), sb.printJson(vel))
+      sb.printJson(landing), sb.printJson(here), sb.printJson(vel),
+      sb.printJson(ahead))
   end
 
   if pather.petportsLanding then

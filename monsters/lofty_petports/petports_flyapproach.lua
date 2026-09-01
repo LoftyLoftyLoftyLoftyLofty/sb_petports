@@ -82,7 +82,7 @@
 --  delegate, and stays one.
 local vanillaSetJumpState = setJumpState
 
-local BUILD_STAMP = "2026-08-31d validation walks the string-pulled route"
+local BUILD_STAMP = "2026-09-01a the swim run-in brakes for a jump"
 local stampLogged = false
 
 --  DELETE ME ONCE THE ANSWER IS IN THE LOG.
@@ -853,6 +853,71 @@ local function planSignature(finder)
     .. (target and (tostring(target[1]) .. "," .. tostring(target[2])) or "?")
 end
 
+--  SLOW DOWN WHEN A JUMP IS NEXT -- petportsWalkMover's brake, for swimmers.
+--
+--  THE SAME BUG, IN THE OTHER MEDIUM. moveJump fires only within 1.0 of its
+--  source and the Jump edge does not become current until the unit has already
+--  crossed that source, so the usable half of the window is one tile wide. At
+--  walkSpeed 8 a swimmer covers about 0.64 tiles per look, the radius test runs
+--  a whole tick AFTER the handover, and what is left is roughly a 0.36 window
+--  sampled every 0.64 tiles. It is a coin flip.
+--
+--  MEASURED 2026-09-01, four Swim -> Jump handovers at one waterline:
+--
+--      gap at handover   gap when moveJump ran   outcome
+--      0.119             0.728                   takeoff
+--      0.023             0.681                   takeoff
+--      0.497             0.836                   takeoff
+--      0.557             1.194                   REFUSED, unit fell 21 tiles
+--
+--  Nothing distinguishes the fourth except phase.
+--
+--  AT JUMP_APPROACH_SPEED THE COIN STOPS BEING FLIPPED. 3.0 is about 0.25 tiles
+--  per look, so the handover lands inside a quarter tile and the radius test a
+--  tick later still sees under 0.5 -- comfortably inside 1.0 rather than
+--  straddling it.
+--
+--  THE AIM IS ALREADY THE JUMP SOURCE AND THAT IS WHY THIS IS ONLY A SPEED.
+--  aimAhead returns Fly and Swim edges only, and a Jump is always followed by
+--  Arcs, so on the run-in it finds no shortcut at all and the mover falls
+--  through to the current edge's target -- which IS the jump source. The unit
+--  was steering at exactly the right point the whole time. It was steering at
+--  it at eight tiles a second, and controlApproachVelocity commands a VELOCITY,
+--  not a stopping place, so it sailed straight through.
+--
+--  GRAVITY-ENABLED CALLERS ONLY, matching the swim arm in petportsJumpMover: a
+--  free mover neither sinks nor is handed Jump edges, and there is no measured
+--  fault to fix for it.
+--
+--  math.min RATHER THAN ASSIGNMENT, so a chassis slower than 3.0 is never sped
+--  UP by a brake.
+local function swimApproachSpeed(pather, base)
+  local finder = pather.finder
+  local ahead = finder ~= nil and finder.lookAhead and finder:lookAhead(1) or nil
+
+  if ahead == nil or ahead.action ~= "Jump"
+     or ahead.source == nil or ahead.source.position == nil then
+    pather.petportsSlowingForSwimJump = nil
+    return base
+  end
+
+  local gap = world.magnitude(mcontroller.position(), ahead.source.position)
+
+  if gap > JUMP_APPROACH_SLOWDOWN then
+    pather.petportsSlowingForSwimJump = nil
+    return base
+  end
+
+  if not pather.petportsSlowingForSwimJump then
+    pather.petportsSlowingForSwimJump = true
+    sb.logInfo("UNIT swim-slowing to %s for jump point %s (gap %s)",
+      sb.printJson(JUMP_APPROACH_SPEED),
+      sb.printJson(ahead.source.position), sb.printJson(gap))
+  end
+
+  return math.min(base, JUMP_APPROACH_SPEED)
+end
+
 function petportsFreeMover(pather)
   --  Vanilla's consume loop, unmodified. Runs first so the cursor is current
   --  before anything looks ahead of it.
@@ -1047,7 +1112,12 @@ function petportsFreeMover(pather)
     local length = math.sqrt(delta[1] * delta[1] + delta[2] * delta[2])
 
     if length > 0.0001 then
-      local speed = mcontroller.baseParameters().walkSpeed
+      --  walkSpeed, EXCEPT WITH A JUMP IMMEDIATELY AHEAD. See swimApproachSpeed
+      --  -- the run-in to a jump point is the one case where full speed loses
+      --  the takeoff window outright, and the walk mover has braked for it on
+      --  land since the same failure was measured there.
+      local speed = swimApproachSpeed(pather,
+        mcontroller.baseParameters().walkSpeed)
       local force = mcontroller.baseParameters().liquidJumpProfile.jumpControlForce
 
       mcontroller.controlApproachVelocity(
