@@ -34,7 +34,7 @@ local DEBUG = true
 --  Bump on every change to this file. A pane has no visible version and a stale
 --  copy is indistinguishable from an unfixed one -- which cost a cycle on the
 --  upcycler before the stamp existed.
-local PANE_BUILD_STAMP = "2026-08-30f farming module rows"
+local PANE_BUILD_STAMP = "2026-09-01a absent is not always on"
 
 local PANE_STATE_KEY = "petports_paneState"
 
@@ -194,7 +194,15 @@ local GROUP_WIDGET = {
 --  `sep` MARKS THE START OF A MODULE BLOCK. Each module's settings are preceded
 --  by a divider so a player can see which module brought what.
 local SETTING_ROWS = {
-	{ key = "carried", owner = "toggles", needs = nil,
+	--  `default = false` ON BOTH DISPLAY TOGGLES, matching the port, which reads
+	--  each of them as `== true` so that absent means OFF. Without it the pane
+	--  draws a ticked box over a unit the port considers switched off -- see
+	--  settingValue, and the tab's own note on why display toggles start quiet.
+	--
+	--  `carried` CARRIED THE SAME MISMATCH AND NOBODY COULD SEE IT, because
+	--  nothing reads that setting yet. Fixed here rather than left to surface the
+	--  day the speech bubbles land.
+	{ key = "carried", owner = "toggles", needs = nil, default = false,
 	  label = "petport.setting.carried", tip = "petport.tip.carried" },
 
 	--  BESIDE `carried` BECAUSE THEY ARE THE SAME KIND OF THING: universal
@@ -206,7 +214,7 @@ local SETTING_ROWS = {
 	--  a default petName -- Diver, Wader, Flyer, Unit -- so keying the tag on
 	--  whether a name exists would show one over every unit in the fleet and give
 	--  the player no way to turn it off short of clearing names they wanted.
-	{ key = "nametag", owner = "toggles", needs = nil,
+	{ key = "nametag", owner = "toggles", needs = nil, default = false,
 	  label = "petport.setting.nametag", tip = "petport.tip.nametag" },
 
 	{ sep = true, needs = "medic", label = "petport.setting.medicblock" },
@@ -874,15 +882,34 @@ local function applicableSettingRows()
 	return out
 end
 
---  THE VALUE A ROW SHOULD SHOW, defaulting to ON when absent.
+--  THE VALUE A ROW SHOULD SHOW, and ABSENT IS NOT ONE ANSWER FOR EVERY ROW.
 --
---  Matches the port: petportMedicTreats reads `~= false`, so a unit whose
---  settings table has never been written treats everybody. A module socketed
---  into an existing unit works immediately rather than looking broken until
---  every box is ticked.
+--  IT USED TO BE `store[row.key] ~= false` FOR EVERYTHING, i.e. absent reads as
+--  ON. That is right for the medic and farming rows and matches their port-side
+--  accessors, which read `settings[class] ~= false` so a freshly socketed module
+--  works immediately instead of looking broken until every box is ticked.
+--
+--  IT IS WRONG FOR THE DISPLAY TOGGLES, AND THAT MISMATCH WAS THE BUG. The port
+--  reads petportNametag() as `toggles.nametag == true` -- absent means OFF,
+--  deliberately, so shipping this feature does not label an entire base. The
+--  pane defaulted the same absent value to ON, so a legacy unit whose petData
+--  predates the toggle drew a TICKED box over a port that was pushing
+--  `tag false`. OBSERVED 2026-09-01 on three legacy pets; the checkbox was never
+--  lying about its own value, the two sides disagreed about what absent meant.
+--
+--  DECLARED PER ROW RATHER THAN INFERRED FROM THE OWNER. Every `toggles` row
+--  happens to want false today, so keying on owner would work and would be a
+--  coincidence -- the next module setting that wants off-by-default would sit
+--  under its own owner and quietly get the wrong answer.
+--
+--  A PRESENT VALUE IS UNCHANGED. Only nil consults the default, so every row
+--  that already had a stored setting reads exactly as it did before.
 local function settingValue(row)
 	local store = paneSettings[row.owner] or {}
-	return store[row.key] ~= false
+	local value = store[row.key]
+
+	if value == nil then return row.default ~= false end
+	return value ~= false
 end
 
 --  REBUILT ONLY WHEN THE SET CHANGES, repainted otherwise.
