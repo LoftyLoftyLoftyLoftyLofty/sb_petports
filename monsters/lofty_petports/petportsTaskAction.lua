@@ -112,7 +112,7 @@ local TASK_DEBUG = true
 --  PER-TICK FLIGHT TRACE. See flightTrace. OFF FOR RELEASE -- it is one line per
 --  tick of every flight, which is the densest logging in this mod and is meant
 --  to be switched on for a specific question and switched off again.
-local FLIGHT_TRACE = true
+local FLIGHT_TRACE = false
 
 --  BUILD STAMP.
 --
@@ -136,7 +136,7 @@ local FLIGHT_TRACE = true
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-01k the latch outlived its arc"
+local BUILD_STAMP = "2026-09-01l trace off, latch fixed"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the

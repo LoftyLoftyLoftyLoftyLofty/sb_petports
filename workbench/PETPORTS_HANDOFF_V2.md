@@ -42,125 +42,92 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-01 (a module, a bug of a known shape, and naming)
+### What is built, as of 2026-09-01 (one session, one bug, three diagnoses)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-A LONG SESSION IN FOUR PIECES: the Hydrator module, the fourth instance of
-`arch.dispatch.twolegs`, unit renaming with a nametag toggle, and an object-sized
-standing search. Three of the four were VERIFIED IN GAME.
+A LONG SESSION ON ONE SYMPTOM: a unit losing all horizontal velocity in mid-air.
+It took THREE diagnoses, two of which were wrong and both of which shipped as
+fixes before the third was found. All of it is VERIFIED IN GAME.
 
 ---
 
-**THE HYDRATOR MODULE RAISES WATER CAPACITY FROM 10 TO 30.**
-`arch.module.hydrator`. Flags channel, one accessor read by both water
-generators, no unit-side code and no new plumbing. **VERIFIED IN GAME.**
-`todo.module.hydratordeadline` -- the worry that a tripled sweep would outlive
-`TASK_DEADLINE` -- did not bite in that test and stays open rather than closed,
-because a 30-tile row on a cold route cache is the case that would show it and
-was not the case tested.
+**THE SWIM -> JUMP HANDOVER IS FIXED.** `arch.unit.swimjump`. A swimmer overshot
+its own jump point and, having no buoyancy, fell 21 tiles to the lakebed. Two
+halves: the swim mover now brakes on the run-in to a Jump exactly as the walk
+mover does, and `petportsJumpMover` gained a liquid arm so a swimmer can swim back
+to a jump point the way a walker walks back. **VERIFIED: 5 of 5 takeoffs, gaps
+0.14 to 0.55, zero sinks.** The liquid arm has never had to fire.
 
-**THE REPLANT FETCH LEG NOW ASKS THE PLACE LEG'S MEDIUM QUESTION.**
-`arch.dispatch.twolegs`. An aquatic unit cycled 147 withdraws and 308 deposits of
-one `oculemonseed` in three minutes without moving, because backoff coupling sees
-a leg that FAILED and cannot see one that was never OFFERED. **VERIFIED: the
-aquatic unit now stays home.** The general rule is written up in that entry.
+**THE ARRIVAL BRAKE ASKS "HAVE I ARRIVED", NOT "AM I NEAR".**
+`arch.pathing.arrivalsign`. `LAND_BRAKE_REACH` 0.5 retired for a signed test
+along the direction of travel. **VERIFIED: 25 firings, every one between 0 and
+0.0017 except a single -0.61 caught by the far-side bound.** This closed
+`todo.pathing.brakefloor`, whose 2026-08-30 triage said it was a note rather than
+a defect and was wrong.
 
-**UNITS CAN BE RENAMED, AND THE NAME TAG IS A PER-UNIT SETTING.**
-`arch.pane.rename`. **VERIFIED.** Rename commits on the button only -- never on
-Enter, deliberately, so a half-typed name cannot reach a server's chat filter.
-Colour escapes pass through and render.
+**NOTHING STEERS x DURING A FLIGHT.** `arch.pathing.nosteer`. The airborne
+`controlApproachXVelocity` and the whole planner-velocity substitution are
+deleted; friction zeroing plus ballistics is the mechanism. Correct, and NOT the
+fix for the thing it was shipped as.
 
-**ANYTHING PUSHED TO A LIVE UNIT NEEDS A SIGNATURE AND A TICK.**
-`arch.port.pushsignature`. Generalised from `pushModuleEffects` getting it right
-and `pushPetName` -- written directly beneath it -- not. The symptom was legacy
-units needing a resocket. **FIXED, NOT YET RE-VERIFIED ON A COLD LOAD.**
+**A LATCH THAT OUTLIVED ITS ARC WAS THE ACTUAL BUG.**
+`arch.pathing.brakelatch`. `petportsLanding` was cleared inside a guard on
+`petportsLaunch ~= nil`; a walk-off fall sets the latch and has no launch record,
+so the latch stuck and silently braked every LATER flight to a standstill in
+mid-air. **VERIFIED: 25 brake firings, 25 latch clears, paired exactly across 38
+takeoffs. Zero dry-air horizontal collapses in 178 airborne Arc ticks.**
 
-**THE STANDING SEARCH IS SIZED TO AN OBJECT'S FOOTPRINT.**
-`arch.pathing.objectsearch`. `GROUND_SEARCH_UP` is 4, an object's entity position
-sits near its base, so any object taller than four tiles had an unreachable roof.
-Requested as a submerged-container fix; it is general. **VERIFIED**, including
-the roof fallback and the matching resolver on the unit side -- a ground unit
-now delivers to and fetches from a half-submerged shipping container.
-
-**A LEDGE AHEAD IS NOT A WRONG STOREY.** `tryPlanDrop` took the deepest ground
-edge in a six-edge lookahead as proof the surface was wrong, and dropped a unit
-through the container roof it was walking on. `PLAN_DROP_REACH` gates that
-evidence on horizontal proximity. **VERIFIED at 2.0; retuned to 1.25 and under
-test**, because the same log caught a second case at exactly 2.0 that the
-inclusive test would still have fired on.
-
-**ONLY THE GROUND CHASSIS HAS BEEN EXERCISED AGAINST ANY OF THIS.** The flyer,
-aquatic and amphibious units were unsocketed for the container work. Nothing here
-is known to be wrong for them and nothing here has been watched with them either.
+**THE INSTRUMENT THAT FOUND IT.** `arch.tooling.flighttrace`. `FLIGHT_TRACE` is
+OFF; leave it that way. It separated three hypotheses in one run after two rounds
+of 12 Hz reconstruction got it wrong twice -- see `proc.tooling.instrument`,
+which is the most reusable thing to come out of tonight.
 
 ---
 
-**THREE ENGINE FACTS LANDED, TWO OF THEM BY BREAKING SOMETHING.**
-
-- `fact.pane.textboxcallback` -- a textbox with no callback throws in the
-  `ContainerPane` CONSTRUCTOR and drops the client to the main menu. Three working
-  examples were in the tree and were not consulted.
-- `fact.unit.entityname` -- a unit is already named from its `shortdescription`;
-  what it lacked was the tag. `petName` in spawn parameters was consumed by
-  nothing until this session.
-- `fact.locomotion.buoyancy` -- `liquidBuoyancy` is NOT inert on a
-  `gravityEnabled` false chassis, contradicting a comment this mod ships. The
-  mechanism is unmeasured and the entry says so.
+**ADVERSARIAL COURSE PASSED 2026-09-01.** 38 takeoffs, 38 landings, 1 landed
+off-plan, 3 stalls, all self-recovered. Against six identical ledge failures per
+session and three identical pool-exit perches at the start of the day.
 
 **KNOWN OPEN, IN THE ORDER THEY WILL BITE:**
 
-- `todo.module.hydratordeadline` -- a hydrated sweep is three times longer against
-  an unchanged `TASK_DEADLINE`. Untested, self-healing if it bites, and it names
-  its own work id in the log.
-- `todo.dispatch.reachbudget` -- NEW, AND THE BIGGEST THING FILED TONIGHT. Units
-  are offered any work in network coverage and nothing asks the path cost.
-  Measured: a ground unit failing crops at exactly `SEARCH_LIMIT` 6.0s, starved
-  rather than walled in. `UNROUTABLE_BACKOFF_FLOOR` is a stopgap for the stutter
-  it caused and is not a fix for it.
-- `todo.tooling.paneflightcallbacks` -- HALF DONE. `CALLBACK MISSING` now catches
-  the textbox rule that cost a client crash; row widgets and the reverse lookup
-  are still open.
-- An amphibious unit walks off a submerged ledge and sinks instead of
-  transitioning to swimming. **OBSERVED 2026-08-31, STILL NOT A BACKLOG ENTRY.**
-- `todo.dispatch.sourcebackoff` -- backoff is keyed by work id; an unreachable
-  SOURCE is a property of the crate.
-- `arch.pathing.originnudge` -- untouched again.
-- `todo.pathing.leashreplan`, `todo.pathing.standpointchoice`,
-  `todo.port.nostandpoint` -- unchanged.
+- `dead.pathing.latehandover` -- the surviving residual, about 0.2 tiles. The unit
+  reaches its planned column and arrives ~0.6 low, clipping a shoreline lip. Costs
+  nothing on every route measured. Filed as DEAD rather than TODO because the
+  large version of it was disproven; the small version is a known, accepted error.
+- `todo.dispatch.reachbudget` -- unchanged, and still the biggest design question.
+- `todo.module.hydratordeadline`, `todo.dispatch.sourcebackoff`,
+  `todo.pathing.leashreplan`, `todo.pathing.standpointchoice`,
+  `todo.port.nostandpoint` -- all unchanged.
+- `arch.pathing.originnudge` -- untouched again, and it walked a unit off a perch
+  into a pool once more before the latch fix removed the perches.
+- `todo.tooling.paneflightcallbacks` -- still half done.
 - The medic path through `columnsFor` is STILL unexercised.
 - Upcycler pane string-table migration -- still the last pane not migrated.
 
 **Debug flags wanting a release pass** -- `TASK_DEBUG`, `VENT_DEBUG`, `DEBUG` in
 all four panes, `FLY_POINT_DEBUG`, `FLY_TELEMETRY`, `CARGO_TRACE` are ON.
-`DRAW_PLAN` and `PETPORTS_FILTER_DEBUG` are OFF and should stay off.
+`FLIGHT_TRACE`, `DRAW_PLAN` and `PETPORTS_FILTER_DEBUG` are OFF and should stay
+off.
 
-**BUILD STAMPS AT THE END OF THIS SESSION.** `petports_petport.lua` at
-`2026-09-01f the search fits the object`; `petportsTaskAction.lua` at
-`2026-09-01a the roof is in range`; `petports_contract.lua` at
-`2026-09-01b the tag asks the setting`; `petportconfig.lua` at
-`2026-09-01a absent is not always on`. `petports_habitat.lua` has no stamp and
-gained `petports_habitatObjectBounds`.
+**BUILD STAMPS AT THE END OF THIS SESSION.** `petportsTaskAction.lua` at
+`2026-09-01l trace off, latch fixed`; `petports_flyapproach.lua` at
+`2026-09-01a the swim run-in brakes for a jump`. `petports_petport.lua` unchanged
+from `2026-09-01h`.
 
-**NO LUA INTERPRETER WAS AVAILABLE IN THE SESSION CONTAINER**, and
-`petports_luacheck.py` was not in the uploaded tree. Every Lua edit was checked by
-block-balance DIFF against the pristine upload rather than by parsing, and the
-pane pre-flight was run and held at its baseline of five string-table globals.
-That is weaker than a syntax check and should not be mistaken for one.
+**A REAL LUA PARSER WAS AVAILABLE THIS SESSION** -- `liblua5.4.so.0` driven
+through Python ctypes, giving actual `luaL_loadbufferx` errors with line numbers.
+All 27 files parse. It is a 5.4 parser, so `goto`, `//` and `\u{}` would pass;
+those were swept for separately and the tree is clean. `petports_luacheck.py` is
+still absent from the uploaded tree.
 
-**THE WORKING COPY IS COMMITTED THROUGH THE CHOREOGRAPHY WORK.** Everything since
-sits uncommitted on top of it.
-
-**LINE ENDINGS ARE NOISE IN `git status`, AND THE TREE IS MIXED.** CRLF:
-`petportsTaskAction.lua`, `petports_contract.lua`. LF: `petports_flyapproach.lua`,
-`petports_petport.lua`, `petports_habitat.lua`. `petports_habitat.lua` is the only
-Lua file indented with TABS -- and `petports_petport.lua` is MIXED BY REGION, tabs
-in the farming generators and two spaces elsewhere. `petportsTaskAction.lua` is
-mixed too: `columnsFor` is tabs, `standableNear` beside it is two spaces. Edits
-must preserve what they find at the point they land, not what the file mostly
-uses.
+**LINE ENDINGS: `str_replace` WRITES LF INTO A CRLF FILE.** 151 LF-only lines
+were introduced into `petportsTaskAction.lua` this session and normalised back to
+CRLF before delivery. Check `file` on any CRLF file after an edit session.
+`petports_contract.lua` carries a stray bare CR that predates this and was not
+touched.
 
 ## ARCHITECTURE
 
@@ -3330,6 +3297,213 @@ ceiling-dwelling flyer is planned; its branch logs once and falls back to the
 PORT rather than the floor, since anything asking for a ceiling is a free mover
 and the floor is the answer least likely to suit it. When that chassis exists it
 declares `"ceiling"` and the only thing to write is the resolver.
+
+### A swimmer cannot walk back to its jump point, so it sinks
+`arch.unit.swimjump` -- see also `fact.locomotion.buoyancy`, `arch.pathing.mediummixed`, `dd.pathing.motionnothealth`
+
+**BUILT 2026-09-01, TWO HALVES OF ONE FAILURE.** An amphibious unit swimming a
+waterline toward a Jump edge overshot its own jump point and fell 21 tiles to the
+lakebed, then spent 4.2 seconds getting back.
+
+**THE HANDOVER IS A PHASE LOTTERY.** `moveJump` fires only within
+`JUMP_TAKEOFF_REACH` 1.0 of its source, the Jump edge does not become current
+until the unit has CROSSED that source, and the mover does not run until the tick
+AFTER the handover -- so the usable window is about 0.36 tiles, sampled every
+0.64. Measured, four Swim -> Jump handovers at one waterline:
+
+    gap at handover   gap when moveJump ran   outcome
+    0.119             0.728                   takeoff
+    0.023             0.681                   takeoff
+    0.497             0.836                   takeoff
+    0.557             1.194                   REFUSED, unit fell 21 tiles
+
+Nothing distinguishes the fourth except phase.
+
+**HALF ONE: THE SWIM MOVER BRAKES FOR A JUMP.** `petportsWalkMover` had done this
+on land since the same failure was measured there; `petportsFreeMover` had no
+equivalent. At `JUMP_APPROACH_SPEED` 3.0 the run-in covers 0.25 per look and the
+handover lands inside a quarter tile. `JUMP_APPROACH_SLOWDOWN` and
+`JUMP_APPROACH_SPEED` are context-globals now so both files can read them.
+
+**AND THE AIM WAS ALREADY THE JUMP SOURCE, WHICH IS WHY A SPEED IS ENOUGH.**
+`aimAhead` returns Fly and Swim edges only and a Jump is always followed by Arcs,
+so on the run-in it finds no shortcut and falls through to the current edge's
+target -- which IS the jump source. The unit was steering at the right point all
+along, at eight tiles a second, and `controlApproachVelocity` commands a VELOCITY
+rather than a stopping place.
+
+**HALF TWO: THE JUMP MOVER'S RECOVERY WAS SWITCHED OFF IN LIQUID.** The walk-back
+branch is gated on `onGround`, never true for a swimmer at a waterline, so the
+mover issued NOTHING -- and an amphibious chassis declares no `liquidBuoyancy`
+and runs `gravityMultiplier` 1.5, so its surface hold is produced ENTIRELY by the
+swim mover's thrust. The first tick with no thrust is the first tick of a fall.
+
+The liquid arm accepts `mixed` as well as `swim`, because the measured body was a
+1.6-tall box centred at 1149.81 straddling one wet row and one dry one.
+`JUMP_LEVEL_TOLERANCE` deliberately does NOT apply -- it exists because walking
+cannot change what floor you are on, and swimming changes both axes.
+
+**BEYOND `JUMP_SWIM_CHASE` 4.0 THE UNIT IS LEFT TO SINK, AND THAT IS DELIBERATE.**
+The grounded-stall check is the only thing that can replan a unit parked on a
+Jump edge and it requires `onGround`, so holding station in open water would wait
+forever on a detector that cannot fire. Sinking terminates in a floor, a stall
+and a replan.
+
+**VERIFIED: 5 of 5 takeoffs, gaps 0.14 to 0.55, zero sinks.** The liquid arm has
+never fired in game -- the brake gets there first every time, which is the
+intended division of labour and also means the arm is UNTESTED.
+
+### A latch that outlives its arc stops the NEXT flight, silently
+`arch.pathing.brakelatch` -- see also `arch.pathing.arrivalsign`, `fact.pathing.arcmoverthrottle`, `dead.pathing.waterdrag`
+
+**THE WORST BUG OF THE 2026-09-01 SESSION, AND IT WAS INTRODUCED BY THE FIX TWO
+BUILDS EARLIER.** `petportsLanding` is the arrival brake's latch. It was cleared
+inside `if self.pather.petportsLaunch ~= nil then`, on the reasoning that the two
+flags have the same lifetime. THEY DO. But only one of them is only ever SET on a
+jump.
+
+The arrival brake fires on ANY arc, including a walk-off fall, which has no
+takeoff and therefore no launch record. So a fall that ended in the brake latched
+the flag and then failed its own clear, because the guard above it asked about a
+record that was never written.
+
+**WHAT A STUCK LATCH DOES.** Every airborne tick of every LATER flight hits
+
+    if pather.petportsLanding then
+      mcontroller.controlApproachXVelocity(0, mcontroller.baseParameters().groundForce)
+      return "running"
+    end
+
+-- horizontal velocity driven to zero, and a return ABOVE the friction zeroing.
+
+**MEASURED.**
+
+    45.516  arrived at landing [2494,1164.8] (ahead -0.713623)   walk-off,
+            no launch record, NO "launch record cleared" line follows
+    47.63   next flight, first tick the arc mover runs:
+            [2510.02,1161.97]  vx 8.00 -> 3.07 -> 0.00, medium AIR
+    47.96   grounded at [2510.02,1152.8] after nine tiles of vertical drop,
+            1.98 short of its Land, stalled, replanned
+
+**IT IS INVISIBLE, AND THAT IS THE REUSABLE PART.** The brake logs once when it
+fires and never again; the hold logs never. The symptom is a unit stopping dead
+in mid-air on a later, unrelated flight, with nothing in the log joining the two.
+It cost TWO confident wrong diagnoses -- see `dead.pathing.plannersteer` and
+`dead.pathing.waterdrag` -- before a per-tick trace showed the same collapse in
+dry air nine tiles above any liquid.
+
+**THE RULE.** LATCHED STATE NEEDS ITS OWN CLEAR AND ITS OWN LOG. Sharing a guard
+with a neighbouring flag couples two lifetimes that are only equal until one of
+them has a narrower setter. The clear is unconditional now, ahead of the launch
+record's, and logs `ARCMOVER landing latch cleared` whenever it actually had
+something to clear -- so a stuck latch can never again be silent.
+
+**VERIFIED 2026-09-01.** 25 brake firings, 25 latch clears, paired exactly, over
+38 takeoffs and 38 landings. Zero dry-air horizontal collapses across 178
+airborne Arc ticks that had horizontal motion in the plan.
+
+### Arrival is a sign test, not a distance
+`arch.pathing.arrivalsign` -- see also `todo.pathing.brakefloor`, `fact.pathing.arcmoverthrottle`, `arch.pathing.brakelatch`
+
+**BUILT 2026-09-01, REPLACING `LAND_BRAKE_REACH` 0.5.** The old gate was
+`math.abs(here[1] - landing[1]) <= 0.5`, which asks AM I NEAR THE LANDING'S
+COLUMN and not HAVE I GOT THERE. Those differ in exactly the case that matters: a
+unit still travelling TOWARD its landing is near it, and braking then removes the
+only velocity that could finish the crossing.
+
+`ahead` is the distance to the landing measured ALONG THE DIRECTION OF TRAVEL --
+positive while it is still in front, zero at it, negative once past. The brake
+fires only at or past zero, bounded on the far side by `LAND_BRAKE_OVERRUN` 1.5
+because the near-side bound is gone and a fast arc covers a tile between looks.
+
+**MEASURED, THREE FAILURES AND ONE SUCCESS THAT SEPARATE THE TWO TESTS:**
+
+    here [2535.59,1150.56]  landing [2536,1149.8]   0.41 short, 0.76 high
+    here [2523.40,1160.80]  landing [2523,1160.8]   0.40 short, level
+    here [2523.40,1160.80]  landing [2523,1160.8]   0.40 short, level
+    here [2531.00,1152.80]  landing [2531,1152.8]   dead on -- CORRECT to brake
+
+All four pass the distance test. Only the fourth passes the sign test.
+
+**A MOTIONLESS UNIT IS TREATED AS ARRIVED, AND THAT IS A BRANCH RATHER THAN A
+CONSEQUENCE.** Signing by `vel[1] >= 0` calls a landing to the RIGHT of a
+stationary unit "still ahead" and refuses to brake forever, on the strength of a
+velocity that is not going to close anything. `LAND_BRAKE_STATIONARY` 0.1 is a
+band, not a comparison against zero, because a resting unit reads `[0,-1.5353]`.
+
+**A TOUCHDOWN STOP WAS TRIED AND REMOVED.** A hard `setVelocity` in the arc
+mover's grounded branch, as a backstop. It fired ZERO times in a session with 35
+takeoffs, and so did every other line in that branch: the ARC SKIP IN `update()`
+GETS THERE FIRST, EVERY TIME, using the same predicate and consuming the arc
+before the mover runs. The branch is a fallback, not the landing path, and a
+guarantee on a path that never executes reads as cover and is not. If a slide-off
+is ever measured, the place to stop it is the GROUNDED branch of that skip.
+
+**`LAND_BRAKE_OVERRUN` IS EXERCISED NOW.** It decided nothing for two sessions
+and then caught two firings at -0.38 and -0.61 -- units already past their column
+that the old near-side reach would have refused outright.
+
+### Nothing steers x during a flight
+`arch.pathing.nosteer` -- see also `fact.pathing.plannervxdrop`, `fact.pathing.arcmoverthrottle`, `dead.pathing.plannersteer`
+
+**BUILT 2026-09-01 BY DELETION.** The airborne branch of `petportsArcMover` used
+to end in `controlApproachXVelocity(wantVx, groundForce)`, where `wantVx` was
+`launch.vx` on a jump and `velocity[1]` -- THE PLANNER'S PER-EDGE VELOCITY -- on
+anything else. Both halves are gone, along with the substitution block, the stale
+record check and `petportsArcSubstituted`.
+
+**THE FRICTION ZEROING FOUR LINES ABOVE IS THE WHOLE MECHANISM.** With
+`airFriction` at 0 and no command, horizontal velocity persists. That IS a
+ballistic arc.
+
+**THE SUBSTITUTION WAS A NARROWER BUG, NOT A FIX.** Holding `launch.vx` and
+issuing nothing produce the same trajectory whenever the command is correct. They
+differ only where it is WRONG, and there the command wins. See
+`fact.pathing.arcmoverthrottle` for the accidental control that proved it a
+session early: unguided the unit hit its landing 0.22 over, guided it missed by
+1.83.
+
+**A WALK-OFF FALL HAD NO COVER AT ALL**, because it has no takeoff and so no
+launch record, and A* models a walk-off as a short forward hop followed by a
+VERTICAL DROP whose stored vx is zero. That looked like the ledge defect and was
+not -- see `dead.pathing.plannersteer`.
+
+**`velocity` SURVIVES** because the liquid branch below still reads
+`velocity[2]`. Only the horizontal half was removed.
+
+### The flight trace, and what it is for
+`arch.tooling.flighttrace` -- see also `proc.tooling.instrument`, `arch.pathing.brakelatch`
+
+**BUILT 2026-09-01 BECAUSE 12 Hz RECONSTRUCTION RAN OUT.** `FLIGHT_TRACE` in
+`petportsTaskAction.lua`, one line per tick for the whole of every flight,
+numbered `#flight.tick` so several falls sort without matching timestamps by
+hand. OFF BY DEFAULT -- it is the densest logging in this mod.
+
+**IT FIRES REGARDLESS OF EDGE ACTION, AND THAT IS THE POINT.** The first airborne
+tick of a walk-off is still on the WALK edge; the pather does not advance to the
+Arc until the following tick. Anything gated on `action == "Arc"` misses the
+handover, which was the interval under suspicion. The call sits ahead of the arc
+block in `update()` for the same reason.
+
+**THE FOUR FIELDS THAT EARNED IT.**
+
+  - `moved` and `dt` -- real displacement over the real interval. The only honest
+    velocity in the line. `mcontroller.velocity()` sits beside it deliberately so
+    the size of the sampling artifact is on the record rather than in a comment;
+    it reads round planner numbers like `[8,-10]` while `moved/dt` reads 3.07.
+  - `liquidMovement` -- the ENGINE'S OWN verdict on whether it is moving this
+    body as a swimmer. Beats inferring a waterline from where a swimmer floats,
+    and is what killed `dead.pathing.waterdrag` in one run.
+  - `medium` -- ours, from `petports_mediumAt`, which reports `mixed` a tick
+    before the engine flips `liquidMovement`. The disagreement is useful.
+  - `planX` and `off` -- where the plan says the unit should be at its current
+    altitude. Turns "it looks like it leaves the arc" into a number.
+
+Plus one chassis line per flight -- `liquidFriction`, `liquidImpedance`,
+`airFriction`, `groundFriction`, `gravityMultiplier` -- so a measured decay can
+be checked against the numbers it is supposedly overriding rather than against a
+guess at engine defaults. `groundFriction` reads null; the other four report
+exactly what the monstertype says.
 
 ## DESIGN DECISIONS
 
@@ -6907,9 +7081,9 @@ and touched down at `[2517.22,1177.8]` -- its planned landing, 0.22 over. Guided
 it missed by 1.83 tiles; UNGUIDED IT HIT. That is the whole indictment: on the
 descent this mover was strictly worse than not running.
 
-**OWNERSHIP IS NOW A STATE INVARIANT, NOT A VELOCITY COMPARISON.** The launch
+**OWNERSHIP WAS MADE A STATE INVARIANT, NOT A VELOCITY COMPARISON.** The launch
 record exists exactly as long as the pather is on an Arc edge -- cleared every
-tick it is not -- so `launch ~= nil` is the whole test. Stated as a per-tick
+tick it is not -- so `launch ~= nil` became the whole test. Stated as a per-tick
 state check rather than hooked onto each exit because there are at least four
 ways off an arc: the mover's grounded last-edge branch, its advance loop running
 past the last Arc, the skip loop stopping on a Land, and a path lost in flight.
@@ -6920,14 +7094,28 @@ VERIFIED IN GAME 2026-08-30 across three courses -- 3-wide platforms, single-wid
 death course, and the original block course. Every jump landed. Worst error 0.49,
 one clear per jump, zero stale-record warnings.
 
-**WHAT IS LEFT IS THE BRAKE'S WINDOW, AND IT IS NOT THE LAUNCH.** The arrival
-test is airborne-only -- the grounded branch returns above it -- so it gets one
-look inside a box 0.5 wide in x and 1.0 tall, while a fast descent covers up to
-1.9 tiles per look. It missed three of eight jumps outright, and when it does
-fire it can fire up to half a tile short because the gate has no floor. See
-`todo.pathing.brakefloor`. Residual measured at +-0.33 to +0.49 and currently
-harmless: a 1.6-wide body braked half a tile short of a node still overlaps that
-node's tile. That is the body size, not a margin anyone chose.
+**SUPERSEDED 2026-09-01: THE SUBSTITUTION IS GONE, NOT MERELY GATED.** Nothing
+steers x during a flight now -- see `arch.pathing.nosteer`. The gate above was
+the right diagnosis of the wrong scope: holding `launch.vx` and issuing NOTHING
+produce the same trajectory whenever the command is correct, because
+`airFriction` is zeroed four lines up and an unforced horizontal velocity simply
+persists. They differ only where the command is wrong. The accidental control in
+this entry -- unguided it hit, guided it missed by 1.83 -- was already the
+argument for deleting rather than gating, a session before anyone read it that
+way.
+
+**THE LAUNCH RECORD SURVIVES AS AN INSTRUMENT.** Nothing reads `launch.vx` for
+control; the clear-time log line is the only place the log states what a flight
+actually launched with, which is the quantity ballistics is now trusted to
+preserve. Deleting the instrument in the same change that starts relying on what
+it measures is how a regression goes unnoticed.
+
+**AND THE BRAKE'S WINDOW IS CLOSED.** The arrival test used to be a distance --
+0.5 in x, 1.0 in y -- which asks "am I near" and not "have I got there". It is a
+sign test now: see `arch.pathing.arrivalsign`. The +-0.33 to +0.49 residual this
+entry called harmless was not, and `todo.pathing.brakefloor`'s reasoning for why
+had a hole in it. Measured after: 25 firings in one session, every one between 0
+and 0.0017 except a single -0.61 caught by the far-side bound.
 
 ### A Lua table with a hole becomes a Json object, not an array
 `fact.tooling.sparsejson` -- see also `arch.module.slots`
@@ -7304,6 +7492,81 @@ contour detour is validated but never travelled).
 every log this mod has ever produced.
 
 ## DISPROVEN
+
+### THE LEDGE FALL WAS THE PLANNER'S vx STEERING THE MOVER
+`dead.pathing.plannersteer` -- see also `arch.pathing.brakelatch`, `arch.pathing.nosteer`, `proc.tooling.instrument`
+
+**BELIEVED 2026-09-01, WRONG, AND THE REASONING WAS GOOD.** A unit walking off a
+ledge above `[2536,1149.8]` lost all horizontal velocity mid-fall and landed a
+tile low and 1.09 short, six times identically. The theory: the arc mover steers
+x toward `pather.edge.source.velocity[1]`, a walk-off has no launch record to
+substitute, and A* stores vx 0 on the vertical part of a walk-off arc. Deceleration
+profile matched a velocity command; the planner really does store zeroes there.
+
+**WHAT KILLED IT.** The steering was deleted and the positions came back
+IDENTICAL TO THE DECIMAL -- `2534.65 -> 2534.91 -> 2534.91 -> 2534.91` before and
+after. A change that removes the only horizontal command in the mover and alters
+nothing was never the cause.
+
+**THE REAL ONE IS `arch.pathing.brakelatch`.** Two mechanisms producing the same
+curve, and only one sample per script tick to tell them apart.
+
+**THE DELETION STANDS ANYWAY**, for the reason it was made rather than the one it
+was sold on -- see `arch.pathing.nosteer`. A correct change argued from a wrong
+diagnosis is still a wrong diagnosis, and shipping it as "the fix" is what made
+the next round of evidence harder to read.
+
+### LIQUID DRAG WAS BRAKING THE UNIT AT THE WATERLINE
+`dead.pathing.waterdrag` -- see also `arch.pathing.brakelatch`, `arch.tooling.flighttrace`, `proc.tooling.instrument`
+
+**BELIEVED 2026-09-01, IMMEDIATELY AFTER `dead.pathing.plannersteer`, AND WRONG
+FOR THE SAME UNDERLYING REASON.** Three walk-off falls sorted perfectly by one
+variable: one through open air held vx 8.17 for four tiles, two that ended in
+water decayed. The waterline at the ledge was independently confirmed -- a
+swimmer floats at y 1149.79 there -- and the decaying tick was the one where the
+body first straddled it. `liquidFriction` 5.0 and `liquidImpedance` 0.5 are the
+chassis defaults and are large enough to do it.
+
+**WHAT KILLED IT.** A per-tick trace, in one run. The same collapse -- vx 8.00 ->
+3.07 -> 0.00 -- occurred at `[2510.02,1161.97]` with `medium air`,
+`liquidMovement false`, NINE TILES ABOVE ANY LIQUID, and stayed at exactly zero
+for four more ticks of dry fall.
+
+**THE CORRELATION WAS REAL AND MEANT NOTHING.** The latch bites on the FIRST
+ARC-MOVER TICK of a flight; on the ledge route that tick happened to be the one
+the body touched water. Two of three falls "entering water" is the sort of
+agreement a single sample per tick will hand you.
+
+**THE COST OF ASSUMING RATHER THAN MEASURING WAS A CONFIG CHANGE THAT PROVED
+NOTHING.** `liquidFriction` and `liquidImpedance` were written explicitly into
+the monstertype at their defaults, as a control. The trace's own chassis line
+showed `baseParameters()` already reported exactly those values, so the control
+could not have discriminated anything. Reverted.
+
+### THE SHORTFALL WAS A LATE WALK -> ARC HANDOVER
+`dead.pathing.latehandover` -- see also `arch.tooling.flighttrace`, `arch.pathing.brakelatch`
+
+**BELIEVED 2026-09-01, AND IT IS REAL BUT AN ORDER OF MAGNITUDE SMALLER THAN
+CLAIMED.** The unit does stay on the Walk edge for one or two airborne script
+ticks before the pather advances to the Arc -- measured, two ticks at the 2533.8
+lip -- so it enters the trajectory already falling, with no equivalent of
+`moveJump`'s `setPosition` snap onto the plan's initial conditions.
+
+The estimate was 0.57 tiles of the 1.09 shortfall, reconstructed from a departure
+0.31 below the plan's arc source.
+
+**MEASURED WITH `planX`, IT IS ABOUT 0.2.** The trace reports `off` at every
+tick, and on a clean fall it reads 0.22, 0.23, 0.13 -- the unit is very nearly on
+the planned arc when the Arc edge takes over, because the walk mover's continued
+horizontal drive happens to match what the arc wanted.
+
+**WHAT IS LEFT OF IT.** The unit reaches its planned COLUMN and arrives roughly
+0.6 too low, so on a shoreline block it clips the lip instead of landing on it.
+Costs nothing on every route measured -- the plan continues into Swim edges and
+the unit swims off at a clean 8.00 -- and would matter where the tile below the
+landing is a drop rather than water. NOT WORTH A SESSION at 1 off-plan landing in
+38 jumps. If it becomes worth one, `arch.tooling.flighttrace` already logs the
+number.
 
 ### SIZING TEXT BY CHARACTER COUNT, IN ANY LANGUAGE
 `dead.pane.charwidth` -- see also `fact.pane.textmeasure`
@@ -8038,9 +8301,11 @@ eventually carry its own markers or drop the concept.
 ---
 
 ### The arrival brake has no floor and only one look to use it
-`todo.pathing.brakefloor` -- see also `fact.pathing.arcmoverthrottle`, `arch.pathing.solvelaunch`
+`todo.pathing.brakefloor` -- see also `fact.pathing.arcmoverthrottle`, `arch.pathing.arrivalsign`, `arch.pathing.solvelaunch`
 
-**TRIAGED 2026-08-30 -- PRIORITY 2.** Nothing is failing on it; it is a note about why the current margin exists rather than a defect. Revisit if the chassis ever narrows or `LAND_BRAKE_REACH` grows.
+**CLOSED 2026-09-01 BY `arch.pathing.arrivalsign`.** Kept because the triage below was WRONG in a way worth preserving, not because the defect survives.
+
+**TRIAGED 2026-08-30 -- PRIORITY 2, AND THAT WAS THE ERROR.** "Nothing is failing on it; it is a note about why the current margin exists rather than a defect." It was a defect, it was failing, and the reasoning that said otherwise named two conditions that would break it -- a narrower chassis, a larger `LAND_BRAKE_REACH` -- and missed a third. OVERLAP ONLY SAVES A LANDING WHOSE NEIGHBOURING TILE IS AT THE SAME HEIGHT. Onto a step up, half a tile short means falling down the side of it, and the body being 1.6 wide buys nothing. Measured three times on 2026-09-01 at two sites before anyone re-read this entry.
 
 The gate in `petportsArcMover`:
 
@@ -9058,8 +9323,51 @@ next reader will trust the bold sentence over the paragraph five sections away.
 then check each against the ENGINE FACTS section. Every superseded claim should
 now name its successor tag inline, as the two above do.
 
+### A LOG SAMPLED AT 12 Hz WILL CONFIRM ANY THEORY YOU BRING IT
+`proc.tooling.instrument` -- see also `proc.tooling.controlfirst`, `arch.tooling.flighttrace`, `dead.pathing.plannersteer`, `dead.pathing.waterdrag`, `proc.pathing.velocityartifact`
+
+**COST: MOST OF 2026-09-01, AND TWO CONFIDENT WRONG ANSWERS SHIPPED AS FIXES.**
+
+The `pre-move` line runs once per script tick -- 0.082s, 4.92 engine ticks. A
+collapse from full speed to zero takes TWO of those. Every theory about it is
+therefore fitted to ONE interior sample, and one sample cannot distinguish
+mechanisms that produce the same curve.
+
+**IT DOES NOT FAIL BY LOOKING UNCERTAIN. IT FAILS BY AGREEING WITH YOU.**
+
+    theory 1  the planner's vx steers the mover   deceleration profile matched a
+              velocity command, and A* really does store zeroes there
+    theory 2  liquid drag at the waterline        three falls sorted perfectly by
+              whether they ended in water, and the waterline was independently
+              confirmed
+
+Both were coherent, both cited real measurements, both were wrong, and the actual
+cause -- `arch.pathing.brakelatch` -- was a stuck flag from a PREVIOUS flight,
+which no reading of a single flight could have found.
+
+**THE AUTHOR SEEING IT AT 60 fps BEAT EVERY RECONSTRUCTION.** "The unit stops
+following its arc before it hits the waterline" was correct, was not derivable
+from the log as it stood, and was the observation that forced the instrument.
+When someone watching the game and the log disagree about ordering, THE LOG IS
+THE ONE MISSING SAMPLES.
+
+**THE RULE.** WHEN TWO EXPLANATIONS FIT THE SAME EVIDENCE, STOP REASONING AND
+INSTRUMENT. A per-tick trace behind a flag cost about an hour and separated three
+hypotheses in ONE RUN, after two rounds of inference had spent a session getting
+it wrong twice. `proc.tooling.controlfirst` says reach for a control before a
+theory; this is the same rule when the control cannot be built without better
+resolution first.
+
+**AND A CORRECT CHANGE ARGUED FROM A WRONG DIAGNOSIS IS STILL A WRONG
+DIAGNOSIS.** Deleting the planner-vx steering was right on its own merits and was
+presented as the fix for the ledge. It fixed nothing there, and shipping it as
+though it had made the next round of evidence harder to read -- the next log was
+scanned for whether the fix worked rather than for what was actually happening.
+Say what a change is expected to do BEFORE the run, and say plainly when it did
+not do it.
+
 ### Reach for a CONTROL before a theory
-`proc.tooling.controlfirst` -- see also `fact.pathing.floatingtarget`
+`proc.tooling.controlfirst` -- see also `fact.pathing.floatingtarget`, `proc.tooling.instrument`
 
 MEASURED 2026-08-30, at the cost of most of a session.
 
