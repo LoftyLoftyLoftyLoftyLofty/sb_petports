@@ -173,7 +173,11 @@ function PetportsFishingSpawner()
           for _, entry in ipairs(pool) do
             local timeOk = (day and entry.day) or (night and entry.night)
             if timeOk and (extraFilter == nil or extraFilter(entry)) then
-              return entry.monster
+              --  THE TIER NAME COMES BACK WITH THE FISH. It is knowable only
+              --  here -- nothing downstream can recover "rare" from a monster
+              --  type without re-deriving the whole table -- and the port wants
+              --  it for per-rarity catch statistics.
+              return entry.monster, rarity[2]
             end
           end
         end
@@ -192,9 +196,9 @@ function PetportsFishingSpawner()
       if tostring(liquidHere[1]) == tostring(entry.liquidId) then
         for _, lure in ipairs(entry.eligibleLureTypes or {}) do
           if lureType == lure.lureType then
-            local picked = pickFromTiers(
+            local picked, rarity = pickFromTiers(
               lure.rarities or {}, lure.availableFish or {}, geo, nil)
-            if picked then return picked end
+            if picked then return picked, rarity end
           end
         end
       end
@@ -231,14 +235,17 @@ function PetportsFishingSpawner()
     if position == nil then return nil end
 
     local geo = geometry()
-    local kind = zoneConfig ~= nil
-      and zoneSpawnType(position, geo)
-      or vanillaSpawnType(position, geo)
+    local kind, rarity
+    if zoneConfig ~= nil then
+      kind, rarity = zoneSpawnType(position, geo)
+    else
+      kind, rarity = vanillaSpawnType(position, geo)
+    end
 
     if kind == nil then return nil end
 
     spawnBias = math.max(0, spawnBias - geo.biasDropPerSpawn)
-    return kind, position
+    return kind, position, rarity
   end
 
   function spawner.reset()

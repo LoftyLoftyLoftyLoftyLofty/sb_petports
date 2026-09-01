@@ -136,7 +136,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-01t petports_freshPather exposed"
+local BUILD_STAMP = "2026-09-01w treasure pool: damage-kind maps, isTreasurePool guard"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -680,6 +680,75 @@ local WATER_REACH = 4.0
 --  spends a medical good on a burst that does not reach.
 local MEDIC_REACH = 5.0
 
+--  HOW CLOSE COUNTS AS CATCHING A FISH.
+--
+--  WIDER THAN A CRATE'S AND FOR THE SAME REASON AS THE MEDIC'S: the target
+--  MOVES. A fish is chasing a lure at swimSpeed 3 and darting at biteSpeed 30,
+--  so a tight radius would have the unit arrive at a position the fish left two
+--  ticks ago -- see todo.pathing.movingtarget, which this shares a cause with.
+--
+--  Tolerance here is doing the work a re-resolve would otherwise have to.
+local FISH_REACH = 5.0
+
+--  A TREASURE POOL NAME OUT OF WHATEVER SHAPE THE MONSTERTYPE DECLARED.
+--
+--  MEASURED 2026-09-01: `fishingchuckle` declares
+--
+--      "landedTreasurePool" : "fishinglegendary"
+--
+--  a bare string, and that is what the first build assumed. `fishingjerk`
+--  declares a TABLE, and handing it to root.createTreasure threw
+--  `LuaConversionException: Error converting LuaValue` -- a caught fish that
+--  produced nothing and was despawned anyway.
+--
+--  FOUR SHAPES, AND THE THIRD IS THE ONE THAT ACTUALLY SHIPS.
+--
+--      "fishinglegendary"                        a bare name (fishingchuckle)
+--      { "poolName" }                            a flat list
+--      { default = "x", fire = "y", ... }        KEYED BY DAMAGE KIND
+--      { { 1, "poolName" } }                     level-keyed pairs
+--
+--  MEASURED 2026-09-01, and the third one is what fishingjerk really declares:
+--
+--      {"default":"fishingcommon","fire":"lofty_crispy_fishingcommon",
+--       "firehammer":"lofty_crispy_fishingcommon", ...}
+--
+--  A monster's treasure pool can vary by the damage kind that killed it, and
+--  other mods patch entries into that map. The first version of this walked the
+--  value with ipairs, which yields NOTHING on a string-keyed table, so it
+--  concluded the fish had no pool and reported a catch with no loot.
+--
+--  `default` IS THE RIGHT KEY FOR US. A unit does not kill a fish -- it rolls
+--  the pool and despawns it -- so there is no damage kind to key on, and any
+--  other entry would be claiming a weapon was used.
+--
+--  RETURNS nil RATHER THAN GUESSING when no string is reachable. The caller
+--  treats that as "this fish has no loot", which is a real state --
+--  landedTreasurePool defaults to "empty" in vanilla's own landedState.
+local function treasurePoolName(value)
+  if type(value) == "string" then return value end
+  if type(value) ~= "table" then return nil end
+
+  --  BEFORE THE ipairs WALK, because a damage-kind map has no array part at all
+  --  and the walk would silently find nothing.
+  if type(value.default) == "string" then return value.default end
+
+  for _, entry in ipairs(value) do
+    if type(entry) == "string" then return entry end
+
+    if type(entry) == "table" then
+      --  A LIST OF MAPS is the other way vanilla writes this.
+      if type(entry.default) == "string" then return entry.default end
+
+      for _, inner in ipairs(entry) do
+        if type(inner) == "string" then return inner end
+      end
+    end
+  end
+
+  return nil
+end
+
 --  How close the unit has to be to poke an animal.
 --
 --  More generous than the crop reach because ANIMALS MOVE and nothing chases
@@ -958,7 +1027,7 @@ function petportsTaskAction.enterWith(args)
   --
   --  So: report and clear before refusing.
   if (task.type == "collect" or task.type == "harvest"
-      or task.type == "animal")
+      or task.type == "animal" or task.type == "fish")
      and not world.entityExists(task.target) then
     if task.port then
       world.sendEntityMessage(task.port, "petports_taskReport", {
@@ -4307,6 +4376,30 @@ function petportsTaskAction.update(dt, stateData)
     return true
   end
 
+  --  A FISH THAT LEAVES THE NETWORK IS NOT WORTH FOLLOWING.
+  --
+  --  It is the only target that can move out of coverage under its own power.
+  --  Everything else is a crop, a crate, a machine or a drop -- none of which
+  --  relocate -- and an animal wanders inside a pen rather than out of a base.
+  --
+  --  CHECKED EVERY TICK, NOT AT ARRIVAL. A fish chasing a lure covers ground
+  --  fast, and the point of this is to give up EARLY: a unit that follows one
+  --  out of coverage has left its own network to chase something it was never
+  --  going to reach, which is exactly the wandering the leash exists to stop.
+  --
+  --  petports_inNetwork RETURNS TRUE WHEN THE UNIT HAS NO NETWORK YET, so this
+  --  cannot strand a task on a unit that has not been told its rects.
+  if task.type == "fish" and task.target ~= nil
+     and world.entityExists(task.target) then
+
+    local fishAt = world.entityPosition(task.target)
+    if fishAt ~= nil and not petports_inNetwork(fishAt) then
+      report(stateData, "failed",
+        "the fish left network coverage at " .. sb.printJson(fishAt))
+      return true
+    end
+  end
+
   --  HAND THE STATE BACK WHEN BEACHED, FOR THE SAME STRUCTURAL REASON AS THE
   --  LEASH YIELD ABOVE.
   --
@@ -5594,7 +5687,7 @@ function petportsTaskAction.update(dt, stateData)
   elseif task.type == "collect" or task.type == "harvest"
      or task.type == "replant" or task.type == "water"
      or task.type == "animal" or task.type == "medic"
-     or task.type == "withdraw" then
+     or task.type == "withdraw" or task.type == "fish" then
     approachTo = approachTargetFor(stateData, target)
 
     if approachTo == nil then
@@ -6379,6 +6472,115 @@ function petportsTaskAction.update(dt, stateData)
     end
 
     return false
+  end
+
+  if task.type == "fish" then
+    --  THE FISH MOVES, SO ARRIVAL IS A RANGE CHECK RATHER THAN A POSITION.
+    if not world.entityExists(task.target) then
+      report(stateData, "failed",
+        "the fish was gone before the unit reached it")
+      return true
+    end
+
+    local there = world.entityPosition(task.target)
+    local gap = there and world.magnitude(mcontroller.position(), there) or nil
+
+    if gap == nil or gap > FISH_REACH then
+      --  NOT A FAILURE YET. The fish is chasing a lure, so the gap closes and
+      --  opens on its own; the dwell timer below is what decides we have been
+      --  reaching for it long enough.
+      stateData.dwellTimer = stateData.dwellTimer - dt
+      if stateData.dwellTimer <= 0 then
+        report(stateData, "failed", string.format(
+          "arrived but the fish is %s away (reach %s) -- it kept moving",
+          sb.printJson(gap or "unknown"), sb.printJson(FISH_REACH)))
+        return true
+      end
+      return false
+    end
+
+    --  THE LOOT IS ROLLED HERE, NOT DROPPED BY THE FISH.
+    --
+    --  A fishing monster's dropPools is EMPTY and its landedTreasurePool is
+    --  applied only by landedState -- which is an out-of-water state and
+    --  despawns instantly if `self.inLiquid`. So a fish killed or despawned in
+    --  open water drops nothing, by vanilla's own design.
+    --
+    --  THAT IS THE BEHAVIOUR WE WANT AND NOT A LIMITATION WE ARE WORKING
+    --  AROUND. Loot that fell on the seabed would sink out of coverage before a
+    --  unit could gather it. Rolling the pool straight into cargo is both
+    --  simpler and the only version that does not lose items.
+    local declared, pool = nil, nil
+    local okParams, params = pcall(root.monsterParameters, task.fishType)
+    if okParams and type(params) == "table" then
+      local base = type(params.baseParameters) == "table"
+        and params.baseParameters or {}
+      declared = params.landedTreasurePool or base.landedTreasurePool
+      pool = treasurePoolName(declared)
+    end
+
+    if pool == nil or pool == "empty" then
+      --  Still a catch, just an empty one. Despawn it anyway or the fish sits
+      --  there being re-dispatched forever.
+      pcall(world.callScriptedEntity, task.target, "despawn")
+      report(stateData, "done", string.format(
+        "caught %s but it has no treasure pool (declared %s)",
+        tostring(task.fishType), sb.printJson(declared)))
+      return true
+    end
+
+    --  GUARD BEFORE ROLLING. root.isTreasurePool exists precisely so a caller
+    --  can avoid handing createTreasure a name that does not resolve, and a
+    --  fish whose pool was patched away by another mod is exactly that case.
+    --  Cheaper and far clearer than catching the exception afterwards.
+    local okPool, poolExists = pcall(root.isTreasurePool, pool)
+    if not okPool or poolExists ~= true then
+      pcall(world.callScriptedEntity, task.target, "despawn")
+      report(stateData, "done", string.format(
+        "caught %s but pool %s does not exist (declared %s)",
+        tostring(task.fishType), tostring(pool), sb.printJson(declared)))
+      return true
+    end
+
+    --  LEVEL FROM THE WORLD, matching what the lure passed the fish at spawn.
+    local level = math.max(1, world.threatLevel())
+    local okTreasure, treasure = pcall(root.createTreasure, pool, level)
+
+    if not okTreasure or type(treasure) ~= "table" or #treasure == 0 then
+      --  sb.printJson ON THE DECLARED VALUE, NOT tostring. The first version of
+      --  this printed `pool table: 000002378D7B8B20`, which named the fault
+      --  without describing it -- the whole question was what shape the
+      --  monstertype had used.
+      report(stateData, "failed", string.format(
+        "caught %s but pool %s (declared %s) produced nothing at level %s: %s",
+        tostring(task.fishType), tostring(pool), sb.printJson(declared),
+        sb.printJson(level), tostring(treasure)))
+      pcall(world.callScriptedEntity, task.target, "despawn")
+      return true
+    end
+
+    --  DESPAWN RATHER THAN KILL, AND THE DIFFERENCE MATTERS.
+    --
+    --  `despawn` is a plain global in fishingMonster.lua, so it needs no message
+    --  handler and no dotted path. It routes the fish into disappearState, which
+    --  explicitly CLEARS the death sound and particle burst before killing --
+    --  so the fish fades out exactly as it does when a player's line snaps, and
+    --  cannot drop anything on the way out.
+    pcall(world.callScriptedEntity, task.target, "despawn")
+
+    sb.logInfo("UNIT CAUGHT %s (%s, %s) at %s -- %s stack(s) from pool %s at "
+      .. "level %s",
+      sb.printJson(task.target), tostring(task.fishType),
+      tostring(task.fishRarity or "unknown rarity"), sb.printJson(there),
+      sb.printJson(#treasure), tostring(pool), sb.printJson(level))
+
+    --  THE WHOLE LIST, WHICH IS THE ONE PLACE THIS MOD CARRIES MORE THAN ONE
+    --  STACK PER TRIP. The port's report handler tells a list from a single
+    --  descriptor by whether it has a `name`.
+    report(stateData, "done", string.format(
+      "caught %s (%s)", tostring(task.fishType),
+      tostring(task.fishRarity or "unknown rarity")), treasure)
+    return true
   end
 
   if task.type == "collect" then

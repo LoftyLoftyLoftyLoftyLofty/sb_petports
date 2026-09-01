@@ -1280,7 +1280,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-01m two-tier lure placement, network rects"
+local PETPORT_BUILD_STAMP = "2026-09-01n fish dispatch, chassis gate, catch stats"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -1315,12 +1315,20 @@ function init()
   --  NOT PERSISTED, deliberately. Both the lure and its fish die with the chunk,
   --  so a reloaded port that remembered a fish id would be remembering a corpse.
   --  fishingCheck rebuilds the lure and the lure reports again.
-  message.setHandler("petports_fishSpawned", simpleHandler(function(fishId, fishType)
+  message.setHandler("petports_fishSpawned", simpleHandler(function(fishId, fishType, rarity)
     self.fishId = fishId
     self.fishType = fishType
 
-    sb.logInfo("PETPORT %s has a fish: %s (%s)",
-      stationUniqueId(), sb.printJson(fishId), tostring(fishType))
+    --  THE RARITY TIER, CARRIED ONLY FOR STATISTICS. It is knowable inside the
+    --  spawner's pickFromTiers and nowhere else -- a monster type alone cannot
+    --  be resolved back to "rare" without re-deriving the whole table -- so it
+    --  is threaded spawner -> lure -> port -> task -> report rather than looked
+    --  up. Nothing in dispatch reads it.
+    self.fishRarity = rarity
+
+    sb.logInfo("PETPORT %s has a fish: %s (%s, %s)",
+      stationUniqueId(), sb.printJson(fishId), tostring(fishType),
+      tostring(rarity or "unknown rarity"))
   end))
 
   --  Timed out, caught, or despawned for lost line of sight. The lure cannot
@@ -1330,6 +1338,7 @@ function init()
     if self.fishId == fishId then
       self.fishId = nil
       self.fishType = nil
+      self.fishRarity = nil
 
       sb.logInfo("PETPORT %s fish %s is gone", stationUniqueId(),
         sb.printJson(fishId))
@@ -1864,7 +1873,19 @@ function init()
     --  world drop for it is already gone. Nothing below this may return early
     --  ahead of it.
     if report.cargo ~= nil then
-      receiveCargo(report.cargo)
+      --  A LIST OR A SINGLE DESCRIPTOR. Every task before fishing returned at
+      --  most one stack, so `cargo` was always one item table. A fish rolls a
+      --  treasure pool and pools return SEVERAL -- see dd.unit.fishcargo -- so
+      --  the report may carry an array.
+      --
+      --  TOLD APART BY `name`, not by type. Both are tables; only a descriptor
+      --  has a name. Getting this wrong is silent: receiveCargo early-returns on
+      --  a nil name, so a list would vanish without a word.
+      if report.cargo.name == nil then
+        for _, stack in ipairs(report.cargo) do receiveCargo(stack) end
+      else
+        receiveCargo(report.cargo)
+      end
     end
 
     --  THE DONE-CLEANUP RUNS BEFORE THE ARRIVAL WORK, AND THE ORDER IS A FIX.
@@ -2059,6 +2080,31 @@ function init()
     if report.outcome == "done" and self.task ~= nil
        and self.task.type == "animal" and self.task.id == report.id then
       metrics.add("livestock", 1)
+    end
+
+    --  A CAUGHT FISH, COUNTED TWICE ON PURPOSE.
+    --
+    --  `fished` is the total and every tier is a separate key beside it, so the
+    --  tiers can be checked against the total -- a rarity that never arrives
+    --  reads as a plumbing break rather than as bad luck, which matters because
+    --  the tier is threaded through four files and any missing link would just
+    --  make it zero forever.
+    --
+    --  THE TIER STRING IS THE SPAWNER'S, NOT AN ENUM HERE. It comes from the
+    --  rarities table the roll actually used -- vanilla's four names, or
+    --  whatever a fishing zone's own table declares -- so a zone with different
+    --  tiers gets counted under its own names with no change to this.
+    --
+    --  ONE PER EXECUTION, however many stacks the pool rolled. Same counting
+    --  rule as the crop and animal harvests above.
+    if report.outcome == "done" and self.task ~= nil
+       and self.task.type == "fish" and self.task.id == report.id then
+      metrics.add("fished", 1)
+
+      local tier = self.task.fishRarity
+      if type(tier) == "string" and tier ~= "" then
+        metrics.add("fished_" .. tier, 1)
+      end
     end
 
     --  The done-cleanup that used to sit here moved ABOVE the delivery
@@ -3526,6 +3572,11 @@ FISHING_LURE = "petports_fishinglure"
 --  not this port, not a saved table -- has to remember either of them exists,
 --  and an orphan left by a crash or a chunk unload resolves itself.
 FISHING_LURE_LIFETIME = 150
+
+--  HOW LONG A UNIT KEEPS REACHING FOR A FISH ONCE IT HAS ARRIVED. Ten seconds
+--  against the 3-second default every other task takes, because a fish is the
+--  only target in the mod that moves under its own power while being caught.
+FISH_DWELL = 10
 
 --  WHAT EVERY FISH THIS PORT'S LURE SPAWNS IS BORN WITH.
 --
@@ -5381,6 +5432,7 @@ local function fishingCheck()
     --  because a dismissed lure will not be alive to send it.
     self.fishId = nil
     self.fishType = nil
+    self.fishRarity = nil
     return
   end
 
@@ -5437,6 +5489,136 @@ local function fishingCheck()
       stationUniqueId(), sb.printJson(spot),
       ok and "spawnProjectile returned nil" or tostring(result))
   end
+end
+
+--  CAN THE SOCKETED CHASSIS ACTUALLY GET TO A FISH?
+--
+--  DERIVED, NOT A WHITELIST. Naming aquatic, amphibious and sinker would be
+--  correct today and wrong the moment anyone builds a chassis on this mod, which
+--  is the intended path rather than an edge case -- the same argument
+--  petports_unit's own header makes about not checking for a name prefix.
+--
+--  THE QUESTION IS "MAY THIS BODY BE SUBMERGED", and the capability table
+--  answers it in two branches because the two chassis kinds decide it
+--  differently:
+--
+--      free mover   governed by PERMISSION -- petports_canSwim
+--      walker       governed by PHYSICS    -- petports_avoidLiquid false
+--
+--  Which sorts the five shipped chassis correctly: aquatic swims, flyer does
+--  not; amphibious and sinker have avoidLiquid false, the drone does not.
+--
+--  IT IS THE FISH'S OWN RULE, NOT ONE WE INVENT. fishingMonster.updateLure
+--  despawns a fish the moment `world.liquidAt(lurePosition)` is false, so a unit
+--  that cannot be in the water can never reach one however long it walks. This
+--  only stops the port wasting a dispatch discovering that.
+--
+--  THE MODULE MAY STILL BE SOCKETED. A player who puts a fishing module in a
+--  drone gets no fish work and no error -- the pane should eventually say why,
+--  and this predicate is what it would ask.
+local function petportCanFish()
+  if not petportFishing() then return false, "no fishing module" end
+
+  local monsterType = self.petData and self.petData.monsterType
+  if monsterType == nil then return false, "no unit" end
+
+  local caps = petports_habitatCapabilitiesForType(monsterType,
+    petports_habitatPermittedSet(petportModuleLiquids()))
+
+  if caps == nil then
+    return false, "chassis capabilities unreadable"
+  end
+
+  if caps.freeMover then
+    if caps.swim then return true end
+    return false, string.format(
+      "%s is a free mover that cannot swim, so it can never reach a fish",
+      tostring(monsterType))
+  end
+
+  if caps.avoidLiquid == false then return true end
+
+  return false, string.format(
+    "%s is a walker that avoids liquid, so it can never reach a fish",
+    tostring(monsterType))
+end
+
+--  GO AND GET THAT FISH.
+--
+--  THE ONLY GENERATOR WHOSE TARGET EXPIRES ON ITS OWN. Everything else names a
+--  crop, a crate, a drop or an animal, all of which wait indefinitely. A fish
+--  times out on its approach window, swims out of coverage, or loses sight of
+--  its lure and despawns -- so a dispatch that is merely slow is a dispatch that
+--  produces nothing. That is why it sits above harvest in the ladder.
+--
+--  ONE FISH, AND THE PORT DOES NOT CHOOSE IT. The lure spawns at most one and
+--  reports it; this generator has nothing to search and nothing to rank. That is
+--  also why there is no reject-reason tally like animalWork's -- there is only
+--  ever one candidate and one reason.
+--
+--  NO CLAIM YET, DELIBERATELY. Two ports sharing water each run their own lure
+--  and their own fish, so there is no contention to arbitrate: a fish belongs to
+--  the lure that spawned it and the port that owns that lure. A claim becomes
+--  necessary the day a fish is visible to a port that did not spawn it, which is
+--  also when it wants a target marker -- see the backlog entry for both.
+local function fishWork()
+  local canFish, why = petportCanFish()
+  if not canFish then return nil, why end
+
+  if self.fishId == nil then
+    return nil, "no fish in the water yet"
+  end
+
+  if not world.entityExists(self.fishId) then
+    --  Timed out or despawned between the lure's report and this tick. The
+    --  lure will notice on its own update and send petports_fishGone.
+    return nil, "the fish is gone"
+  end
+
+  --  A UNIT ALREADY CARRYING SOMETHING DOES NOT GO FISHING.
+  --
+  --  Not a capacity test. A fish returns SEVERAL stacks where every other task
+  --  returns at most one, so the honest rule is "start empty" rather than
+  --  "leave room" -- there is no way to know in advance how much room a treasure
+  --  pool will need, and depositing first is cheap.
+  local cargo = self.petData and self.petData.cargo
+  if cargo ~= nil and #cargo > 0 then
+    return nil, string.format(
+      "the unit is carrying %s stack(s) and should deposit before fishing",
+      sb.printJson(#cargo))
+  end
+
+  local workId = "fish:" .. self.fishId
+  local failure = self.workFailures[workId]
+  if failure ~= nil and (failure["until"] or 0) > world.time() then
+    return nil, "backed off from this fish after a failure"
+  end
+
+  local position = world.entityPosition(self.fishId)
+  if position == nil then return nil, "the fish has no position" end
+
+  sb.logInfo("PETPORT %s FISH dispatch: %s#%s (%s) at %s",
+    stationUniqueId(), tostring(self.fishType), sb.printJson(self.fishId),
+    tostring(self.fishRarity or "unknown rarity"), sb.printJson(position))
+
+  return {
+    id = workId,
+    type = "fish",
+    port = stationUniqueId(),
+    target = self.fishId,
+    position = position,
+
+    --  CARRIED FOR THE UNIT AND FOR THE STATISTICS. fishType is what the unit
+    --  reads landedTreasurePool from; fishRarity is only ever counted.
+    fishType = self.fishType,
+    fishRarity = self.fishRarity,
+
+    --  THE ARRIVAL RETRY BUDGET. Without this the unit gets the 3-second
+    --  default, which is short for a target that is itself chasing something
+    --  else at swimSpeed 3 and darting at biteSpeed 30 -- the gap opens and
+    --  closes on its own, and three seconds of it can easily be all "open".
+    dwell = FISH_DWELL
+  }
 end
 
 --  What is left is a unit sitting still, away from its port, for HEALTH_INTERVAL
@@ -10959,6 +11141,21 @@ local function findWork()
   if doHauling then work, why = collectionWork() end
   if dispatchable(work) ~= nil then return work end
 
+  --  FISH SIT BETWEEN COLLECT AND HARVEST, AND IT IS THE SAME ARGUMENT BOTH
+  --  TIMES: PERISHABILITY DECIDES THE ORDER.
+  --
+  --  Below collect, because an item drop is ALREADY counting down -- a fish that
+  --  has not been reached yet has lost nothing, where a drop lost to a detour is
+  --  gone. Above harvest, because a ripe crop will be exactly as ripe in a
+  --  minute and a fish will not: it times out on its approach window, swims out
+  --  of coverage, or loses sight of its lure and despawns.
+  --
+  --  NO PARTICIPATION GROUP GATES THIS. The four groups are port switches; the
+  --  fishing module on the socketed unit is the only switch, and petportCanFish
+  --  is where that is read. A player who does not want fish unsockets it.
+  local fish, noFish = fishWork()
+  if dispatchable(fish) ~= nil then return fish end
+
   --  HARVEST SITS BELOW COLLECT, and the reason is perishability. An item drop
   --  has a despawn timer; a ripe crop does not, and will be exactly as ripe in
   --  a minute. So clearing the ground first costs nothing and losing a drop to
@@ -11110,6 +11307,7 @@ local function findWork()
       .. "; " .. tostring(bothLegs(noPutBack, noFetch, "no replant work"))
       .. "; " .. tostring(bothLegs(noWet, noFetchWater, "no watering work"))
       .. "; " .. tostring(noBeast or "no animal work")
+      .. "; " .. tostring(noFish or "no fishing work")
       .. "; " .. tostring(noStock or "no restock work")
       .. "; " .. tostring(noFuel or "no fuel to collect")
       .. "; " .. tostring(noTidy or "no tidying work")

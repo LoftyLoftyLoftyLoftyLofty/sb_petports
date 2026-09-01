@@ -516,7 +516,7 @@ function update(dt)
   if self.spawnTimer <= 0 then
     self.spawnTimer = util.randomInRange(self.spawnTimeRange)
 
-    local spawnType, spawnPosition = self.fishingSpawner.getSpawn(here)
+    local spawnType, spawnPosition, rarity = self.fishingSpawner.getSpawn(here)
 
     if spawnType and spawnPosition then
       --  OUR PARAMETERS FIRST, THEN THE THREE THE FISH CANNOT WORK WITHOUT, so
@@ -540,7 +540,7 @@ function update(dt)
         --  poll would spend a twentieth of the fish's life just noticing it.
         --  petports_lureFish stays as a reconcile for a port that reloaded.
         world.sendEntityMessage(self.ownerId, "petports_fishSpawned",
-          spawned, spawnType)
+          spawned, spawnType, rarity)
 
         sb.logInfo("petports: lure %s spawned %s (%s) at %s, level %s, lurker %s "
           .. "(%s mode, bias now %s)",
@@ -549,6 +549,11 @@ function update(dt)
           tostring(self.fishIsLurker),
           tostring(self.fishingSpawner.mode()),
           sb.printJson(self.fishingSpawner.bias()))
+
+        if rarity ~= nil then
+          sb.logInfo("petports: lure %s fish %s is %s",
+            sb.printJson(entity.id()), sb.printJson(spawned), tostring(rarity))
+        end
 
         --  LEVEL WITH IT IMMEDIATELY, BEFORE IT HAS LOOKED AT ANYTHING.
         --
