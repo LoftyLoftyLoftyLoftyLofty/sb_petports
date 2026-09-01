@@ -5,8 +5,16 @@ plus the unit behaviour that makes one worth having. Split out of the Nicemice
 mod on 2025-08-19, before any public release, so that object and monster
 identity names were still free to change.
 
-Nicemice remains the intended content layer: unit types, chassis variants and
-the encounter/quest loop that unit items drop from. This mod is the machinery.
+**PETPORTS IS STANDALONE, AND THAT CHANGED ON 2026-09-01.** The v1 framing put
+the content layer in Nicemice -- unit types, chassis variants and the
+encounter/quest loop that unit items drop from -- with this mod as the machinery.
+It no longer holds. Petports ships its own species, its own acquisition and its
+own release, because the machinery is too useful to gate behind a race mod.
+
+Nicemice T6+ ships use petports as a replacement for the vanilla ship pet system,
+and Nicemice ships an update alongside carrying its OWN themed units. Those are
+not on this list and do not belong on it. **A DESIGN THAT ONLY MAKES SENSE FOR A
+SHORTSTACK SPACE MOUSE IS A NICEMICE ENTRY; EVERYTHING ELSE IS OURS.**
 
 ## How to read this
 
@@ -105,7 +113,9 @@ session and three identical pool-exit perches at the start of the day.
   into a pool once more before the latch fix removed the perches.
 - `todo.tooling.paneflightcallbacks` -- still half done.
 - The medic path through `columnsFor` is STILL unexercised.
-- Upcycler pane string-table migration -- still the last pane not migrated.
+- ~~Upcycler pane string-table migration~~ -- WRONG, it closed 2026-08-30. All
+  four panes are on the shared table; the two `Upcycler running` hits left in the
+  config are comments. Corrected 2026-09-01.
 
 **Debug flags wanting a release pass** -- `TASK_DEBUG`, `VENT_DEBUG`, `DEBUG` in
 all four panes, `FLY_POINT_DEBUG`, `FLY_TELEMETRY`, `CARGO_TRACE` are ON.
@@ -6277,11 +6287,19 @@ separating them means measuring a hold time that is still being cancelled a tick
 late.
 
 ### THE PATHFINDER PICKS EDGE TYPE BY MEDIUM, NOT BY CHASSIS
-`fact.pathing.edgebymedium` -- see also `arch.locomotion.classes`
+`fact.pathing.edgebymedium` -- see also `arch.locomotion.classes`, `fact.pathing.liquidthreshold`
 
 A gravity-DISABLED actor submerged in water is planned `Swim` edges, not `Fly`.
 A gravity-ENABLED ground unit dropped into a lake is planned `Swim` edges too,
 and then `Jump` arcs to get out. The chassis does not enter into it.
+
+**QUALIFIED 2026-09-01 BY `fact.pathing.liquidthreshold`, AND THE HEADLINE IS
+STILL TRUE.** Edge type is picked by medium, not by chassis -- but WHAT COUNTS
+AS A MEDIUM is itself a per-chassis movement parameter. A chassis that declares
+`minimumLiquidPercentage` above 1.0 is never in liquid as far as the search is
+concerned, and is planned Walk edges along the seabed. Everything above holds
+for every chassis that leaves that parameter alone, which is all four shipping
+ones.
 
 This is the single most useful fact of the session and the otter fell out of it.
 It also means A MOVER BOUND TO THE SLOT THAT "SHOULD" APPLY IS NOT ENOUGH:
@@ -6290,6 +6308,76 @@ called once and vanilla's `moveSwim` ran instead. The telemetry said so plainly
 -- `aim null skip null` on every line, fields nothing else writes.
 
 Bind both slots on every chassis.
+
+### `inLiquid` IS TESTED BEFORE `onGround`, AND ITS THRESHOLD IS A CHASSIS PARAMETER
+`fact.pathing.liquidthreshold` -- see also `fact.pathing.edgebymedium`, `todo.locomotion.sinker`, `dd.pathing.coststeering`
+
+READ FROM `StarPlatformerAStar.cpp` AND **VERIFIED IN GAME 2026-09-01** by a
+purpose-built test chassis. This is the fact that made the sinker possible, and
+it was reached by reading the source rather than by testing -- see
+`proc.pathing.readsource`.
+
+**`neighbors()` IS AN ELSE-IF CHAIN AND LIQUID WINS.**
+
+    if (node.velocity.isValid())            getArcNeighbors
+    else if (inLiquid(node.position))       getSwimmingNeighbors
+    else if (acceleration[1] == 0.0f)       getFlyingNeighbors
+    else if (onGround(node.position))       getWalkingNeighbors
+    else                                    getFallingNeighbors
+
+A submerged node NEVER REACHES `getWalkingNeighbors` no matter what solid ground
+sits beneath it. The floor is never consulted, because the chain has already
+left. `getSwimmingNeighbors` then closes the door behind it: it calls
+`getFlyingNeighbors`, filters every edge down to targets that are themselves
+`inLiquid`, and relabels `Fly` to `Swim`.
+
+**NO COST SETTING CAN PRODUCE A WALK EDGE UNDERWATER.** `swimCost` is applied in
+that same `transform`, AFTER the edge type is decided -- `edge.cost *= swimCost`.
+Cost prices what was offered and cannot change what is offered. A whole test plan
+was built on raising `swimCost` before the source was read, and it would have
+measured nothing.
+
+**THE THRESHOLD IS THE LEVER.**
+
+    bool PathFinder::inLiquid(Vec2F pos) const {
+      RectF box = boundBox(pos);
+      return m_world->liquidLevel(box).level
+             >= m_movementParams.minimumLiquidPercentage.value(0.5f);
+    }
+
+`minimumLiquidPercentage` is an **ActorMovementParameters** field, so it comes off
+the monstertype's `movementSettings` and NOT off `petports_pathOptions`. Above
+1.0 it is unsatisfiable at any fill level, `inLiquid` is never true, and a
+gravity-enabled chassis falls through to `onGround` -- which is pure tile
+collision and knows nothing about water.
+
+**IT IS ALSO READ BY THE MOVEMENT CONTROLLER, ON THE EVIDENCE OF THE RESULT.**
+The test chassis both PLANNED walk routes underwater and EXECUTED them, walking
+the bottom rather than swimming. That was the open question when the variant was
+built and it is answered by the outcome. **NOT SEPARATELY CONFIRMED IN
+`StarActorMovementController.cpp`**, so the mechanism is inferred from behaviour;
+`liquidBuoyancy` 0.0 was set in the same change and some of the effect may belong
+to it.
+
+**TWO PARAMETERS, AND THE SECOND IS NOT OPTIONAL.** `liquidBuoyancy` must be 0.0
+or the unit floats and there is nothing to see -- the default in
+`default_actor_movement.config` is what the aquatic chassis overrides rather than
+accepts. `liquidImpedance` was deliberately left alone.
+
+**WHAT ELSE STOPS APPLYING.** `liquidJumpCost` is consulted only inside
+`if (inLiquid(...))`, so it goes dead too. And in `simulateArc` the landing test
+is `onGround(rounded, Stand) || inLiquid(rounded)` -- losing the liquid branch
+means an arc into water no longer registers a landing on the surface and must
+reach real ground. For something that sinks, that reads correct.
+
+**THE MOD'S OWN LUA STILL BELIEVES IN WATER, AND MUST.** `petports_avoidLiquid`
+has to stay FALSE on such a chassis or every resolver refuses submerged targets.
+The engine and our validation now disagree about whether the unit is wet, and
+that disagreement is the design rather than a bug.
+
+**AND A* WILL ROUTE THROUGH LAVA.** `getSwimmingNeighbors` opens with
+`// TODO avoid damaging liquids, e.g. lava`. That is direct source confirmation
+of why medium validation exists on our side, previously inferred.
 
 ### `validStandingPosition` TREATS ANY LIQUID AS STANDABLE WHEN `avoidLiquid` IS FALSE
 `fact.pathing.liquidstandable`
@@ -8748,35 +8836,196 @@ side. Whether a shallow puddle counts as rescued needs a number, and it should
 be the same number, or a unit will flop its way into a puddle and stop.
 
 **BATCH IT.** A flop needs a `flopping` animation state in all four chassis
-animations. `todo.unit.names` and the `drone_placeholder` rename touch the same
+animations. `todo.unit.species` and the `drone_placeholder` rename touch the same
 files, and the fade work already opened them once this session.
 
 ### Sinker locomotion -- ground pathing that will not swim
-`todo.locomotion.sinker` -- see also `dead.locomotion.pelagic`
+`todo.locomotion.sinker` -- see also `fact.pathing.liquidthreshold`, `dead.locomotion.pelagic`, `todo.unit.species`
 
-**TRIAGED 2026-08-30 -- NICE TO HAVE, NOT REQUIRED.** Worth an attempt at some point; nothing depends on it.
+**PROVEN VIABLE AND VERIFIED IN GAME 2026-09-01. THE QUESTION THIS ENTRY ASKED
+IS ANSWERED YES.** A test chassis walked the seabed, planned and executed. What
+remains is not research -- it is building the thing as a real chassis.
 
-Vanilla ground monsters walk into water and keep walking. Whether that is
-reachable from this mod's setup is unknown; the pelagic attempt failed because
-water is a closed node set for a GRAVITY-DISABLED actor, and a sinker is
-gravity-enabled, so it is a different question rather than the same one answered.
+**THE MECHANISM IS `fact.pathing.liquidthreshold`** and lives there rather than
+here. Two parameters on `movementSettings`:
 
-**THAT CHALLENGE IS RESOLVED AND THE CLAIM SURVIVED -- SEE
-`fact.pathing.watercrossed`.** The aquatic unit seen leaving the water had been
-put there by our own blind-steer fallback, not by a plan; every crossing plan
-started in air, where air-to-water routing is legal. The finding was NOT narrower
-than recorded, so the sinker question is unchanged: a gravity-ENABLED actor is
-still a different question, not the same one answered.
+    minimumLiquidPercentage   2.0   the search stops believing water exists
+    liquidBuoyancy            0.0   or it bobs and there is nothing to see
 
-### Names for the chassis
-`todo.unit.names`
+**THE TEST ARTEFACTS ARE IN THE TREE AND ARE NOT A CHASSIS.**
+`monsters/lofty_petports/amphibious/petports_sinkertest.monstertype` and
+`items/lofty_petports/units/petports_unit_sinkertest.item`, both copies of the
+amphibious pair. They deliberately SHARE the amphibious category so they wear
+the axolotter's body with no new art. **DELETE THEM WHEN THE REAL CHASSIS
+LANDS** -- a test variant left in the tree becomes a shipping one by accident,
+and this one is indistinguishable from a Wader on sight.
 
-**TRIAGED 2026-08-30 -- DEFERRED UNTIL THE ART EXISTS.** "Axolotter" is the only settled species. Naming the other three against placeholder sprites would fix names to art that has not been drawn.
+**WHAT A REAL SINKER STILL NEEDS**, none of it engine research:
 
-The four locomotion classes need real names rather than their class. "Axolotter"
-for the amphibious one. This also settles what the monsterpart files are called --
-see `status.port.inventory` on `drone_placeholder`, which is free to rename now and
-expensive once there are several variants.
+- Its own type, categories, monsterpart and animation, per the rule the test
+  variant deliberately breaks.
+- A creature design. **IT IS THE CRAB** -- see `todo.unit.species`.
+- A decision on `liquidImpedance`, left untouched during the test on purpose. If
+  the unit walks the bottom at half pace, that is `default_actor_movement.config`
+  doing its job and it is a tuning question, not a defect.
+- Its own deny list. It inherits the amphibious lava / corelava / poison list
+  today, and a chassis that cannot perceive water is exactly the one that most
+  needs the forbidden-liquid test to keep working.
+
+**THE ORIGINAL FRAMING WAS RIGHT ABOUT VANILLA AND WRONG ABOUT WHY IT MATTERED.**
+Vanilla ground monsters do walk into water and keep walking -- but `groundMovement.lua`
+contains no pathfinder at all, so that behaviour is reactive steering and not
+ground pathing that will not swim. Copying it would have meant giving up dispatch
+to specific targets. The route that worked came from the threshold instead.
+
+**THE PELAGIC CLAIM SURVIVES UNCHANGED -- SEE `fact.pathing.watercrossed`.** The
+aquatic unit seen leaving the water had been put there by our own blind-steer
+fallback, not by a plan. That was always a gravity-DISABLED question and this was
+always a gravity-ENABLED one.
+
+### The species roster
+`todo.unit.species` -- see also `todo.item.acquisition`, `todo.locomotion.sinker`, `todo.unit.recolour`, `dd.unit.specialization`, `todo.art.invisibleframe`
+
+**FILED 2026-09-01, ABSORBING todo.unit.names.** That entry said "Axolotter is
+the only settled species" and deferred the rest until art existed. Four more are
+settled now, so the deferral is spent and the naming question was never separable
+from the creature design anyway -- a name is the last line of a design, not a task
+of its own.
+
+**ONE ENTRY, NOT FIVE.** Five thin per-creature entries would rot as a block and
+be pruned as a block. They also share every dependency: the same monsterpart
+files, the same art pass, the same rename window.
+
+**THE ROSTER, AS SETTLED 2026-09-01.**
+
+    amphibious   Axolotter          settled, name and creature
+    aquatic 1    dumbo octopus      creature settled, unnamed
+    aquatic 2    marimo mossball    creature settled, "marimomo" tentative
+    ground       alien ant          creature settled, unnamed
+    flyer        bat-adjacent       direction settled, details open
+    sinker       crab               creature settled, unnamed
+
+**THE SINKER IS A REAL CLASS NOW, NOT A MAYBE.** It was listed here as "no
+design" while the locomotion was an open question. That question was answered
+2026-09-01 -- see `todo.locomotion.sinker` -- and the crab is its creature. Six
+species across five locomotion classes.
+
+**AQUATIC HAS TWO AND THAT IS THE STRUCTURAL FACT ON THIS LIST.** Every piece of
+naming and asset machinery written so far assumed one species per locomotion
+class. It is not one-to-one, so `drone_placeholder` and its siblings cannot be
+renamed to their locomotion class -- the rename has to go to the SPECIES, and the
+aquatic sheet has to split before it is named. This is the thing that gets missed.
+
+**THE BAT IS THE ONLY ONE THAT CANNOT BE DRAWN YET.** The other four have enough
+design to start art against. A flyer needs its silhouette settled before the
+`flopping` and `invisible` states are authored, so it gates its own animation
+work and nothing else's.
+
+**THE RENAME WINDOW IS STILL OPEN AND STILL CLOSES HARD.** `drone_placeholder` is
+free to rename now and expensive once there are several variants in the wild --
+unchanged from the absorbed entry, and now more urgent because five names arrive
+at once rather than one.
+
+**THE ALIEN ANT CARRIES AN ACQUISITION CLAIM**, not just a design: it appears in
+hive and shroom biomes. That is the only species so far whose design says where a
+player finds it, and it belongs to `todo.item.acquisition` as much as here.
+
+**BATCH THE ANIMATION WORK.** A `flopping` state (`todo.locomotion.beached`), the
+per-sheet `invisible` blank (`todo.art.invisibleframe`) and this rename all touch
+the same four animation files. Opening them once is the whole reason to sequence
+these together.
+
+### Where a player finds a petport unit
+`todo.item.acquisition` -- see also `todo.unit.species`, `plan.module.investmentpath`, `dd.port.proliferation`
+
+**FILED 2026-09-01. TWO SCALES OF ONE QUESTION**, kept together because the
+answer to either constrains the other: what structure holds a unit, and where
+that structure is placed.
+
+**THE TILED PIECES ARE THE UNIT OF WORK.** Deploy areas for petport microdungeons
+and surface dungeons need designing as Tiled pieces. **POISON OCEAN PLANETS GET A
+LARGER STRUCTURE** rather than a microdungeon -- decided, and the only sizing
+decision made so far.
+
+**THE TENTACLE PLANET IS AN OPEN INVESTIGATION AND MAY SIMPLY BE NO.** Whether
+microdungeons can be inserted into it at all is unknown; if they can, a
+tentacle-themed unit found there is worth having. **ESTABLISH THE ENGINE ANSWER
+BEFORE DESIGNING THE CREATURE** -- a settled design against a planet that cannot
+host it is the expensive order.
+
+**ONE SPECIES ALREADY CARRIES AN ACQUISITION CLAIM.** The alien ant appears in
+hive and shroom biomes (`todo.unit.species`). That is the first entry on this
+list that came out of a creature design rather than a placement pass, and the
+pattern is probably right: the biome should fall out of what the creature IS.
+
+**THIS IS NOW THIS MOD'S PROBLEM, NOT NICEMICE'S.** The v1 framing put the
+encounter loop that unit items drop from in Nicemice. Petports ships standalone,
+so it has to answer this itself or the machinery arrives with nothing to find.
+
+### A fishing module
+`todo.module.fishing` -- see also `arch.module.effects`, `todo.module.designpass`
+
+**FILED 2026-09-01 -- AN INVESTIGATION, NOT A COMMITMENT.** Whether a fishing
+module is reasonable to build is the question; nothing is decided.
+
+**WHAT MAKES IT DIFFERENT FROM EVERY MODULE SO FAR.** The three built modules --
+light, lava block, poison block -- and the two port-side ones grant a
+CAPABILITY. Fishing would be a TASK, which means a work generator, a claim, a
+target class and a deadline, not a status effect. It belongs to
+`arch.module.effects`'s machinery only at the socket; everything downstream is
+dispatch work.
+
+**THE FIRST THING TO SETTLE IS WHAT IT FISHES.** Vanilla fishing is a minigame
+driven by a rod item; there may be no headless path to a catch at all. Read that
+before costing anything else -- see `fact.unit.damageteams`, which is the only
+thing this document currently knows about fishing, and it is a damage-team
+measurement rather than a mechanism.
+
+### Recolouring a unit, and the part that is not technical
+`todo.unit.recolour` -- see also `todo.unit.species`, `dd.unit.specialization`
+
+**FILED 2026-09-01. THE TECHNICAL HALF IS EASY AND IS NOT THE PROBLEM.**
+Directives on a monsterpart are well understood and the mod already composes
+them. What is undecided is the PLAYER-FACING system: how a recolour is accessed,
+and what it costs.
+
+**THE OPEN QUESTIONS, NONE ANSWERED.**
+
+    access   a dye item consumed at the port? a pane control? a Maxwell-style
+             NPC service? something else
+    cost     free, a consumable, or a currency -- and whether cost exists at all
+    scope    per unit, per species, or a palette unlocked once
+
+**A DYE SYSTEM IS THE OBVIOUS ANSWER AND SHOULD STILL BE ARGUED FOR.** Vanilla
+dyes exist and players know them, which is most of a case on its own. The reason
+to not just take it: dyes are consumed per application, and a player who
+recolours a unit and dislikes it has paid twice for one decision.
+
+**IT INTERACTS WITH THE ROSTER.** Five species arriving at once
+(`todo.unit.species`) is the moment a palette either exists or does not, and
+retrofitting one across finished sheets is the expensive order.
+
+### A capture pod thrown at a unit should say why it did nothing
+`todo.unit.capturepod` -- see also `dd.unit.nopipeline`, `fact.unit.spawnrender`, `dd.unit.itemispet`
+
+**FILED 2026-09-01. A PLAYER'S FIRST INSTINCT WITH ANY MONSTER IS THE POD**, and
+this mod's units are not pod-shaped -- `dd.unit.nopipeline` is the decision that
+made them so, deliberately. The failure is therefore GUARANTEED to be met by
+every player, and it currently produces silence.
+
+**S.A.I.L. SHOULD INTERCEPT IT** and say the creature came from a petport. Same
+for the relocator, which this document already knows about from a different
+angle (`fact.unit.spawnrender`).
+
+**WHAT IS UNKNOWN IS WHETHER THE ATTEMPT IS OBSERVABLE.** Both are projectiles
+that act on a monster; whether a monster script can see and refuse one, or
+whether the interaction has to be blocked at the monstertype, has not been
+looked at. **SETTLE THAT BEFORE WRITING ANY MESSAGE TEXT** -- if the pod simply
+fails silently at the engine level there may be no hook to speak from.
+
+**AN UNCAPTURABLE MONSTER MUST NOT EAT THE POD.** Whatever the mechanism, a
+player who throws a pod gets the pod back. A consumed pod plus no capture is the
+one outcome worse than silence.
 
 ### Finish the petport pane
 `todo.pane.statstab` -- see also `arch.pane.hoverlayer`, `arch.pane.statslist`
@@ -8788,16 +9037,9 @@ expensive once there are several variants.
   (`todo.art.statsdressing`) and the per-treat block once eating exists.
 - **Decide whether the unit's HP bar belongs in the pane at all.** A unit that
   cannot be hurt by anything the player builds may not need one.
-- **Rename is still `not built`** behind its button on the Settings tab.
-
-### Unit nameplates
-`todo.unit.nameplate` -- see also `todo.unit.names`
-
-**TRIAGED 2026-08-30 -- NEXT UP.** Vanilla sample code for driving names above monsters is available.
-
-Work out how names above monsters are driven and whether ours can carry one. Then
-a "display unit name" checkbox on the pet Settings tab, ON by default, beside the
-rename button -- the two belong together and neither means much without the other.
+- **Rename is BUILT** -- the button on the Settings tab works and the name is
+  pushed to a live unit by `pushPetName`. The claim that it was `not built`
+  survived here for a session after it shipped.
 
 ### Error state on the petport itself
 `todo.port.errorindicator`
@@ -8812,14 +9054,22 @@ the pane's diagnostic row already knows, it just cannot be seen from outside.
 ### Modules, design and liquids
 `todo.module.designpass` -- see also `arch.module.effects`, `plan.module.investmentpath`
 
-**TRIAGED 2026-08-30 -- NEXT, AFTER THE UPCYCLER STRING MIGRATION.**
+**UNBLOCKED 2026-09-01, AND HALF OF IT IS ALREADY DONE.** It was gated on the
+upcycler string migration, which closed 2026-08-30 -- so this sat blocked on
+nothing for a session. The second bullet below shipped as `arch.module.liquids`
+and the first is all that remains.
 
-- **A design pass on what modules a pet can have.** One placeholder lamp exists;
-  the investment path names slots but not contents.
-- **Lava and poison immunity modules must also unblock those liquids in the
-  pathing deny list.** The status effect alone makes a unit survive the liquid it
-  still refuses to path through, which is the wrong half of the feature and the
-  reason the lamp was built first.
+- **A design pass on what modules a pet can have** -- THE WHOLE OF WHAT IS LEFT.
+  The investment path names slots but not contents. Five modules now exist, not
+  one: light, lava block and poison block as status effects, plus medic and
+  hydrator on the port side. `todo.module.fishing` is the first candidate for a
+  module that is a TASK rather than a capability, and the design pass should
+  settle whether that class belongs at all.
+- **DONE -- lava and poison immunity also unblock those liquids in the pathing
+  deny list.** Built as `arch.module.liquids`: `petports_moduleLiquids` is read
+  off the item by the port with no unit in the world, subtractive only, and both
+  `petportsAvoidLiquids` and the `petportsLiquidVerdict` memo clear on receipt.
+  Swim pathing inside corelava was the test that proved it.
 
 ### A hydrated sweep is three times longer, against an unchanged deadline
 `todo.module.hydratordeadline` -- see also `arch.module.hydrator`, `arch.farming.sweep`
@@ -9075,7 +9325,7 @@ arrival failure, confirm the counts climb past 1 and the intervals escalate.
 If they do, delete this entry.
 
 ### The unit's invisibility is borrowed from the spinner sheet
-`todo.art.invisibleframe` -- see also `todo.art.panes`, `todo.unit.names`
+`todo.art.invisibleframe` -- see also `todo.art.panes`, `todo.unit.species`
 
 **TRIAGED 2026-08-30 -- GOES WITH THE NEXT ART PASS.** No work until each chassis sheet gains its own blank frame. Until then the constraint below is the whole point of the entry: `spinner.png:blank` cannot be removed or renamed.
 
