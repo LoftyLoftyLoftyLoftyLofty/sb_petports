@@ -131,7 +131,7 @@ local TASK_DEBUG = true
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-01g arrived is a sign, not a distance"
+local BUILD_STAMP = "2026-09-01h the sign test stands alone"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -457,6 +457,14 @@ local LAND_BRAKE_ARRIVED = 0.05
 --  could be stepped clean over by a fast arc -- the same one-sample problem the
 --  jump takeoff radius has. Past this the arc has failed at something other than
 --  its last tenth of a tile and stopping the unit dead is not the repair.
+--
+--  KEPT, AND KNOWN UNEXERCISED. 2026-09-01: 24 brake firings across 35 takeoffs,
+--  every one of them at an `ahead` between 0 and 0.0017 -- not a single negative
+--  reading, so this bound has never actually decided anything. It stays because
+--  it is the only thing standing between a fast arc and no brake at all, and
+--  because removing a guard on the grounds that it has not yet been needed is
+--  how the near-side reach came to be trusted. It should not be quoted as
+--  tested.
 local LAND_BRAKE_OVERRUN = 1.5
 
 --  BELOW THIS HORIZONTAL SPEED THE UNIT IS NOT GOING ANYWHERE, and the sign of
@@ -2298,44 +2306,33 @@ function petportsArcMover(pather)
   if mcontroller.onGround() and not mcontroller.liquidMovement() then
     local nextEdge = pather.finder:lookAhead(1) or {}
 
-    --  TOUCHDOWN IS THE ONLY UNAMBIGUOUS ARRIVAL, AND IT IS WHERE THE
-    --  DON'T-SLIDE-OFF GUARANTEE BELONGS.
+    --  NOTHING BRAKES HERE, AND A TOUCHDOWN STOP WAS TRIED AND REMOVED.
     --
-    --  The airborne brake above is a prediction and can be stepped over: the
-    --  window is one look wide and a fast arc covers a whole tile between looks.
-    --  Now that it correctly refuses to fire before the unit has arrived, the
-    --  cases it declines have to be caught somewhere, and the ground is the only
-    --  place that cannot be wrong about it.
+    --  2026-09-01: a hard `setVelocity({0, vel[2]})` was added at the top of
+    --  this branch as a backstop for the airborne brake, on the reasoning that
+    --  touchdown is the one arrival that cannot be predicted wrong. It fired
+    --  ZERO times in a session with 35 takeoffs and 40 landings, and so did
+    --  every other line in this branch:
     --
-    --  WHY BOTH, RATHER THAN ONLY THIS ONE. Between the engine registering
-    --  contact and this script's next look, up to 0.083s pass -- a tenth of a
-    --  tile short of a full tile at walkSpeed 8. On a SINGLE-TILE platform that
-    --  is the whole margin, so the airborne brake earns its place by usually
-    --  getting there first and this is the backstop for when it does not.
+    --      ARCMOVER grounded on an arc     0
+    --      ARCMOVER grounded at            0
+    --      ARCMOVER airborne again         0
+    --      hit MAX_ARC_SKIP                0
     --
-    --  NOT WHILE RISING. There is exactly one grounded tick per takeoff where
-    --  the launch velocity is applied and onGround has not gone false yet --
-    --  measured at [3768,1010.8] with velocity [0,48.314]. Braking there would
-    --  cancel the jump on the tick it was made, so a launch must be allowed to
-    --  leave. `vel[2] <= 0` is the same test the skip logic in update() uses to
-    --  decide an arc is over, deliberately, so the two agree about what a
-    --  landing is.
+    --  THE ARC SKIP IN update() GETS HERE FIRST, EVERY TIME. It runs before the
+    --  mover, its GROUNDED mode is the same predicate a touchdown stop would
+    --  use -- `onGround() and vel[2] <= 0` -- and it consumes every remaining
+    --  Arc edge before stopping on the Land. By the time this mover runs, the
+    --  cursor is on a non-Arc and the guard above has already returned.
     --
-    --  ZEROED OUTRIGHT, LIKE THE AIRBORNE BRAKE. The branch below returns
-    --  BEFORE the friction assignments, so groundFriction is still the chassis
-    --  value here and the unit has something to hold against; and where the next
-    --  edge is a Land, moveLand's controlApproachXVelocity(0, groundForce) picks
-    --  it up on the following tick. Zeroing rather than approaching zero is what
-    --  makes it independent of a groundForce this mod does not declare.
-    if vel[2] <= 0 and not pather.petportsLanding then
-      pather.petportsLanding = true
-      mcontroller.setVelocity({ 0, vel[2] })
-
-      sb.logInfo("UNIT ARCMOVER touchdown stop at %s vel %s: on the ground with the arc over, "
-        .. "next edge %s -- killing horizontal velocity",
-        sb.printJson(here), sb.printJson(vel), tostring(nextEdge.action))
-    end
-
+    --  SO THIS BRANCH IS A FALLBACK, NOT THE LANDING PATH. It is still reachable
+    --  in principle -- MAX_ARC_SKIP, or a tick where the arc block in update()
+    --  does not run -- and is kept for that. What it must not do is carry a
+    --  guarantee, because a guarantee on a path that never executes reads as
+    --  cover and is not. If a slide-off is ever measured, the place to stop it
+    --  is the GROUNDED branch of that skip, at the moment it decides the arc is
+    --  over.
+    --
     --  Vanilla's escape, kept as-is: on the LAST arc edge, hand over to
     --  whatever follows. Worth knowing this is why the bug needs two or more
     --  arc edges left at touchdown -- land holding the last one and vanilla
