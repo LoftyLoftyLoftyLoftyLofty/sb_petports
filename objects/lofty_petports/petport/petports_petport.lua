@@ -545,6 +545,25 @@ FARMABLE_STAGE_BASE = 0
 --  becomes several sweeps rather than one task that outlives TASK_DEADLINE.
 WATER_CARRY = 10
 
+--  THE SAME NUMBER WITH A HYDRATOR MODULE SOCKETED. Read through
+--  petportWaterCarry(), never directly -- both water generators must agree or
+--  the fetch leg hauls thirty and the place leg sweeps ten.
+--
+--  IT IS A SECOND CONSTANT RATHER THAN A MULTIPLIER because the ceiling is the
+--  thing being tuned. A row of thirty is a number a player can look at and
+--  count; "three times whatever the base is" is a number that moves when the
+--  base does, and the base is an economy decision that has nothing to do with
+--  this module.
+--
+--  IT ALSO TRIPLES THE LONGEST POSSIBLE SWEEP, which is the one thing here that
+--  is not free. WATER_CARRY's comment above says the cap bounds the task
+--  against TASK_DEADLINE, and this raises that bound. The failure is visible
+--  and self-healing -- an abandoned sweep logs "deadline -- no report in 150s"
+--  against a `water:` work id, the tiles already wetted stay wet, and the unit
+--  still carries its remaining cargo home -- so this ships unraised and gets
+--  watched rather than being pre-emptively padded. See todo.module.hydratordeadline.
+WATER_CARRY_HYDRATED = 30
+
 --  How far to look left and right from a crop for more dry soil.
 --
 --  A bot that waters only the tile under the crop leaves a checkerboard. The
@@ -1177,7 +1196,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-08-31k the vouch rides on the task"
+local PETPORT_BUILD_STAMP = "2026-09-01a the bucket is bigger"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -3287,6 +3306,12 @@ MEDIC_FLAG = "medic"
 --  here anyway so the one place flags are spelled stays one place.
 CAMOUFLAGE_FLAG = "camouflage"
 
+--  HYDRATOR. Read by the PORT and by nothing else, because water capacity is a
+--  dispatch decision: it sets how long a run the port hands over and how much
+--  liquid it tells the unit to fetch. The unit sweeps the list it is given and
+--  has no opinion about its length, so there is nothing to push.
+HYDRATOR_FLAG = "hydrator"
+
 --  FARMING IS A MODULE NOW, NOT A PORT SWITCH.
 --
 --  It used to be the fourth participation group, alongside hauling, sorting and
@@ -3344,6 +3369,32 @@ function petportFarming()
     if flag == FARMING_FLAG then return true end
   end
   return false
+end
+
+function petportHydrator()
+  for _, flag in ipairs(petportModuleFlags()) do
+    if flag == HYDRATOR_FLAG then return true end
+  end
+  return false
+end
+
+--  HOW MANY TILES ONE WATER DISPATCH MAY COVER, AND THEREFORE HOW MUCH LIQUID
+--  THE UNIT FETCHES.
+--
+--  ONE FUNCTION BECAUSE THE TWO LEGS MUST NOT DISAGREE. withdrawWaterWork sizes
+--  the fetch and waterWork sizes the sweep; they are separate generators reading
+--  what used to be a shared constant, and a module that changed one and not the
+--  other would send a unit to a crate for thirty and then have it put ten down.
+--  That is arch.dispatch.twolegs in miniature, and the cheapest guard against it
+--  is that there is only one place to ask.
+--
+--  TWO HYDRATORS ARE ONE HYDRATOR. moduleFieldUnion deduplicates, so a second
+--  copy grants nothing -- the same honest outcome two lamp modules get, and for
+--  the same reason: stacking would need per-entry arithmetic this layer does not
+--  do.
+function petportWaterCarry()
+  if petportHydrator() then return WATER_CARRY_HYDRATED end
+  return WATER_CARRY
 end
 
 --  IS THIS FARMING ACTIVITY SWITCHED ON FOR THIS UNIT?
@@ -8015,7 +8066,7 @@ local function waterWork()
 		if stack ~= nil and not backedOff and claimFree(workId) then
 			--  Carry decides length. One item per tile, and the unit stops when
 			--  it runs out rather than pretending.
-			local carried = math.min(stack.count or 1, WATER_CARRY)
+			local carried = math.min(stack.count or 1, petportWaterCarry())
 			local tiles = {}
 
 			for index = 1, math.min(carried, #run.tiles) do
@@ -8551,7 +8602,7 @@ local function withdrawWaterWork()
 
 			if not backedOff and reachableEnd and claimFree(workId)
 			   and claimFree("water:" .. tostring(run.key)) then
-				local wanted = math.min(#run.tiles, WATER_CARRY)
+				local wanted = math.min(#run.tiles, petportWaterCarry())
 
 				for _, want in ipairs(run.wants) do
 					for _, beacon in ipairs(petports_beaconsFor("deposit")) do

@@ -42,75 +42,65 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-08-31 (dispatch eligibility, and five bugs of one shape)
+### What is built, as of 2026-09-01 (one module, and it needed no new plumbing)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-ONE SUBJECT: whether a task should be offered to the unit that is holding it.
-todo.dispatch.eligibility was priority 1 and is CLOSED; it now stands as
-`arch.dispatch.eligibility`. It took six test rounds and the fix was fifteen
-lines; the other five rounds were bugs the fix exposed,
-every one of them a variant of the same mistake -- **ASKING A WHOLE-FOOTPRINT
-QUESTION ABOUT A TARGET, OR A ONE-POINT QUESTION ABOUT A BODY.** That distinction
-is the durable thing from this session and it is written up as
-`arch.dispatch.anytile`.
+A SHORT SESSION AGAINST A LONG ONE. The previous session was six test rounds on
+dispatch eligibility; this one was a single module, `arch.module.hydrator`, and
+the interesting thing about it is how little it touched.
 
 ---
 
-**A CHASSIS IS NO LONGER OFFERED WORK IT CANNOT DO.** `arch.dispatch.eligibility`.
-Seventeen call sites across fifteen work types, all asking one predicate that is
-the same ladder the environment gate runs. Verified in game: an aquatic unit at a
-dry farm reports `0 backed off, 0 gone, 12 in a medium this chassis cannot work
-in` and stays home, where it used to dispatch, fail, and stutter-step the leash on
-a 2.9-second cycle.
+**THE HYDRATOR MODULE RAISES WATER CAPACITY FROM 10 TO 30.**
+`arch.module.hydrator`. `WATER_CARRY` had exactly two readers, both in the port,
+and both now go through `petportWaterCarry()`. No unit-side code, no new module
+channel, no pane work, no changes to `categories.config.patch` or
+`petports_filtergroups.config` -- both match on the `petports_module` tag the new
+item already carries.
 
-**THE PREDICATE WAS ALREADY WRITTEN.** `petports_habitatVerdict` encodes every
-rule this needed. The function that LOOKED right -- `petports_targetAllowed` --
-would have refused an amphibious unit every submerged target, because it reads
-`petports_media()`, whose `swim` defaults false, and the amphibious chassis
-declares neither flag. It had never run for a walker in its life.
+**IT IS THE FIRST MODULE THAT CHANGES A MAGNITUDE**, rather than adding a task
+(medic, farming), removing one (oblivious), or widening where a unit may go
+(poison and lava block). The flag channel carried it because capacity is a
+DISPATCH property -- the unit sweeps whatever list it is handed and has no
+opinion about its length.
 
-**A TARGET NEEDS ANY TILE; A BODY NEEDS EVERY TILE.** `arch.dispatch.anytile`.
-Running the home ladder over a half-submerged shipping container refused it to
-both the swimmer and the flyer while the amphibious unit carried the entire base.
-Running the body ladder over one point cleared a flyer to hover on the waterline
-with its bottom half submerged, and it slid under and stuck. The two failures
-look unrelated and are the same sentence with the quantifier flipped.
+**ONE ACCESSOR, BECAUSE TWO GENERATORS SHARED THE CONSTANT.** `waterWork` sizes
+the sweep, `withdrawWaterWork` sizes the fetch. Moving one and not the other
+sends a unit to a crate for thirty and has it put ten down -- which is
+`arch.dispatch.twolegs` in miniature, on a task that already had that bug once.
 
-**THE MEDIUM AT A BODY IS THREE-VALUED NOW.** `arch.pathing.mediummixed`.
-`petports_mediumAt` ANDed its rows into one flag, so it answered "am I ENTIRELY
-in water" and called everything else air. `mixed` is refused for every free
-mover -- there is no chassis a waterline is right for.
-
-**THE PORT VOUCHES FOR A FOOTPRINT THE UNIT CANNOT SEE.** `arch.dispatch.vouch`.
-`petports_flyPointNear`'s single-point veto is load-bearing and was NOT deleted;
-it now takes `mediumVerified` from the one caller that has run the footprint
-ladder. Everything that cannot vouch keeps the guard.
-
-**A TWO-LEG JOB MUST ASK ONE QUESTION.** `arch.dispatch.twolegs`. Three separate
-instances found in one session -- replant, medic, watering. Each had a fetch leg
-and a place leg with different work ids, so a refused place leg left its fetch
-leg fully eligible and the unit hauled cargo it could not put down.
+**THE ICON IS WATER'S OWN COLOUR**, `[80, 221, 254]` read out of `water.liquid`,
+the same config the watering droplet already takes its tint from. The family
+diamond remapped pixel-for-pixel off the poison module, so the 57/52/3
+body/outline/highlight distribution is identical to its six siblings. It is
+brighter than the family -- water's value is 0.996 against their 0.84 -- and that
+was kept rather than dimmed to match.
 
 ---
 
 **KNOWN OPEN, IN THE ORDER THEY WILL BITE:**
 
+- `todo.module.hydratordeadline` -- NEW, AND THE ONLY THING THIS SESSION ADDED TO
+  THE RISK LIST. A hydrated sweep is three times longer against an unchanged
+  `TASK_DEADLINE`. Untested. Self-healing if it bites, and it names its own work
+  id in the log.
+- **THE HYDRATOR IS ENTIRELY UNTESTED IN GAME.** Nothing in this session ran.
 - An amphibious unit walks off a submerged ledge and sinks instead of
-  transitioning to swimming. **OBSERVED BY THE AUTHOR 2026-08-31, NOT YET A
+  transitioning to swimming. **OBSERVED BY THE AUTHOR 2026-08-31, STILL NOT A
   BACKLOG ENTRY.** Probably the source of most of `todo.dispatch.sourcebackoff`'s
   nine measured failures.
 - `todo.dispatch.sourcebackoff` -- backoff is keyed by work id, but an
   unreachable SOURCE is a property of the crate. One bad crate is retried once
   per outstanding run.
 - `arch.pathing.originnudge` -- untouched again this session.
-- `todo.pathing.leashreplan` -- survives, and eligibility no longer hides it,
-  because the leash is no longer being interrupted every 2.9 seconds.
+- `todo.pathing.leashreplan` -- survives, and eligibility no longer hides it.
 - The medic path through `columnsFor` is STILL unexercised. No patients existed
   in any verifying session this week.
 - `todo.pathing.standpointchoice` and `todo.port.nostandpoint` unchanged.
+- Upcycler pane string-table migration -- still the last pane not migrated.
 
 **Debug flags wanting a release pass** -- `TASK_DEBUG`, `VENT_DEBUG`, `DEBUG` in
 all four panes, `FLY_POINT_DEBUG`, `FLY_TELEMETRY`, `CARGO_TRACE` are ON.
@@ -118,25 +108,32 @@ all four panes, `FLY_POINT_DEBUG`, `FLY_TELEMETRY`, `CARGO_TRACE` are ON.
 a release preflight rather than trimmed piecemeal.
 
 **BUILD STAMPS AT THE END OF THIS SESSION.** `petports_petport.lua` at
-`2026-08-31k the vouch rides on the task`; `petports_contract.lua` at
+`2026-09-01a the bucket is bigger`; `petports_contract.lua` at
 `2026-08-31e half in the water is out`; `petportsTaskAction.lua` at
-`2026-08-31d withdraw resolves its approach point`. `petports_habitat.lua` has no
-stamp and changed alongside them.
+`2026-08-31d withdraw resolves its approach point`. The last two are unchanged
+this session.
 
-**THE LAST CHANGE OF THE SESSION IS UNTESTED IN GAME.** `31k` / `31d` closes the
-unit-side half of `arch.dispatch.vouch` and was written after the last verifying
-log. Everything above it is verified; this is not.
+**TWO THINGS FROM THE PREVIOUS SESSION ARE STILL UNVERIFIED IN GAME.** `31k` /
+`31d` closed the unit-side half of `arch.dispatch.vouch` and was written after
+the last verifying log. This session's work sits on top of that, so a failure in
+the next test round has two candidate sources, not one.
+
+**NO LUA INTERPRETER WAS AVAILABLE IN THE SESSION CONTAINER**, and
+`petports_luacheck.py` was not in the uploaded tree -- only `paneheck`,
+`handoff`, `panetitles` and the two dump tools. The `petports_petport.lua` edits
+are therefore UNCHECKED BY TOOLING. The handoff lint ran clean at its baseline of
+seven pre-existing undated plans.
 
 **THE WORKING COPY IS COMMITTED THROUGH THE CHOREOGRAPHY WORK.** The environment
-gate, the first modules, and both of the last two sessions sit uncommitted on top
-of it.
+gate, the first modules, and the last three sessions sit uncommitted on top of it.
 
 **LINE ENDINGS ARE NOISE IN `git status`, AND THE TREE IS MIXED.** CRLF:
 `petportsTaskAction.lua`, `petports_contract.lua`. LF: `petports_flyapproach.lua`,
 `petports_petport.lua`. `petports_habitat.lua` is the only Lua file indented with
 TABS -- and `petports_petport.lua` is MIXED BY REGION, tabs in the farming
 generators and two spaces elsewhere. Edits must preserve what they find at the
-point they land, not what the file mostly uses.
+point they land, not what the file mostly uses. THIS SESSION'S EDITS FOLLOWED
+THAT: two spaces for the new flag predicates, tabs at the two call sites.
 
 ## ARCHITECTURE
 
@@ -2387,6 +2384,39 @@ because `canSwim` false already refuses all liquid, and subtracting from an empt
 set subtracts nothing. The IMMUNITY half of poison block matters for all four,
 because toxic rain arrives through the weather path. Lava block's does not --
 lava is only ever a liquid.
+
+### A module that changes a number, and the accessor that keeps two legs honest
+`arch.module.hydrator` -- see also `arch.module.effects`, `arch.farming.sweep`, `arch.dispatch.twolegs`, `todo.module.hydratordeadline`
+
+**BUILT 2026-09-01.** The Hydrator raises a unit's water capacity from
+`WATER_CARRY` 10 to `WATER_CARRY_HYDRATED` 30. It is the first module that
+changes a MAGNITUDE rather than adding a behaviour, removing one, or widening
+where a unit may go.
+
+**IT NEEDED NO NEW CHANNEL AND NO UNIT-SIDE CODE.** Capacity is a DISPATCH
+property: the port decides how long a run to hand over and how much liquid to
+send the unit to fetch. The unit sweeps whatever list it is given and has no
+opinion about its length, so `petports_moduleFlags` carries it, nothing is
+pushed, and there is no status effect to author. Second module after medic with
+no `petports_moduleEffects` at all.
+
+**THE MAGNITUDE LIVES IN THE PORT, NOT ON THE ITEM.** A module declaring its own
+number would force the port to decide what two of them meant, and would split one
+economy decision across two files. The flag says WHICH ceiling; the port owns
+what the ceiling is.
+
+**BOTH LEGS READ ONE ACCESSOR, AND THAT IS THE ONLY LOAD-BEARING PART.**
+`waterWork` sizes the sweep and `withdrawWaterWork` sizes the fetch. They are
+separate generators that happened to share a constant, so a module that moved one
+and not the other sends a unit to a crate for thirty and has it put ten down --
+`arch.dispatch.twolegs` in miniature. `petportWaterCarry()` exists so there is
+only one place to ask.
+
+**TWO HYDRATORS ARE ONE HYDRATOR**, free, because `moduleFieldUnion`
+deduplicates. Same honest outcome two lamp modules get.
+
+**NOTHING IN THE PANE DISPLAYS CAPACITY**, so the item description is the only
+place a player learns the number, and it states it.
 
 ### What counts as a patient, and why no engine field alone can say
 `arch.dispatch.medicpatients` -- see also `fact.unit.damageteams`, `arch.module.liquids`
@@ -8236,6 +8266,36 @@ the pane's diagnostic row already knows, it just cannot be seen from outside.
   pathing deny list.** The status effect alone makes a unit survive the liquid it
   still refuses to path through, which is the wrong half of the feature and the
   reason the lamp was built first.
+
+### A hydrated sweep is three times longer, against an unchanged deadline
+`todo.module.hydratordeadline` -- see also `arch.module.hydrator`, `arch.farming.sweep`
+
+**FILED 2026-09-01 -- UNTESTED, AND THE ONE THING THE HYDRATOR MIGHT COST.**
+
+`WATER_CARRY`'s own comment says the cap exists partly to bound a watering task
+against `TASK_DEADLINE`: a forty-tile row becomes four sweeps rather than one task
+that outlives it. `WATER_CARRY_HYDRATED` triples the longest sweep and
+`TASK_DEADLINE` was deliberately NOT raised to match.
+
+`self.taskAge` resets on dispatch only -- the unit's progress message is read for
+a colour, never for a reset -- so a thirty-tile hydrated run gets the same flat
+150 seconds a ten-tile one did. Between tiles the sweep clears `arrived`, the
+ground target and the pather, so arrival is re-earned per tile at a fresh pather's
+price. Warm, that is milliseconds; cold, it is the case `TASK_DEADLINE` was raised
+from 60 to 150 for in the first place.
+
+**NOT PRE-EMPTIVELY PADDED, BECAUSE THE FAILURE IS LEGIBLE AND SELF-HEALING.** An
+abandoned run logs `deadline -- no report in 150s` against a `water:` work id, the
+tiles already wetted stay wet, and the remaining cargo comes home through
+`depositWork`. So it converges across retries rather than deadlocking, and the log
+line names the work id -- which makes this measurable rather than guessable.
+
+**THE FIX, IF IT IS NEEDED, IS NOT A BIGGER GLOBAL DEADLINE.** Raising
+`TASK_DEADLINE` for every task to accommodate one module is the wrong shape. The
+candidates in order: scale the deadline by the length of the dispatched tile list,
+or let the sweep's per-tile progress push `taskAge` out the way a claim refresh
+does. The second is closer to what the deadline is actually for -- it exists to
+catch a unit that reports NOTHING, and a unit watering tile nineteen is not that.
 
 ### Maxwell
 `todo.unit.maidrank`

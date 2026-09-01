@@ -1,0 +1,76 @@
+//  PETPORTS -- HYDRATOR MODULE
+//
+//  THE FIRST MODULE THAT CHANGES A NUMBER RATHER THAN ADDING OR REMOVING A
+//  BEHAVIOUR. Every module before this one turned something on (medic, farming),
+//  turned something off (oblivious), or widened where a unit may go (poison and
+//  lava block). This one leaves the task list untouched and only makes one task
+//  bigger.
+//
+//      petports_moduleEffects   pushed to a LIVE unit as status effects
+//      petports_moduleLiquids   read by the port, with no unit, for the gate
+//      petports_moduleFlags     read by the port, to change its own dispatch
+//
+//  IT USES THE FLAGS CHANNEL, AND ONLY THAT ONE. Water capacity is a DISPATCH
+//  decision: the port decides how long a run to hand over and how much liquid to
+//  send the unit to fetch. The unit sweeps whatever list it is given and has no
+//  opinion about its length, so there is nothing to push to it and no status
+//  effect to author. That is why this file has no petports_moduleEffects at all
+//  -- the second module after medic with none.
+//
+//  THE NUMBER LIVES IN THE PORT, NOT HERE. WATER_CARRY_HYDRATED in
+//  petports_petport.lua, beside the base WATER_CARRY it replaces, because the
+//  two are one economy decision and splitting them across two files is how they
+//  drift. A module declaring its own magnitude would also mean the port had to
+//  decide what two of them meant.
+//
+//  TWO HYDRATORS ARE ONE HYDRATOR. moduleFieldUnion deduplicates the flag, so a
+//  second copy buys nothing -- the same outcome two lamp modules get. A player
+//  wanting more throughput adds another pet, which is the answer everywhere else
+//  in this mod.
+//
+//  IT RAISES THE LONGEST POSSIBLE SWEEP, AND THAT IS THE THING TO WATCH.
+//  WATER_CARRY exists partly to bound a watering task against TASK_DEADLINE, so
+//  tripling it triples the longest sweep a unit can be sent on. The failure is
+//  self-healing and legible -- an abandoned run logs against a `water:` work id,
+//  the tiles already wetted stay wet -- so this ships and gets tested rather
+//  than getting a padded deadline it may not need.
+//
+//  NOTHING IN THE PANE SHOWS CAPACITY, so the description below is the only
+//  place a player is told what this does. It says the number.
+
+{
+	"itemName" : "petports_module_hydrator",
+	"price" : 350,
+	"rarity" : "Uncommon",
+
+	//  Shared with the other modules, so the categories.config.patch label and
+	//  the petports_filtergroups.config subgroup that already exist cover this
+	//  item too. A new category would need both added or it sorts to Unsorted.
+	"category" : "petports_module",
+
+	//  TEST ART. The family diamond carrying WATER'S OWN COLOUR -- [80, 221,
+	//  254] straight out of water.liquid, the same config the watering droplet
+	//  already reads its tint from, so the module and the drops it enables are
+	//  the same blue by construction rather than by eye.
+	//
+	//  BRIGHTER THAN THE REST OF THE FAMILY, deliberately. Water's value is
+	//  0.996 against the family's 0.84, and the honest read of "the colour water
+	//  is" was to keep it rather than dim it to match. If it reads too hot
+	//  beside the others, darkening the body is one number.
+	"inventoryIcon" : "petports_module_hydrator.png",
+
+	"description" : "An expanded reservoir. Socket it into a unit and it carries thirty units of liquid per trip instead of ten.",
+	"shortdescription" : "Hydrator Module",
+
+	//  petports_no_upcycling KEEPS IT OUT OF THE CONVERTER, or a unit hauling
+	//  surplus to an upcycler turns the player's modules into treats.
+	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],
+
+	//  MAXSTACK 1 IS A REQUIREMENT. The pane moves modules with
+	//  player.swapSlotItem(), which returns the whole cursor stack; it refuses a
+	//  stack rather than trusting this field, so a stackable module would be
+	//  refused forever and look broken.
+	"maxStack" : 1,
+
+	"petports_moduleFlags" : [ "hydrator" ]
+}
