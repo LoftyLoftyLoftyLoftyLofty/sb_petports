@@ -297,7 +297,18 @@
       //  a full tile per ~81ms. Trust the positions.
       "flySpeed" : 12,
       "airFriction" : 24.0,
-      "airForce" : 9999.0
+      "airForce" : 9999.0,
+
+      //  A NUDGE OUT OF WATER RATHER THAN A FLOAT. The aquatic chassis pins this
+      //  to 0 and says why: buoyancy opposes gravity, and there is no gravity on
+      //  a gravityEnabled false actor, so it should compute to nothing. If that
+      //  holds, this is inert and harmless. If it does not, a flyer that barely
+      //  clips a waterline gets pushed clear before plan validation has to refuse
+      //  the position and re-home it -- which is the case this is here for.
+      //
+      //  0.25, not 1.0. Neutral is the fish's value; a quarter is a lean upward
+      //  that cannot fight the 9999 station-keeping if it turns out to apply.
+      "liquidBuoyancy" : 0.25
     },
 
     "bodyMaterialKind" : "robotic",

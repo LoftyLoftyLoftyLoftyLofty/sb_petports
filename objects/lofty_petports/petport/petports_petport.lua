@@ -1196,7 +1196,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-01a the bucket is bigger"
+local PETPORT_BUILD_STAMP = "2026-09-01b the fetch asks what the place asks"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -8666,6 +8666,13 @@ local function withdrawWork()
 	local intents = petports_replantsAll()
 	local wanted = 0
 
+	--  COUNTED SEPARATELY BECAUSE THE SUMMARY USED TO BLAME THE WRONG THING. It
+	--  listed storage, claims and backoff, which were the only ways to get here
+	--  when it was written -- so a chassis refused on medium read as "no seed in
+	--  storage" and sent anyone reading the log to look at a crate that was fine.
+	--  Same failure targetSuits' second return was added to fix elsewhere.
+	local wrongMedium = 0
+
 	for key, intent in pairs(intents) do
 		if intent.name ~= nil and intent.position ~= nil
 		   and inNetworkCoverage(intent.position) then
@@ -8717,9 +8724,50 @@ local function withdrawWork()
 			--  work ids and therefore different claims. Without it, a port
 			--  would happily fetch a second seed for a tile another unit is
 			--  already walking one to.
+			--  AND THE PLACE LEG'S MEDIUM QUESTION, WHICH BACKOFF CANNOT ANSWER.
+			--
+			--  THE COUPLING ABOVE IS NECESSARY AND WAS NOT SUFFICIENT. It reads
+			--  workFailures, so it sees a replant that TRIED AND FAILED. An
+			--  eligibility refusal never tries: replantWork returns nil before
+			--  dispatch, writes no failure, and leaves this leg looking perfectly
+			--  free. MEASURED 2026-09-01: an aquatic unit fetched one oculemonseed
+			--  for intent 2540,1184, was never offered the replant because the
+			--  tile is dry land, deposited the seed back into the crate it came
+			--  from, found its cargo empty and fetched it again -- 147 withdraws
+			--  and 308 deposits in three minutes, one cycle every 3.3 seconds,
+			--  never moving from [2552.56,1147.81].
+			--
+			--  waterRunWorkable ALREADY LEARNED THIS AND SAID SO. Its header
+			--  records the identical shape for the watering pair and states the
+			--  conclusion outright: a leg refused on MEDIUM records no failure, so
+			--  the backoff coupling cannot see it, and the only thing that stops it
+			--  is asking the same question before fetching. Replanting got the
+			--  backoff half of arch.dispatch.twolegs and not this half.
+			--
+			--  ABOVE THE TILE, NOT THE TILE, and the reason is replantWork's: a
+			--  tilled tile is solid foreground, so sampling it reads zero liquid
+			--  for every chassis and the test would be vacuously true -- and worse
+			--  than useless, because "air" is a REFUSAL for an aquatic unit, so a
+			--  submerged farm would turn away the only chassis that could work it.
+			--  The expression is copied deliberately; the two legs must sample the
+			--  same point or this is the same bug wearing different coordinates.
+			--
+			--  THE LABEL IS THE PLACE LEG'S ON PURPOSE. targetRefused is keyed by
+			--  label and says its piece once per target, and this is a fact about
+			--  the TILE rather than about which generator noticed. The two legs
+			--  never run in the same scan -- replantWork requires a carried seed
+			--  and this refuses one -- so they cannot fight over the entry.
+			local placeAbove = { intent.position[1] + 0.5, intent.position[2] + 1.5 }
+
 			local free = not backedOff
 				and claimFree(workId)
 				and claimFree("replant:" .. key)
+
+			if free and not targetEligible("replant at " .. tostring(key),
+				placeAbove, nil) then
+				wrongMedium = wrongMedium + 1
+				free = false
+			end
 
 			if free then
 				local containerId = containerWithSeed(intent.name)
@@ -8750,8 +8798,9 @@ local function withdrawWork()
 	--  who stops stocking a seed gets a bare tile, not a stuck network.
 	return nil, string.format(
 		"%s replant intent(s), none actionable (no seed in storage, claimed, "
-		.. "or the replant leg has backed off)",
-		wanted)
+		.. "or the replant leg has backed off); %s in a medium this chassis "
+		.. "cannot work in",
+		wanted, wrongMedium)
 end
 
 --------------------------------------------------------------------------------
