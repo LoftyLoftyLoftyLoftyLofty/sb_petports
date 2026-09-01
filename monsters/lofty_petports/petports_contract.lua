@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-08-31e half in the water is out"
+local CONTRACT_BUILD_STAMP = "2026-09-01b the tag asks the setting"
 
 local contractStamped = false
 
@@ -156,6 +156,31 @@ function init()
 
   stampOnce()
 
+  --  THE STORED NAME, APPLIED AT SPAWN.
+  --
+  --  ABOVE THE MATERIALISE GATE ON PURPOSE. That gate exists to keep a debug or
+  --  relocated unit from fading in out of nothing; a name is not choreography and
+  --  a unit that arrived some other way should still wear one if it was given it.
+  --
+  --  petName IS OUR OWN SPAWN PARAMETER, NOT VANILLA'S. Nothing in monster.lua or
+  --  capturable.lua reads a `petName` config parameter -- capturable.optName goes
+  --  to world.entityName instead -- so the port putting it in the spawn table does
+  --  not by itself name anything. THIS is what makes that parameter mean something,
+  --  and without it a rename would survive in petData and vanish on every respawn.
+  local spawnName = config.getParameter("petName")
+
+  --  THE TAG IS A SEPARATE PARAMETER, NOT INFERRED FROM THE NAME. Every unit
+  --  item ships a default petName, so "has a name" is true for the whole fleet
+  --  and would show a tag over all of it. petports_showNametag carries the
+  --  player's actual choice, off by default, and the port sends both together.
+  --
+  --  BOTH ARE APPLIED HERE RATHER THAN WAITING FOR A PUSH, because the port only
+  --  pushes on a settings change. Without this a respawned unit would come back
+  --  wearing whatever the engine defaults to until somebody opened the pane.
+  if type(spawnName) == "string" and spawnName ~= "" then
+    petports_setUnitName(spawnName, config.getParameter("petports_showNametag", false))
+  end
+
   --  SET BY THE PORT IN THE SPAWN PARAMETERS. Absent means a unit that arrived
   --  some other way -- a relocated one, a debug spawn -- and those should not
   --  materialise out of nothing.
@@ -242,6 +267,57 @@ end
 --  Oblivious is read entirely port-side, so the original design said flags never
 --  reach a unit. Camouflage changes that: a damage team can only be set through
 --  monster.*, which the port does not have.
+--  THE NAME OVER THIS UNIT, PUSHED BY THE PORT.
+--
+--  monster.setName AND monster.setDisplayNametag BOTH EXIST -- CONFIRMED
+--  2026-09-01 by /entityeval on a deployed unit, which returned "function" for
+--  each. That eval also returned "Utility Unit" for world.entityName, so a unit
+--  is ALREADY NAMED before this ever runs: the engine takes the monstertype's
+--  shortdescription as the entity name.
+--
+--  WHICH MEANS THE TAG, NOT THE NAME, IS WHAT THIS TURNS ON. Nothing switches
+--  setDisplayNametag on for us -- vanilla only does it from capturable.update
+--  and only under capturable.ownerUuid(), which a port-spawned unit has no pod
+--  to provide. So an unnamed unit renders no tag at all, and that is the state
+--  `show` false has to be able to get back to.
+--
+--  `show` IS A PARAMETER RATHER THAN name ~= nil BECAUSE THE NAME IS NEVER NIL.
+--  A cleared name arrives here as the SPECIES with show false: the port resolves
+--  it before pushing, because vanilla's tick loop renames anything whose
+--  world.entityName reads empty to the literal "Pet". Passing the species keeps
+--  that branch unreachable while the flag does the actual clearing.
+--
+--  CALLED FROM TWO PLACES, which is the point of it being a function. The port
+--  pushes it on rename, and init applies the stored name at spawn -- see the
+--  petName read there. A unit that only got the push would come back nameless
+--  after every respawn.
+function petports_setUnitName(name, show)
+  if type(name) ~= "string" or name == "" then
+    sb.logInfo("UNIT setUnitName REFUSED: %s is not a usable name",
+      sb.printJson(name))
+    return false
+  end
+
+  local ok, err = pcall(monster.setName, name)
+
+  if not ok then
+    sb.logInfo("UNIT setUnitName FAILED for %s: %s", tostring(name), tostring(err))
+    return false
+  end
+
+  --  GUARDED SEPARATELY so a missing binding is reported rather than swallowed
+  --  with the rename it accompanied. If the name changes and no tag appears,
+  --  this line says which half failed.
+  local okTag, errTag = pcall(monster.setDisplayNametag, show == true)
+
+  if not okTag then
+    sb.logInfo("UNIT setDisplayNametag FAILED: %s", tostring(errTag))
+  end
+
+  sb.logInfo("UNIT name set to %s, tag %s", tostring(name), tostring(show == true))
+  return true
+end
+
 function petports_setModuleEffects(effects, category, liquids, flags, baseTeam)
   category = category or "petports_modules"
   effects = effects or {}

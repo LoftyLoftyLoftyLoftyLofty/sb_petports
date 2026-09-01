@@ -197,6 +197,18 @@ local SETTING_ROWS = {
 	{ key = "carried", owner = "toggles", needs = nil,
 	  label = "petport.setting.carried", tip = "petport.tip.carried" },
 
+	--  BESIDE `carried` BECAUSE THEY ARE THE SAME KIND OF THING: universal
+	--  per-unit DISPLAY toggles, owned by no module, defaulted off. The tab's
+	--  own note gives the reason -- a base running a dozen units with permanent
+	--  labels overhead is the vanilla ship-pet clutter this mod exists to avoid.
+	--
+	--  A SETTING RATHER THAN "DOES IT HAVE A CUSTOM NAME". Every unit item ships
+	--  a default petName -- Diver, Wader, Flyer, Unit -- so keying the tag on
+	--  whether a name exists would show one over every unit in the fleet and give
+	--  the player no way to turn it off short of clearing names they wanted.
+	{ key = "nametag", owner = "toggles", needs = nil,
+	  label = "petport.setting.nametag", tip = "petport.tip.nametag" },
+
 	{ sep = true, needs = "medic", label = "petport.setting.medicblock" },
 
 	{ key = "player", owner = "medic", needs = "medic",
@@ -261,6 +273,10 @@ local TAB_MEMBERS = {
 	--  sits beside happens to be.
 	tabSettings = {
 		"renameButton",
+		--  THE FIELD IS TWO WIDGETS AND BOTH ARE MEMBERS. The backing is a
+		--  separate image rather than part of the textbox, so leaving it out
+		--  would paint an empty box over the Details tab.
+		"nameFieldBacking", "tbPetName",
 		--  THE LIST IS ONE WIDGET NOW, where the pet toggles used to be several.
 		--  Its ROWS are not members of anything -- they do not exist until
 		--  paintSettings builds them.
@@ -992,6 +1008,26 @@ end
 local moduleWriteToken = nil
 local moduleTokenSeq = 0
 
+--  THE LAST NAME THE PORT REPORTED, so refresh can tell a genuine change from
+--  its own repetition.
+--
+--  A TEXTBOX CANNOT BE REPAINTED ON EVERY REFRESH. refresh runs on a mirror that
+--  changes for fuel, cargo, task and diagnostics, and writing the field each
+--  time would delete whatever the player was halfway through typing -- a rename
+--  would be unusable on any unit that was actually working.
+--
+--  KEYED ON WHAT THE PORT SAID, NOT ON WHAT THE BOX HOLDS. Comparing against the
+--  widget's own text would treat every keystroke as a change to undo, which is
+--  the same bug wearing a different mask. This only rewrites when the STORED
+--  name moves underneath the pane -- a commit landing, or a different unit being
+--  socketed.
+--
+--  false RATHER THAN nil FOR "NOTHING SEEN YET", because nil is also a legitimate
+--  value for it to hold: an unnamed unit reports petNameRaw absent, and with nil
+--  as the sentinel the first paint of an unnamed unit would compare equal to the
+--  initial state and never clear the box.
+local paneNameSeen = false
+
 local function nextModuleToken()
 	moduleTokenSeq = moduleTokenSeq + 1
 
@@ -1258,6 +1294,8 @@ local function showEmpty()
 	moduleWriteToken = nil
 
 	widget.setText("petName", petports_stringOr("petport.nounit"))
+	widget.setText("tbPetName", "")
+	paneNameSeen = false
 	widget.setText("petSpecies", "")
 	widget.setText("taskLabel", "")
 	widget.setText("diagLabel", "")
@@ -1339,6 +1377,15 @@ local function refresh(force)
 	end
 
 	widget.setText("petName", state.petName or "Unnamed unit")
+
+	--  THE FIELD FOLLOWS petNameRaw, THE HEADER FOLLOWS petName. An unnamed unit
+	--  shows its species above and an EMPTY box below, so the box always reads as
+	--  "what this unit is called", never as a suggestion the player has to clear
+	--  before typing.
+	if state.petNameRaw ~= paneNameSeen then
+		paneNameSeen = state.petNameRaw
+		widget.setText("tbPetName", state.petNameRaw or "")
+	end
 
 	--  THE SPECIES LINE IS A DIFF, NOT A FIELD. It appears only when the player
 	--  has renamed the unit, so the port sends both and the comparison happens
@@ -1975,8 +2022,39 @@ local function paintHover()
 	}, 7, TIP_BODY_COLOR)
 end
 
+--  EXISTS SO THE PANE CAN BE BUILT, AND DOES NOTHING SO ENTER CANNOT COMMIT.
+--
+--  A textbox MUST name a callback -- with none, WidgetParser looks for one named
+--  after the widget and throws inside the ContainerPane constructor, taking the
+--  client to the main menu on interact rather than merely breaking the field.
+--
+--  The callback fires on ENTER. Committing there is exactly what we do not want:
+--  a half-typed name reaching a server's chat filter is how someone gets banned
+--  for a rename they never finished. renameClicked is the only commit path, so
+--  this is empty and must stay empty.
+function petNameEntered()
+end
+
+--  THE ONLY COMMIT PATH, ON PURPOSE. The textbox's callback is a no-op, so a name
+--  reaches the port when the player presses this and at no other moment. Enter
+--  would commit whatever is in the box the instant it is pressed, and a half-
+--  typed name is exactly the sort of thing a server's chat-politeness plugin
+--  bans people for.
+--
+--  TRIMMED, AND AN EMPTY RESULT MEANS CLEAR. A field holding only spaces is a
+--  player clearing the name, not naming a unit " ". The port takes nil as
+--  "forget the stored name", which drops the header back to the species.
+--
+--  FIRE AND FORGET, LIKE EVERY OTHER SETTING. No write token: the module swap
+--  needed one because a dropped reply could duplicate or destroy an ITEM, and a
+--  name has no such hazard. The worst a lost message costs is a click, and the
+--  next mirror repaints the field from whatever the port actually holds.
 function renameClicked()
-	dbg("rename requested -- not built")
+	local typed = widget.getText("tbPetName") or ""
+	local trimmed = typed:match("^%s*(.-)%s*$")
+
+	dbg("rename requested: %s", trimmed == "" and "<clear>" or trimmed)
+	tell("petports_setPetName", { name = trimmed ~= "" and trimmed or nil })
 end
 
 --  TWO TOGGLES, AND THE TWO THAT WERE HERE ARE GONE FOR DIFFERENT REASONS.

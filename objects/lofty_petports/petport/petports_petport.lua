@@ -572,6 +572,19 @@ WATER_CARRY_HYDRATED = 30
 --  purpose.
 WATER_RUN_REACH = 32
 
+--  THE LONGEST NAME A UNIT MAY CARRY, AND IT MUST EQUAL THE PANE'S REGEX.
+--
+--  `tbPetName` caps typing at 24 in petportconfig.config. The two are the same
+--  decision written twice because the engine has no way to say so -- the same
+--  situation the restock pane's quota field is in, and the same rule applies:
+--  everything typeable is valid, so nothing a player enters is silently trimmed
+--  after the fact. MOVE ONE, MOVE BOTH.
+--
+--  Re-clamped port-side anyway, because a message handler is reachable by
+--  anything that can send an entity message and the pane is not the only
+--  possible sender.
+PET_NAME_MAX = 24
+
 CLAIM_TTL = 30.0
 
 --  How often to look for work and to push claim expiry out.
@@ -1196,7 +1209,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-01b the fetch asks what the place asks"
+local PETPORT_BUILD_STAMP = "2026-09-01d the tag is a checkbox"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -1443,10 +1456,21 @@ function init()
     if self.petData == nil or type(payload) ~= "table" then return false end
 
     self.petData.toggles = {
-      carried = payload.carried == true
+      carried = payload.carried == true,
+
+      --  DEFAULTS OFF, like every display toggle on this tab, because absent
+      --  reads as false here. That is deliberate: all four unit items ship a
+      --  petName, so a tag defaulting on would label the entire fleet the moment
+      --  this shipped and a player would have to visit every port to quiet it.
+      nametag = payload.nametag == true
     }
     self.dirty = true
     self.paneSignature = nil
+
+    --  PUSHED IMMEDIATELY, because this is the one toggle here with a visible
+    --  effect on a LIVE unit. `carried` is stored and read by nothing yet; this
+    --  one has to reach the entity or the checkbox does nothing until respawn.
+    pushPetName()
 
     sb.logInfo("PETPORT %s toggles: %s", stationUniqueId(), sb.printJson(self.petData.toggles))
     return true
@@ -1586,6 +1610,47 @@ function init()
     self.workTimer = 0
 
     sb.logInfo("PETPORT %s farming activities: %s", stationUniqueId(), sb.printJson(set))
+    return true
+  end))
+
+  --  RENAME. Writes petData and pushes to the live unit, which are two separate
+  --  obligations and both are needed.
+  --
+  --  petData IS THE DURABLE HALF -- it travels with the pet to another port and
+  --  is what seeds petName in the spawn parameters, so the name survives a
+  --  respawn, a world reload and being carried somewhere else.
+  --
+  --  THE PUSH IS THE VISIBLE HALF. Spawn parameters are read once, at spawn, so
+  --  without it a rename would not appear over a deployed unit until something
+  --  killed it. See petports_setUnitName on the unit side.
+  --
+  --  A NIL NAME IS A CLEAR, NOT A MALFORMED PAYLOAD. The pane sends no `name`
+  --  key when the field was emptied, and the correct response is to forget the
+  --  stored name so the header falls back to the species -- which is why this
+  --  checks the payload TABLE for validity and then accepts whatever `name`
+  --  holds, including nothing.
+  message.setHandler("petports_setPetName", simpleHandler(function(payload)
+    if type(payload) ~= "table" then return false end
+    if self.petData == nil then return false end
+
+    --  LENGTH IS RE-CLAMPED HERE RATHER THAN TRUSTED. The textbox regex caps it
+    --  at 24, but a message handler is reachable by anything that can send an
+    --  entity message and the pane is not the only possible sender.
+    local name = payload.name
+    if type(name) ~= "string" or name == "" then
+      name = nil
+    else
+      name = string.sub(name, 1, PET_NAME_MAX)
+    end
+
+    self.petData.petName = name
+    self.dirty = true
+    self.paneSignature = nil
+
+    pushPetName()
+
+    sb.logInfo("PETPORT %s renamed unit to %s", stationUniqueId(),
+      name == nil and "<cleared>" or tostring(name))
     return true
   end))
 
@@ -2101,7 +2166,14 @@ function spawnPet()
     initialStatus = copy(self.petData.status) or {},
     initialStorage = copy(self.petData.storage) or {},
 
-    petName = self.petData.petName
+    petName = self.petData.petName,
+
+    --  THE TAG STATE HAS TO TRAVEL WITH THE NAME. petName alone tells the unit
+    --  what it is called and not whether to show it, so a respawn would come
+    --  back with the tag off on a unit whose owner had switched it on -- or
+    --  worse, on for one that had switched it off, if the contract guessed.
+    --  Read at init by petports_contract.lua alongside petName.
+    petports_showNametag = petportNametag()
   }
 
   --  THE ROUTE THAT ACTUALLY RESTORES STATE.
@@ -3364,6 +3436,25 @@ function petportMedic()
   return false
 end
 
+--  IS THE NAME TAG SWITCHED ON FOR THIS UNIT?
+--
+--  ON petData.toggles, so it travels with the pet to another port -- the same
+--  rule the medic classes and the farming activities follow, and for the same
+--  reason: it describes how one PET behaves, not what a port does.
+--
+--  DEFAULTS OFF WHEN ABSENT, which is the opposite of the farming and medic
+--  accessors. Those default ON so a freshly socketed module works immediately
+--  rather than looking broken. A display toggle has no such problem: nothing is
+--  broken by a quiet fleet, and every unit item ships a name, so defaulting on
+--  would label the whole base the moment this shipped.
+function petportNametag()
+  if self.petData == nil then return false end
+
+  local toggles = self.petData.toggles
+  if type(toggles) ~= "table" then return false end
+  return toggles.nametag == true
+end
+
 function petportFarming()
   for _, flag in ipairs(petportModuleFlags()) do
     if flag == FARMING_FLAG then return true end
@@ -3504,7 +3595,53 @@ end
 
 --------------------------------------------------------------------------------
 
---  Derived from the seed rather than stored as its own field. The seed already
+--  THE NAME OVER A DEPLOYED UNIT.
+--
+--  SPAWN PARAMETERS ARE READ ONCE, so petData alone would leave a renamed unit
+--  wearing its old name until something respawned it. This is the same wire
+--  pushModuleEffects uses and for the same reason: the change has to reach an
+--  entity that already exists.
+--
+--  NOT SIGNATURE-GATED, UNLIKE THE MODULE PUSH. That one runs from update on
+--  every tick and needs a signature to stay quiet; this one fires only when a
+--  player presses a button, so there is nothing to debounce and a signature
+--  would be state to keep in step for no gain.
+--
+--  THE TAG IS A SETTING, THE NAME IS NOT.
+--
+--  `show` COMES FROM petData.toggles.nametag AND NOTHING ELSE. Keying it on
+--  "does this unit have a custom name" does not work: every unit item ships a
+--  default petName -- Diver, Wader, Flyer, Unit -- so a name always exists and
+--  the tag would always be on. Worse, the only way to turn it off would be to
+--  clear a name the player may want to keep. One checkbox, one meaning.
+--
+--  THE NAME IS NEVER PUSHED EMPTY. vanilla's capturable.update sets the name to
+--  the literal "Pet" whenever world.entityName reads empty. MEASURED 2026-09-01
+--  by /entityeval: a deployed unit already reports "Utility Unit", inherited
+--  from the monstertype's shortdescription, and that branch is also gated on
+--  capturable.ownerUuid(), which a port-spawned unit does not have. Both halves
+--  are vanilla's to change, so an empty name is simply never sent -- a unit with
+--  no stored name is pushed its species instead.
+function pushPetName()
+  if self.petId == nil or not world.entityExists(self.petId) then return end
+
+  local name = self.petData ~= nil and self.petData.petName or nil
+  if name == nil or name == "" then
+    name = paneSpecies() or "Utility Unit"
+  end
+
+  local show = petportNametag()
+
+  sb.logInfo("PETPORT %s pushing name to unit %s: %s (tag %s)", stationUniqueId(),
+    sb.printJson(self.petId), tostring(name), tostring(show))
+
+  --  Defined in petports_contract.lua. callScriptedEntity to a function the
+  --  target does not define returns nil SILENTLY, so the log above fires
+  --  whether or not the far end exists -- the same guard the module push uses.
+  world.callScriptedEntity(self.petId, "petports_setUnitName", name, show)
+end
+
+--------------------------------------------------------------------------------
 --  exists, already persists, and already decides which monsterpart the unit
 --  wears -- so a serial taken from it is stamped at build time by construction
 --  and cannot drift from the unit it names.
@@ -3621,6 +3758,17 @@ function mirrorPaneState(dt)
       participation = participation,
       crosshairs = crosshairs,
       petName = self.petData.petName or paneSpecies() or "Utility Unit",
+
+      --  THE RAW FIELD AS WELL AS THE RESOLVED ONE, and they are different
+      --  questions. `petName` above is what to DISPLAY and is never nil, because
+      --  a header reading nothing is worse than one reading the species. The
+      --  rename field needs what is actually STORED -- nil when the player has
+      --  never named this unit -- or it would prefill with "Utility Unit" and
+      --  the first click of Rename would set that as a literal name.
+      --
+      --  Its absence is also what lets an empty commit mean "clear", since the
+      --  pane can tell an unnamed unit from one named after its species.
+      petNameRaw = self.petData.petName,
       species = paneSpecies(),
       serial = paneSerial(),
       fuelBlips = paneFuelBlips(),
