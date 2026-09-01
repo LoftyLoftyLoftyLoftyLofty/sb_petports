@@ -1,0 +1,68 @@
+//  SINKER UNIT ITEM
+//
+//  A COPY of petports_unit_amphibious.item. Read the test unit's for the
+//  crosshair colour block and how petData merges.
+//
+//  PROMOTED 2026-09-01 FROM petports_unit_sinkertest, which pointed at a
+//  throwaway monstertype and reused the amphibious icon. Both are deleted.
+//
+//  ONLY monsterType DIFFERS IN ANY LOAD-BEARING WAY. It must match the
+//  monstertype's "type" exactly; a mismatch makes spawnPet return nil and the
+//  petport looks perfectly fine while doing nothing.
+//
+//  ICON IS THE AMPHIBIOUS ICON HUE-ROTATED TO 25, saturation and value
+//  preserved, black outline and white highlight left untouched. That is the
+//  same rotation applied to the body's fullbright layer, so the item in the
+//  inventory and the glow in the world are the same orange -- which is the
+//  entire reason the icon was recoloured rather than reused.
+//
+//  ORANGE IS A TESTING AID, NOT A SETTLED IDENTITY COLOUR. The amphibious
+//  monsterpart records that hue-space is exhausted at four chassis and that a
+//  fifth cannot be distinguished by hue under colour blindness. Nothing here
+//  reconsiders that -- orange is clear in normal vision, which is all it was
+//  asked for. Real art answers this with shape, not another colour.
+
+{
+  "itemName" : "petports_unit_sinker",
+  "price" : 0,
+  "rarity" : "Rare",
+  "category" : "petports_pet",
+  "inventoryIcon" : "petports_unit_sinker.png",
+  "description" : "A dormant M.A.U.S. utility unit, ballasted rather than sealed. It does not swim. It walks in, sinks, and carries on along the bottom. Socket it into a Petport to bring it online.",
+  "shortdescription" : "Utility Unit (Sinker)",
+  "itemTags" : [ "petports", "petports_unit", "petports_no_upcycling" ],
+
+  //  Unchanged from the amphibious item, deliberately. The port reads these off
+  //  petData.crosshairColors and falls back to its own defaults when absent --
+  //  and a unit whose crosshairs render in different colours than the rest of
+  //  the fleet is a unit whose log is harder to read beside a normal one.
+  "crosshairColors" : {
+    "routing" : "ffff20ff",
+    "enroute" : "20ff20ff",
+    "unroutable" : "ff2020ff",
+    "blocked" : "ff8020ff",
+    "unclaimed" : "606060ff"
+  },
+
+  //  Rare derives to exactly this via MODULE_SLOTS_BY_RARITY, so the field
+  //  changes nothing today and is written anyway -- rarity is a balance knob
+  //  and slot count is a capability, and retuning this unit some day should not
+  //  silently grant it a fourth slot. Same reasoning as every other unit item.
+  "petports_moduleSlots" : 3,
+
+  "maxStack" : 1,
+
+  "petData" : {
+    //  MUST match the monstertype's "type" exactly. A mismatch makes spawnPet
+    //  return nil and the petport looks fine while doing nothing.
+    "monsterType" : "petports_sinker",
+
+    //  Placeholder, per todo.unit.species -- the sinker's creature is the crab
+    //  and it is unnamed. "Ballast" describes the mechanism rather than
+    //  claiming a species name that has not been chosen.
+    "petName" : "Ballast",
+
+    "status" : {},
+    "storage" : {}
+  }
+}

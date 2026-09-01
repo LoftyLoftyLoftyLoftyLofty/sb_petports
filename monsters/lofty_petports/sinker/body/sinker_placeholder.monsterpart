@@ -1,0 +1,49 @@
+//  M.A.U.S. UTILITY UNIT -- SINKER PLACEHOLDER BODY VARIANT
+//
+//  Sibling of the drone, flyer, aquatic and amphibious monsterparts. Read the
+//  drone's for how category + type binding works; only what DIFFERS is recorded
+//  here.
+//
+//  Own category, therefore own monsterpart, therefore own pngs -- the engine
+//  picks at random from every monsterpart matching a category, so a shared one
+//  would have the chassis wearing each other's bodies. THE SINKER TEST VARIANT
+//  DELIBERATELY BROKE THIS RULE and wore the axolotter's body; this file is
+//  what replaces that shortcut.
+//
+//  ORANGE, AND IT DOES NOT SOLVE THE PROBLEM THE AMPHIBIOUS PART RECORDS.
+//
+//  That file found hue-space exhausted at four chassis and concluded a fifth
+//  could not be told apart by hue, with the real answer being SHAPE or a
+//  marking once art lands. Nothing here contradicts that. Orange at hue 25 is
+//  well clear of the other four in normal vision, which is the entire job it
+//  was asked to do -- TELL THEM APART ON SCREEN WHILE TESTING. Under
+//  deuteranopia it collapses toward the aquatic green exactly as predicted.
+//
+//  So this is a TESTING AID WEARING THE COSTUME OF A DESIGN DECISION, and the
+//  distinction matters when real art is commissioned: do not treat orange as
+//  a settled identity colour for the crab, and do not read its presence here
+//  as the colour-blindness finding having been reconsidered. It has not been.
+//
+//  HOW THESE PNGS WERE MADE. body_0_lit.png and default.frames are byte copies
+//  of the amphibious ones -- the base layer is neutral grey-blue and carries no
+//  identity at all. Only body_0_fullbright.png differs, and only by a HUE
+//  ROTATION to 25 with saturation and value preserved exactly:
+//
+//      #aa5cd1 -> #d18d5c    sat 0.56  val 0.82
+//      #d091ef -> #efb891    sat 0.39  val 0.94   <- the fadeColor tone
+//      #68238a -> #8a4e23    sat 0.75  val 0.54
+//
+//  Preserving sat and val rather than picking three oranges by eye means the
+//  glow reads at the same brightness as its siblings, which is what makes a
+//  side-by-side comparison of two units mean anything.
+
+{
+  "name" : "sinker_placeholder",
+  "category" : "petports_sinker",
+  "type" : "body",
+
+  "frames" : {
+    "body" : "body_0_lit.png",
+    "bodyfullbright" : "body_0_fullbright.png"
+  }
+}

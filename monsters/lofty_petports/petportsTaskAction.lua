@@ -136,7 +136,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-01l trace off, latch fixed"
+local BUILD_STAMP = "2026-09-01p arcprobe removed, question settled"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -482,6 +482,32 @@ local LAND_BRAKE_STATIONARY = 0.1
 --  And how far ABOVE the landing still counts, so a pass-over five tiles up on
 --  the way to something else is not mistaken for an arrival.
 local LAND_BRAKE_CEILING = 1.0
+
+--  HOW CLOSE A MOTIONLESS UNIT MUST ACTUALLY BE, HORIZONTALLY, BEFORE ITS LACK
+--  OF VELOCITY COUNTS AS HAVING ARRIVED.
+--
+--  ADDED 2026-09-01. The stationary branch below used to set `ahead` to 0 with
+--  no distance test at all, so ANY unit whose horizontal velocity fell inside
+--  LAND_BRAKE_STATIONARY passed both the arrived and the overrun bound
+--  regardless of where it actually was. The ceiling test was the only spatial
+--  constraint, and it only looks at height.
+--
+--  MEASURED FALSE ARRIVAL, four identical laps:
+--
+--      ARCMOVER arrived at landing [2533,1142.8] from [2532.2,1143.2]
+--                        vel [0,-15.6714] (ahead 0)
+--
+--  0.8 tiles SHORT and 0.4 tiles ABOVE, in mid-air, with the latch then holding
+--  x at zero for the whole descent. The unit had lost vx to a wall on the way
+--  up; losing horizontal velocity near the right height was enough to be
+--  declared landed.
+--
+--  0.5 IS BOUNDED BELOW BY THAT MEASUREMENT AND ABOVE BY THE CASE THE BRANCH
+--  EXISTS FOR. The five-lap slide-off that earned the brake was a unit AT its
+--  landing to the decimal -- gap 0 -- so anything above zero preserves it. The
+--  false arrival was at 0.8, so anything below that removes it. Half a tile
+--  sits between them with room on both sides rather than being tuned to either.
+local LAND_BRAKE_STATIONARY_GAP = 0.5
 
 --  How high a launch of v0 actually gets, on the engine's integrator.
 --
@@ -1290,7 +1316,42 @@ local function solveLaunch(pather, edge, source)
   end
 
   --  Never out-reach the planner horizontally, and keep the old cap on a raise.
-  if plannedVx ~= 0 and math.abs(vx) > math.abs(plannedVx) then
+  --
+  --  THE `plannedVx ~= 0` GUARD WAS REMOVED 2026-09-01 AND ITS REMOVAL IS THE
+  --  FIX. It made this clamp skip the one case where the plan asked for ZERO
+  --  horizontal reach at launch, so branch 2's `vx = dx / time` ran free and
+  --  turned a planned vertical climb into a diagonal parabola.
+  --
+  --  THAT IS NOT A ROUNDING DIFFERENCE, IT IS A DIFFERENT PATH THROUGH SPACE.
+  --  A* plans a climb-then-traverse precisely when something is in the way: it
+  --  rises in a clear column to above the obstruction, THEN moves sideways. The
+  --  parabola goes diagonally from the first tick, through the obstruction the
+  --  column existed to avoid. Measured, four identical laps:
+  --
+  --      launch lowered vx: plan [0,31.82] -> [2.29436,34.3286],
+  --                         landing [2533,1142.8] (dx 1 dy 4)
+  --      ARCPROBE solved BLOCKED at [2532.23,1141.53] (6 samples)
+  --                | plan clear (20 samples)
+  --
+  --  ARCPROBE WAS A TEMPORARY SWEPT-PATH DIAGNOSTIC AND IS GONE, REMOVED in the
+  --  same change that fixed this. It stepped the solved launch and the planner's
+  --  own waypoints and reported which of the two hit terrain. Do not go looking
+  --  for it in a current log -- these two lines are the whole of what it found
+  --  and the reason the guard came out.
+  --
+  --  The plan climbs to 1143.8, a full tile ABOVE the landing at 1142.8, before
+  --  it moves sideways at all. The solved arc hit the ledge face at 1141.53, a
+  --  tile and a quarter BELOW the lip, on sample 6 of 20 while still rising.
+  --
+  --  vy IS STILL SOLVED. Branch 2 pins the apex and that half was always right --
+  --  it launched at 34.33 for a plan apex of 1143.8 and reached 1143.996. Only
+  --  the invented horizontal is removed.
+  --
+  --  THE HORIZONTAL NOW COMES FROM THE PLAN'S OWN SCHEDULE instead, in the
+  --  airborne branch of petportsArcMover. A vertical launch that is never given
+  --  horizontal velocity rises and falls in its own column forever, so these two
+  --  changes are one change and neither is testable alone.
+  if math.abs(vx) > math.abs(plannedVx) then
     vx = math.abs(plannedVx) * (vx > 0 and 1 or -1)
   end
   if plannedVy > 0 then
@@ -2423,24 +2484,39 @@ function petportsArcMover(pather)
   --  TRAVEL: positive while the landing is still in front, zero at it, negative
   --  once past.
   --
-  --  A UNIT WITH NO HORIZONTAL VELOCITY IS TREATED AS ARRIVED, and that is a
-  --  branch rather than a consequence of the sign expression. Signing by
-  --  `vel[1] >= 0` would call a landing to the RIGHT of a motionless unit "still
-  --  ahead" and refuse to brake forever, on the strength of a velocity that is
-  --  not going to close anything. There is nothing left to protect when nothing
-  --  is moving, so the brake may fire -- and it is a no-op on a vx already at
-  --  zero, which is why this reads as pedantry until the latch is considered.
+  --  A UNIT WITH NO HORIZONTAL VELOCITY IS TREATED AS ARRIVED ONLY IF IT IS
+  --  ACTUALLY THERE, and that is a branch rather than a consequence of the sign
+  --  expression. Signing by `vel[1] >= 0` would call a landing to the RIGHT of a
+  --  motionless unit "still ahead" and refuse to brake forever, on the strength
+  --  of a velocity that is not going to close anything.
+  --
+  --  QUALIFIED 2026-09-01 BY LAND_BRAKE_STATIONARY_GAP. This branch used to set
+  --  `ahead` to 0 unconditionally, which said "nothing is moving, so there is
+  --  nothing left to protect" -- true of a unit sitting ON its landing and false
+  --  of one that lost its horizontal velocity to a wall on the way up. The
+  --  second case measured four identical laps: arrival declared in mid-air 0.8
+  --  tiles short, latch set, x held at zero for the whole descent, unit falls
+  --  back to the tile it launched from. The gap test keeps the original case and
+  --  drops that one.
   --
   --  THIS IS WHERE THE BRAKE WAS ORIGINALLY EARNED, AND THAT CASE STILL FIRES.
   --  The five-lap slide-off was a unit at `[2493,1155.8]` with the Land target
-  --  at exactly that point -- `ahead` 0, inside the epsilon, braked. What no
-  --  longer fires is the brake on a unit that has not got there yet.
+  --  at exactly that point -- gap 0, `ahead` 0, inside the epsilon, braked. What
+  --  no longer fires is the brake on a unit that has not got there yet.
   local landing = plannedLanding(pather)
   local ahead = nil
 
   if landing ~= nil then
     if math.abs(vel[1]) < LAND_BRAKE_STATIONARY then
-      ahead = 0
+      --  MOTIONLESS, SO THE SIGN EXPRESSION HAS NO DIRECTION TO MEASURE ALONG
+      --  AND THE HONEST QUESTION BECOMES "AM I THERE", NOT "AM I CLOSING".
+      --
+      --  Reporting the raw gap rather than 0 when it is short is what makes the
+      --  arrived test fail: LAND_BRAKE_ARRIVED is 0.05, so any gap above the
+      --  threshold below leaves `ahead` positive and out of the window. It also
+      --  puts the real distance into the log line instead of a hardcoded zero.
+      local gap = math.abs(landing[1] - here[1])
+      ahead = (gap <= LAND_BRAKE_STATIONARY_GAP) and 0 or gap
     else
       ahead = (landing[1] - here[1]) * ((vel[1] > 0) and 1 or -1)
     end
@@ -2458,6 +2534,28 @@ function petportsArcMover(pather)
       .. "velocity so the unit does not slide off it",
       sb.printJson(landing), sb.printJson(here), sb.printJson(vel),
       sb.printJson(ahead))
+  end
+
+  --  THE REFUSAL IS LOGGED, ONCE PER LANDING, BECAUSE THE ALTERNATIVE IS AN
+  --  ABSENCE. Before the gap test this situation produced an `ARCMOVER arrived`
+  --  line; after it, it produces nothing at all, and "the line I expected is
+  --  missing" is the hardest possible thing to read a log for. This says what
+  --  was decided and on what inputs, at the point of decision.
+  --
+  --  Change-gated on the landing rather than suppressed: a unit that goes short
+  --  of a DIFFERENT landing later is a new event and says so. The record dies
+  --  with the pather, which is rebuilt per task and per vent leg.
+  if landing ~= nil and not pather.petportsLanding and vel[2] < 0
+    and math.abs(vel[1]) < LAND_BRAKE_STATIONARY
+    and ahead > LAND_BRAKE_ARRIVED
+    and pather.petportsShortOf ~= landing[1] then
+
+    pather.petportsShortOf = landing[1]
+
+    sb.logInfo("UNIT ARCMOVER NOT arrived at landing %s from %s vel %s -- motionless but %s "
+      .. "tiles short horizontally (gap limit %s); descending past it rather than latching",
+      sb.printJson(landing), sb.printJson(here), sb.printJson(vel),
+      sb.printJson(ahead), sb.printJson(LAND_BRAKE_STATIONARY_GAP))
   end
 
   if pather.petportsLanding then
@@ -2480,8 +2578,12 @@ function petportsArcMover(pather)
 
   local velocity = pather.edge.source.velocity or pather.edge.target.velocity or {0, 0}
 
-  --  NOTHING STEERS X DURING A FLIGHT. THE FRICTION ZEROING ABOVE IS THE WHOLE
-  --  MECHANISM.
+  --  WHY NOTHING STEERS X, AND THE ONE EXCEPTION.
+  --
+  --  The history below is the reasoning for arch.pathing.nosteer, which
+  --  deleted all horizontal command from this branch. It is unchanged and
+  --  still governs every ballistic arc. The exception that follows it is
+  --  scoped so that none of the failures recorded here can recur.
   --
   --  This branch used to end in
   --
@@ -2550,6 +2652,68 @@ function petportsArcMover(pather)
   --
   --  `velocity` SURVIVES because the liquid branch below reads velocity[2]. Only
   --  the horizontal half is removed.
+  --
+  --  ==================== THE EXCEPTION, ADDED 2026-09-01 ====================
+  --
+  --  NOTHING STEERS X DURING A FLIGHT, WITH ONE NARROW EXCEPTION ADDED
+  --  2026-09-01. THE FRICTION ZEROING ABOVE IS STILL THE WHOLE MECHANISM FOR
+  --  EVERY BALLISTIC ARC.
+  --
+  --  THE EXCEPTION: AN ARC WHOSE PLANNED LAUNCH vx WAS ZERO.
+  --
+  --  A* plans those as climb-then-traverse -- a vertical rise in a clear column
+  --  to above an obstruction, then horizontal at the top. Its own edge list says
+  --  so, and says exactly where the turn happens:
+  --
+  --      edge 6  [2532,1142.3] -> [2532,1143.3]  vel [0,14.6963]
+  --      edge 7  [2532,1143.3] -> [2532,1143.8]  vel [0,4.96] -> [12,0]
+  --      edge 8  [2532,1143.8] -> [2532.5,1143.8] vel [12,-5]
+  --
+  --  A* CAN DO THAT BECAUSE ITS ACTOR MODEL HAS AIR CONTROL. Ours had none after
+  --  the deletion below, so the horizontal half of every such plan was simply
+  --  never flown, and solveLaunch's invented launch vx was the only thing that
+  --  moved the unit sideways at all -- into the wall the column avoided.
+  --
+  --  ACQUIRE ONLY, NEVER BRAKE. THIS IS THE PROPERTY THAT MAKES IT SAFE.
+  --
+  --  The deleted version drove x toward the planner's per-edge velocity on every
+  --  airborne tick, and the disaster it caused was a BRAKE: A* dropped its own vx
+  --  from 12 to 1 at an apex, the mover obeyed in one look, and the unit crossed
+  --  its landing altitude 1.83 tiles short and fell twelve tiles.
+  --
+  --      edge 62 Arc  vel [12,7.06] -> dst [2516.71,1180.75] vel [1,0]
+  --      25.690  [2514.92,1181.07]  vel [1,-3.744]  edge 64
+  --
+  --  Commanding only when the plan's magnitude EXCEEDS the current one cannot
+  --  reproduce that. A planner vx that drops is ignored; the launched velocity
+  --  still holds for the whole arc, exactly as fact.pathing.plannervxdrop
+  --  requires.
+  --
+  --  A WALK-OFF FALL CANNOT REACH THIS AT ALL. It has no takeoff and therefore no
+  --  launch record, and the record is the first thing tested. That was the half
+  --  the old launch-record substitution could never cover, and it is excluded
+  --  here by construction rather than by a comparison that could lapse.
+  --
+  --  airForce, NOT groundForce. The unit is in the air; groundForce is what the
+  --  landing brake uses and is a different quantity. At airForce 50 against mass
+  --  1 the window above the obstruction -- 0.264s on the measured jump -- buys
+  --  1.74 tiles against the 1.0 the plan needs, so this is not running to the
+  --  edge of what the chassis can do.
+  local launch = pather.petportsLaunch
+  if launch ~= nil and launch.plannedVx == 0 then
+    local wantVx = velocity[1] or 0
+
+    if wantVx ~= 0 and math.abs(wantVx) > math.abs(vel[1]) then
+      if pather.petportsSteering ~= wantVx then
+        pather.petportsSteering = wantVx
+        sb.logInfo("UNIT ARCMOVER steering to plan vx %s at %s (have %s) -- vertical-launch arc, "
+          .. "acquiring the horizontal the plan turns on at its apex",
+          sb.printJson(wantVx), sb.printJson(here), sb.printJson(vel[1]))
+      end
+
+      mcontroller.controlApproachXVelocity(wantVx, mcontroller.baseParameters().airForce)
+    end
+  end
 
   if mcontroller.liquidMovement() then
     if velocity[2] ~= 0 then

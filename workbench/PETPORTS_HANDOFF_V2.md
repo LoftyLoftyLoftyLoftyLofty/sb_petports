@@ -2275,6 +2275,33 @@ launch that arrives at the plan's landing on the DESCENDING branch.
 Both guarantee arriving descending, which is what makes a Land mean what it says.
 Never more horizontal reach than planned; raises still capped.
 
+**THE `plannedVx ~= 0` GUARD ON THE REACH CLAMP WAS REMOVED 2026-09-01, AND ITS
+REMOVAL IS A FIX RATHER THAN A TIDY-UP.** The clamp read
+
+    if plannedVx ~= 0 and math.abs(vx) > math.abs(plannedVx) then
+
+so it skipped the one case where the plan asked for ZERO horizontal reach at
+launch, and branch 2's `vx = dx / time` ran free. **"NEVER MORE HORIZONTAL REACH
+THAN PLANNED" WAS FALSE IN EXACTLY THE CASE IT MATTERED**, and the comment
+claiming it had been sitting three lines above the guard that broke it.
+
+**WHY IT MATTERED IS GEOMETRY, NOT ARITHMETIC.** A* plans a vertical launch
+precisely when something is in the way: it rises in a clear column to above the
+obstruction and THEN moves sideways. Turning that into a parabola sends the unit
+diagonally from the first tick, through the obstruction the column existed to
+avoid. Measured, four identical laps, then fixed and re-measured clean:
+
+    before   plan [0,31.82] -> [2.29436,34.3286]   swept path BLOCKED at
+             [2532.23,1141.53], sample 6 of 20, still rising, 1.25 tiles
+             below a lip the plan cleared by a full tile
+    after    plan [0,31.82] -> [0,34.3286]         swept path clear
+
+vy IS STILL SOLVED and that half was always right -- 34.33 for a plan apex of
+1143.8, reaching 1143.996. Only the invented horizontal is gone, and the
+horizontal now comes from the plan's own schedule via `arch.pathing.climbsteer`.
+**THE TWO ARE ONE CHANGE**: a vertical launch never given horizontal velocity
+rises and falls in its own column forever.
+
 **BRANCH 1 CAN FLY WELL ABOVE THE PLAN'S OWN APEX, AND THIS ENTRY USED TO DENY
 IT.** The claim was "this exceeds the plan's own apex by at most
 `JUMP_ARC_CLEARANCE`, and only in the pathological case". That is true of branch
@@ -3454,7 +3481,18 @@ and then caught two firings at -0.38 and -0.61 -- units already past their colum
 that the old near-side reach would have refused outright.
 
 ### Nothing steers x during a flight
-`arch.pathing.nosteer` -- see also `fact.pathing.plannervxdrop`, `fact.pathing.arcmoverthrottle`, `dead.pathing.plannersteer`
+`arch.pathing.nosteer` -- see also `fact.pathing.plannervxdrop`, `fact.pathing.arcmoverthrottle`, `dead.pathing.plannersteer`, `fact.pathing.airauthority`, `arch.pathing.climbsteer`
+
+**QUALIFIED 2026-09-01 BY `arch.pathing.climbsteer`, AND THE RULE STILL HOLDS FOR
+EVERY BALLISTIC ARC.** One narrow exception now commands horizontal velocity:
+an arc whose PLANNED LAUNCH vx WAS ZERO, which is how A* draws a climb past an
+obstruction. Read that entry for the three gates that keep it from being the
+thing deleted below.
+
+**AND ITS OPEN MEASUREMENT IS ANSWERED -- SEE `fact.pathing.airauthority`.** This
+entry asked whether `groundForce` simply has no airborne authority in the
+ACCELERATING direction. It does not, and `airForce` does, at exactly its stated
+value. The old command was the wrong quantity rather than a doomed idea.
 
 **BUILT 2026-09-01 BY DELETION.** The airborne branch of `petportsArcMover` used
 to end in `controlApproachXVelocity(wantVx, groundForce)`, where `wantVx` was
@@ -3480,6 +3518,64 @@ not -- see `dead.pathing.plannersteer`.
 
 **`velocity` SURVIVES** because the liquid branch below still reads
 `velocity[2]`. Only the horizontal half was removed.
+
+### One exception to nosteer: an arc whose planned launch vx was zero
+`arch.pathing.climbsteer` -- see also `arch.pathing.nosteer`, `arch.pathing.solvelaunch`, `fact.pathing.airauthority`, `fact.pathing.plannervxdrop`
+
+**BUILT AND VERIFIED IN GAME 2026-09-01.** The airborne branch of
+`petportsArcMover` commands horizontal velocity again, in one narrow case, after
+`arch.pathing.nosteer` deleted all of it. This is the other half of the guard
+removal in `arch.pathing.solvelaunch` and neither is testable alone.
+
+**A* MODELS AIR CONTROL AND WE DID NOT.** Its edge list changes vx mid-flight
+with no force behind it, because its actor model can steer:
+
+    edge 6  [2532,1142.3] -> [2532,1143.3]   vel [0,14.6963]
+    edge 7  [2532,1143.3] -> [2532,1143.8]   vel [0,4.96] -> [12,0]
+    edge 8  [2532,1143.8] -> [2532.5,1143.8] vel [12,-5]
+
+That is a climb-then-traverse: rise in a clear column to a full tile above the
+landing, then go sideways. **THE PLAN IS NOT A PARABOLA AND WAS NEVER MEANT TO
+BE ONE.** After the deletion the horizontal half of every such plan was simply
+never flown.
+
+**THREE GATES, AND THE THIRD IS THE ONE THAT MAKES IT SAFE.**
+
+    launch record required   a WALK-OFF has no takeoff and so cannot reach this
+                             at all -- excluded by construction, which is the
+                             half the old launch-record substitution could never
+                             cover and the source of dead.pathing.plannersteer
+    plannedVx == 0           every ballistic arc is untouched
+    acquire only             command ONLY when the plan's magnitude EXCEEDS the
+                             current one
+
+**ACQUIRE-ONLY IS WHAT PREVENTS A RERUN OF THE FAILURE THAT JUSTIFIED THE
+DELETION.** That failure was a BRAKE -- A* dropped its own vx from 12 to 1 at an
+apex, the mover obeyed in one look, and the unit crossed its landing altitude
+1.83 tiles short and fell twelve tiles. A planner vx that DROPS is now ignored,
+so the launched velocity still holds for the whole arc exactly as
+`fact.pathing.plannervxdrop` requires.
+
+**MEASURED, THE WHOLE CLIMB:**
+
+    [2531,   1132.90]  vel [0,       47.30]   launch, vx clamped to 0
+    [2531,   1141.23]  vel [0,       17.30]   x pinned at 2531, rising clear
+    [2531,   1142.34]  vel [0,        7.30]   steering fires
+    [2531.21,1142.61]  vel [4.16667, -2.70]
+    [2531.76,1142.05]  vel [8.33333,-12.70]
+    [2532.2, 1140.66]  vel [0.00488,-22.70]   landed
+
+Covered the 1.0 tile it needed in three ticks. **ZERO STALLS across five
+takeoffs and 27 tiles of climb, against four-plus identical laps on one ledge
+before.**
+
+**`airForce`, NOT `groundForce` -- see `fact.pathing.airauthority`.** Using the
+landing brake's quantity for an airborne command is what made the previous
+attempt look like it had no authority.
+
+**IT LOGS ONCE PER PATHER, NOT ONCE PER ARC.** Change-gated on the target vx,
+which is 12 every time, so a run with four steered arcs shows one line. Do not
+read the count as attempts.
 
 ### The flight trace, and what it is for
 `arch.tooling.flighttrace` -- see also `proc.tooling.instrument`, `arch.pathing.brakelatch`
@@ -6309,6 +6405,36 @@ called once and vanilla's `moveSwim` ran instead. The telemetry said so plainly
 
 Bind both slots on every chassis.
 
+### `airForce` STEERS AN AIRBORNE UNIT AT EXACTLY ITS STATED VALUE; `groundForce` DOES NOT
+`fact.pathing.airauthority` -- see also `arch.pathing.climbsteer`, `arch.pathing.nosteer`
+
+**MEASURED 2026-09-01, AND IT CLOSES A QUESTION `arch.pathing.nosteer` LEFT
+OPEN.** That entry recorded an asymmetry it could not explain: the same
+`controlApproachXVelocity` call, with `groundForce`, closed a gap in two ticks
+when DECELERATING (commanding 0 against an actual 8) and never closed it in five
+when ACCELERATING (commanding -12 against an actual -10.8). It asked whether
+`groundForce` simply has no airborne authority in the accelerating direction and
+left it unmeasured.
+
+**IT DOES NOT, AND `airForce` DOES.** Commanding vx 12 with `airForce` against a
+unit at 0:
+
+    [2531,   1142.34]  vel [0,        7.30]
+    [2531.21,1142.61]  vel [4.16667, -2.70]
+    [2531.76,1142.05]  vel [8.33333,-12.70]
+
++4.16667 per 0.0833s tick is **50.0 exactly** -- `airForce` 50 against mass 1,
+to the digit. Full authority, no deficit, nothing asymmetric.
+
+**SO THE OLD FAILURE WAS THE WRONG QUANTITY, NOT A DOOMED IDEA.** `groundForce`
+is what the landing brake uses on a grounded unit. Reaching for it while the unit
+is in the air is the mistake, and it made airborne steering look impossible for a
+session and a half. **USE `airForce` FOR ANY AIRBORNE HORIZONTAL COMMAND.**
+
+**THE DECELERATING CASE STILL WORKED WITH `groundForce`**, which is why this took
+so long to see: half the calls behaved and half did not, and a quantity that
+works in one direction reads as a tuning problem rather than a wrong constant.
+
 ### `inLiquid` IS TESTED BEFORE `onGround`, AND ITS THRESHOLD IS A CHASSIS PARAMETER
 `fact.pathing.liquidthreshold` -- see also `fact.pathing.edgebymedium`, `todo.locomotion.sinker`, `dd.pathing.coststeering`
 
@@ -7581,6 +7707,39 @@ every log this mod has ever produced.
 
 ## DISPROVEN
 
+### Sinker jumping underwater was never a liquid problem
+`dead.locomotion.sinkerjump` -- see also `arch.pathing.climbsteer`, `arch.pathing.solvelaunch`, `fact.pathing.airauthority`, `dead.pathing.waterdrag`
+
+**FILED AND RESOLVED 2026-09-01. THE PREMISE WAS WRONG.** Filed as "a sinker
+walks the seabed correctly and struggles with JUMPS while submerged", with
+`liquidImpedance` and liquid friction as the standing suspects. Neither was
+involved. **NOTHING ABOUT THE FAILURE WAS SPECIFIC TO THE SINKER, TO WATER, OR
+TO THE CHASSIS.**
+
+**WHAT KILLED THE LIQUID THEORY, IN ONE READING OF THE FIRST LOG.** The unit's
+airborne vy decayed by exactly -10.0000 a tick with no terminal velocity,
+reaching -42.7 and still accelerating -- g 120, which is vanilla's 80 times
+`gravityMultiplier` 1.5. Dry-air physics to four decimals, nine tiles under the
+waterline. The amphibious unit in the SAME log at the SAME moment was capped at
+-1.83. Two chassis, one water, one drag-limited and one in free fall.
+
+**IT ALSO CONFIRMED `minimumLiquidPercentage` REACHES THE MOVEMENT CONTROLLER**,
+which `fact.pathing.liquidthreshold` had inferred from behaviour rather than
+measured. And the arc mover zeroes `liquidImpedance` every airborne tick anyway,
+so the prime suspect was never reachable from an arc in the first place.
+
+**THE REAL CAUSE WAS `arch.pathing.solvelaunch`'s REACH CLAMP SKIPPING PLANS
+WHOSE LAUNCH vx WAS ZERO**, flattening a climb-then-traverse into a diagonal that
+flew through the ledge the climb existed to clear. Fixed by deleting the guard
+and adding `arch.pathing.climbsteer`. **A GROUND OR AMPHIBIOUS UNIT WOULD HAVE
+FAILED IDENTICALLY** -- an earlier log has the same jump shape succeeding from
+one tile over, before the terrain changed.
+
+**THE LESSON IS THE ONE `dead.pathing.waterdrag` ALREADY TAUGHT AND THIS ENTRY
+RE-LEARNED.** "It is in water and it moves badly" has now pointed at liquid twice
+and been wrong twice. Both times the per-tick trace settled it immediately. The
+entry was written with that warning in its own body and the warning was correct.
+
 ### THE LEDGE FALL WAS THE PLANNER'S vx STEERING THE MOVER
 `dead.pathing.plannersteer` -- see also `arch.pathing.brakelatch`, `arch.pathing.nosteer`, `proc.tooling.instrument`
 
@@ -8319,19 +8478,6 @@ fix — the rewrite is the fix.
 ---
 
 ## BACKLOG
-
-### Multi-port deferral is arbitration by straight-line distance
-`todo.dispatch.deferral`
-
-**TRIAGED 2026-08-30 -- PRIORITY 1, AND IT IS A DELETE.** 21 of 22 drops deferred to a port that was already busy. Claims already arbitrate correctly and cannot deadlock, so the likely outcome is removing `anotherUnitIsCloser` and its six companions rather than improving the distance test.
-
-`anotherUnitIsCloser` picks a winner by straight-line distance, which the comment
-concedes is routinely wrong in a player's base. `DEFER_GRACE` exists to undo it
-after 12 seconds, `deferredSince` tracks the grace, and a four-way tally exists to
-diagnose it. Observed 21 of 22 drops deferred while the other port was already
-busy. Claims already arbitrate correctly and cannot deadlock. Deleting deferral
-removes `anotherUnitIsCloser`, `DEFER_GRACE`, `deferredSince`, `entry.hasUnit`,
-`publishUnitPosition`, `UNIT_POSITION_THRESHOLD`, and two of the four counters.
 
 ### Animals move, and nothing chases them
 `todo.farming.animalsmove`
