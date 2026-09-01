@@ -282,6 +282,46 @@ def check(lua_path, cfg_path, band):
 		findings.append(f"CALLBACK UNWIRED    {name}  named by a widget, absent from "
 		                f"scriptWidgetCallbacks -- throws at CONSTRUCTION")
 
+	#  A WIDGET THAT MUST NAME A CALLBACK AND DOES NOT.
+	#
+	#  THE CHECK ABOVE CANNOT SEE THIS, and the difference cost a client crash on
+	#  2026-09-01. It compares callbacks that ARE named against scriptWidgetCallbacks;
+	#  a widget with no `callback` key at all never enters `used`, so a missing one
+	#  is invisible to it. A textbox added with no callback threw
+	#
+	#      (WidgetParserException) Failed to find textbox callback named: 'tbPetName'
+	#
+	#  inside the ContainerPane CONSTRUCTOR -- WidgetParser falls back to the
+	#  WIDGET'S OWN NAME and throws when nothing of that name is registered. The
+	#  pane did not misbehave, it failed to exist, and interacting dropped the
+	#  client to the main menu.
+	#
+	#  TEXTBOX ONLY, BECAUSE TEXTBOX IS WHAT WAS MEASURED. Other types may share
+	#  the rule and none of them have been tested, so they are not asserted here.
+	#  Adding one means crashing a pane on purpose first; a guessed entry in this
+	#  set would fail working panes and get the whole check switched off.
+	#
+	#  ROW WIDGETS ARE EXEMPT AND THAT IS NOT AN OVERSIGHT. Inside a listTemplate
+	#  the opposite rule applies -- see the row-callback notes above -- and whether
+	#  a row TEXTBOX must name one is untested. Skipped rather than guessed.
+	REQUIRES_CALLBACK = ('textbox',)
+
+	def walk_required(node, name=None, in_template=False):
+		if isinstance(node, dict):
+			if (not in_template
+			    and node.get('type') in REQUIRES_CALLBACK
+			    and not isinstance(node.get('callback'), str)):
+				findings.append(f"CALLBACK MISSING    {name}  is a "
+					f"{node.get('type')} with no callback -- WidgetParser falls back "
+					f"to the widget name and throws at CONSTRUCTION")
+			for k, v in node.items():
+				walk_required(v, k, in_template or k == 'listTemplate')
+		elif isinstance(node, list):
+			for v in node:
+				walk_required(v, name, in_template)
+
+	walk_required(gui)
+
 	# -- 5: widget names -----------------------------------------------------
 	prefixes = set(re.findall(r'"([A-Za-z_]\w*)"\s*\.\.', clean))
 	for name in sorted(set(re.findall(r'widget\.\w+\(\s*"([A-Za-z_]\w*)"', clean))):

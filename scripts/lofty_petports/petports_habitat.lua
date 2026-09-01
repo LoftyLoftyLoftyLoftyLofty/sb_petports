@@ -670,3 +670,36 @@ function petports_habitatObjectPoints(entityId)
 
 	return points
 end
+
+--  THE TILE BOX AN OBJECT OCCUPIES, as { minX, minY, maxX, maxY } tile centres.
+--
+--  THE SAME ARITHMETIC AS petports_habitatObjectPoints AND DELIBERATELY BUILT ON
+--  IT rather than repeating the floor-and-nudge dance. That arithmetic is
+--  load-bearing and subtle -- spaces are integer offsets from a tile origin, so
+--  the origin floors before they are added and the sum nudges to a tile centre
+--  before anything samples it -- and a second copy is how the two drift.
+--
+--  WHY A BOX AND NOT THE POINTS. A caller sizing a SEARCH wants extents; a
+--  caller sampling MEDIUM wants every tile. Handing the box to the medium test
+--  would call the hollow middle of a ring-shaped object occupied, and handing
+--  the points to a search would make it ask about each tile separately. Two
+--  questions, two shapes, one source.
+--
+--  nil FOR A NON-OBJECT, which is the caller's signal to fall back to whatever
+--  it did before. Item drops, livestock and patients all take that path.
+function petports_habitatObjectBounds(entityId)
+	local points = petports_habitatObjectPoints(entityId)
+	if points == nil or #points == 0 then return nil end
+
+	local minX, minY = points[1][1], points[1][2]
+	local maxX, maxY = minX, minY
+
+	for _, point in ipairs(points) do
+		if point[1] < minX then minX = point[1] end
+		if point[1] > maxX then maxX = point[1] end
+		if point[2] < minY then minY = point[2] end
+		if point[2] > maxY then maxY = point[2] end
+	end
+
+	return { minX, minY, maxX, maxY }
+end

@@ -131,7 +131,7 @@ local TASK_DEBUG = true
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-08-31d withdraw resolves its approach point"
+local BUILD_STAMP = "2026-09-01e the ledge two tiles ahead is not either"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -2679,7 +2679,7 @@ end
 --  findStandingPoint on the port is demoted to the no-unit-exists fallback its
 --  own header always said it was. `radius` exists because the port asks wider
 --  than a task does.
-local function standableNear(position, searchUp, radius, mediumVerified)
+local function standableNear(position, searchUp, radius, mediumVerified, searchDown)
   --  A FREE-MOVING CHASSIS OWNS THIS ANSWER OUTRIGHT, INCLUDING THE nil.
   --  Same correction as petports_standingPointNear -- read the note there for
   --  the measurement. Short version: nil from petports_flyPointNear now means
@@ -2700,6 +2700,13 @@ local function standableNear(position, searchUp, radius, mediumVerified)
   end
 
   if searchUp == nil then searchUp = GROUND_SEARCH_UP end
+
+  --  TRAILING, NOT MIDDLE, AND THAT IS THE WHOLE REASON IT IS LAST. Every other
+  --  caller passes four arguments and gets the constant; only the object-sized
+  --  search overrides it. An argument added in the middle would have meant a nil
+  --  in the middle of a callScriptedEntity list, which this mod has never
+  --  measured -- see the note on petports_homePointNear.
+  if searchDown == nil then searchDown = GROUND_SEARCH_DOWN end
 
   --  EVERY COLUMN IS ASKED, AND THE NEAREST ANSWER WINS. THIS USED TO RETURN
   --  THE FIRST ONE.
@@ -2762,7 +2769,7 @@ local function standableNear(position, searchUp, radius, mediumVerified)
     --  unit ends up standing still with approachPosition nil and nothing in the
     --  log to explain it. See the flag's header in petports_contract.lua.
     local ok, resolved = pcall(findGroundPosition,
-      {x, position[2]}, GROUND_SEARCH_DOWN, searchUp, petports_avoidLiquid())
+      {x, position[2]}, searchDown, searchUp, petports_avoidLiquid())
 
     --  Guard the SHAPE, not just nil-ness: pcall returns the error message in
     --  this slot on failure, and a string indexes without complaint.
@@ -2835,7 +2842,7 @@ local function standableNear(position, searchUp, radius, mediumVerified)
 
       local floor = nil
 
-      for drop = 1, math.abs(GROUND_SEARCH_DOWN) do
+      for drop = 1, math.abs(searchDown) do
         local lower = { resolved[1], resolved[2] - drop }
 
         if world.pointTileCollision({ lower[1], lower[2] - 1.0 },
@@ -2907,7 +2914,7 @@ local function standableNear(position, searchUp, radius, mediumVerified)
 
   sb.logInfo("UNIT no standable column near %s within %s columns (up %s, down %s)",
     sb.printJson(position), sb.printJson(#columnsFor(radius)),
-    sb.printJson(searchUp), sb.printJson(GROUND_SEARCH_DOWN))
+    sb.printJson(searchUp), sb.printJson(searchDown))
   return nil
 end
 
@@ -2928,6 +2935,171 @@ end
 --  handoff records: a guarded call to a file nobody loaded is silent and costs a
 --  session.
 petports_standablePoint = standableNear
+
+--  A STANDING POINT SIZED TO AN OBJECT RATHER THAN TO A POINT.
+--
+--  THE DEFAULT SEARCH IS ANCHORED ON AN ENTITY POSITION AND REACHES FOUR TILES
+--  UP. That is right for a crop, a drop or a cow, and wrong for anything TALL:
+--  an object's entity position sits near its base, so a container taller than
+--  GROUND_SEARCH_UP has a perfectly good roof the search cannot see. A submerged
+--  shipping container is where that became visible -- a ground unit could walk a
+--  platform to it and had nowhere to be sent -- but the bug is general and every
+--  tall object had it.
+--
+--  THE FOOTPRINT BOX PLUS TWO TILES ON EVERY SIDE. The buffer is what makes the
+--  roof REACHABLE rather than merely included: the top row is inside the object,
+--  and the tile a unit actually stands on is the one above it. Two rather than
+--  one because the same margin has to serve the sides, where the unit stands
+--  BESIDE the object on ground that may itself step down.
+--
+--  IT WIDENS THE SEARCH AND RELAXES NOTHING. Whether the chassis may work here
+--  was already settled by targetSuits over this same footprint, and every
+--  candidate still passes validStandingPosition, petports_mediumAllows and the
+--  descend guard exactly as before. A wider net, the same fish.
+--
+--  NO COLLISION KIND IS CONSULTED, DELIBERATELY. Whether a container top is
+--  Block or Platform does not matter here: STANDABLE_TILE_SET holds both and
+--  validStandingPosition accepts either, so the roof is standable either way.
+--  Gating this on "has platform collision" would have excluded the Block case,
+--  which fact.pathing.collisionkinds says is what a crate top actually is.
+--
+--  IT LIVES HERE RATHER THAN IN petports_contract.lua, WHERE THE OTHER TWO
+--  ENTRY POINTS ARE, because GROUND_SEARCH_UP, GROUND_SEARCH_DOWN and
+--  COLUMN_RADIUS are locals of this file. A copy of them next to the contract's
+--  delegates would be three constants needing to stay equal across two files,
+--  which is the drift arch.pathing.oneanchor exists to have stopped.
+--
+--  FREE MOVERS FALL THROUGH UNCHANGED. standableNear hands a free-moving chassis
+--  to petports_flyPointNear before any of this is read.
+OBJECT_SEARCH_BUFFER = 2
+
+--  Somewhere to stand on TOP of an object, found from the object rather than
+--  from the tile world.
+--
+--  THE ROW ABOVE THE TOP ROW. `bounds` holds tile CENTRES, so the top row is
+--  bounds[4] - 0.5 and a unit standing on it has its feet at bounds[4] + 1.3 --
+--  which is the same `row + 1.8` the column search produces, e.g. a floor row of
+--  1152 giving 1153.8. The floor test then samples one full tile below, exactly
+--  as the descend guard does.
+--
+--  NEAREST COLUMN WINS, ranked by true distance, for the same reason
+--  standableNear ranks rather than first-fits: the order of a first-fit search
+--  IS its answer, and this file has had that bug three times.
+local function objectRoofPoint(position, bounds)
+  if position == nil or type(bounds) ~= "table" or #bounds < 4 then return nil end
+
+  local roofY = bounds[4] + 1.3
+  local best, bestDistance = nil, nil
+
+  for x = math.floor(bounds[1]) + 0.5, math.floor(bounds[3]) + 0.5, 1 do
+    local candidate = { x, roofY }
+    local why = nil
+
+    --  STANDABLE_TILE_SET, NOT THE DEFAULT. This is the whole reason the
+    --  fallback exists -- see the note at its call site.
+    if not world.pointTileCollision({ x, roofY - 1.0 }, STANDABLE_TILE_SET) then
+      why = "no floor below"
+    elseif not petports_mediumAllows(candidate) then
+      why = "a medium this chassis will not enter"
+    else
+      local fits, standable = pcall(validStandingPosition, candidate,
+        petports_avoidLiquid())
+
+      if not fits then
+        why = "validStandingPosition raised: " .. tostring(standable)
+      elseif not standable then
+        why = "validStandingPosition says the body does not fit"
+      end
+    end
+
+    if why == nil then
+      local distance = world.magnitude(candidate, position)
+
+      if bestDistance == nil or distance < bestDistance then
+        best, bestDistance = candidate, distance
+      end
+    elseif TASK_DEBUG then
+      sb.logInfo("UNIT roof candidate %s refused: %s",
+        sb.printJson(candidate), why)
+    end
+  end
+
+  if best ~= nil then
+    sb.logInfo("UNIT roof point for %s bounds %s -> %s (dist %s)",
+      sb.printJson(position), sb.printJson(bounds),
+      sb.printJson(best), sb.printJson(bestDistance))
+  else
+    sb.logInfo("UNIT no roof point on bounds %s at y %s -- every column refused",
+      sb.printJson(bounds), sb.printJson(roofY))
+  end
+
+  return best
+end
+
+function petports_objectPointNear(position, bounds, mediumVerified)
+  if position == nil or type(bounds) ~= "table" or #bounds < 4 then return nil end
+
+  local minX, minY, maxX, maxY = bounds[1], bounds[2], bounds[3], bounds[4]
+
+  --  THE RADIUS IS THE FURTHER SIDE, not half the width. `position` is the
+  --  entity position and is not guaranteed to sit at the box's centre, so
+  --  measuring to both edges and taking the larger is what actually covers it.
+  local reach = math.max(math.abs(minX - position[1]), math.abs(maxX - position[1]))
+  local radius = math.ceil(reach) + OBJECT_SEARCH_BUFFER
+
+  --  OFFSETS FROM position[2], because that is what findGroundPosition takes.
+  --  Up positive, down negative, matching GROUND_SEARCH_UP and _DOWN.
+  local up = math.ceil(maxY - position[2]) + OBJECT_SEARCH_BUFFER
+  local down = math.floor(minY - position[2]) - OBJECT_SEARCH_BUFFER
+
+  --  NEVER TIGHTER THAN THE DEFAULTS. A one-tile crate or a crop would otherwise
+  --  come out with a SMALLER search than it gets today, which would be a
+  --  regression wearing a fix's clothes.
+  if up < GROUND_SEARCH_UP then up = GROUND_SEARCH_UP end
+  if down > GROUND_SEARCH_DOWN then down = GROUND_SEARCH_DOWN end
+  if radius < COLUMN_RADIUS then radius = COLUMN_RADIUS end
+
+  if TASK_DEBUG then
+    sb.logInfo("UNIT object point for %s bounds %s -> radius %s up %s down %s",
+      sb.printJson(position), sb.printJson(bounds),
+      sb.printJson(radius), sb.printJson(up), sb.printJson(down))
+  end
+
+  local found = standableNear(position, up, radius, mediumVerified, down)
+  if found ~= nil then return found end
+
+  --  THE ROOF, ASKED FOR DIRECTLY, WHEN THE COLUMN SEARCH FOUND NOTHING.
+  --
+  --  MEASURED 2026-09-01 by /entityeval on the submerged shipping container:
+  --
+  --      pointTileCollision(top tile)                          false
+  --      pointTileCollision(top tile, STANDABLE_TILE_SET)      true
+  --
+  --  The container IS standable -- the author stood on it -- and the DEFAULT
+  --  collision set does not report it. That is fact.pathing.platformfloor
+  --  exactly, one layer further down: there, the descend guard asked with
+  --  defaults and threw away platforms findGroundPosition had found. Here the
+  --  column search returned NOTHING AT ALL for twenty-one columns -- not one
+  --  candidate logged, rejected or descended -- so whatever dropped it sits
+  --  inside findGroundPosition, below anything this file can pass kinds to.
+  --
+  --  SO THIS STOPS ASKING IT. The object's own footprint already says where the
+  --  roof is; the standing row is the one above the top row. Every candidate is
+  --  then put through the SAME three predicates the column search uses, with the
+  --  floor test given STANDABLE_TILE_SET explicitly -- so this is a different
+  --  route to the answer, not a weaker standard.
+  --
+  --  A FALLBACK, NOT A REPLACEMENT. It runs only where the existing search
+  --  produced nothing, so every target that resolves today resolves the same way
+  --  by the same code. There is no case this can make worse.
+  --
+  --  IT LOGS WHICH PREDICATE REFUSED, and that is half the point of building it
+  --  this way. If the roof is still refused, the next log says whether it was the
+  --  floor, the medium or validStandingPosition -- which is the measurement the
+  --  column search could not produce, because it reported one silence for
+  --  twenty-one columns.
+  return objectRoofPoint(position, bounds)
+end
 
 --  Where the unit should be heading right now.
 --
@@ -3018,7 +3190,43 @@ local function approachTargetFor(stateData, rawPosition)
       stateData.groundTarget = standableNear(rawPosition, nil, nil, verified)
     end
   else
-    stateData.groundTarget = standableNear(rawPosition, nil, nil, verified)
+    --  AN OBJECT TARGET IS SIZED TO ITS FOOTPRINT HERE TOO, AND THE OMISSION
+    --  WAS THE WHOLE BUG.
+    --
+    --  MEASURED 2026-09-01. The PORT resolved a standing point on the roof of a
+    --  submerged shipping container -- `roof point for [2553,1147] ... ->
+    --  [2552.5,1153.8]` -- dispatched on it, and the unit then declined the same
+    --  target two seconds later with `no standable position near withdraw
+    --  target`. The port had run petports_objectPointNear; this line ran the bare
+    --  column search, which is exactly the search that had already returned
+    --  nothing for twenty-one columns.
+    --
+    --  arch.pathing.oneanchor, AGAIN, AND IN ITS PUREST FORM: two resolvers,
+    --  identical inputs, opposite answers. Routing both through
+    --  petports_objectPointNear with the same bounds and the same raw position
+    --  is what makes the port's dispatch and the unit's approach agree by
+    --  construction rather than by both happening to be right.
+    --
+    --  `task.target` IS AN ENTITY ID ONLY FOR SOME TASK TYPES -- replant and
+    --  water carry a tile key string instead. No branch is needed:
+    --  petports_habitatObjectBounds pcalls world.objectSpaces, so a string, a nil
+    --  or a dead id all come back nil and the old path runs untouched.
+    local bounds = nil
+    if task ~= nil then
+      bounds = petports_habitatObjectBounds(task.target)
+    end
+
+    if bounds ~= nil then
+      stateData.groundTarget = petports_objectPointNear(rawPosition, bounds, verified)
+    end
+
+    --  STILL FALLS BACK. petports_objectPointNear never searches TIGHTER than
+    --  the default, so this can only matter if it returned nil outright -- but a
+    --  target that used to resolve must keep resolving, and that guarantee is
+    --  cheaper to keep than to reason about.
+    if stateData.groundTarget == nil then
+      stateData.groundTarget = standableNear(rawPosition, nil, nil, verified)
+    end
   end
 
   return stateData.groundTarget
@@ -3319,6 +3527,33 @@ end
 --  different answer from "clear" and the caller must treat it as such.
 local PLAN_WALK_LOOKAHEAD = 6
 
+--  HOW CLOSE A LOWER GROUND EDGE HAS TO BE TO SAY ANYTHING ABOUT THE SURFACE WE
+--  ARE STANDING ON.
+--
+--  1.25, AND 2.0 WAS WRONG BY ITS OWN LOG. Sized to separate two shapes the scan
+--  cannot otherwise tell apart, from three measurements in one session:
+--
+--      ~1.0   the wedge this scan exists for -- a Land at our height with its
+--             lower Walks immediately after it. MUST still fire.
+--       2.0   a unit standing at [2547,1153.55] on the west end of the shipping
+--             container, with the plan stepping off at [2545,1152.8]. MUST NOT
+--             fire: this is the ledge two tiles ahead, and dropping here is what
+--             put the unit back in the water it had just climbed out of.
+--       6.35  the same ledge seen from the middle of the container roof. MUST
+--             NOT fire; this is the drop that started the whole investigation.
+--
+--  THE FIRST DRAFT OF THIS CONSTANT WAS 2.0 AND WOULD HAVE FIRED ON THE SECOND
+--  CASE, because the test is `<=` and the measurement is exactly 2.0. The number
+--  was reasoned from the two extremes while the middle case was sitting in the
+--  same log, four lines further down. Read the whole log before picking a
+--  threshold from the ends of it.
+--
+--  ERR SMALL. Too small costs a drop that happens a tick later, once the unit has
+--  walked closer to the ledge. Too large costs a unit dropping through the floor
+--  it is standing on. Those are not comparable, so the gap above the wedge's ~1.0
+--  is deliberately thin.
+local PLAN_DROP_REACH = 1.25
+
 --  THE PLAN WANTS US A STOREY DOWN. DROP, DO NOT REPLAN.
 --
 --  When a plan's next ground edge sits below the unit, replanning is the wrong
@@ -3381,6 +3616,7 @@ local function tryPlanDrop(pather, finder)
   local worstEdge = nil
   local worstIndex = nil
   local worstBelow = nil
+  local worstReach = nil
 
   for i = index, math.min(index + PLAN_WALK_LOOKAHEAD, #edges) do
     local edge = edges[i]
@@ -3391,11 +3627,52 @@ local function tryPlanDrop(pather, finder)
     if edge.target ~= nil and edge.target.position ~= nil then
       local below = here[2] - edge.target.position[2]
 
+      --  AND IT HAS TO BE AN EDGE WE HAVE ACTUALLY REACHED.
+      --
+      --  A LOWER EDGE FAR AHEAD IS THE PLAN DESCENDING, NOT US ON THE WRONG
+      --  STOREY, and without this the scan cannot tell those apart. MEASURED
+      --  2026-09-01, a ground unit leaving the roof of a submerged shipping
+      --  container westward:
+      --
+      --      PLAN DROP at [2551.35,1153.55]: Walk edge 7 targets [2545,1152.8],
+      --      1 below us -- dropped one platform (cursor is Walk edge 1)
+      --
+      --  Edges 1..6 were the roof at 1153.8 and the unit was correctly standing
+      --  on them. Edge 7 -- the LAST index PLAN_WALK_LOOKAHEAD admits -- was the
+      --  ground a tile lower, six tiles west, where the plan steps off the
+      --  container. The scan took the worst edge in the run, called the roof the
+      --  wrong storey, and dropped the unit through the platform it was walking
+      --  on. It swam out, climbed back on, and did it again.
+      --
+      --  IT ONLY BIT NOW BECAUSE THE DROP HAS TO SUCCEED TO HURT. On solid
+      --  ground scootThroughPlatform refuses and the mistake is a log line; the
+      --  container is the first PLATFORM-collision footing a walker has ever
+      --  been given, so this is the first time the bad verdict could act.
+      --
+      --  PROXIMITY IS THE DISCRIMINATOR, AND IT KEEPS THE SHAPE THE SCAN WAS
+      --  BUILT FOR. The wedge case in the header -- a Land at our height
+      --  followed by Walks a storey down -- has those Walks IMMEDIATELY after
+      --  the Land, within a tile. A legitimate step-down sits further along the
+      --  run. Gating on distance separates them without narrowing the lookahead,
+      --  which would reintroduce the wedge.
+      --
+      --  THE SAME LOG ALSO CAUGHT THE UNIT AT THE CONTAINER'S WEST END, two
+      --  tiles from the step-down, dropping straight back into the water it had
+      --  just climbed out of. That case is why PLAN_DROP_REACH is 1.25 and not
+      --  the 2.0 the two outer measurements suggested -- see the constant.
+      --
+      --  IT ALSO MAKES THE DROP HAPPEN IN THE RIGHT PLACE rather than merely not
+      --  happening in the wrong one. The unit now walks the roof to the step and
+      --  drops there, which is what the plan describes.
+      local reach = math.abs(here[1] - edge.target.position[1])
+
       if below >= PLAN_SURFACE_TOLERANCE
+         and reach <= PLAN_DROP_REACH
          and (worstBelow == nil or below > worstBelow) then
         worstEdge = edge
         worstIndex = i
         worstBelow = below
+        worstReach = reach
       end
     end
   end
@@ -3407,9 +3684,10 @@ local function tryPlanDrop(pather, finder)
   local feetNow = here[2] + mcontroller.boundBox()[2]
   local ok, why = scootThroughPlatform(pather, feetNow - 0.5)
 
-  local detail = string.format("%s edge %s targets %s, %s below us: %s",
+  local detail = string.format("%s edge %s targets %s, %s below us and %s across: %s",
     tostring(worstEdge.action), tostring(worstIndex),
-    sb.printJson(worstEdge.target.position), sb.printJson(worstBelow), why)
+    sb.printJson(worstEdge.target.position), sb.printJson(worstBelow),
+    sb.printJson(worstReach), why)
 
   if ok then
     return true, detail, true

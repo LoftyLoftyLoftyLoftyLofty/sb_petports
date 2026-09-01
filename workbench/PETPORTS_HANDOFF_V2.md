@@ -42,98 +42,125 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-01 (one module, and it needed no new plumbing)
+### What is built, as of 2026-09-01 (a module, a bug of a known shape, and naming)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-A SHORT SESSION AGAINST A LONG ONE. The previous session was six test rounds on
-dispatch eligibility; this one was a single module, `arch.module.hydrator`, and
-the interesting thing about it is how little it touched.
+A LONG SESSION IN FOUR PIECES: the Hydrator module, the fourth instance of
+`arch.dispatch.twolegs`, unit renaming with a nametag toggle, and an object-sized
+standing search. Three of the four were VERIFIED IN GAME.
 
 ---
 
 **THE HYDRATOR MODULE RAISES WATER CAPACITY FROM 10 TO 30.**
-`arch.module.hydrator`. `WATER_CARRY` had exactly two readers, both in the port,
-and both now go through `petportWaterCarry()`. No unit-side code, no new module
-channel, no pane work, no changes to `categories.config.patch` or
-`petports_filtergroups.config` -- both match on the `petports_module` tag the new
-item already carries.
+`arch.module.hydrator`. Flags channel, one accessor read by both water
+generators, no unit-side code and no new plumbing. **VERIFIED IN GAME.**
+`todo.module.hydratordeadline` -- the worry that a tripled sweep would outlive
+`TASK_DEADLINE` -- did not bite in that test and stays open rather than closed,
+because a 30-tile row on a cold route cache is the case that would show it and
+was not the case tested.
 
-**IT IS THE FIRST MODULE THAT CHANGES A MAGNITUDE**, rather than adding a task
-(medic, farming), removing one (oblivious), or widening where a unit may go
-(poison and lava block). The flag channel carried it because capacity is a
-DISPATCH property -- the unit sweeps whatever list it is handed and has no
-opinion about its length.
+**THE REPLANT FETCH LEG NOW ASKS THE PLACE LEG'S MEDIUM QUESTION.**
+`arch.dispatch.twolegs`. An aquatic unit cycled 147 withdraws and 308 deposits of
+one `oculemonseed` in three minutes without moving, because backoff coupling sees
+a leg that FAILED and cannot see one that was never OFFERED. **VERIFIED: the
+aquatic unit now stays home.** The general rule is written up in that entry.
 
-**ONE ACCESSOR, BECAUSE TWO GENERATORS SHARED THE CONSTANT.** `waterWork` sizes
-the sweep, `withdrawWaterWork` sizes the fetch. Moving one and not the other
-sends a unit to a crate for thirty and has it put ten down -- which is
-`arch.dispatch.twolegs` in miniature, on a task that already had that bug once.
+**UNITS CAN BE RENAMED, AND THE NAME TAG IS A PER-UNIT SETTING.**
+`arch.pane.rename`. **VERIFIED.** Rename commits on the button only -- never on
+Enter, deliberately, so a half-typed name cannot reach a server's chat filter.
+Colour escapes pass through and render.
 
-**THE ICON IS WATER'S OWN COLOUR**, `[80, 221, 254]` read out of `water.liquid`,
-the same config the watering droplet already takes its tint from. The family
-diamond remapped pixel-for-pixel off the poison module, so the 57/52/3
-body/outline/highlight distribution is identical to its six siblings. It is
-brighter than the family -- water's value is 0.996 against their 0.84 -- and that
-was kept rather than dimmed to match.
+**ANYTHING PUSHED TO A LIVE UNIT NEEDS A SIGNATURE AND A TICK.**
+`arch.port.pushsignature`. Generalised from `pushModuleEffects` getting it right
+and `pushPetName` -- written directly beneath it -- not. The symptom was legacy
+units needing a resocket. **FIXED, NOT YET RE-VERIFIED ON A COLD LOAD.**
+
+**THE STANDING SEARCH IS SIZED TO AN OBJECT'S FOOTPRINT.**
+`arch.pathing.objectsearch`. `GROUND_SEARCH_UP` is 4, an object's entity position
+sits near its base, so any object taller than four tiles had an unreachable roof.
+Requested as a submerged-container fix; it is general. **VERIFIED**, including
+the roof fallback and the matching resolver on the unit side -- a ground unit
+now delivers to and fetches from a half-submerged shipping container.
+
+**A LEDGE AHEAD IS NOT A WRONG STOREY.** `tryPlanDrop` took the deepest ground
+edge in a six-edge lookahead as proof the surface was wrong, and dropped a unit
+through the container roof it was walking on. `PLAN_DROP_REACH` gates that
+evidence on horizontal proximity. **VERIFIED at 2.0; retuned to 1.25 and under
+test**, because the same log caught a second case at exactly 2.0 that the
+inclusive test would still have fired on.
+
+**ONLY THE GROUND CHASSIS HAS BEEN EXERCISED AGAINST ANY OF THIS.** The flyer,
+aquatic and amphibious units were unsocketed for the container work. Nothing here
+is known to be wrong for them and nothing here has been watched with them either.
 
 ---
 
+**THREE ENGINE FACTS LANDED, TWO OF THEM BY BREAKING SOMETHING.**
+
+- `fact.pane.textboxcallback` -- a textbox with no callback throws in the
+  `ContainerPane` CONSTRUCTOR and drops the client to the main menu. Three working
+  examples were in the tree and were not consulted.
+- `fact.unit.entityname` -- a unit is already named from its `shortdescription`;
+  what it lacked was the tag. `petName` in spawn parameters was consumed by
+  nothing until this session.
+- `fact.locomotion.buoyancy` -- `liquidBuoyancy` is NOT inert on a
+  `gravityEnabled` false chassis, contradicting a comment this mod ships. The
+  mechanism is unmeasured and the entry says so.
+
 **KNOWN OPEN, IN THE ORDER THEY WILL BITE:**
 
-- `todo.module.hydratordeadline` -- NEW, AND THE ONLY THING THIS SESSION ADDED TO
-  THE RISK LIST. A hydrated sweep is three times longer against an unchanged
-  `TASK_DEADLINE`. Untested. Self-healing if it bites, and it names its own work
-  id in the log.
-- **THE HYDRATOR IS ENTIRELY UNTESTED IN GAME.** Nothing in this session ran.
+- `todo.module.hydratordeadline` -- a hydrated sweep is three times longer against
+  an unchanged `TASK_DEADLINE`. Untested, self-healing if it bites, and it names
+  its own work id in the log.
+- `todo.dispatch.reachbudget` -- NEW, AND THE BIGGEST THING FILED TONIGHT. Units
+  are offered any work in network coverage and nothing asks the path cost.
+  Measured: a ground unit failing crops at exactly `SEARCH_LIMIT` 6.0s, starved
+  rather than walled in. `UNROUTABLE_BACKOFF_FLOOR` is a stopgap for the stutter
+  it caused and is not a fix for it.
+- `todo.tooling.paneflightcallbacks` -- HALF DONE. `CALLBACK MISSING` now catches
+  the textbox rule that cost a client crash; row widgets and the reverse lookup
+  are still open.
 - An amphibious unit walks off a submerged ledge and sinks instead of
-  transitioning to swimming. **OBSERVED BY THE AUTHOR 2026-08-31, STILL NOT A
-  BACKLOG ENTRY.** Probably the source of most of `todo.dispatch.sourcebackoff`'s
-  nine measured failures.
-- `todo.dispatch.sourcebackoff` -- backoff is keyed by work id, but an
-  unreachable SOURCE is a property of the crate. One bad crate is retried once
-  per outstanding run.
-- `arch.pathing.originnudge` -- untouched again this session.
-- `todo.pathing.leashreplan` -- survives, and eligibility no longer hides it.
-- The medic path through `columnsFor` is STILL unexercised. No patients existed
-  in any verifying session this week.
-- `todo.pathing.standpointchoice` and `todo.port.nostandpoint` unchanged.
+  transitioning to swimming. **OBSERVED 2026-08-31, STILL NOT A BACKLOG ENTRY.**
+- `todo.dispatch.sourcebackoff` -- backoff is keyed by work id; an unreachable
+  SOURCE is a property of the crate.
+- `arch.pathing.originnudge` -- untouched again.
+- `todo.pathing.leashreplan`, `todo.pathing.standpointchoice`,
+  `todo.port.nostandpoint` -- unchanged.
+- The medic path through `columnsFor` is STILL unexercised.
 - Upcycler pane string-table migration -- still the last pane not migrated.
 
 **Debug flags wanting a release pass** -- `TASK_DEBUG`, `VENT_DEBUG`, `DEBUG` in
 all four panes, `FLY_POINT_DEBUG`, `FLY_TELEMETRY`, `CARGO_TRACE` are ON.
-`DRAW_PLAN` and `PETPORTS_FILTER_DEBUG` are OFF and should stay off. Deferred to
-a release preflight rather than trimmed piecemeal.
+`DRAW_PLAN` and `PETPORTS_FILTER_DEBUG` are OFF and should stay off.
 
 **BUILD STAMPS AT THE END OF THIS SESSION.** `petports_petport.lua` at
-`2026-09-01a the bucket is bigger`; `petports_contract.lua` at
-`2026-08-31e half in the water is out`; `petportsTaskAction.lua` at
-`2026-08-31d withdraw resolves its approach point`. The last two are unchanged
-this session.
-
-**TWO THINGS FROM THE PREVIOUS SESSION ARE STILL UNVERIFIED IN GAME.** `31k` /
-`31d` closed the unit-side half of `arch.dispatch.vouch` and was written after
-the last verifying log. This session's work sits on top of that, so a failure in
-the next test round has two candidate sources, not one.
+`2026-09-01f the search fits the object`; `petportsTaskAction.lua` at
+`2026-09-01a the roof is in range`; `petports_contract.lua` at
+`2026-09-01b the tag asks the setting`; `petportconfig.lua` at
+`2026-09-01a absent is not always on`. `petports_habitat.lua` has no stamp and
+gained `petports_habitatObjectBounds`.
 
 **NO LUA INTERPRETER WAS AVAILABLE IN THE SESSION CONTAINER**, and
-`petports_luacheck.py` was not in the uploaded tree -- only `paneheck`,
-`handoff`, `panetitles` and the two dump tools. The `petports_petport.lua` edits
-are therefore UNCHECKED BY TOOLING. The handoff lint ran clean at its baseline of
-seven pre-existing undated plans.
+`petports_luacheck.py` was not in the uploaded tree. Every Lua edit was checked by
+block-balance DIFF against the pristine upload rather than by parsing, and the
+pane pre-flight was run and held at its baseline of five string-table globals.
+That is weaker than a syntax check and should not be mistaken for one.
 
-**THE WORKING COPY IS COMMITTED THROUGH THE CHOREOGRAPHY WORK.** The environment
-gate, the first modules, and the last three sessions sit uncommitted on top of it.
+**THE WORKING COPY IS COMMITTED THROUGH THE CHOREOGRAPHY WORK.** Everything since
+sits uncommitted on top of it.
 
 **LINE ENDINGS ARE NOISE IN `git status`, AND THE TREE IS MIXED.** CRLF:
 `petportsTaskAction.lua`, `petports_contract.lua`. LF: `petports_flyapproach.lua`,
-`petports_petport.lua`. `petports_habitat.lua` is the only Lua file indented with
-TABS -- and `petports_petport.lua` is MIXED BY REGION, tabs in the farming
-generators and two spaces elsewhere. Edits must preserve what they find at the
-point they land, not what the file mostly uses. THIS SESSION'S EDITS FOLLOWED
-THAT: two spaces for the new flag predicates, tabs at the two call sites.
+`petports_petport.lua`, `petports_habitat.lua`. `petports_habitat.lua` is the only
+Lua file indented with TABS -- and `petports_petport.lua` is MIXED BY REGION, tabs
+in the farming generators and two spaces elsewhere. `petportsTaskAction.lua` is
+mixed too: `columnsFor` is tabs, `standableNear` beside it is two spaces. Edits
+must preserve what they find at the point they land, not what the file mostly
+uses.
 
 ## ARCHITECTURE
 
@@ -2973,6 +3000,36 @@ leg half a question. But a leg refused on MEDIUM records no failure at all, so
 watering needed the stronger form: `waterRunWorkable` is one function BOTH legs
 call, and the fetch leg asks it before it scans crates.
 
+**REPLANT GOT THE BACKOFF HALF AND NOT THE MEDIUM HALF, AND THIS ENTRY SAID SO
+FOR A DAY BEFORE ANYONE ACTED ON IT.** The paragraph above already named the
+weakness in the abstract; `waterRunWorkable`'s own header already spelled out the
+conclusion -- *a run refused on MEDIUM records no failure, so the backoff
+coupling added for replant cannot see it, and the only thing that stops it is
+asking the same question before fetching.* Watering acted on that. Replanting
+did not, and the bug survived a session that believed it had fixed all three
+instances.
+
+**MEASURED AGAIN 2026-09-01, ON AN AQUATIC UNIT.** 147 `withdraw:2540,1184` and
+308 `deposit:152`, one cycle every 3.3 seconds, the unit never leaving
+`[2552.56,1147.81]`. The replant tile is dry land, so `replantWork` refused it on
+medium and wrote no failure; `withdrawWork` checked coverage, backoff and claims
+and never asked the medium question at all. The same port was refusing water runs
+and item drops correctly and out loud in the same log -- `SKIPPING water run ...
+is out of the water` -- which is what made the absence of any equivalent replant
+line the diagnosis.
+
+**FIXED BY GIVING withdrawWork THE PLACE LEG'S QUESTION.** `targetEligible` over
+`{x + 0.5, y + 1.5}` -- ABOVE the tile, the expression copied from `replantWork`
+deliberately, because a tilled tile is solid foreground and sampling it reads
+zero liquid for every chassis. The two legs must sample the same point or this is
+the same bug wearing different coordinates. It shares the place leg's
+`targetRefused` label so the change-gate reports the tile once, and the tail
+diagnostic counts medium refusals rather than blaming storage for them.
+
+**THE GENERAL RULE, STATED SO THE FOURTH INSTANCE IS CHEAPER:** a fetch leg must
+ask its place leg's ELIGIBILITY question, not merely observe its FAILURES. Backoff
+sees a leg that tried and failed. It cannot see one that was never offered.
+
 **THE MEDIC'S FETCH LEG WAS UNCHECKED WHILE ITS DELIVERY LEG WAS CHECKED**, in
 the same generator, on the same trip. A medic could verify it could reach a
 patient and then be sent to a crate it could not. Both legs now route through
@@ -2981,6 +3038,116 @@ patient and then be sent to a crate it could not. Both legs now route through
 **A REASON STRING IS PART OF THE FIX.** `containerWithSeed` returning nil no
 longer means "the network has none"; it means "none this unit can get to", and
 the medic's decline text had to stop asserting the stronger claim.
+
+### Renaming a unit, and the tag that is a separate question
+`arch.pane.rename` -- see also `arch.pane.petport`, `arch.port.pushsignature`, `fact.unit.entityname`, `fact.pane.textboxcallback`
+
+**BUILT 2026-09-01.** A text field and a Rename button on the Settings tab, plus
+a `nametag` display toggle in the settings list. The field sits left of the
+button; the pair spans `settingsScroll`'s width and both centre on y 89.
+
+**THE NAME AND THE TAG ARE TWO SETTINGS, NOT ONE.** Keying the tag on "does this
+unit have a custom name" does not work, because EVERY unit item ships a default
+`petName` -- Diver, Wader, Flyer, Unit. A name always exists, so the tag would
+always be on and the only way to silence it would be clearing a name the player
+wanted. `petData.toggles.nametag` is the switch; the field only sets the name.
+
+**THE BUTTON IS THE ONLY COMMIT PATH, AND THAT IS A SAFETY DECISION.** A textbox
+callback fires on ENTER, and a half-typed name reaching a server's chat-politeness
+plugin is how somebody gets banned for a rename they never finished. The callback
+exists because the parser demands one -- see `fact.pane.textboxcallback` -- and is
+empty.
+
+**THE FIELD CANNOT BE REPAINTED ON EVERY REFRESH.** `refresh` runs on a mirror
+that changes for fuel, cargo, task and diagnostics, so writing the field each time
+would delete whatever was being typed and make renaming impossible on a working
+unit. It follows a new `petNameRaw` and rewrites only when the STORED name moves.
+The sentinel for "nothing seen yet" is `false`, not `nil`, because `nil` is a
+legitimate value it can hold.
+
+**`petNameRaw` IS SEPARATE FROM `petName` BECAUSE THEY ANSWER DIFFERENT
+QUESTIONS.** The header must never be blank and falls back to the species; the
+field must be blank when unnamed, or the first click of Rename would store the
+literal name "Utility Unit".
+
+**24 CHARACTERS IN THE REGEX AND IN `PET_NAME_MAX`**, the same decision written
+twice because the engine has no way to say so -- the restock quota field's rule,
+everything typeable is valid. Re-clamped port-side because a message handler is
+reachable by more than the pane. NO CHARACTER FILTERING: what a name may contain
+is a server's policy, not this mod's.
+
+**COLOUR ESCAPES PASS THROUGH.** `^cyan;Fuwafuwa` renders coloured on the tag.
+Accidental rather than designed, and the cap counts the escape, so `^cyan;` costs
+six of the twenty-four.
+
+### The search is sized to the target when the target is an object
+`arch.pathing.objectsearch` -- see also `arch.pathing.oneanchor`, `fact.pathing.collisionkinds`, `arch.dispatch.anytile`
+
+**BUILT 2026-09-01.** `standableNear` is anchored on an entity position and
+reaches `GROUND_SEARCH_UP` 4 tiles up. An object's entity position sits near its
+BASE, so anything taller than four tiles has a roof the resolver cannot see.
+
+**THE SUBMERGED SHIPPING CONTAINER IS WHERE IT SHOWED, AND THE BUG IS GENERAL.**
+A ground unit could walk a platform to the container and be told there was nowhere
+to stand. Every tall object had this; the container merely made it visible,
+because a short object's roof happens to fall inside the default reach.
+
+**THE FOOTPRINT BOX PLUS TWO TILES ON EVERY SIDE.** `petports_habitatObjectBounds`
+derives the box from `petports_habitatObjectPoints`, so the search and the medium
+test read one source. The buffer is what makes the roof REACHABLE rather than
+merely included -- the top row is inside the object and the standable tile is the
+one above it -- and two rather than one because the same margin serves the sides.
+
+**IT WIDENS THE SEARCH AND RELAXES NOTHING.** Eligibility was already settled by
+`targetSuits` over the same footprint, and every candidate still passes
+`validStandingPosition`, `petports_mediumAllows` and the descend guard.
+
+**NO COLLISION KIND IS CONSULTED, DELIBERATELY.** The feature was requested as
+"if the container has platform collision"; it is not gated on that, because
+`STANDABLE_TILE_SET` holds both Block and Platform and `validStandingPosition`
+accepts either. Gating on Platform would have EXCLUDED the case
+`fact.pathing.collisionkinds` says is true -- a crate top is Block -- and fixed
+nothing.
+
+**`searchDown` IS A TRAILING PARAMETER, AND THE POSITION IS THE POINT.** An
+argument in the middle would have meant a nil mid-`callScriptedEntity` list, which
+this mod has never measured. Same reasoning that gave `petports_homePointNear` its
+own function. `petports_objectPointNear` lives in `petportsTaskAction.lua` rather
+than beside the other two entry points in `petports_contract.lua`, because
+`GROUND_SEARCH_UP`, `GROUND_SEARCH_DOWN` and `COLUMN_RADIUS` are locals of that
+file -- written in the contract first, it would have read three nil globals
+silently.
+
+**NEVER TIGHTER THAN THE DEFAULTS.** A one-tile crate or a crop would otherwise
+come out with a SMALLER search than before, which is a regression wearing a fix's
+clothes.
+
+### Anything pushed to a live unit needs a signature and a tick, not a call site
+`arch.port.pushsignature` -- see also `arch.module.effects`, `arch.pane.rename`
+
+**THE RULE, GENERALISED FROM TWO INSTANCES.** State the port holds and the unit
+must WEAR has to be pushed from `update` behind a signature that includes the
+ENTITY ID. Pushing it from the sites that mutate it is not enough, because a
+respawn is not a mutation and no mutation site fires for it.
+
+**`pushModuleEffects` GOT THIS RIGHT AND ITS COMMENT SAYS WHY.** `pushPetName`
+was written directly beneath it and did not, firing only from the rename handler
+and the toggles handler -- so correctness rested entirely on the spawn parameters
+being right.
+
+**OBSERVED 2026-09-01.** Units whose spawn parameters predated
+`petports_showNametag` -- which is every unit in an existing save -- came back
+with an unmanaged tag and stayed that way until somebody opened the pane.
+Resocketing "fixed" them because that is a fresh spawn with fresh parameters,
+which is the shape of a report that should point straight at this rule.
+
+**THE ENTITY ID MUST BE IN THE SIGNATURE, NOT JUST THE VALUE.** A unit that died
+and came back to the same name would otherwise match its predecessor's signature
+and never be pushed to at all.
+
+**THE MUTATION SITES STILL CALL IT**, so a rename lands on the click rather than
+the next tick. The signature makes that free: whichever runs first writes it and
+the other returns immediately.
 
 ### Medium enforcement -- four gates, and validation must model the mover
 `arch.pathing.mediumenforcement` -- see also `dd.pathing.coststeering`, `fact.pathing.edgespan`, `dead.pathing.escapeclause`, `arch.unit.exitpaths`
@@ -3758,6 +3925,39 @@ unupgraded unit.
 Units this mod ships state their count explicitly even where it matches the
 derivation, so that retuning a unit's rarity stays a decision about how it drops
 rather than a silent grant of another slot.
+
+### A settings row declares what ABSENT means, because it is not one answer
+`dd.pane.settingdefault` -- see also `arch.pane.rename`, `arch.module.effects`
+
+**MEASURED 2026-09-01 ON THREE LEGACY PETS.** The `nametag` box drew TICKED while
+the port pushed `tag false` on the same tick. The checkbox was never wrong about
+its own value; the two sides disagreed about what a MISSING value meant.
+
+    pane   settingValue        store[key] ~= false   absent -> ON
+    port   petportNametag()    toggles.nametag == true   absent -> OFF
+
+**BOTH DEFAULTS ARE CORRECT FOR THEIR OWN ROWS, WHICH IS WHY THIS IS A DESIGN
+DECISION AND NOT SIMPLY A BUG.** Medic and farming rows default ON so a freshly
+socketed module works immediately instead of looking broken until six boxes are
+ticked. Display toggles default OFF so shipping one does not label an entire base.
+One shared `settingValue` could express only the first.
+
+**DECLARED PER ROW, NOT INFERRED FROM THE OWNER.** Every `toggles` row wants false
+today, so keying on owner would work and would be a COINCIDENCE -- the next module
+setting that wants off-by-default sits under its own owner and would quietly get
+the wrong answer.
+
+**ONLY `nil` CONSULTS THE DEFAULT.** A present value reads exactly as before, so
+nothing with a stored setting shifts.
+
+**`carried` CARRIED THE IDENTICAL MISMATCH AND WAS INVISIBLE**, because nothing
+reads that setting yet. It would have surfaced the day speech bubbles land. Fixed
+at the same time.
+
+**THE GENERAL TRAP:** a pane-side default and a port-side accessor are two
+spellings of one rule, and they are written in different files by different
+reflexes -- `~= false` reads as permissive, `== true` reads as careful. Adding a
+setting means choosing the default ONCE and writing it on both sides deliberately.
 
 ### Diagnostics are icons with tooltips, not a wrapped label
 `dd.pane.diagicons` -- see also `fact.pane.labelgrows`
@@ -5354,6 +5554,95 @@ one click, which is normally the trap and is exactly what is wanted here.
 That gives an existing list hover art and sound without touching its working
 selection path. Use the button's own callback only when something else in the
 row needs one too.
+
+### A TEXTBOX MUST NAME A CALLBACK, AND THE PANE DIES AT CONSTRUCTION IF IT DOES NOT
+`fact.pane.textboxcallback` -- see also `fact.pane.nullcallback`, `arch.pane.rename`
+
+**MEASURED 2026-09-01, BY CRASHING THE CLIENT TO THE MAIN MENU.**
+
+    (WidgetParserException) Failed to find textbox callback named: 'tbPetName'
+    Star::WidgetParser::textboxHandler
+    Star::ContainerPane::ContainerPane
+
+With no `callback` key, `WidgetParser::textboxHandler` FALLS BACK TO THE WIDGET'S
+OWN NAME and throws when no function of that name is registered. The throw is
+inside the `ContainerPane` CONSTRUCTOR, so the pane does not fail to work -- it
+fails to EXIST, and interacting with the object drops the player out of the world.
+
+**THE CALLBACK MUST ALSO BE IN `scriptWidgetCallbacks`.** Both halves are
+required. `tbMin`, `tbMax` and `tbThreshold` all do it, in two panes, and were
+sitting in the tree as three working examples while the assumption "no callback
+means no Enter handler" was written instead.
+
+**THIS IS THE EXACT INVERSE OF THE ROW-CALLBACK RULE AND BOTH FAIL THE SAME WAY.**
+A ROW callback must NOT appear in `scriptWidgetCallbacks` or `addListItem` throws
+at construction; a TEXTBOX callback MUST appear there or `ContainerPane` throws at
+construction. Two opposite rules, one symptom, and the pane pre-flight currently
+sees neither.
+
+**COMMITTING ON ENTER IS A SEPARATE QUESTION FROM SATISFYING THE PARSER.** The
+callback fires on ENTER, so where Enter must not commit, the answer is a
+registered EMPTY function, not a missing one. `"callback" : "null"` may also work
+-- `fact.pane.nullcallback` records it constructing and doing nothing on a row
+BUTTON -- but it is UNTESTED on a textbox and the empty named function is what
+shipped.
+
+### A UNIT IS ALREADY NAMED; WHAT IT LACKS IS THE TAG
+`fact.unit.entityname` -- see also `arch.pane.rename`, `fact.unit.damageteams`
+
+**MEASURED 2026-09-01 BY `/entityeval` ON A DEPLOYED UNIT:**
+
+    type(monster.setName)            "function"
+    type(monster.setDisplayNametag)  "function"
+    type(monster.setUniqueId)        "function"
+    world.entityName(entity.id())    "Utility Unit"
+
+**`world.entityName` IS NOT EMPTY BEFORE ANYTHING OF OURS RUNS.** The engine takes
+the monstertype's `shortdescription` as the entity name. So a unit has always had
+a name; what it never had was a VISIBLE tag.
+
+**NOTHING SWITCHES THE TAG ON FOR A PORT-SPAWNED UNIT.** Vanilla calls
+`monster.setDisplayNametag(true)` from `capturable.update` only under
+`capturable.ownerUuid()` -- `config.getParameter("ownerUuid")` -- and a unit
+spawned by a petport has no pod owner. Asserting it ourselves is therefore not
+redundant.
+
+**`petName` IN SPAWN PARAMETERS DID NOTHING FOR YEARS.** Neither `monster.lua`
+nor `capturable.lua` reads a `petName` config parameter -- `capturable.optName`
+goes to `world.entityName` instead. The port had been passing it since the file
+was written and nothing consumed it; `petports_setUnitName`, called from the
+contract's `init`, is what made that parameter mean something.
+
+**THE `"Pet"` BRANCH IS REAL BUT CURRENTLY UNREACHABLE FOR US.**
+`capturable.update` calls `monster.setName("Pet")` every tick when
+`world.entityName` reads empty -- gated on that same `ownerUuid`. Both halves are
+vanilla's to change, so an empty name is never sent: a unit with no stored name is
+pushed its SPECIES with the tag off.
+
+### `liquidBuoyancy` DOES SOMETHING ON A GRAVITY-DISABLED ACTOR
+`fact.locomotion.buoyancy` -- see also `arch.locomotion.classes`, `proc.pathing.readsource`
+
+**OBSERVED 2026-09-01, AND IT CONTRADICTS A COMMENT THIS MOD SHIPPED.**
+`petports_aquatic.monstertype` pins `liquidBuoyancy` to 0 and explains why:
+*buoyancy is a force opposing gravity and there is no gravity here, so it should
+compute to nothing -- but "should" is doing work in that sentence.* It was right
+to hedge.
+
+Setting `liquidBuoyancy` to 0.25 on the FLYER -- also `gravityEnabled` false --
+produced the intended effect: a flyer barely straddling a waterline is nudged
+clear instead of holding a mixed-medium position until plan validation refuses it
+and re-homes.
+
+**THE MECHANISM IS NOT ESTABLISHED AND THIS ENTRY DOES NOT CLAIM ONE.** If
+buoyancy were purely a gravity multiplier it would multiply zero and do nothing.
+It did something. Whether the engine applies a buoyant force independently of the
+gravity term, or something else moved, has NOT been measured -- `/entityeval`
+against a straddling flyer with the field at 0 and at 0.25 would settle it and
+has not been run.
+
+**WHAT IS SAFE TO RELY ON TODAY:** the field is not inert on a gravity-disabled
+chassis, so the aquatic chassis's pinned `0.0` is LOAD-BEARING rather than
+defensive documentation. Do not delete it as a no-op.
 
 ### Portrait drawables carry a 3x3 transformation, and the mirror is in it
 `fact.pane.portrait` -- see also `arch.pane.petport`
@@ -8296,6 +8585,113 @@ candidates in order: scale the deadline by the length of the dispatched tile lis
 or let the sweep's per-tile progress push `taskAge` out the way a claim refresh
 does. The second is closer to what the deadline is actually for -- it exists to
 catch a unit that reports NOTHING, and a unit watering tile nineteen is not that.
+
+### The pane pre-flight cannot see either callback-registration rule
+`todo.tooling.paneflightcallbacks` -- see also `fact.pane.textboxcallback`, `arch.pane.rename`
+
+**FILED 2026-09-01, AFTER THE RULE IT WOULD HAVE CAUGHT DROPPED THE CLIENT TO THE
+MAIN MENU.**
+
+Two opposite rules govern whether a widget's callback belongs in
+`scriptWidgetCallbacks`, and BOTH failures throw at pane CONSTRUCTION rather than
+at click, so the pane does not exist rather than misbehaving:
+
+    textbox   MUST name a callback AND register it   or ContainerPane throws
+    list row  MUST NOT be registered                 or addListItem throws
+
+The tool already knows the second -- it reports `settingsRowClicked` as UNWIRED
+and the config carries a note saying the report is wrong there. It knows nothing
+of the first.
+
+**HALF DONE, 2026-09-01.** `CALLBACK MISSING` now fires on a pane-level widget
+whose type is in `REQUIRES_CALLBACK` and which declares no `callback`. The
+existing `CALLBACK UNWIRED` check could not see this: it compares callbacks that
+ARE named against `scriptWidgetCallbacks`, and a widget with no `callback` key
+never enters that set.
+
+**BOTH CONTROLS RUN.** Silent on all four working panes; reintroducing the exact
+crash -- deleting `tbPetName`'s callback -- produces the finding by name.
+
+**`REQUIRES_CALLBACK` HOLDS ONLY `textbox`, BECAUSE THAT IS ALL THAT WAS
+MEASURED.** Adding a type means crashing a pane on purpose first. A guessed entry
+would fail working panes and get the whole check switched off, which is worse than
+not having it.
+
+**STILL OPEN:** row widgets are skipped entirely, since the opposite registration
+rule applies inside a `listTemplate` and whether a row textbox must name a
+callback is untested. And nothing yet checks that a name in `scriptWidgetCallbacks`
+has a matching function in the Lua -- plausible as a third failure mode, not
+observed, so not asserted.
+
+### Coverage is the dispatch radius, and a large network outruns the pathfinder
+`todo.dispatch.reachbudget` -- see also `todo.dispatch.sourcebackoff`, `arch.dispatch.eligibility`, `arch.port.coverage`
+
+**FILED 2026-09-01, WITH MEASUREMENTS, AND DELIBERATELY NOT FOUGHT THAT NIGHT.**
+It is a design question with several defensible answers and no cheap one.
+
+**A UNIT IS OFFERED ANY WORK IN NETWORK COVERAGE, AND NOTHING ASKS WHAT IT COSTS
+TO GET THERE.** Eligibility asks about MEDIUM (`arch.dispatch.eligibility`) and,
+for objects, about FOOTING. Neither asks about distance, and networks are
+explicitly designed to grow into sprawling multi-port complexes.
+
+**MEASURED.** A ground unit on a shipping container was dispatched to crops it
+could theoretically reach -- around a pond, up two ladders, over a cliff. Every
+attempt failed at 5.95 to 5.97 seconds, which is `SEARCH_LIMIT` 6.0 exactly. The
+unit was not walled in and the target was not unreachable: **the search was
+starved**, which is the same failure `SEARCH_LIMIT`'s own note records from
+2025-08-20 -- *"a chained route took 22.25 SECONDS to solve; the same target from
+atop the platforms took 0.08s. It was never unreachable, it was starved."*
+
+**IT IS A PROPERTY OF THE PAIR, NOT OF THE TARGET.** The same crop is likely
+solvable in milliseconds from the port. That is what makes it different from
+ordinary unreachability and what every current mechanism gets wrong:
+`workFailures` is keyed by work id, so a verdict earned at one end of the
+network is applied at the other. `todo.dispatch.sourcebackoff` is the same
+observation about crates; this is the third instance of one shape.
+
+**THE STOPGAP SHIPPED THAT NIGHT IS `UNROUTABLE_BACKOFF_FLOOR`**, which stops
+the stutter -- six seconds of search buying one second of backoff, with two
+targets alternating, left a unit advancing 0.7 tiles per twelve seconds. It does
+NOT address this entry, and it carries this entry's flaw: a crop unreachable from
+the far end of the network stays suppressed for thirty seconds after the unit
+walks home, where it would have been trivially reachable.
+
+**CANDIDATE DIRECTIONS, NONE CHOSEN AND NONE COSTED:**
+
+- A DISTANCE OR COST BUDGET AT DISPATCH -- cheap to write, and the hard part is
+  that straight-line distance is a poor proxy for path cost, which is the whole
+  problem restated.
+- DISPATCH RADIUS SEPARATE FROM COVERAGE -- coverage decides what a network
+  OWNS; a second, smaller number decides what one unit is offered. Player-facing
+  and explainable, and it makes a big base want more pets, which is the answer
+  this mod gives everywhere else.
+- RAISING `SEARCH_LIMIT` OR `EXPLORE_RATE` -- treats the symptom, moves the wall
+  rather than removing it, and costs CPU on every failing search.
+- CACHING THE VERDICT PER REGION rather than per work id, so "cannot get there
+  from this end" is remembered as a fact about geography and cleared when the
+  unit moves. This is the one that would also close
+  `todo.dispatch.sourcebackoff`.
+- **SEGMENTED PATHFINDING OVER A SPATIAL INDEX -- quadtree or similar.** THE
+  AUTHOR'S PROPOSAL, 2026-09-01, and the only candidate here that attacks the
+  cause rather than the symptom. Solve coarse region-to-region connectivity once,
+  and let A* do fine pathing only within a segment. It answers "can this unit get
+  there at all" without a six-second search, which is the question every other
+  entry on this list is trying to approximate. It is also by far the largest, and
+  it wants its own session and its own design pass rather than being grown out of
+  a bug fix.
+
+**THE BACKOFF FLOOR IS BETTER THAN "A STOPGAP" AND IT IS WORTH SAYING WHY.**
+Observed by the author the same night: pushing a failed target out of the way for
+thirty seconds does not merely stop the thrash, it lets the unit ATTEMPT OTHER
+CROPS -- and a different target may be solvable from where the unit is standing.
+So the backoff turns a stall into a cheap search ACROSS targets, using work the
+unit was going to do anyway. That is a real mitigation and not just noise
+suppression, and any replacement for it should keep the property.
+
+**WHOEVER PICKS THIS UP SHOULD READ `EXPLORE_RATE`'S NOTE FIRST.** It records
+that the same search starved at vanilla's rate and solved at 300, so the
+boundary between "far" and "unreachable" in this mod is a tuning constant rather
+than a fact about the world.
 
 ### Maxwell
 `todo.unit.maidrank`

@@ -640,6 +640,19 @@ DIAG_DWELL = 3.0
 --  and only past that does the port conclude it should stop asking often.
 FAILURE_BACKOFF = { 1.0, 2.0, 5.0, 10.0, 30.0 }
 
+--  THE FLOOR A ROUTING FAILURE STARTS AT, SKIPPING THE RAMP ABOVE.
+--
+--  The ramp assumes a cheap retry. A routing failure costs the unit its entire
+--  approach timeout to discover, so the first two rungs spend six seconds to buy
+--  one -- see noteFailure for the measurement and what it did to the leash.
+--
+--  EQUAL TO THE RAMP'S LAST ENTRY ON PURPOSE. That value is already the
+--  document's answer to "how long may a fixable problem go unnoticed", and a
+--  routing failure is exactly the case its note describes: the port concluding
+--  it should stop asking often. A second constant with a second opinion about
+--  that number is how the two drift.
+UNROUTABLE_BACKOFF_FLOOR = 30.0
+
 --  How many failed walk-home attempts before the unit is re-homed instead.
 RECALL_LIMIT = 2
 
@@ -1132,7 +1145,43 @@ local function noteFailure(taskId, reason)
   --  service, and they want different symbols -- an X versus a warning.
   record.unroutable = string.find(reason or "", "no vent route", 1, true) ~= nil
     or string.find(reason or "", "no route", 1, true) ~= nil
+
+  --  AN UNROUTABLE TARGET SKIPS THE RAMP, AND THE REASON IS THAT THE RETRY IS
+  --  NOT CHEAP.
+  --
+  --  FAILURE_BACKOFF's ramp is tuned for a target that might succeed in a
+  --  moment -- an item still falling, a unit briefly boxed in -- where retrying
+  --  after one second costs one second. A ROUTING failure is not that. The unit
+  --  spends its whole approach timeout discovering it, and nothing about the
+  --  world changed in the second afterwards.
+  --
+  --  MEASURED 2026-09-01, a ground unit trying to walk home along a container:
+  --
+  --      accepted harvest:142 ... failed 5.97s later, moved 0.05  -> backoff 1s
+  --      accepted harvest:139 ... failed 5.96s later, moved 0.68  -> backoff 1s
+  --      accepted harvest:142 ... failed 5.95s later, moved 0.68  -> backoff 2s
+  --
+  --  SIX SECONDS SPENT TO EARN ONE SECOND OF REST. With two unreachable crops
+  --  alternating, one was always eligible, the leash was preempted every time,
+  --  and the unit advanced about 0.7 tiles per twelve seconds. That is the
+  --  stutter-step of arch.dispatch.eligibility arriving through the backoff
+  --  rather than through the medium check.
+  --
+  --  THE FLOOR MUST EXCEED THE ATTEMPT, or alternating targets refill each
+  --  other's slot and the ramp never gets to climb. 30 is the value the ramp
+  --  already settles on for persistent failure, and its own note calls that
+  --  "costs almost nothing to retry" -- so a player who opens the door still
+  --  gets the work picked up within half a minute.
+  --
+  --  IT IS A FLOOR, NOT A REPLACEMENT. record.count keeps climbing, so a target
+  --  that stays unroutable still walks up to the ceiling normally rather than
+  --  being pinned at the floor forever.
   local backoff = FAILURE_BACKOFF[math.min(record.count, #FAILURE_BACKOFF)]
+
+  if record.unroutable and backoff < UNROUTABLE_BACKOFF_FLOOR then
+    backoff = UNROUTABLE_BACKOFF_FLOOR
+  end
+
   record["until"] = world.time() + backoff
   self.workFailures[taskId] = record
 
@@ -1209,7 +1258,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-01d the tag is a checkbox"
+local PETPORT_BUILD_STAMP = "2026-09-01h unroutable rests longer than it costs"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -3622,8 +3671,32 @@ end
 --  capturable.ownerUuid(), which a port-spawned unit does not have. Both halves
 --  are vanilla's to change, so an empty name is simply never sent -- a unit with
 --  no stored name is pushed its species instead.
+--
+--  PUSHED ON CHANGE, AND THE PET ID IS PART OF WHAT COUNTS AS A CHANGE.
+--
+--  SIGNATURE-GATED AND DRIVEN FROM update, exactly like pushModuleEffects, and
+--  for the reason that entry already states: a respawned unit is not a mutation,
+--  so nothing that fires only on mutation will cover it.
+--
+--  THIS WAS BUILT WITHOUT THAT AND THE GAP WAS OBSERVED 2026-09-01. Calling it
+--  only from the two message handlers meant the name and tag reached a unit when
+--  a player renamed it or ticked the box, and at no other time -- so correctness
+--  rested entirely on the spawn parameters being right. Any unit whose
+--  parameters PREDATE petports_showNametag -- which is every unit in an existing
+--  save -- came back with an unmanaged tag and stayed that way until somebody
+--  opened the pane. Resocketing fixed them because that is a fresh spawn with
+--  fresh parameters, which is the symptom this explains rather than a fluke.
+--
+--  THE HANDLERS STILL CALL IT, so a rename lands on the same frame as the click
+--  rather than on the next tick. The signature makes that free: whichever runs
+--  first writes it and the other returns immediately.
 function pushPetName()
-  if self.petId == nil or not world.entityExists(self.petId) then return end
+  if self.petId == nil or not world.entityExists(self.petId) then
+    --  Cleared so the next unit -- respawn or replacement -- is pushed to,
+    --  rather than matching a signature left behind by its predecessor.
+    self.pushedPetName = nil
+    return
+  end
 
   local name = self.petData ~= nil and self.petData.petName or nil
   if name == nil or name == "" then
@@ -3631,6 +3704,15 @@ function pushPetName()
   end
 
   local show = petportNametag()
+
+  --  THE ENTITY ID IS IN THE SIGNATURE, not just the name and the flag. Without
+  --  it a unit that died and came back to the same name would match its
+  --  predecessor's signature and never be pushed to at all.
+  local signature = string.format("%s|%s|%s",
+    tostring(self.petId), tostring(name), tostring(show))
+
+  if signature == self.pushedPetName then return end
+  self.pushedPetName = signature
 
   sb.logInfo("PETPORT %s pushing name to unit %s: %s (tag %s)", stationUniqueId(),
     sb.printJson(self.petId), tostring(name), tostring(show))
@@ -4391,6 +4473,41 @@ end
 --
 --  MOVING TARGETS DO NOT COME HERE. A patient or an animal gets the reach test
 --  alone -- see the note in animalWork.
+--  THE STANDING SEARCH IS SIZED TO THE TARGET WHEN THE TARGET IS AN OBJECT.
+--
+--  `position` alone is an entity position, which for an object sits near its
+--  BASE. The default search reaches four tiles up, so anything taller than that
+--  has a roof the resolver cannot see -- a ground unit could walk a platform to
+--  a submerged shipping container and be told there was nowhere to stand.
+--
+--  THE BOUNDS COME FROM world.objectSpaces, VIA THE SHARED HABITAT MODULE, which
+--  is the same source targetSuits samples for medium two lines above. One read
+--  of what the object occupies, two questions asked of it.
+--
+--  nil BOUNDS MEANS NOT AN OBJECT and the old path runs untouched. Item drops,
+--  livestock and patients are points, and a point has no footprint to size a
+--  search from.
+local function standingPointForTarget(position, entityId, radius, mediumVerified)
+  local bounds = petports_habitatObjectBounds(entityId)
+
+  if bounds == nil then
+    return standingPointNear(position, radius, mediumVerified)
+  end
+
+  if self.petId ~= nil and world.entityExists(self.petId) then
+    local ok, resolved = pcall(world.callScriptedEntity, self.petId,
+      "petports_objectPointNear", position, bounds, mediumVerified)
+
+    if ok and resolved ~= nil then return resolved end
+
+    sb.logInfo("PETPORT %s unit could not resolve an object point near %s "
+      .. "bounds %s (called %s)", stationUniqueId(), sb.printJson(position),
+      sb.printJson(bounds), tostring(ok))
+  end
+
+  return nil
+end
+
 local function servicePointNear(label, entityId, position, radius)
   local suits, why = targetSuits(position, entityId)
 
@@ -4403,9 +4520,20 @@ local function servicePointNear(label, entityId, position, radius)
   --  keeps a single-point veto that cannot see a straddling footprint, and the
   --  line above is the footprint answer it is missing. Passing true anywhere
   --  targetSuits has NOT run would be a lie that costs a hovering unit.
-  local stand = standingPointNear(position, radius or 4, true)
+  local bounds = petports_habitatObjectBounds(entityId)
+  local stand = standingPointForTarget(position, entityId, radius or 4, true)
 
   if stand == nil then
+    --  THE MESSAGE HAS TO SAY WHICH SEARCH RAN. An object target is searched
+    --  over its whole footprint plus a margin, not within `radius`, so quoting
+    --  `radius` there reported "within 4 tiles" for a search that actually
+    --  covered twenty-one columns -- which sends anyone reading the log looking
+    --  for a wider search that had already happened.
+    if bounds ~= nil then
+      return nil, string.format(
+        "no standable spot around the object footprint %s", sb.printJson(bounds))
+    end
+
     return nil, string.format("no standable spot within %s tiles",
       tostring(radius or 4))
   end
@@ -11927,6 +12055,12 @@ end
   --  a string equality against a value that changes only when the module set or
   --  the entity does -- cheaper than the timer that would guard it.
   pushModuleEffects()
+
+  --  BESIDE IT, FOR THE SAME REASON AND WITH THE SAME GATE. The name and the tag
+  --  have to survive a respawn, and the spawn parameters alone cannot promise
+  --  that for a unit created before those parameters existed. Its own signature
+  --  compare is the gate; see pushPetName.
+  pushPetName()
 
   workUpdate(dt)
 end
