@@ -109,6 +109,11 @@ local ARRIVAL_DISTANCE = 1.5
 --  Per-second approach tracing. Noisy; off once reachability is understood.
 local TASK_DEBUG = true
 
+--  PER-TICK FLIGHT TRACE. See flightTrace. OFF FOR RELEASE -- it is one line per
+--  tick of every flight, which is the densest logging in this mod and is meant
+--  to be switched on for a specific question and switched off again.
+local FLIGHT_TRACE = true
+
 --  BUILD STAMP.
 --
 --  Printed once per state entry. Twice now a fix has been diagnosed as not
@@ -131,7 +136,7 @@ local TASK_DEBUG = true
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-01h the sign test stands alone"
+local BUILD_STAMP = "2026-09-01k the latch outlived its arc"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -2344,10 +2349,11 @@ function petportsArcMover(pather)
       pather.arcDelta = nil
 
       --  THE ARC IS OVER, so the launch record it belonged to must not survive
-      --  into the next one. A stale record plus a coincidentally equal planned
-      --  vx is the one way the gate in the airborne branch could be fooled.
+      --  into the next one. The record is DIAGNOSTIC ONLY since nothing steers
+      --  x any more -- see the airborne branch -- but its lifetime is still what
+      --  makes the "launch record cleared" line report the right flight, and
+      --  petportsLanding beside it is load-bearing.
       pather.petportsLaunch = nil
-      pather.petportsArcSubstituted = nil
       pather.petportsLanding = nil
 
       pather:advancePath()
@@ -2474,89 +2480,76 @@ function petportsArcMover(pather)
 
   local velocity = pather.edge.source.velocity or pather.edge.target.velocity or {0, 0}
 
-  --  STEER TOWARD WHAT WE ACTUALLY LAUNCHED AT, NOT WHAT THE PLAN ASKED FOR.
+  --  NOTHING STEERS X DURING A FLIGHT. THE FRICTION ZEROING ABOVE IS THE WHOLE
+  --  MECHANISM.
   --
-  --  See solveLaunch: when a plan's Land sits on the ascending crossing, the
-  --  launch is lowered so the unit arrives descending. Every arc edge of that
-  --  jump still carries the planner's original velocity, so approaching
-  --  velocity[1] here would restore the horizontal speed the correction just
-  --  removed -- silently, mid-flight, with the takeoff line still reporting the
-  --  corrected value.
+  --  This branch used to end in
   --
-  --  THE LAUNCH HOLDS FOR THE WHOLE ARC, NOT FOR THE EDGES THAT HAPPEN TO AGREE
-  --  WITH IT. This gate used to read `launch.plannedVx == velocity[1]`, on the
-  --  reasoning that matching the takeoff's planned vx proved the edge belonged
-  --  to this jump. It does not, and the case where it fails is the ordinary one:
-  --  A* CHANGES ITS OWN vx PARTWAY THROUGH AN ARC. See
-  --  fact.pathing.plannervxdrop. Measured on the platform course:
+  --      mcontroller.controlApproachXVelocity(wantVx, groundForce)
+  --
+  --  where wantVx was `launch.vx` on a real jump and `velocity[1]` -- THE
+  --  PLANNER'S PER-EDGE VELOCITY -- on anything else. Both halves are gone.
+  --
+  --  THE PLANNER'S VELOCITIES DESCRIBE A TRAJECTORY THE UNIT IS NOT FLYING, and
+  --  A* CHANGES ITS OWN vx PARTWAY THROUGH AN ARC. See fact.pathing.plannervxdrop.
+  --  Measured on the platform course:
   --
   --      edge 62 Arc  vel [12,7.06]  -> dst [2516.71,1180.75] vel [1,0]
   --      edge 64 Arc  vel [1,0]      -> dst [2516.93,1180.25] vel [1,-26.5]
   --
-  --      25.607  [2514.65,1180.89]  vel [7.95553, 6.256]   edge 62, gate passes
-  --      25.690  [2514.92,1181.07]  vel [1, -3.744]        edge 64, gate FAILS
+  --      25.607  [2514.65,1180.89]  vel [7.95553, 6.256]   edge 62
+  --      25.690  [2514.92,1181.07]  vel [1, -3.744]        edge 64
   --
-  --  One look, and the unit is braked from the launched 7.96 to the planner's 1
+  --  One look, and the unit was braked from the launched 7.96 to the planner's 1
   --  at the apex, with a quarter second of descent still to run. It crossed its
-  --  landing altitude 1.83 tiles short in x and fell twelve tiles.
+  --  landing altitude 1.83 tiles short and fell twelve tiles.
   --
-  --  THE CONTROL THAT SETTLED IT: on a later attempt the task failed mid-flight
-  --  and the pather was discarded at the apex. With nothing calling this mover,
-  --  the unit kept its launched vx, flew pure ballistics and touched down at
-  --  [2517.22,1177.8] -- its planned landing, 0.22 over. Guided it missed by
-  --  1.83 tiles; unguided it hit. solveLaunch was right the whole time.
+  --  A LAUNCH RECORD ONLY EVER PATCHED HALF OF THAT. It covered jumps, because a
+  --  jump has a takeoff to record. A WALK-OFF FALL HAS NO TAKEOFF, so it fell
+  --  through to the planner's numbers -- and A* models a walk-off as a short
+  --  forward hop followed by a VERTICAL DROP, whose stored vx is zero. Measured
+  --  2026-09-01 at the ledge above [2536,1149.8], six times, identical:
   --
-  --  SO THE PLANNER'S PER-EDGE VELOCITIES DESCRIBE A TRAJECTORY THE UNIT IS NO
-  --  LONGER FLYING, and must not steer anything once a launch is committed.
-  --  With friction zeroed above, holding launch.vx is what the ballistic case
-  --  does on its own; this branch now just declines to interfere with it.
+  --      45.170  [2534.65,1152.16]   vx  8.05
+  --      45.252  [2534.91,1150.99]   vx  2.99
+  --      45.337  [2534.91,1149.10]   vx  0.00   -- braked to a standstill in air
+  --      45.414  [2534.91,1148.80]   grounded, one tile low and 1.09 short
   --
-  --  OWNERSHIP IS A STATE INVARIANT NOW, NOT A VELOCITY COMPARISON. The record
-  --  exists only while the pather is on an Arc edge -- cleared every tick it is
-  --  not, in the arc tick block -- so `launch ~= nil` is the whole test. That
-  --  closes the two cases the old gate was defending: a stale record cannot
-  --  survive the Land at the end of its own arc, and a FALLING arc entered with
-  --  no takeoff has no record to inherit.
+  --  The unit then sat on an unreachable Land edge until the stall watchdog
+  --  replanned. No wall was involved: an earlier flight occupied x 2535.59 at
+  --  that height. The mover was obeying an instruction sampled at a point the
+  --  unit never occupied -- the skip logic had already advanced the cursor to an
+  --  edge whose source is [2535.33,1151.12], 0.4 tiles further east.
   --
-  --  OVERSHOOT IS STILL HANDLED, AND NOT BY THIS. The arrival brake above is
-  --  what stops a fast flat jump sliding off its landing; that is untouched.
-  --  What is removed here is only the mid-flight re-sync to the plan.
-  local wantVx = velocity[1]
-  local launch = pather.petportsLaunch
-
-  if launch ~= nil then
-    wantVx = launch.vx
-
-    --  A RECORD OLDER THAN THE EDGE IT IS BEING APPLIED TO SHOULD NOT EXIST.
-    --  The arcs of a jump are the contiguous run after the Jump edge, so an
-    --  index at or below jumpIndex means the per-tick clear did not fire. Named
-    --  rather than corrected: it is a bug in the invariant, and silently
-    --  refusing the substitution would hide it.
-    local index = pather.finder and pather.finder.currentEdgeIndex
-
-    if launch.jumpIndex ~= nil and index ~= nil and index <= launch.jumpIndex then
-      sb.logInfo("UNIT ARCMOVER STALE LAUNCH: record from jump edge %s applied on edge %s "
-        .. "-- the per-tick clear should have removed this",
-        sb.printJson(launch.jumpIndex), sb.printJson(index))
-    end
-
-    --  LOGGED ON EVERY CHANGE OF THE PLANNED VALUE, NOT ONCE PER PATHER. The
-    --  old latch printed twice in a 1178-line log and never for the jump that
-    --  failed, because petportsArcSubstituted stayed set across four jumps --
-    --  and there was no line at all when the substitution LAPSED, which is the
-    --  event that was breaking the flight. Keyed on the planned vx so a steady
-    --  arc still prints once, while the edge that used to end the substitution
-    --  now prints the divergence it causes.
-    if pather.petportsArcSubstituted ~= velocity[1] then
-      pather.petportsArcSubstituted = velocity[1]
-      sb.logInfo("UNIT ARCMOVER steering to the LAUNCHED vx %s; this edge's plan says %s "
-        .. "(jump edge %s, now on edge %s)",
-        sb.printJson(wantVx), sb.printJson(velocity[1]),
-        sb.printJson(launch.jumpIndex), sb.printJson(index))
-    end
-  end
-
-  mcontroller.controlApproachXVelocity(wantVx, mcontroller.baseParameters().groundForce)
+  --  THE CONTROL THAT SETTLED IT, AND IT PREDATES THIS CHANGE: on one attempt the
+  --  task failed mid-flight and the pather was discarded at the apex. With
+  --  NOTHING CALLING THIS MOVER, the unit kept its launched vx, flew pure
+  --  ballistics and touched down at [2517.22,1177.8] -- its planned landing, 0.22
+  --  over. Guided it missed by 1.83 tiles; unguided it hit. That is this change,
+  --  observed a session before it was written.
+  --
+  --  SO THE SUBSTITUTION WAS NEVER THE FIX -- IT WAS A NARROWER BUG. Holding
+  --  launch.vx and issuing nothing produce the same trajectory whenever the
+  --  command is correct, because airFriction is zero four lines above and an
+  --  unforced horizontal velocity simply persists. They differ only where the
+  --  command is WRONG, and there the command wins. Deleting it removes the only
+  --  case where the two disagree.
+  --
+  --  OVERSHOOT IS STILL HANDLED, AND NOT BY THIS. The arrival brake above zeroes
+  --  x with setVelocity once the unit reaches its landing, and the
+  --  petportsLanding hold keeps it there. Both are untouched: this branch only
+  --  ever ran while the unit was still in flight.
+  --
+  --  AN OPEN MEASUREMENT THIS SHOULD SETTLE. The same command, with the same
+  --  groundForce, behaved asymmetrically: commanding -12 against an actual -10.8
+  --  never closed the gap in five ticks, while commanding 0 against an actual 8
+  --  closed it in two. Whether groundForce simply has no airborne authority in
+  --  the ACCELERATING direction is unmeasured. If the pool-exit jumps stop
+  --  arriving 0.4 short after this, that deficit was this call interfering and
+  --  the question answers itself.
+  --
+  --  `velocity` SURVIVES because the liquid branch below reads velocity[2]. Only
+  --  the horizontal half is removed.
 
   if mcontroller.liquidMovement() then
     if velocity[2] ~= 0 then
@@ -3951,6 +3944,152 @@ local function planWalkBlocked(finder)
   return blocked, walkIndex, walkEdge, sweep
 end
 
+--  WHERE THE PLAN SAYS THE UNIT SHOULD BE AT THIS ALTITUDE.
+--
+--  Walks forward from the cursor through the Arc run and finds the first
+--  segment whose endpoints bracket `y`, then interpolates x across it. Returns
+--  nil when nothing brackets -- above the first waypoint, below the last, or a
+--  plan with no arc left.
+--
+--  FIRST BRACKET, NOT NEAREST. An arc's y is not monotonic across its apex, so
+--  a rising arc can bracket one altitude twice. Taking the first match from the
+--  cursor forward is right for a FALL, which is what this exists to measure,
+--  and is knowingly approximate on the ascending half of a jump.
+local function flightPlanX(finder, y)
+  if finder == nil or finder.edges == nil then return nil end
+
+  local index = finder.currentEdgeIndex
+  if index == nil then return nil end
+
+  for i = index, math.min(index + MAX_JUMP_LOOKAHEAD, #finder.edges) do
+    local edge = finder.edges[i]
+    if edge == nil then break end
+
+    local from = edge.source and edge.source.position
+    local to = edge.target and edge.target.position
+
+    if from ~= nil and to ~= nil then
+      local hi, lo = math.max(from[2], to[2]), math.min(from[2], to[2])
+
+      if y <= hi and y >= lo then
+        local span = from[2] - to[2]
+
+        --  A LEVEL SEGMENT BRACKETS EVERY y INSIDE IT AND INTERPOLATES
+        --  NONE OF THEM. Report its start rather than dividing by zero.
+        if math.abs(span) < 0.0001 then return from[1] end
+
+        local t = (from[2] - y) / span
+        return from[1] + t * (to[1] - from[1])
+      end
+    end
+
+    if edge.action ~= "Arc" and i > index then break end
+  end
+
+  return nil
+end
+
+--  ONE LINE PER TICK FOR THE WHOLE OF A FLIGHT.
+--
+--  BUILT 2026-09-01 BECAUSE 12 Hz RECONSTRUCTION RAN OUT. Three explanations
+--  for a unit falling short of its planned arc -- a late Walk -> Arc handover, a
+--  liquid drag leak, and the planner-velocity steering since deleted -- all
+--  produce the same shape when sampled from `pre-move` lines alone. The author
+--  watching at 60 fps could see the trajectory break BEFORE the waterline,
+--  which no reading of the existing log could confirm or refute. This is the
+--  instrument that separates them.
+--
+--  IT FIRES REGARDLESS OF EDGE ACTION, and that is the point. The first
+--  airborne tick of a walk-off is still on the WALK edge -- the pather does not
+--  advance to the Arc until the following tick -- so anything gated on `action
+--  == "Arc"` misses the handover, which is the interval under suspicion.
+--
+--  liquidMovement() IS THE FIELD THAT SETTLES THE DRAG QUESTION. It is the
+--  engine's own verdict on whether this body is being moved as a swimmer, so it
+--  beats inferring a waterline from where a swimmer floats. If horizontal speed
+--  decays across ticks that all report false, drag is not the mechanism and the
+--  liquidFriction control test is unnecessary.
+--
+--  POSITIONS ARE THE TRUTH AND VELOCITY IS NOT. proc.pathing.velocitysample
+--  records that a reported velocity is a friction sampling artifact; the
+--  round-numbered [8,-10] readings in every arc log are planner values, not
+--  measurements. `moved` is the real displacement since the previous trace line
+--  and `dt` is the interval it happened over -- divide them and that is the only
+--  honest velocity in the line. mcontroller.velocity() is kept BESIDE it so the
+--  size of the artifact is on the record rather than in a comment.
+--
+--  ONE FLIGHT PER `#n`, so a log with six falls in it sorts into six flights
+--  without matching timestamps by hand.
+local function flightTrace(dt, stateData)
+  if not FLIGHT_TRACE then return end
+
+  local here = mcontroller.position()
+  local grounded = mcontroller.onGround()
+  local prev = stateData.petportsTrace
+
+  --  Grounded and was already grounded: nothing in flight, keep the anchor
+  --  fresh so the first airborne tick has something to measure against.
+  if grounded and (prev == nil or prev.grounded) then
+    stateData.petportsTrace = {
+      pos = here, grounded = true, tick = 0,
+      flight = (prev and prev.flight) or 0
+    }
+    return
+  end
+
+  local flight = (prev and prev.flight) or 0
+  local tick = (prev and prev.tick or 0) + 1
+
+  --  A NEW FLIGHT STARTS ON THE FIRST TICK OFF THE GROUND.
+  if prev == nil or prev.grounded then
+    flight = flight + 1
+    tick = 1
+  end
+
+  local finder = self.pather and self.pather.finder
+  local edge = finder and finder.edges and finder.currentEdgeIndex
+    and finder.edges[finder.currentEdgeIndex]
+
+  local moved = prev and prev.pos and world.distance(here, prev.pos) or nil
+  local planX = flightPlanX(finder, here[2])
+  local bounds = mcontroller.boundBox()
+  local feet = world.liquidAt({ here[1], here[2] + bounds[2] + 0.5 })
+  local mid = world.liquidAt(here)
+
+  sb.logInfo("UNIT TRACE #%s.%s at %s moved %s dt %s | vel %s onGround %s liquidMovement %s "
+    .. "fillFeet %s fillMid %s medium %s | edge %s/%s %s src %s srcVel %s dst %s "
+    .. "| planX %s off %s",
+    sb.printJson(flight), sb.printJson(tick),
+    sb.printJson(here), sb.printJson(moved), sb.printJson(dt),
+    sb.printJson(mcontroller.velocity()), tostring(grounded),
+    tostring(mcontroller.liquidMovement()),
+    sb.printJson(feet and feet[2] or 0), sb.printJson(mid and mid[2] or 0),
+    tostring(petports_mediumAt(here, bounds)),
+    tostring(finder and finder.currentEdgeIndex),
+    tostring(finder and finder.edges and #finder.edges),
+    tostring(edge and edge.action),
+    sb.printJson(edge and edge.source and edge.source.position),
+    sb.printJson(edge and edge.source and edge.source.velocity),
+    sb.printJson(edge and edge.target and edge.target.position),
+    sb.printJson(planX),
+    sb.printJson(planX and (planX - here[1])))
+
+  --  THE CHASSIS NUMBERS, ONCE PER FLIGHT. These are what the arc mover's
+  --  controlParameters zeroing is trying to override, so a decay measured
+  --  against them says whether the override reached the engine.
+  if tick == 1 then
+    local base = mcontroller.baseParameters()
+    sb.logInfo("UNIT TRACE #%s chassis: liquidFriction %s liquidImpedance %s "
+      .. "airFriction %s groundFriction %s gravityMultiplier %s",
+      sb.printJson(flight),
+      sb.printJson(base.liquidFriction), sb.printJson(base.liquidImpedance),
+      sb.printJson(base.airFriction), sb.printJson(base.groundFriction),
+      sb.printJson(base.gravityMultiplier))
+  end
+
+  stateData.petportsTrace = { pos = here, grounded = grounded, tick = tick, flight = flight }
+end
+
 function petportsTaskAction.update(dt, stateData)
   local task = stateData.task
 
@@ -4150,6 +4289,11 @@ function petportsTaskAction.update(dt, stateData)
       sb.printJson(mcontroller.velocity()),
       tostring(mcontroller.onGround()))
   end
+
+  --  AHEAD OF THE ARC BLOCK, AND UNGATED ON EDGE ACTION. The handover tick of a
+  --  walk-off is still on the Walk edge, so anything downstream of the arc
+  --  block's `action == "Arc"` test cannot see the interval being measured.
+  flightTrace(dt, stateData)
 
   --  AN ARC WAYPOINT THE UNIT CANNOT REACH. SKIP IT.
   --
@@ -4489,17 +4633,67 @@ function petportsTaskAction.update(dt, stateData)
       end
     end
   else
+    --  THE ARRIVAL BRAKE LATCH IS CLEARED SEPARATELY, AND THE NESTING IS THE
+    --  WHOLE POINT.
+    --
+    --  IT USED TO SIT INSIDE `petportsLaunch ~= nil` AND THAT WAS A BUG WITH A
+    --  BODY COUNT. The two flags have the same lifetime -- both live exactly as
+    --  long as the arc -- but only one of them is only ever SET on a jump. The
+    --  arrival brake fires on any arc, including a walk-off fall, which has no
+    --  takeoff and therefore no launch record. So a fall that ended in the brake
+    --  latched petportsLanding and then failed its own clear, because the guard
+    --  above it asked about a record that was never written.
+    --
+    --  WHAT THAT COSTS, MEASURED 2026-09-01:
+    --
+    --      45.516  arrived at landing [2494,1164.8] (ahead -0.713623)   walk-off,
+    --              no launch record, no "launch record cleared" line follows
+    --      47.63   next flight, first tick the arc mover runs
+    --              [2510.02,1161.97] vx 8.00 -> 3.07 -> 0.00, medium AIR
+    --      47.96   grounded at [2510.02,1152.8], nine tiles of vertical drop,
+    --              1.98 short of its Land, stalled and replanned
+    --
+    --  A LATCHED BRAKE IS INVISIBLE. It logs once when it fires and never again;
+    --  the hold below it issues controlApproachXVelocity(0) silently on every
+    --  airborne tick thereafter and RETURNS ABOVE THE FRICTION ZEROING. So the
+    --  symptom is a unit that stops dead in mid-air on a later, unrelated
+    --  flight, with nothing in the log connecting the two.
+    --
+    --  IT ALSO EXPLAINS TWO WRONG DIAGNOSES. The same collapse was attributed
+    --  first to the planner-velocity steering in the airborne branch and then to
+    --  liquid drag at a waterline; deleting the first changed nothing and the
+    --  second was coincidence -- the brake bites on the first arc-mover tick of
+    --  a flight, which on one route happened to be the tick the body touched
+    --  water. Both readings were of one sample; the per-tick trace separated
+    --  them in one run by showing an identical collapse in dry air.
+    --
+    --  UNCONDITIONAL, AND IDEMPOTENT. This branch runs on every tick the pather
+    --  is not on an Arc -- most of a unit's life -- so clearing a flag that is
+    --  already nil is the ordinary case and costs nothing. Gating it on anything
+    --  is how it broke.
+    if self.pather ~= nil and self.pather.petportsLanding ~= nil then
+      sb.logInfo("UNIT ARCMOVER landing latch cleared at %s: the pather is on %s, not an Arc",
+        sb.printJson(mcontroller.position()),
+        tostring(arcEdge and arcEdge.action or "no edge"))
+
+      self.pather.petportsLanding = nil
+    end
+
     --  THE LAUNCH RECORD LIVES EXACTLY AS LONG AS THE ARC DOES.
     --
-    --  petportsArcMover honours pather.petportsLaunch for every arc edge of the
-    --  jump it belongs to, with `launch ~= nil` as the whole ownership test, so
-    --  the record's LIFETIME is now the invariant that keeps it honest. Stating
-    --  it as a per-tick state check rather than hooking each exit is deliberate:
-    --  there are at least four ways off an arc -- the mover's grounded
-    --  last-edge branch, its advance loop running past the last Arc, the skip
-    --  loop stopping on a Land, and a path lost mid-flight -- and only the first
-    --  ever cleared this. The failing jump on the platform course took the
-    --  third, so the record would have outlived its arc every single time.
+    --  IT IS DIAGNOSTIC NOW, NOT CONTROL. Nothing steers x during a flight any
+    --  more -- see the airborne branch of petportsArcMover -- so no trajectory
+    --  depends on this record. It is kept because the line below is the only
+    --  place the log states what a flight ACTUALLY launched with, and that is
+    --  precisely the quantity the new ballistic behaviour is trusted to preserve.
+    --  Deleting the instrument in the same change that starts relying on what it
+    --  measures is how a regression goes unnoticed.
+    --
+    --  Stating the lifetime as a per-tick state check rather than hooking each
+    --  exit is deliberate: there are at least four ways off an arc -- the
+    --  mover's grounded last-edge branch, its advance loop running past the last
+    --  Arc, the skip loop stopping on a Land, and a path lost mid-flight -- and
+    --  only the first ever cleared this.
     --
     --  ONE PLACE, ONE RULE: not on an Arc edge, no launch record. That covers
     --  every exit including ones not written yet.
@@ -4511,14 +4705,12 @@ function petportsTaskAction.update(dt, stateData)
     --  is correct, and the following tick reads an Arc.
     if self.pather ~= nil and self.pather.petportsLaunch ~= nil then
       sb.logInfo("UNIT ARCMOVER launch record cleared at %s: the pather is on %s, not an Arc "
-        .. "-- launched vx %s is no longer being honoured",
+        .. "-- the flight launched at vx %s",
         sb.printJson(mcontroller.position()),
         tostring(arcEdge and arcEdge.action or "no edge"),
         sb.printJson(self.pather.petportsLaunch.vx))
 
       self.pather.petportsLaunch = nil
-      self.pather.petportsArcSubstituted = nil
-      self.pather.petportsLanding = nil
     end
   end
 
