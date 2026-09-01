@@ -136,7 +136,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-01p arcprobe removed, question settled"
+local BUILD_STAMP = "2026-09-01t petports_freshPather exposed"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -2794,6 +2794,34 @@ freshPather = function(why)
   self.pather.keepDropping = petportsKeepDropping
 end
 
+--  THE ONLY WAY OTHER FILES MAY BUILD A PATHER. Added 2026-09-01 after a crash.
+--
+--  freshPather is a FILE-LOCAL, forward-declared at the top of this file so that
+--  tryVentRoute can call it above its own definition -- see the header on that
+--  declaration for why it must stay an assignment rather than a
+--  `local function`. Being a local means petports_flyapproach.lua CANNOT SEE IT:
+--  a call to a bare `freshPather` there resolves to the global of that name,
+--  which is nil, and the failure is a hard Lua error rather than a quiet
+--  fallback.
+--
+--      attempt to call a nil value
+--        [C]: in global 'freshPather'
+--        petports_flyapproach...:1328: in global 'approachPoint'
+--        /monsters/pets/actions/inspectAction.lua:33: in field 'update'
+--
+--  Measured 2026-09-01, one tick after a beaching, and it killed the unit --
+--  vanilla's inspectAction calls approachPoint and has no idea any of this
+--  exists. The comment that introduced it claimed freshPather was a
+--  context-global; it never was.
+--
+--  A WRAPPER RATHER THAN MAKING freshPather ITSELF GLOBAL, because the local's
+--  forward declaration is load-bearing for tryVentRoute and turning it into a
+--  global would leave two names for one function with different visibility.
+--  One arrow out, pointing in.
+function petports_freshPather(why)
+  return freshPather(why)
+end
+
 function petportsTaskAction.enteringState(stateData)
   --  First entry only. See BUILD_STAMP for why this is not at file scope.
   if not stampLogged then
@@ -4276,6 +4304,37 @@ function petportsTaskAction.update(dt, stateData)
   if task.port == nil and self.petportsTask ~= nil then
     sb.logInfo("UNIT leaving station-keeping: task %s was dispatched",
       tostring(self.petportsTask.id))
+    return true
+  end
+
+  --  HAND THE STATE BACK WHEN BEACHED, FOR THE SAME STRUCTURAL REASON AS THE
+  --  LEASH YIELD ABOVE.
+  --
+  --  petports_petBehavior runs plain `%a+State` scripts only when NO action
+  --  state holds the unit:
+  --
+  --      if self.actionState.stateDesc() == "" and not self.state.update(dt)
+  --
+  --  So petportsFlopState can never be reached while this action is running,
+  --  and an aquatic unit beached MID-TASK -- which is the only way it can
+  --  happen, since the port refuses to spawn one into a medium it cannot
+  --  occupy -- would stand still until the medium check collected it. Leaving
+  --  voluntarily is the only way the flop can happen at all.
+  --
+  --  REPORTED, UNLIKE THE LEASH YIELD ABOVE. A leash was never dispatched so
+  --  nobody is owed an answer; a real task WAS, and abandoning it silently
+  --  leaves the claim to be collected by TTL. The return path is the ordinary
+  --  one, so the port hears about it through the same channel as any other
+  --  abandonment.
+  --
+  --  CHEAP ENOUGH TO RUN PER TICK: petports_outOfMedium short-circuits on
+  --  petports_freeMover for every walking chassis, which is a single
+  --  baseParameters read, and only a free mover pays for the bounds test.
+  local beached = petports_outOfMedium()
+  if beached.checked and beached.out then
+    sb.logInfo("UNIT beached mid-task at %s (medium %s) -- yielding the task "
+      .. "action so it can flop; the port re-homes if it cannot self-rescue",
+      sb.printJson(beached.position), tostring(beached.medium))
     return true
   end
 

@@ -105,6 +105,25 @@
       "/scripts/util.lua",
       "/scripts/vec2.lua",
 
+      //  BEACHED FLOP -- LISTED BEFORE idleState AND wanderState ON PURPOSE.
+      //
+      //  A plain %a+State, so petports_petBehavior runs it only while no action
+      //  state holds the unit. That is why petportsTaskAction.update yields on
+      //  petports_outOfMedium AND petBehavior.run suppresses every action while
+      //  beached -- measured 2026-09-01: yielding alone produced 91 yields in 8
+      //  seconds and the flop was never reached once.
+      //
+      //  ORDER IS A HEDGE, NOT A GUARANTEE. If stateMachine.pickState takes the
+      //  first state whose enter() returns non-nil, being ahead of idle and
+      //  wander is what wins the pick. If it round-robins via moveStateToEnd
+      //  instead, order buys nothing and the forced pick in petBehavior.run is
+      //  what does the work. Both are in place because /scripts/stateMachine.lua
+      //  and /monsters/pets/groundPet.lua have not been read.
+      //
+      //  LOADED BY EVERY CHASSIS, INCLUDING WALKERS. petportsFlopState.enter
+      //  returns nil for anything petports_outOfMedium reports as unchecked, so
+      //  a ground or amphibious unit can never enter it.
+      "/monsters/lofty_petports/petportsFlopState.lua",
       "/monsters/pets/idleState.lua",
       "/monsters/pets/wanderState.lua",
 

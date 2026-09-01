@@ -167,8 +167,172 @@ function petBehavior.run()
     self.currentActionScore = 0
   end
 
+  --  BEACHED SUPPRESSION. WITHOUT THIS THE FLOP CAN NEVER RUN.
+  --
+  --  petportsTaskAction.update yields on petports_outOfMedium so the unit can
+  --  flop -- but yielding only ENDS the action. The re-assert below runs every
+  --  tick and would put it straight back at TASK_SCORE, so the measured result
+  --  was 91 yields in 8 seconds, 80ms apart, and the flop state never reached
+  --  once. A plain %a+State only runs while actionState is empty, so the queue
+  --  has to stay empty too.
+  --
+  --  QUEUE NOTHING RATHER THAN SCORE IT LOWER. Any positive score re-enters the
+  --  action; a beached unit must hold NO action at all for petportsFlopState to
+  --  be picked.
+  --
+  --  self.petportsTask IS NOT CLEARED. The task is still held and still owed a
+  --  report -- it is simply not offered while the unit cannot work. The moment
+  --  the medium clears, the re-assert below resumes and the unit carries on with
+  --  the same task rather than needing a fresh dispatch.
+  --
+  --  WALKERS NEVER PAY FOR THIS. petports_outOfMedium short-circuits on
+  --  petports_freeMover, which is one baseParameters read.
+  local mediumReport = petports_outOfMedium()
+  local beached = mediumReport.checked and mediumReport.out
+
   --  Re-assert the held task. Every tick, unconditionally -- see the header.
+  if beached then
+    --  END WHATEVER ACTION IS ALREADY RUNNING. SUPPRESSION ALONE CANNOT.
+    --
+    --  groundPet.update only ticks the plain-state machine when the action slot
+    --  is empty:
+    --
+    --      if self.actionState.stateDesc() == "" and not self.state.update(dt)
+    --
+    --  Suppressing the queue below stops a NEW action being picked, but an
+    --  action already in flight keeps the slot until it finishes on its own --
+    --  and inspect, follow, beg, eat and play are all VANILLA and have no idea
+    --  beaching exists. Measured 2026-09-01: the flop state was entered by the
+    --  forced pick below and then never ticked once, because inspectAction was
+    --  mid-run and held the slot.
+    --
+    --  endState IS THE CLEAN EXIT, NOT A CANCEL. stateMachine.endState calls the
+    --  state's own leavingState first, so petportsTaskAction still reports its
+    --  task through the ordinary path if it happens to be the one running.
+    --
+    --  petportsTaskAction ALSO YIELDS ITSELF on the same condition, per tick,
+    --  which is faster than this -- run() is only called once a second. This is
+    --  the catch-all for the five actions that cannot yield themselves.
+    if self.actionState ~= nil and self.actionState.stateDesc() ~= "" then
+      sb.logInfo("BEHAVIOR ending action %s -- unit is beached and the action "
+        .. "slot has to be empty before the flop state can tick",
+        tostring(self.actionState.stateDesc()))
+      self.actionState.endState()
+    end
+
+    --  FORCE THE STATE, RATHER THAN HOPING THE PICK ORDER FAVOURS IT.
+    --
+    --  This is vanilla's own pattern -- swimmingMonster.lua does exactly this:
+    --
+    --      if not mcontroller.liquidMovement() then
+    --        if self.state.stateDesc() ~= "flopState" then
+    --          self.state.pickState({flop = true})
+    --        end
+    --      end
+    --
+    --  Suppressing the action queue only empties the ACTION slot. Which plain
+    --  state then runs is stateMachine's choice between petportsFlopState,
+    --  idleState and wanderState, and a beached unit that picks idle stands
+    --  still exactly as it did before any of this was written.
+    --
+    --  GUARDED ON stateDesc SO IT IS NOT RE-PICKED EVERY TICK, which would
+    --  restart the flop and reset its jump timer forever -- the unit would
+    --  twitch instead of hopping.
+    --
+    --  NIL-GUARDED ON self.state because this file is shared and groundPet.lua
+    --  owns that table; a nil here would be a hard error on any host that names
+    --  it differently, and the ordering hedge in the scripts list still applies.
+    --  FORCE THE STATE, RATHER THAN HOPING THE PICK ORDER FAVOURS IT.
+    --
+    --  This is vanilla's own pattern -- swimmingMonster.lua does exactly this:
+    --
+    --      if not mcontroller.liquidMovement() then
+    --        if self.state.stateDesc() ~= "flopState" then
+    --          self.state.pickState({flop = true})
+    --        end
+    --      end
+    --
+    --  Suppressing the action queue only empties the ACTION slot. Which plain
+    --  state then runs is stateMachine's choice between petportsFlopState,
+    --  idleState and wanderState, and a beached unit that picks idle stands
+    --  still exactly as it did before any of this was written.
+    --
+    --  PASSING PARAMS IS LOAD-BEARING AND IS WHY petportsFlopState DEFINES
+    --  enterWith. pickState(params) calls `enterWith` and skips every state
+    --  without one, so this reaches the flop and cannot reach idle or wander --
+    --  neither of which defines it. Calling pickState() bare here would put the
+    --  choice back into list order.
+    --
+    --  GUARDED ON stateDesc SO IT IS NOT RE-PICKED, which would restart the flop
+    --  and reset its jump timer -- the unit would twitch instead of hopping.
+    --  stateDesc returns the state NAME when a state defines no description(),
+    --  which is why this compares against the name.
+    --
+    --  NIL-GUARDED ON self.state because this file is shared and groundPet.lua
+    --  owns that table.
+    --
+    --  RUNS ONCE A SECOND, NOT PER TICK. petBehavior.run is called from
+    --  groundPet.querySurroundings on querySurroundingsCooldown, which the
+    --  monstertypes set to 1. So beaching can take up to a second to be noticed
+    --  here -- petportsTaskAction.update yields per tick, so the action slot
+    --  empties immediately and only the forced pick waits.
+    if self.state ~= nil and self.state.stateDesc() ~= "petportsFlopState" then
+      local picked = self.state.pickState({ petportsFlopState = true })
+
+      --  CHANGE-GATED, AND IT REPORTS FAILURE RATHER THAN SUCCESS. A pick that
+      --  works announces itself through petportsFlopState.enteringState; a pick
+      --  that silently returns false is what happened on 2026-09-01 and took a
+      --  round trip and a source read to find.
+      if not picked and self.petportsFlopPickFailed ~= true then
+        self.petportsFlopPickFailed = true
+        sb.logInfo("BEHAVIOR flop pick REFUSED while out of medium (%s) -- "
+          .. "state is %s. petportsFlopState.enterWith returned nil, or the "
+          .. "state is not in this chassis's scripts list.",
+          tostring(mediumReport.medium),
+          tostring(self.state.stateDesc()))
+      elseif picked then
+        self.petportsFlopPickFailed = nil
+      end
+    end
+
+    if self.petportsBeachedQuiet ~= true then
+      self.petportsBeachedQuiet = true
+      sb.logInfo("BEHAVIOR suppressing task actions -- unit is out of its medium "
+        .. "(%s). It will hold task %s and resume when it is back in water.",
+        tostring(mediumReport.medium),
+        tostring(self.petportsTask and self.petportsTask.id or "none"))
+    end
+
+    --  DROP THE WHOLE QUEUE AND STOP. GATING THE TWO SITES BELOW IS NOT ENOUGH.
+    --
+    --  groundPet.querySurroundings calls behavior.reactTo for EVERY nearby
+    --  entity and THEN calls run(), and the reactTo handlers queue actions
+    --  themselves -- beg, follow, inspect, eat, play and sleep, at lines far
+    --  below this one. So by the time run() starts, the queue is already full of
+    --  actions this function never added.
+    --
+    --  MEASURED 2026-09-01: with only the two sites below gated, a beached unit
+    --  re-picked inspectAction roughly every two seconds for the whole beaching.
+    --  The flop state was entered and then repeatedly evicted, so it ticked in
+    --  bursts -- which is what "flopping, but wrong" looks like from outside.
+    --
+    --  CLEARING IS WHAT run() DOES AT ITS OWN END ANYWAY, so returning here
+    --  leaves exactly the state a normal pass would. The only things skipped are
+    --  the queueing, the scoring and the pick, which is the entire point.
+    petBehavior.actionQueue = {}
+    self.currentActionScore = 0
+    return
+  end
+
   if self.petportsTask ~= nil then
+    --  Change-gated the other way: one line when suppression lifts, so the log
+    --  shows a beginning and an end rather than a beginning and silence.
+    if self.petportsBeachedQuiet then
+      self.petportsBeachedQuiet = nil
+      sb.logInfo("BEHAVIOR resuming task actions -- unit is back in its medium, "
+        .. "task %s was held throughout", tostring(self.petportsTask.id))
+    end
+
     petBehavior.queueAction(
       "petportsTask",
       { petportsTask = self.petportsTask },
@@ -186,6 +350,11 @@ function petBehavior.run()
   for actionName, _ in pairs(petBehavior.actionStates) do
     --  Already queued above, with its args. Queueing it again bare would let
     --  the argless fallback in the pick loop enter the state with no task.
+    --
+    --  NO BEACHED GATE HERE ANY MORE. It used to carry `and not beached`, which
+    --  was both insufficient -- the reactTo handlers queue actions of their own
+    --  before run() is ever called -- and now unreachable, because the beached
+    --  branch above clears the queue and returns before this loop.
     if actionName ~= "petportsTask" then
       petBehavior.queueAction(actionName)
     end

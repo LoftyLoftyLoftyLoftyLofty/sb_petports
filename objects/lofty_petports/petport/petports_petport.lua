@@ -110,6 +110,28 @@ ENVIRONMENT_SUBMERGED_FILL = PETPORTS_HABITAT_SUBMERGED_FILL
 --  reason to be in the wrong medium for fifteen.
 MEDIUM_STRIKE_LIMIT = 2
 
+--  AND A LONGER ONE WHEN THE UNIT IS MERELY BEACHED, ADDED 2026-09-01.
+--
+--  6 x ENVIRONMENT_INTERVAL is 30 seconds. The distinction is SELF-RESCUE, not
+--  severity: a unit reading "air" is on dry land, where petportsFlopState hops
+--  and drops through platforms and can genuinely find water on its own. Every
+--  other wrong medium -- wedged in terrain, sitting in a forbidden liquid -- has
+--  no self-rescue path at all, so waiting longer there buys nothing and just
+--  leaves the unit stuck for three times as long.
+--
+--  WHY NOT SIMPLY RAISE MEDIUM_STRIKE_LIMIT. It governs both cases, and the
+--  header above earns its 2 on the "swimmer bobbing at a surface" false positive
+--  rather than on the beached case. Raising it would slow every unrecoverable
+--  rescue in the mod to fix a recoverable one.
+--
+--  THE FLOP DOES NOT KNOW THIS NUMBER and must not: it runs until it is back in
+--  water or until it is collected, and both endings are somebody else's. A timer
+--  on the unit side would be a second source of truth for the same deadline.
+--  APPLIES TO "air" AND "mixed" BOTH -- see mediumCheck. A drained unit reads
+--  mixed far more often than air, because a body straddling the waterline is
+--  what draining actually produces.
+MEDIUM_STRIKE_LIMIT_BEACHED = 6
+
 --  How often the port asks whether its unit is still alive in the useful sense.
 --
 --  SEPARATE FROM DISPATCHED-WORK FAILURE, AND IT HAS TO BE. The stranding ladder
@@ -1258,7 +1280,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-01h unroutable rests longer than it costs"
+local PETPORT_BUILD_STAMP = "2026-09-01j beached covers mixed as well as air"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -5100,16 +5122,27 @@ local function mediumCheck()
 
   self.mediumStrikes = (self.mediumStrikes or 0) + 1
 
+  --  A BEACHED UNIT GETS LONGER, BECAUSE IT IS THE ONLY WRONG MEDIUM IT CAN GET
+  --  ITSELF OUT OF. See MEDIUM_STRIKE_LIMIT_BEACHED.
+  --  "mixed" COUNTS AS BEACHED TOO, AND THE FIRST TEST OF THIS MISSED IT.
+  --  petports_mediumAt returns swim / mixed / air / forbidden. A unit whose
+  --  water was drained out from under it straddles the waterline and reads
+  --  MIXED, not air -- measured at [2476.04,1129.54] for the whole of an
+  --  8-second test. Both are self-rescuable by flopping; only "forbidden"
+  --  (a denied liquid) is not, and that one keeps the short limit.
+  local recoverable = (answer.medium == "air") or (answer.medium == "mixed")
+  local limit = recoverable and MEDIUM_STRIKE_LIMIT_BEACHED or MEDIUM_STRIKE_LIMIT
+
   sb.logInfo("PETPORT %s unit is outside its own medium at %s (reads %s) -- "
     .. "poll %s of %s, it will plan nothing until this clears",
     stationUniqueId(), sb.printJson(answer.position), tostring(answer.medium),
-    sb.printJson(self.mediumStrikes), sb.printJson(MEDIUM_STRIKE_LIMIT))
+    sb.printJson(self.mediumStrikes), sb.printJson(limit))
 
-  if self.mediumStrikes >= MEDIUM_STRIKE_LIMIT then
+  if self.mediumStrikes >= limit then
     self.mediumStrikes = 0
     rehomeUnit("outside its own medium at "
       .. sb.printJson(answer.position) .. " (reads " .. tostring(answer.medium)
-      .. ") for " .. tostring(ENVIRONMENT_INTERVAL * MEDIUM_STRIKE_LIMIT) .. "s")
+      .. ") for " .. tostring(ENVIRONMENT_INTERVAL * limit) .. "s")
   end
 end
 

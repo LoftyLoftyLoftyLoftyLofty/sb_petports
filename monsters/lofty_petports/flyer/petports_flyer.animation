@@ -53,6 +53,13 @@
           "jumping"   : { "frames" : 8, "cycle" : 0.75, "mode" : "loop" },
           "falling"   : { "frames" : 8, "cycle" : 0.75, "mode" : "loop" },
 
+          //  BEACHED FLOP -- driven only by petportsFlopState.lua.
+          //  Aliased to the same run strip as everything else until real
+          //  art lands; it exists now so the state NAME is right from the
+          //  start, because animator.setAnimationState on a state that
+          //  does not exist is a hard error rather than a no-op.
+          "flopping"  : { "frames" : 8, "cycle" : 0.45, "mode" : "loop" },
+
           //  --- driven by the action states ---
           "eat"       : { "frames" : 8, "cycle" : 0.55, "mode" : "transition", "transition" : "eatloop" },
           "eatloop"   : { "frames" : 8, "cycle" : 0.55, "mode" : "loop" },
@@ -117,6 +124,7 @@
             "swim"      : { "properties" : { "image" : "<partImage>:run.<frame>" } },
             "jumping"   : { "properties" : { "image" : "<partImage>:run.<frame>" } },
             "falling"   : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "flopping"  : { "properties" : { "image" : "<partImage>:run.<frame>" } },
             "eat"       : { "properties" : { "image" : "<partImage>:run.<frame>" } },
             "eatloop"   : { "properties" : { "image" : "<partImage>:run.<frame>" } },
             "inspect"   : { "properties" : { "image" : "<partImage>:run.<frame>" } },
@@ -153,6 +161,7 @@
             "swim"      : { "properties" : { "image" : "<partImage>:run.<frame>" } },
             "jumping"   : { "properties" : { "image" : "<partImage>:run.<frame>" } },
             "falling"   : { "properties" : { "image" : "<partImage>:run.<frame>" } },
+            "flopping"  : { "properties" : { "image" : "<partImage>:run.<frame>" } },
             "eat"       : { "properties" : { "image" : "<partImage>:run.<frame>" } },
             "eatloop"   : { "properties" : { "image" : "<partImage>:run.<frame>" } },
             "inspect"   : { "properties" : { "image" : "<partImage>:run.<frame>" } },

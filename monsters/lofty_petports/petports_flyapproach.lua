@@ -82,7 +82,7 @@
 --  delegate, and stays one.
 local vanillaSetJumpState = setJumpState
 
-local BUILD_STAMP = "2026-09-01a the swim run-in brakes for a jump"
+local BUILD_STAMP = "2026-09-01c fallback pathers via petports_freshPather"
 local stampLogged = false
 
 --  DELETE ME ONCE THE ANSWER IS IN THE LOG.
@@ -1197,17 +1197,45 @@ function approachPoint(dt, targetPosition, stopDistance, running)
       self.approachPosition = groundPosition
     end
 
-    self.pather = self.pather or PathMover:new({run = running})
-    self.pather.options.run = running
-
-    --  A GROUND UNIT CAN STILL BE HANDED Swim EDGES. The pathfinder picks edge
-    --  type by medium, so a walker in water gets them, and vanilla's moveSwim
-    --  advances at most one edge per tick. freshPather binds this too; the
-    --  binding is repeated here for any caller that reaches approachPoint
-    --  without one, exactly as the pather construction above is.
-    if self.pather.moveSwim ~= petportsFreeMover then
-      self.pather.moveSwim = petportsFreeMover
+    --  FALLBACK PATHER, VIA freshPather RATHER THAN BY HAND. 2026-09-01.
+    --
+    --  This read `self.pather = self.pather or PathMover:new({run = running})`
+    --  followed by a single moveSwim binding. A pather built that way ran
+    --  VANILLA moveJump, which ignores `edge.jumpVelocity` and fires at full
+    --  strength -- harmless while the planner only ever drew 45s, and a real
+    --  wrong-jump since `smallJumpMultiplier` left 1.0 and 22.5 edges started
+    --  appearing. Answering a 22.5 edge with a 45 launch is exactly the failure
+    --  the old velocity pin existed to stop.
+    --
+    --  ONE PLACE KNOWS WHAT A PATHER NEEDS, and it is freshPather: moveJump,
+    --  moveWalk, moveArc, moveSwim, timedDrop, keepDropping, the path options
+    --  and the explore rate. Binding a subset here is how the set drifted out of
+    --  agreement in the first place, so the subset is gone rather than extended.
+    --
+    --  THE moveSwim RE-ASSERTION THAT USED TO FOLLOW IS DELETED, NOT MOVED.
+    --  Every pather now comes from freshPather -- this site, the fly site below,
+    --  and petportsTaskAction on entering any task state -- and freshPather
+    --  binds moveSwim for every chassis. There is no longer a path that reaches
+    --  here with a pather lacking it.
+    --
+    --  THE NARROW CASE THIS FIRES IN: freshPather runs on entering any task
+    --  state including leash, and `self.pather` persists on the script table,
+    --  so only a unit that reaches petportsSleepAction before it has ever held
+    --  a task can get here -- a fresh spawn that goes straight to rest.
+    --
+    --  VIA petports_freshPather, NOT freshPather. THAT DISTINCTION CRASHED A
+    --  UNIT ON 2026-09-01.
+    --
+    --  freshPather is a FILE-LOCAL in petportsTaskAction.lua, forward-declared
+    --  so tryVentRoute can call it early. A local is invisible across files, so
+    --  a bare `freshPather` here resolves to a nil global and the call is a hard
+    --  error -- which vanilla's inspectAction hit through approachPoint one tick
+    --  after a beaching, killing the unit. petports_freshPather is the wrapper
+    --  that file exposes for exactly this.
+    if self.pather == nil then
+      petports_freshPather("approachPoint ground fallback -- no task pather yet")
     end
+    self.pather.options.run = running
 
     if self.approachPosition
        and (targetDistance > stopDistance or not mcontroller.onGround()) then
@@ -1298,18 +1326,28 @@ function approachPoint(dt, targetPosition, stopDistance, running)
   --  RAW, NO GROUND RESOLVE. See the header.
   self.approachPosition = targetPosition
 
-  --  Vanilla's own line. petportsTaskAction.freshPather has normally built this
-  --  already with our path options; this is the fallback for any caller that
-  --  reaches approachPoint without one, and it matches what vanilla would do.
-  self.pather = self.pather or PathMover:new({run = running})
+  --  SAME FIX AS THE GROUND BRANCH ABOVE, 2026-09-01: build through freshPather
+  --  rather than by hand, so the pather gets moveJump, moveWalk, moveArc,
+  --  moveSwim, timedDrop and keepDropping instead of vanilla's for all but one.
+  if self.pather == nil then
+    petports_freshPather("approachPoint fly fallback -- no task pather yet")
+  end
   self.pather.options.run = running
 
-  --  ASSIGNED EVERY TICK, NOT ONCE. petportsTaskAction.freshPather builds a NEW
-  --  pather per task -- deliberately, because PathFinder:reset does not clear
-  --  aStar -- and it lives in a file shared with the ground drone, which must
-  --  not learn about this mover. Re-asserting here is what keeps the two apart
-  --  without a nil-guarded call in shared code, which is the silent-failure
-  --  shape petports_think.lua warns about.
+  --  ASSIGNED EVERY TICK, NOT ONCE, AND STILL NECESSARY AFTER THAT CHANGE.
+  --  petportsTaskAction.freshPather builds a NEW pather per task -- deliberately,
+  --  because PathFinder:reset does not clear aStar -- and it lives in a file
+  --  shared with the ground drone, which must not learn about this mover.
+  --  Re-asserting here is what keeps the two apart without a nil-guarded call in
+  --  shared code, which is the silent-failure shape petports_think.lua warns
+  --  about.
+  --
+  --  freshPather DOES NOT BIND moveFly, WHICH IS WHY THIS BLOCK SURVIVED THE
+  --  DELETION OF ITS SIBLING ABOVE. That one only re-asserted moveSwim, which
+  --  freshPather does bind, so it was dead the moment the construction changed.
+  --  This one is not: a task-built pather reaching a flyer still arrives without
+  --  moveFly, exactly as before.
+  --
   --  BOTH SLOTS. Which one the engine dispatches to depends on whether the unit
   --  is submerged at that instant, and an amphibious chassis crosses that line
   --  mid-route. Binding only the one that "should" apply is how the first
