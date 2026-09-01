@@ -1,0 +1,56 @@
+//  PETPORTS -- FISHING MODULE
+//
+//  THE SECOND MODULE THAT ADDS A TASK RATHER THAN CHANGING ONE, after medic,
+//  and it rides the same channel:
+//
+//      petports_moduleFlags     read by the port, to change its own dispatch
+//
+//  The port reads `fishing` there and it is the ONLY gate on whether a lure
+//  exists. No module, no lure; no lure, no fish; no fish, no fishing task.
+//
+//  THERE IS NO PORT-SIDE PARTICIPATION CHECKBOX FOR THIS, and that is a
+//  decision rather than an omission. A player who does not want fish appearing
+//  in their water unsockets the module. Adding a fifth group to the port's
+//  hauling / sorting / farming / machines set would be a second switch for one
+//  behaviour -- the trap the medic module's own header names.
+//
+//  IT DOES NOT BELONG TO THE `farming` GROUP EITHER, even though both produce
+//  food. Farming is work done to things the PLAYER placed: their crops, their
+//  soil, their water. Fishing is work done to a thing this mod invented and put
+//  in the water itself. Lumping them would mean switching off a farm silently
+//  switches off fishing, which is not a connection a player would predict.
+//
+//  WHICH CHASSIS CAN ACTUALLY USE IT IS DECIDED BY VANILLA, NOT BY US. A fish
+//  despawns itself when `world.liquidAt(lurePosition)` is false, so a unit only
+//  ever reaches one by being in the water with it. Aquatic and amphibious units
+//  qualify; a sinker qualifies and is bad at it, because it walks the seabed and
+//  cannot close vertically on something that swims. A ground unit or a flyer
+//  standing on the shore never gets near one. That falls out of the fish's own
+//  script rather than being a rule this file imposes, which is why there is no
+//  chassis whitelist here.
+//
+//  LEGENDARY BECAUSE OF WHERE IT COMES FROM, not because of what it does. It is
+//  the sunken-ship find that arrives with an octopus already holding it.
+
+{
+	"itemName" : "petports_module_fishing",
+	"price" : 900,
+	"rarity" : "Legendary",
+
+	//  Shared with the other modules, so the categories.config.patch label and
+	//  the petports_filtergroups.config subgroup that already exist cover this
+	//  without either being touched.
+	"category" : "petports_module",
+
+	//  The medic icon hue-rotated to 190, saturation and value preserved, with
+	//  the dark casing left alone -- the same treatment the sinker's body took.
+	//  Placeholder, and it should be redrawn with the rest of the module art.
+	"inventoryIcon" : "petports_module_fishing.png",
+
+	"description" : "A baited line on a spool. Socket it into a unit that can swim and it will hunt whatever the water turns up.",
+	"shortdescription" : "Fishing Module",
+	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],
+	"maxStack" : 1,
+
+	"petports_moduleFlags" : [ "fishing" ]
+}

@@ -1,0 +1,144 @@
+//  PETPORTS -- FISHING LURE
+//
+//  A FORK OF VANILLA'S /projectiles/fishing/fishinglure.projectile, which is a
+//  rod's lure. Read that file alongside this one; only what DIFFERS is recorded
+//  here.
+//
+//  WHAT A LURE IS FOR, AND WHY THE PORT SPAWNS ONE AT ALL. Vanilla's lure is not
+//  a decoration -- IT IS THE FISH SPAWNER. `FishingSpawner()` lives on the lure
+//  script and spawns a fish every few seconds for as long as the lure is in
+//  liquid. So a port that wants fish spawns ONE of these and everything
+//  downstream is the lure's job. The port never calls the spawner itself.
+//
+//  THE SPRITE IS A PLACEHOLDER AND IS DELIBERATELY VISIBLE. An 8x8 white
+//  outline square, so the lure can be watched without debug rendering while the
+//  behaviour is being proven. IT IS MEANT TO BECOME TRANSPARENT once patrol,
+//  teleport and spawning are confirmed -- a player should never see this.
+
+{
+  "projectileName" : "petports_fishinglure",
+  "image" : "petports_fishinglure.png",
+  "animationCycle" : 1.0,
+  "frameNumber" : 1,
+  "flippable" : false,
+
+  //  NO LIGHT, UNLIKE VANILLA'S. The rod's lure lights itself so a player can
+  //  find it in dark water. Ours is invisible-to-be, and a glowing point in the
+  //  ocean with nothing attached to it reads as a bug.
+  "actionOnReap" : [ ],
+  "statusEffects" : [ ],
+
+  //  HARMLESS, AND THIS MATTERS MORE FOR US THAN FOR VANILLA. Ours drifts around
+  //  inside a player's base near their own pets. power 0 and "nodamage" together
+  //  mean it cannot participate in damage resolution at all.
+  "power" : 0.0,
+  "damageKind" : "nodamage",
+
+  //  Vanilla's is 35 because a rod CASTS it. Ours is placed where it is wanted
+  //  and moves under its own patrol, so a launch speed would only fight the
+  //  first second of that.
+  "speed" : 0,
+
+  //  VANILLA'S PHYSICS PROFILE, REUSED ON PURPOSE. It is what makes a lure sit
+  //  in water the way players expect rather than sinking or floating out.
+  //  Writing our own would be inventing a second answer to a solved question.
+  "physics" : "fishinglure",
+
+  "bounces" : -1,
+  "piercing" : true,
+  "orientationLocked" : true,
+  "onlyHitTerrain" : true,
+  "clientEntityMode" : "ClientPresenceMaster",
+
+  //  ONE SECOND, AND THE PORT MUST OVERRIDE IT. This is vanilla's value and it
+  //  is not a mistake there: the rod pings `updateLure` every tick and that
+  //  handler calls `projectile.setTimeToLive(2)`, so a rod's lure lives exactly
+  //  as long as the rod keeps talking to it and dies almost immediately when it
+  //  stops.
+  //
+  //  WE HAVE NO ROD AND DO NOT WANT A KEEPALIVE. A flat lifetime passed as a
+  //  spawn parameter is what makes the whole fishing loop self-cleaning: the
+  //  lure expires on its own, which nils the fish's `lureId`, which lets the
+  //  fish despawn itself. Nothing has to remember either of them exists.
+  //
+  //  LEFT AT 1 RATHER THAN RAISED so that a lure spawned WITHOUT the parameter
+  //  -- by hand, by a mistake, by a future caller that forgets -- dies at once
+  //  instead of drifting in someone's ocean forever.
+  "timeToLive" : 1,
+
+  "scripts" : [ "petports_fishinglure.lua" ],
+
+  //  --- OUR PARAMETERS, ALL OVERRIDABLE AT SPAWN ---
+  //
+  //  HOW CLOSE A FISH GETS BEFORE THE LURE MOVES AWAY FROM IT.
+  //
+  //  THIS EXISTS BECAUSE WE SPAWN FISH WITH `hookDistance` 0. A fish that can
+  //  never hook never resolves its approach: `approachState` waits out its
+  //  lookTimer, tests `lureDist < hookDistance`, fails, and darts at the lure at
+  //  `biteSpeed` 30 instead -- then overshoots, turns, and darts again. It
+  //  oscillates on the spot for the rest of its life and looks broken.
+  //
+  //  4.0 SITS JUST ABOVE VANILLA'S `biteDistance`, which is 3.5 for an
+  //  approacher and 4 for a lurker. Moving at that range puts the fish back into
+  //  the outer branch of its own state, where it clears its lookTimer and swims
+  //  in calmly at `swimSpeed` 3. The dart is never reached.
+  "petports_teleportRange" : 4.0,
+
+  //  Horizontal drift, so the lure is a moving target rather than a point. The
+  //  fish tracks it either way; this is about how the water reads.
+  //
+  //  TILES PER SECOND, APPLIED TO POSITION. There is no force partner to this
+  //  any more: the lure drives its own position rather than asking the movement
+  //  controller for a velocity, because a force fighting the fishinglure physics
+  //  profile's gravity lost slowly and the lure sank the whole time it was
+  //  alive. petports_patrolForce was removed with that approach.
+  "petports_patrolSpeed" : 2.5,
+
+  //  HOW FAR OFF A LURKER'S OWN ROW A TELEPORT MAY LAND.
+  //
+  //  A lurker outside its biteDistance idles FACING the lure, so a lure six
+  //  tiles above it leaves the fish angled at the sky for the rest of its life.
+  //  An approacher swims toward the lure instead and its facing follows travel,
+  //  so it is unaffected and skips the constrained pass entirely.
+  //
+  //  1.25 AFTER WATCHING IT. 2.0 was still enough tilt to read as looking up or
+  //  down. The teleport relaxes the constraint entirely on a second pass rather
+  //  than refusing, so a tight value costs nothing when no level spot exists --
+  //  a silly angle is a smaller problem than a fish oscillating on the spot.
+  //
+  //  IT IS ALSO APPLIED AT SPAWN, not only when a fish closes in. getSpawn
+  //  places a fish at a uniform angle 8-14 tiles out, so a lurker is as likely
+  //  to arrive below the lure as beside it -- and one that spawns underneath
+  //  never approaches far enough to trigger the ordinary teleport, so it would
+  //  otherwise spend its whole life angled at the ceiling.
+  "petports_levelTolerance" : 1.25,
+
+  //  ATTEMPTS PER PASS. The constrained pass is rejection sampling on a circle
+  //  and only about one candidate in twenty-five lands near the fish's row, so
+  //  the count is high. It is cheap anyway: the level test is arithmetic and
+  //  runs before any world call, so a wrongly-placed candidate is discarded for
+  //  the price of one subtraction.
+  "petports_teleportAttempts" : 100,
+
+  //  RARITY BIAS AT THE START OF A LURE'S LIFE. 0 means the published odds apply
+  //  from the very first fish -- roughly 80 percent common, 16 uncommon, 3.9
+  //  rare, 0.1 legendary.
+  //
+  //  UPSTREAM USES 0.2 AND THAT IS UNUSABLE HERE. The roll is
+  //  `math.random() + bias` against thresholds 0.001 / 0.04 / 0.2 / 100, so at
+  //  0.2 nothing above common can be rolled AT ALL -- it is not improbable, it
+  //  is arithmetically unreachable. A player burns that off in two casts; a
+  //  petport lure lives 150s, holds one fish at a time, and hands a fresh
+  //  spawner to its replacement, so it would reset the bias faster than it could
+  //  ever decay it.
+  "petports_spawnBias" : 0,
+
+  //  WHAT A FISHING ZONE SHOULD CALL US. Irisil-style zones match this against
+  //  their eligibleLureTypes list; a zone that does not name it finds no match
+  //  and spawns nothing, which is the correct failure rather than an error.
+  "petports_lureType" : "petports_fishinglure",
+
+  //  How often the patrol looks ahead. Every tick is wasted work for a body
+  //  moving 2.5 tiles a second.
+  "petports_patrolCheck" : 0.25
+}

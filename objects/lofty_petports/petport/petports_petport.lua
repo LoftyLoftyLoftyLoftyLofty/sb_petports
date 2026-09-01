@@ -1280,7 +1280,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-01j beached covers mixed as well as air"
+local PETPORT_BUILD_STAMP = "2026-09-01m two-tier lure placement, network rects"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -1300,6 +1300,41 @@ function init()
   self.dirty = false
   self.writeTimer = WRITE_INTERVAL
   self.firstUpdate = true
+
+  --  THE LURE TELLS THE PORT WHAT IT HAS IN THE WATER.
+  --
+  --  PUSHED, NOT POLLED. The port's own cadence is ENVIRONMENT_INTERVAL, five
+  --  seconds, and a fish lives well under two minutes -- polling would spend a
+  --  twentieth of the fish's life just noticing it existed, before any dispatch
+  --  or travel. The lure knows the instant it spawns one, so it says so.
+  --
+  --  THE PORT HOLDS THE ID, NOT THE LURE'S IDENTITY. What dispatch needs is "is
+  --  there a fish, where is it, can this chassis reach it" -- all of which come
+  --  from the entity. The lure is bookkeeping the port does not have to do.
+  --
+  --  NOT PERSISTED, deliberately. Both the lure and its fish die with the chunk,
+  --  so a reloaded port that remembered a fish id would be remembering a corpse.
+  --  fishingCheck rebuilds the lure and the lure reports again.
+  message.setHandler("petports_fishSpawned", simpleHandler(function(fishId, fishType)
+    self.fishId = fishId
+    self.fishType = fishType
+
+    sb.logInfo("PETPORT %s has a fish: %s (%s)",
+      stationUniqueId(), sb.printJson(fishId), tostring(fishType))
+  end))
+
+  --  Timed out, caught, or despawned for lost line of sight. The lure cannot
+  --  tell which and the port does not need to -- the id is dead either way, and
+  --  anything holding a claim on it should let go now rather than on a timer.
+  message.setHandler("petports_fishGone", simpleHandler(function(fishId)
+    if self.fishId == fishId then
+      self.fishId = nil
+      self.fishType = nil
+
+      sb.logInfo("PETPORT %s fish %s is gone", stationUniqueId(),
+        sb.printJson(fishId))
+    end
+  end))
 
   --  Sent by the pet when it dies or is recalled, so the petport can write the
   --  final state back into the item rather than losing it.
@@ -3471,6 +3506,63 @@ FARMING_FLAG = "farming"
 FARMING_CLASSES = { "harvest", "water", "replant", "animals" }
 MEDIC_ITEM = "medicalgoods"
 
+--  FISHING. The flag is the only gate on whether a lure exists at all.
+FISHING_FLAG = "fishing"
+
+--  THE PORT SPAWNS A LURE. THE LURE SPAWNS THE FISH. The port never calls
+--  FishingSpawner itself -- that lives on the lure, which is where vanilla puts
+--  it too, and it spawns a fish every few seconds for as long as it sits in
+--  liquid. So the port's whole job here is "should a lure exist, and if so
+--  where", and everything after that belongs to petports_fishinglure.lua.
+FISHING_LURE = "petports_fishinglure"
+
+--  TWO AND A HALF MINUTES, PASSED AT SPAWN BECAUSE VANILLA'S DEFAULT IS ONE
+--  SECOND. A rod's lure survives on a keepalive: the rod pings updateLure every
+--  tick and that handler calls setTimeToLive(2). We have no rod and want no
+--  keepalive, so the lifetime is flat and stated here.
+--
+--  A FLAT LIFETIME IS WHAT MAKES THE WHOLE LOOP SELF-CLEANING. The lure expires,
+--  which nils its fish's lureId, which lets the fish despawn itself. Nothing --
+--  not this port, not a saved table -- has to remember either of them exists,
+--  and an orphan left by a crash or a chunk unload resolves itself.
+FISHING_LURE_LIFETIME = 150
+
+--  WHAT EVERY FISH THIS PORT'S LURE SPAWNS IS BORN WITH.
+--
+--  hookDistance 0 IS THE LOAD-BEARING ONE. approachState and lurkState both test
+--  `lureDist < config.getParameter("hookDistance", 1.5)` before hooking, so 0
+--  makes hooking unreachable. That matters because hookedState HAS NO TIMER --
+--  it exits only on catch, unhook, or a line break that needs a rod's reel
+--  control -- so a fish that hooked itself on an unattended lure would sit there
+--  forever. Unable to hook, it times out on its own approach window instead.
+--
+--  THE WINDOWS ARE WIDENED FROM VANILLA'S. approachTimeRange defaults to {8,14}
+--  and lurkTimeRange to {16,24}, both sized for a player who is already standing
+--  there holding a rod. A port has to notice the fish, claim it, dispatch a unit
+--  and let it swim over. These are a first guess and should be tuned against a
+--  measured time-to-arrive rather than by feel.
+FISHING_FISH_PARAMETERS = {
+  hookDistance = 0,
+  approachTimeRange = { 45, 75 },
+  lurkTimeRange = { 45, 75 }
+}
+
+--  Vanilla's own spawner tuning, read rather than copied so the thresholds
+--  cannot drift from the ones getSpawn applies to the fish.
+FISHING_SPAWNER_CONFIG = "/scripts/fishing/fishingspawner.config"
+
+--  DOES THE SOCKETED UNIT CARRY A FISHING MODULE?
+--
+--  Same shape as petportOblivious and petportMedic above, and deliberately not
+--  folded in with them: they answer different questions and a shared loop over
+--  the flag list would be a saving of nothing.
+function petportFishing()
+  for _, flag in ipairs(petportModuleFlags()) do
+    if flag == FISHING_FLAG then return true end
+  end
+  return false
+end
+
 --  A TRADE GOOD WITH ALMOST NO VANILLA USE, GIVEN ONE. That is the design
 --  intent rather than an accident of naming: medicalgoods sits in vanilla as
 --  a sellable with no sink, and this makes a stockpile of it mean something.
@@ -5143,6 +5235,207 @@ local function mediumCheck()
     rehomeUnit("outside its own medium at "
       .. sb.printJson(answer.position) .. " (reads " .. tostring(answer.medium)
       .. ") for " .. tostring(ENVIRONMENT_INTERVAL * limit) .. "s")
+  end
+end
+
+--  THE NETWORK'S RECTS, WITH THE USUAL FALLBACK. Every generator that reasons
+--  about reach walks this list; the lure is handed the same one so its patrol
+--  and its fish stay inside the network that spawned it.
+local function fishingRects()
+  local rects = self.networkRects
+  if rects == nil or #rects == 0 then rects = { coverageRect() } end
+  return rects
+end
+
+--  A CLEAR, SUBMERGED POINT SOMEWHERE IN THE NETWORK.
+--
+--  `ceiling` bounds how HIGH a candidate may sit, and nil means unbounded. That
+--  parameter is the whole difference between the two placement tiers below.
+--
+--  The three tests are vanilla's spawnPositionNear, against thresholds from
+--  vanilla's own config. That function is a local inside FishingSpawner and
+--  cannot be called from here, so the logic is duplicated and none of the tuning
+--  is.
+local function submergedSpot(cfg, ceiling)
+  local rects = fishingRects()
+  local threshold = cfg.liquidThreshold or 0.9
+
+  for _ = 1, 24 do
+    --  A RECT AT RANDOM, THEN A POINT IN IT. Uniform over rects rather than
+    --  over area, which very slightly favours a small rect -- irrelevant when
+    --  every port's coverage is the same size.
+    local rect = rects[math.random(#rects)]
+
+    local top = rect[4]
+    if ceiling ~= nil then top = math.min(top, ceiling) end
+    if top >= rect[2] then
+      local x = math.floor(rect[1] + math.random() * (rect[3] - rect[1])) + 0.5
+      local y = math.floor(rect[2] + math.random() * (top - rect[2])) + 0.5
+      local here = { x, y }
+
+      local liquid = world.liquidAt(here)
+      if liquid and liquid[2] >= threshold then
+        local box = { here[1] + cfg.checkRegion[1], here[2] + cfg.checkRegion[2],
+                      here[1] + cfg.checkRegion[3], here[2] + cfg.checkRegion[4] }
+
+        if not world.rectCollision(box) then
+          local fill = world.liquidAt(box)
+          if fill and fill[2] >= threshold then return here end
+        end
+      end
+    end
+  end
+
+  return nil
+end
+
+--  WHERE COULD A LURE SIT?
+--
+--  TWO TIERS, AND THE SECOND EXISTS BECAUSE OF FISHING ZONES.
+--
+--  TIER ONE IS VANILLA'S RULES. world.type() must have a pool -- ocean, toxic,
+--  arctic or magma -- and the spot must be at least minDepth below the ocean
+--  level, because that is what petports_fishingspawner's vanilla mode will
+--  demand of the fish position afterwards. A lure placed here has the best
+--  possible odds of producing anything.
+--
+--  TIER TWO IS ANY CLEAR SUBMERGED WATER, AND IT IS A BET ON A ZONE.
+--
+--  An Irisil-style fishing zone is a stagehand that broadcasts its parameters to
+--  every projectile in its area, so a lure sitting in a zone gets configured
+--  without this mod ever looking for one. But it has to BE there first, and tier
+--  one refuses to place it: world.type() rejects a forest world before position
+--  is ever considered, so a player's zone-covered pond would never see a lure.
+--
+--  WE DO NOT SEARCH FOR THE STAGEHAND, DELIBERATELY. Querying coverage for
+--  stagehands and matching a name would work, but it would make this file know
+--  that Project Irisil exists and would hard-code one mod's entity name into
+--  another mod's dispatch. The message channel already gives us zone support
+--  with no dependency in either direction; placing a lure somewhere findable is
+--  the whole of our side of that bargain.
+--
+--  AN UNCONFIGURED TIER-TWO LURE IS INERT, NOT WRONG. In vanilla mode
+--  vanillaSpawnType returns nil for a biome with no pool, so it sits in the
+--  water spawning nothing until a zone speaks to it. The cost is one projectile
+--  and a getSpawn attempt every few seconds. If that proves too expensive, the
+--  self-correcting fix is for the lure to report repeated failures and let the
+--  port stop replacing it -- deliberately not built yet, because it is machinery
+--  for a cost nobody has measured.
+local function fishingSpot()
+  local ok, cfg = pcall(root.assetJson, FISHING_SPAWNER_CONFIG)
+  if not ok or type(cfg) ~= "table" or type(cfg.pools) ~= "table"
+     or type(cfg.checkRegion) ~= "table" then
+    return nil, "vanilla's fishing spawner config is unreadable"
+  end
+
+  --  TIER ONE, only where vanilla could actually produce a fish.
+  if cfg.pools[world.type()] ~= nil then
+    local ceiling = world.oceanLevel(entity.position()) - (cfg.minDepth or 8)
+    local spot = submergedSpot(cfg, ceiling)
+    if spot ~= nil then return spot, nil, "vanilla depth band" end
+  end
+
+  --  TIER TWO. No biome test, no depth test -- the spawner applies both itself
+  --  and refuses if they are not met, so the worst case is an idle lure.
+  local spot = submergedSpot(cfg, nil)
+  if spot ~= nil then return spot, nil, "any submerged water, pending a zone" end
+
+  return nil, "no clear submerged spot anywhere in network coverage"
+end
+
+--  KEEP EXACTLY ONE LURE ALIVE WHILE THE SOCKETED UNIT CAN FISH.
+--
+--  THE MODULE IS THE ONLY SWITCH. No participation group, no port checkbox: a
+--  player who does not want fish unsockets the module, and this stops.
+--
+--  ONE LURE, NOT ONE FISH. The lure enforces its own one-fish-at-a-time budget,
+--  because it is the only thing that knows both that it spawned a fish and
+--  whether that fish is still alive. This function never asks.
+--
+--  NOTHING IS PERSISTED. self.lureId lives on the script table and dies with the
+--  chunk -- which is correct, because the lure is spawned with this port as its
+--  source entity and vanilla's own update kills a lure whose source is gone. A
+--  reloaded port finds no lure and makes a new one; there is no stale id to
+--  reconcile and no cleanup pass to write.
+local function fishingCheck()
+  local wanted = petportEnabled() and self.petId ~= nil
+    and world.entityExists(self.petId) and petportFishing()
+
+  if self.lureId ~= nil and not world.entityExists(self.lureId) then
+    self.lureId = nil
+  end
+
+  if not wanted then
+    if self.lureId ~= nil then
+      --  kill() is vanilla's own door, kept in our fork for exactly this.
+      pcall(world.callScriptedEntity, self.lureId, "kill")
+      sb.logInfo("PETPORT %s fishing lure %s dismissed -- no unit with a "
+        .. "fishing module", stationUniqueId(), sb.printJson(self.lureId))
+      self.lureId = nil
+    end
+
+    --  AND FORGET THE FISH WITH IT. The lure dying nils the fish's lureId,
+    --  which lets the fish despawn itself -- but that happens on the fish's
+    --  next update, and the port must not offer a dispatch against it in the
+    --  meantime. Dropped here rather than waiting for petports_fishGone,
+    --  because a dismissed lure will not be alive to send it.
+    self.fishId = nil
+    self.fishType = nil
+    return
+  end
+
+  if self.lureId ~= nil then return end
+
+  local spot, why, tier = fishingSpot()
+  if spot == nil then
+    --  CHANGE-GATED. This runs on the environment timer and a port on a forest
+    --  world would otherwise report the same refusal every five seconds forever.
+    if self.fishingRefusal ~= why then
+      self.fishingRefusal = why
+      sb.logInfo("PETPORT %s cannot place a fishing lure: %s",
+        stationUniqueId(), tostring(why))
+    end
+    return
+  end
+  self.fishingRefusal = nil
+
+  --  THE NETWORK'S RECTS, NOT THIS PORT'S. The first build passed
+  --  coverageRect() and clamped the lure to the port that spawned it, which is
+  --  visibly wrong the moment two ports share a body of water -- fish could
+  --  only ever appear in one of them.
+  --
+  --  SAME IDIOM AS EVERY GENERATOR THAT REASONS ABOUT REACH: walk
+  --  self.networkRects, fall back to a one-element list of our own rect when
+  --  the registry has not answered yet.
+  local rects = fishingRects()
+
+  local parameters = {
+    timeToLive = FISHING_LURE_LIFETIME,
+    petports_coverage = rects,
+    petports_fishParameters = FISHING_FISH_PARAMETERS
+  }
+
+  --  SOURCE ENTITY IS THIS PORT, AND THAT IS THE TEARDOWN. The lure's update
+  --  ends in `else projectile.die()` when its source is gone, so breaking or
+  --  unloading this port kills the lure, which frees its fish.
+  --
+  --  ZERO DIRECTION AND trackSourceEntity FALSE: it is placed, not cast.
+  local ok, result = pcall(world.spawnProjectile,
+    FISHING_LURE, spot, entity.id(), { 0, 0 }, false, parameters)
+
+  --  BOTH FAILURE SHAPES. pcall's false is a thrown error; a true with a nil
+  --  result is spawnProjectile declining, which it does silently.
+  if ok and result ~= nil then
+    self.lureId = result
+    sb.logInfo("PETPORT %s fishing lure %s placed at %s for %ss -- %s, across "
+      .. "%s network rect(s)",
+      stationUniqueId(), sb.printJson(result), sb.printJson(spot),
+      sb.printJson(FISHING_LURE_LIFETIME), tostring(tier),
+      sb.printJson(#rects))
+  else
+    sb.logInfo("PETPORT %s failed to place a fishing lure at %s: %s",
+      stationUniqueId(), sb.printJson(spot),
+      ok and "spawnProjectile returned nil" or tostring(result))
   end
 end
 
@@ -11866,6 +12159,22 @@ function update(dt)
     --  one that is already being withdrawn would be two rescues racing over the
     --  same entity.
     mediumCheck()
+
+    --  AND THE SAME TIMER AGAIN, FOR THE SAME CAUSE: WATER MOVES.
+    --
+    --  A lure needs submerged, uncollided water inside coverage, which is the
+    --  same thing environmentCheck is watching for the port's own footprint. A
+    --  drained lake invalidates all three questions at once, so they share a
+    --  cadence for the reason the two above do rather than by convenience.
+    --
+    --  LAST, AFTER BOTH. environmentCheck can retire the unit and mediumCheck
+    --  can re-home it, and either changes the answer to "can the socketed unit
+    --  fish" -- so asking before them would place a lure for a unit that is
+    --  about to be withdrawn.
+    --
+    --  FIVE SECONDS OF LATENCY ON SOCKETING A MODULE is accepted. The player
+    --  action that starts fishing is closing a pane, not a timing-critical one.
+    fishingCheck()
   end
 
   --  THE DOOR NOW ALSO MEANS "AND SOMETHING COULD LIVE IN HERE".
