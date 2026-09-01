@@ -1,293 +1,530 @@
-<mxfile host="Electron" modified="2026-09-01T07:16:39.907Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.2.5 Chrome/120.0.6099.109 Electron/28.1.0 Safari/537.36" etag="etG9UI4qODNmUqQwSUnr" version="24.2.5" type="device">
+<mxfile host="Electron" modified="2026-09-01T17:53:29.519Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.2.5 Chrome/120.0.6099.109 Electron/28.1.0 Safari/537.36" etag="lDw5KfdZngxiO0zl5kN7" version="24.2.5" type="device">
   <diagram name="Page-1" id="NveRE99YrSAUUvzC1UxD">
     <mxGraphModel dx="1434" dy="844" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="z3SXewJq1nG71BAtuIDS-1" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;MODULES&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#0050ef;fontColor=#ffffff;strokeColor=#001DBC;" vertex="1" parent="1">
-          <mxGeometry x="40" y="120" width="800" height="40" as="geometry" />
+        <mxCell id="z3SXewJq1nG71BAtuIDS-1" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;MODULES&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#0050ef;fontColor=#ffffff;strokeColor=#001DBC;" parent="1" vertex="1">
+          <mxGeometry x="40" y="120" width="1280" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-2" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;UNITS&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#0050ef;fontColor=#ffffff;strokeColor=#001DBC;" vertex="1" parent="1">
-          <mxGeometry x="40" y="600" width="800" height="40" as="geometry" />
+        <mxCell id="z3SXewJq1nG71BAtuIDS-2" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;UNITS&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#0050ef;fontColor=#ffffff;strokeColor=#001DBC;" parent="1" vertex="1">
+          <mxGeometry x="40" y="1040" width="1280" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-3" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Light&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="40" y="200" width="200" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-4" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Poison Block&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+        <mxCell id="z3SXewJq1nG71BAtuIDS-3" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Light&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
           <mxGeometry x="40" y="240" width="200" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-5" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Lava Block&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="40" y="280" width="200" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-6" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Farming&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="40" y="320" width="200" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-7" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Camouflage&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+        <mxCell id="z3SXewJq1nG71BAtuIDS-4" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Poison Block&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
           <mxGeometry x="40" y="360" width="200" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-8" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Fishing&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+        <mxCell id="z3SXewJq1nG71BAtuIDS-5" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Lava Block&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
           <mxGeometry x="40" y="400" width="200" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-9" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Medic&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="40" y="440" width="200" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-10" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;IX&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="280" y="40" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-11" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;FINDABLE&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="360" y="40" width="120" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-13" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" vertex="1" parent="1">
-          <mxGeometry x="280" y="200" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-14" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" vertex="1" parent="1">
-          <mxGeometry x="280" y="240" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-15" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" vertex="1" parent="1">
-          <mxGeometry x="280" y="280" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-16" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" vertex="1" parent="1">
-          <mxGeometry x="280" y="320" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-17" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" vertex="1" parent="1">
-          <mxGeometry x="280" y="360" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-18" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="280" y="400" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-19" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" vertex="1" parent="1">
-          <mxGeometry x="280" y="440" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-21" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Oblivious&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+        <mxCell id="z3SXewJq1nG71BAtuIDS-6" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Farming&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
           <mxGeometry x="40" y="480" width="200" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-22" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" vertex="1" parent="1">
-          <mxGeometry x="280" y="480" width="40" height="40" as="geometry" />
+        <mxCell id="z3SXewJq1nG71BAtuIDS-7" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Camouflage&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="40" y="640" width="200" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-23" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Hydrator&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="40" y="520" width="200" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-24" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" vertex="1" parent="1">
-          <mxGeometry x="280" y="520" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-25" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;IDEA&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="520" y="40" width="320" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-26" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="400" y="200" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-27" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="400" y="240" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-28" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="400" y="280" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-29" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="400" y="320" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-30" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="400" y="360" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-31" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="400" y="400" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-32" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="400" y="440" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-33" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="400" y="480" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-34" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="400" y="520" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-35" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;TBD&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="520" y="200" width="320" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-36" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;TBD&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="520" y="240" width="320" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-37" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;TBD&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="520" y="280" width="320" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-38" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;TBD&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="520" y="320" width="320" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-39" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;TBD&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="520" y="360" width="320" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-40" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;TBD&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="520" y="400" width="320" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-41" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;TBD&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="520" y="440" width="320" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-42" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;TBD&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="520" y="480" width="320" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-43" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;TBD&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="520" y="520" width="320" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-44" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;M.A.U.S. Pipsy&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="40" y="680" width="200" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-45" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="280" y="680" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-46" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="400" y="680" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-47" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Nicemice T6 ship reward&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="520" y="680" width="320" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-48" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Axolotter&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+        <mxCell id="z3SXewJq1nG71BAtuIDS-8" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Fishing&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
           <mxGeometry x="40" y="720" width="200" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-49" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="280" y="720" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-50" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="400" y="720" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-51" value="Microdungeon - axolotter cave" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="520" y="720" width="320" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-52" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Alien Ant / Hive&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="40" y="760" width="200" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-53" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="280" y="760" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-54" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="400" y="760" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-55" value="Microdungeon - hive biome" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="520" y="760" width="320" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-56" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Alien Ant / Shroom&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+        <mxCell id="z3SXewJq1nG71BAtuIDS-9" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Medic&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
           <mxGeometry x="40" y="800" width="200" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-57" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+        <mxCell id="z3SXewJq1nG71BAtuIDS-10" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;IX&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="280" y="40" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-11" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;FINDABLE&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="360" y="40" width="120" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-13" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" parent="1" vertex="1">
+          <mxGeometry x="280" y="240" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-14" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" parent="1" vertex="1">
+          <mxGeometry x="280" y="360" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-15" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" parent="1" vertex="1">
+          <mxGeometry x="280" y="400" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-16" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" parent="1" vertex="1">
+          <mxGeometry x="280" y="480" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-17" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" parent="1" vertex="1">
+          <mxGeometry x="280" y="640" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-18" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="280" y="720" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-19" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" parent="1" vertex="1">
           <mxGeometry x="280" y="800" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-58" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+        <mxCell id="z3SXewJq1nG71BAtuIDS-21" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Oblivious&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="40" y="600" width="200" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-22" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" parent="1" vertex="1">
+          <mxGeometry x="280" y="600" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-23" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Hydrator&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="40" y="520" width="200" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-24" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" parent="1" vertex="1">
+          <mxGeometry x="280" y="520" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-25" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;IDEA&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="520" y="40" width="320" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-26" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="400" y="240" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-27" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="400" y="360" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-28" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="400" y="400" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-29" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="400" y="480" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-30" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="400" y="640" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-31" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="400" y="720" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-32" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
           <mxGeometry x="400" y="800" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-59" value="Microdungeon - shroom biome" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+        <mxCell id="z3SXewJq1nG71BAtuIDS-33" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="400" y="600" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-34" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="400" y="520" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-35" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Pet emits light&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="520" y="240" width="320" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-36" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Blocks poison status, allows liquid traversal&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="520" y="360" width="440" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-37" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Blocks fire status, allows liquid traversal&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="520" y="400" width="440" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-38" value="Allows farming task dispatch" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="520" y="480" width="320" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-39" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Ghostly teamtype; performs tasks&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="520" y="640" width="320" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-40" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Unit attempts to fish in eligible oceans&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="520" y="720" width="440" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-41" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Heals nearby friendly npcs by type&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
           <mxGeometry x="520" y="800" width="320" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-60" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Bat&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="40" y="840" width="200" height="40" as="geometry" />
+        <mxCell id="z3SXewJq1nG71BAtuIDS-42" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Ghostly teamtype; decorative pet&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="520" y="600" width="320" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-61" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="280" y="840" width="40" height="40" as="geometry" />
+        <mxCell id="z3SXewJq1nG71BAtuIDS-43" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Increase water fetch capacity&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="520" y="520" width="320" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-62" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="400" y="840" width="40" height="40" as="geometry" />
+        <mxCell id="z3SXewJq1nG71BAtuIDS-44" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;M.A.U.S. Pipsy&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="40" y="2000" width="200" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-63" value="?" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="520" y="840" width="320" height="40" as="geometry" />
+        <mxCell id="z3SXewJq1nG71BAtuIDS-45" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="280" y="2000" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-64" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Amphibious&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;strokeColor=#2D7600;fontColor=#ffffff;" vertex="1" parent="1">
-          <mxGeometry x="880" y="680" width="160" height="40" as="geometry" />
+        <mxCell id="z3SXewJq1nG71BAtuIDS-46" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="400" y="2000" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-65" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Amphibious&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;strokeColor=#2D7600;fontColor=#ffffff;" vertex="1" parent="1">
-          <mxGeometry x="880" y="720" width="160" height="40" as="geometry" />
+        <mxCell id="z3SXewJq1nG71BAtuIDS-47" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Nicemice T6 ship reward&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="520" y="2000" width="320" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-66" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Ground&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a0522d;fontColor=#ffffff;strokeColor=#6D1F00;" vertex="1" parent="1">
-          <mxGeometry x="880" y="760" width="160" height="40" as="geometry" />
+        <mxCell id="z3SXewJq1nG71BAtuIDS-48" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Axolotter&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="40" y="1840" width="200" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-67" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Ground&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a0522d;fontColor=#ffffff;strokeColor=#6D1F00;" vertex="1" parent="1">
-          <mxGeometry x="880" y="800" width="160" height="40" as="geometry" />
+        <mxCell id="z3SXewJq1nG71BAtuIDS-49" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="280" y="1840" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-68" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Flyer&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#d80073;fontColor=#ffffff;strokeColor=#A50040;" vertex="1" parent="1">
-          <mxGeometry x="880" y="840" width="160" height="40" as="geometry" />
+        <mxCell id="z3SXewJq1nG71BAtuIDS-50" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="400" y="1840" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-74" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Irisa&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="40" y="920" width="200" height="40" as="geometry" />
+        <mxCell id="z3SXewJq1nG71BAtuIDS-51" value="Microdungeon - axolotter cave" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="520" y="1840" width="320" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-75" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="280" y="920" width="40" height="40" as="geometry" />
+        <mxCell id="z3SXewJq1nG71BAtuIDS-52" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Alien Ant / Hive&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="40" y="1640" width="200" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-76" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="400" y="920" width="40" height="40" as="geometry" />
+        <mxCell id="z3SXewJq1nG71BAtuIDS-53" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="280" y="1640" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-77" value="?" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="520" y="920" width="320" height="40" as="geometry" />
+        <mxCell id="z3SXewJq1nG71BAtuIDS-54" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="400" y="1640" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-79" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Ground&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a0522d;fontColor=#ffffff;strokeColor=#6D1F00;" vertex="1" parent="1">
-          <mxGeometry x="880" y="920" width="160" height="40" as="geometry" />
+        <mxCell id="z3SXewJq1nG71BAtuIDS-55" value="Microdungeon - hive biome" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="520" y="1640" width="320" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-80" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#1ba1e2;fontColor=#ffffff;strokeColor=#006EAF;" vertex="1" parent="1">
-          <mxGeometry x="1040" y="680" width="40" height="40" as="geometry" />
+        <mxCell id="z3SXewJq1nG71BAtuIDS-56" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Alien Ant / Shroom&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="40" y="1800" width="200" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-81" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#6a00ff;fontColor=#ffffff;strokeColor=#3700CC;" vertex="1" parent="1">
+        <mxCell id="z3SXewJq1nG71BAtuIDS-57" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="280" y="1800" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-58" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="400" y="1800" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-59" value="Microdungeon - shroom biome" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="520" y="1800" width="320" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-60" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Bat&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="40" y="2040" width="200" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-61" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="280" y="2040" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-62" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="400" y="2040" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-63" value="Popular request - ix tbd" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="520" y="2040" width="320" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-64" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Amphibious&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;strokeColor=#2D7600;fontColor=#ffffff;" parent="1" vertex="1">
+          <mxGeometry x="880" y="2000" width="160" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-65" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Amphibious&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;strokeColor=#2D7600;fontColor=#ffffff;" parent="1" vertex="1">
+          <mxGeometry x="880" y="1840" width="160" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-66" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Ground&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a0522d;fontColor=#ffffff;strokeColor=#6D1F00;" parent="1" vertex="1">
+          <mxGeometry x="880" y="1640" width="160" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-67" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Ground&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a0522d;fontColor=#ffffff;strokeColor=#6D1F00;" parent="1" vertex="1">
+          <mxGeometry x="880" y="1800" width="160" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-68" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Flyer&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#d80073;fontColor=#ffffff;strokeColor=#A50040;" parent="1" vertex="1">
+          <mxGeometry x="880" y="2040" width="160" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-74" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Irisa&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="40" y="1480" width="200" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-75" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="280" y="1480" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-76" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="400" y="1480" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-77" value="Irisil Dens" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="520" y="1480" width="320" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-79" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Ground&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a0522d;fontColor=#ffffff;strokeColor=#6D1F00;" parent="1" vertex="1">
+          <mxGeometry x="880" y="1480" width="160" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-80" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#1ba1e2;fontColor=#ffffff;strokeColor=#006EAF;" parent="1" vertex="1">
+          <mxGeometry x="1040" y="2000" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-81" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#CC00CC;fontColor=#ffffff;strokeColor=#432D57;" parent="1" vertex="1">
+          <mxGeometry x="1040" y="1840" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-82" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#008a00;fontColor=#ffffff;strokeColor=#005700;" parent="1" vertex="1">
+          <mxGeometry x="1040" y="1640" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-83" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#008a00;fontColor=#ffffff;strokeColor=#005700;" parent="1" vertex="1">
+          <mxGeometry x="1040" y="1800" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-84" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#008a00;fontColor=#ffffff;strokeColor=#005700;" parent="1" vertex="1">
+          <mxGeometry x="1040" y="2040" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-86" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#CC00CC;fontColor=#ffffff;strokeColor=#3700CC;" parent="1" vertex="1">
+          <mxGeometry x="1040" y="1480" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-87" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Fuwaza&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="40" y="2080" width="200" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-88" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="280" y="2080" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-89" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="400" y="2080" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-90" value="Fox shaped uncanny creature" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="520" y="2080" width="320" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-91" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Ground&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a0522d;fontColor=#ffffff;strokeColor=#6D1F00;" parent="1" vertex="1">
+          <mxGeometry x="880" y="2080" width="160" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-92" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#CC00CC;fontColor=#ffffff;strokeColor=#3700CC;" parent="1" vertex="1">
+          <mxGeometry x="1040" y="2080" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-93" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Tentacle (?)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="40" y="2120" width="200" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-94" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="280" y="2120" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-95" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="400" y="2120" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-96" value="Microdungeon tentacle boss world" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="520" y="2120" width="320" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-98" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#CC00CC;fontColor=#ffffff;strokeColor=#3700CC;" parent="1" vertex="1">
+          <mxGeometry x="1040" y="2120" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-99" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Amphibious&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;strokeColor=#2D7600;fontColor=#ffffff;" parent="1" vertex="1">
+          <mxGeometry x="880" y="2120" width="160" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-100" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Marimo mossball&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="40" y="1240" width="200" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-101" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="280" y="1240" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-102" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="400" y="1240" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-103" value="Ocean surface" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="520" y="1240" width="320" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-104" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Aquatic&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#0050ef;fontColor=#ffffff;strokeColor=#001DBC;" parent="1" vertex="1">
+          <mxGeometry x="880" y="1240" width="160" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="z3SXewJq1nG71BAtuIDS-105" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#f5f5f5;fontColor=#333333;strokeColor=#666666;" parent="1" vertex="1">
+          <mxGeometry x="1040" y="1240" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-1" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Crab&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1280" width="200" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-2" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="280" y="1280" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-3" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="400" y="1280" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-4" value="Hylotl dungeons" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="520" y="1280" width="320" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-5" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#008a00;fontColor=#ffffff;strokeColor=#005700;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="1280" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-6" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Sinker&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#76608a;strokeColor=#432D57;fontColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry x="880" y="1280" width="160" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-7" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Octopus&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1320" width="200" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-8" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="280" y="1320" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-9" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="400" y="1320" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-10" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Sunken ship&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="520" y="1320" width="320" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-11" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Aquatic&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;strokeColor=#2D7600;fontColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry x="880" y="1320" width="160" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-12" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#1ba1e2;fontColor=#ffffff;strokeColor=#006EAF;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="1320" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-13" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Type + Rarity&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="880" y="40" width="200" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-14" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;OCEAN PLANET&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#f0a30a;fontColor=#000000;strokeColor=#BD7000;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1160" width="1040" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-15" value="MIDNIGHT PLANET" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#f0a30a;fontColor=#000000;strokeColor=#BD7000;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1560" width="1040" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-16" value="UNDERGROUND BIOMES / PLANET AGNOSTIC" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#f0a30a;fontColor=#000000;strokeColor=#BD7000;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1720" width="1040" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-17" value="ALIEN PLANET" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#f0a30a;fontColor=#000000;strokeColor=#BD7000;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1400" width="1040" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-18" value="OTHER / UNSORTED / TBD" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#f0a30a;fontColor=#000000;strokeColor=#BD7000;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1920" width="1040" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-19" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Mod Crossover&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1120" y="40" width="200" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-20" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Project Irisil&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1120" y="1480" width="200" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-21" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Nicemice&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1120" y="2000" width="200" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-22" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#f5f5f5;fontColor=#333333;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="240" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-23" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#008a00;fontColor=#ffffff;strokeColor=#005700;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="360" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-24" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#1ba1e2;fontColor=#ffffff;strokeColor=#006EAF;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="400" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-26" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#CC00CC;fontColor=#ffffff;strokeColor=#3700CC;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="640" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-27" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#1ba1e2;fontColor=#ffffff;strokeColor=#006EAF;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="480" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-29" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#CC00CC;fontColor=#ffffff;strokeColor=#3700CC;" vertex="1" parent="1">
           <mxGeometry x="1040" y="720" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-82" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#008a00;fontColor=#ffffff;strokeColor=#005700;" vertex="1" parent="1">
-          <mxGeometry x="1040" y="760" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-83" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#008a00;fontColor=#ffffff;strokeColor=#005700;" vertex="1" parent="1">
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-30" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#CC00CC;fontColor=#ffffff;strokeColor=#3700CC;" vertex="1" parent="1">
           <mxGeometry x="1040" y="800" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-84" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#008a00;fontColor=#ffffff;strokeColor=#005700;" vertex="1" parent="1">
-          <mxGeometry x="1040" y="840" width="40" height="40" as="geometry" />
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-31" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#008a00;fontColor=#ffffff;strokeColor=#005700;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="600" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-86" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#6a00ff;fontColor=#ffffff;strokeColor=#3700CC;" vertex="1" parent="1">
-          <mxGeometry x="1040" y="920" width="40" height="40" as="geometry" />
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-32" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#008a00;fontColor=#ffffff;strokeColor=#005700;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="520" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-87" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Fuwaza&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="40" y="960" width="200" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-88" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="280" y="960" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-89" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="400" y="960" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-90" value="?" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="520" y="960" width="320" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-91" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Ground&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a0522d;fontColor=#ffffff;strokeColor=#6D1F00;" vertex="1" parent="1">
-          <mxGeometry x="880" y="960" width="160" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-92" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#6a00ff;fontColor=#ffffff;strokeColor=#3700CC;" vertex="1" parent="1">
-          <mxGeometry x="1040" y="960" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-93" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Tentacle (?)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="40" y="1000" width="200" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-94" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="280" y="1000" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-95" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
-          <mxGeometry x="400" y="1000" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-96" value="Microdungeon tentacle boss world" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="520" y="1000" width="320" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-98" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#6a00ff;fontColor=#ffffff;strokeColor=#3700CC;" vertex="1" parent="1">
-          <mxGeometry x="1040" y="1000" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-99" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Amphibious&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;strokeColor=#2D7600;fontColor=#ffffff;" vertex="1" parent="1">
-          <mxGeometry x="880" y="1000" width="160" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-100" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Marimo mossball&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-33" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Fuel Efficiency I&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
           <mxGeometry x="40" y="880" width="200" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-101" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-34" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
           <mxGeometry x="280" y="880" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-102" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-35" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
           <mxGeometry x="400" y="880" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-103" value="Ocean planet obvious candidate" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-36" value="More work per food" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
           <mxGeometry x="520" y="880" width="320" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-104" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Aquatic&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#0050ef;fontColor=#ffffff;strokeColor=#001DBC;" vertex="1" parent="1">
-          <mxGeometry x="880" y="880" width="160" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="z3SXewJq1nG71BAtuIDS-105" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#f5f5f5;fontColor=#333333;strokeColor=#666666;" vertex="1" parent="1">
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-38" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#f5f5f5;fontColor=#333333;strokeColor=#666666;" vertex="1" parent="1">
           <mxGeometry x="1040" y="880" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-39" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Fuel Efficiency II&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="920" width="200" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-40" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="280" y="920" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-41" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="400" y="920" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-42" value="More work per food" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="520" y="920" width="320" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-43" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#008a00;fontColor=#ffffff;strokeColor=#005700;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="920" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-44" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Fuel Efficiency III&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="960" width="200" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-45" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="280" y="960" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-46" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="400" y="960" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-47" value="More work per food" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="520" y="960" width="320" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-48" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#1ba1e2;fontColor=#ffffff;strokeColor=#006EAF;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="960" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-49" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;RGB Light&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="280" width="200" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-50" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="280" y="280" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-51" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="400" y="280" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-52" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Light; pet settings can adjust RGB&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="520" y="280" width="320" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-54" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#CC00CC;fontColor=#ffffff;strokeColor=#3700CC;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="280" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-55" value="Common" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#f5f5f5;fontColor=#333333;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="1440" y="40" width="160" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-56" value="Uncommon" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#008a00;fontColor=#ffffff;strokeColor=#005700;" vertex="1" parent="1">
+          <mxGeometry x="1440" y="80" width="160" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-57" value="Rare" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#1ba1e2;fontColor=#ffffff;strokeColor=#006EAF;" vertex="1" parent="1">
+          <mxGeometry x="1440" y="120" width="160" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-58" value="Legendary" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#CC00CC;fontColor=#ffffff;strokeColor=#3700CC;" vertex="1" parent="1">
+          <mxGeometry x="1440" y="160" width="160" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-59" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;WHERE TO ACTUALLY FIND STUFF&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#0050ef;fontColor=#ffffff;strokeColor=#001DBC;" vertex="1" parent="1">
+          <mxGeometry x="40" y="2210" width="1280" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-60" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Water Purifier&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="2320" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-61" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="280" y="2320" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-63" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Poison Ocean planets&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="360" y="2320" width="320" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-66" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Large themed structure on poison ocean surface.&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="720" y="2320" width="600" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-67" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&quot;Hive ant&quot; Burrow&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="2440" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-68" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="280" y="2440" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-69" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Midnight planets / Hive biome&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="360" y="2440" width="320" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-70" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Simple microdungeon with one petport, one Hive Ant pet with a farming module, and a custom farming object that produces the baby larva item. Built to match the dark purple hive aesthetic.&lt;br&gt;&quot;Hive Ants&quot; aren&#39;t actually ants. That&#39;s just what we&#39;re calling these alien creatures until I have a better name for them. Storage container with configured deposit beacon, too.&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="720" y="2440" width="600" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-71" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&quot;Alien ant&quot; Burrow&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="2640" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-72" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="280" y="2640" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-73" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Underground / Shroom biome&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="360" y="2640" width="320" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-74" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Simple microdungeon with one petport, one Alien Ant pet with a farming module, some pre-tilled soil, and a bunch of mushrooms. Storage container with configured deposit beacon, too.&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="720" y="2640" width="600" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-75" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Beachcombing&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="2800" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-76" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="280" y="2800" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-77" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Ocean planets / Surface islands&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="360" y="2800" width="320" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-78" value="Interactive object that drops a single Marimomo + a deposit beacon and despawns. Similar to finding them on the beach in real life." style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="720" y="2800" width="600" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-79" value="Hylotl Ocean Ruins" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="2920" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-80" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="280" y="2920" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-81" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Ocean planets / Ocean floor&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="360" y="2920" width="320" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-82" value="Simple addition to existing vanilla dungeon with one petport, one Crab pet with a farming module, some pre-tilled soil, and some reefpods. There are already lots of smaller crabs here, too. Storage container with configured deposit beacon, too." style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="720" y="2920" width="600" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-83" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Sunken ship&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="3080" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-84" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="280" y="3080" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-85" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Ocean planets / Ocean floor&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="360" y="3080" width="320" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-86" value="Microdungeon with one petport, one Octopus pet with a fishing module, storage container with configured restock beacon." style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="720" y="3080" width="600" height="80" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>
