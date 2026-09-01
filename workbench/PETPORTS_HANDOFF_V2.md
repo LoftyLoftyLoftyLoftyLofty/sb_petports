@@ -50,94 +50,79 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-01 (one session, one bug, three diagnoses)
+### What is built, as of 2026-09-01 (sinker locomotion, arc planning, beached flop)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-A LONG SESSION ON ONE SYMPTOM: a unit losing all horizontal velocity in mid-air.
-It took THREE diagnoses, two of which were wrong and both of which shipped as
-fixes before the third was found. All of it is VERIFIED IN GAME.
+THREE PIECES OF WORK, EACH ONE VERIFIED IN GAME, AND ALL THREE FOUND BY READING
+SOURCE RATHER THAN BY GUESSING. The session's recurring lesson is in
+`proc.pathing.readsource`: every one of these had a plausible wrong theory that a
+source read killed in minutes.
 
 ---
 
-**THE SWIM -> JUMP HANDOVER IS FIXED.** `arch.unit.swimjump`. A swimmer overshot
-its own jump point and, having no buoyancy, fell 21 tiles to the lakebed. Two
-halves: the swim mover now brakes on the run-in to a Jump exactly as the walk
-mover does, and `petportsJumpMover` gained a liquid arm so a swimmer can swim back
-to a jump point the way a walker walks back. **VERIFIED: 5 of 5 takeoffs, gaps
-0.14 to 0.55, zero sinks.** The liquid arm has never had to fire.
+**SINKER LOCOMOTION EXISTS AND IS A REAL CHASSIS.** `fact.pathing.liquidthreshold`,
+`todo.locomotion.sinker`. `neighbors()` tests `inLiquid` BEFORE `onGround`, so a
+submerged node never reaches `getWalkingNeighbors` and no cost setting can
+produce a walk edge underwater. The lever is `minimumLiquidPercentage` above 1.0,
+an ActorMovementParameters field: the search stops believing water exists and a
+gravity-enabled chassis walks the seabed. `petports_sinker` ships with the crab
+as its creature (`todo.unit.species`), orange placeholder art, and its own
+category, animation and monsterpart. **VERIFIED: planned AND executed, walking
+the bottom.**
 
-**THE ARRIVAL BRAKE ASKS "HAVE I ARRIVED", NOT "AM I NEAR".**
-`arch.pathing.arrivalsign`. `LAND_BRAKE_REACH` 0.5 retired for a signed test
-along the direction of travel. **VERIFIED: 25 firings, every one between 0 and
-0.0017 except a single -0.61 caught by the far-side bound.** This closed
-`todo.pathing.brakefloor`, whose 2026-08-30 triage said it was a note rather than
-a defect and was wrong.
+**THE LAUNCH SOLVER NO LONGER FLATTENS A CLIMB INTO A PARABOLA.**
+`arch.pathing.solvelaunch`, `arch.pathing.climbsteer`. The reach clamp was gated
+on `plannedVx ~= 0`, so it skipped the one case where the plan asked for zero
+horizontal reach -- turning A*'s deliberate climb-then-traverse into a diagonal
+that flew through the ledge the climb existed to clear. **Removing four words was
+the fix.** Its other half is a narrow, acquire-only steering exception for arcs
+whose planned launch vx was zero. **VERIFIED: zero stalls across five takeoffs
+and 27 tiles of climb, against four-plus identical laps on one ledge before.**
 
-**NOTHING STEERS x DURING A FLIGHT.** `arch.pathing.nosteer`. The airborne
-`controlApproachXVelocity` and the whole planner-velocity substitution are
-deleted; friction zeroing plus ballistics is the mechanism. Correct, and NOT the
-fix for the thing it was shipped as.
+**`airForce` HAS FULL AIRBORNE AUTHORITY; `groundForce` DOES NOT.**
+`fact.pathing.airauthority`. Measured at exactly 50.0 accel, `airForce` 50 against
+mass 1. This closes a question `arch.pathing.nosteer` left open for two sessions
+and explains why the earlier steering attempt looked impossible: wrong quantity,
+not a doomed idea.
 
-**A LATCH THAT OUTLIVED ITS ARC WAS THE ACTUAL BUG.**
-`arch.pathing.brakelatch`. `petportsLanding` was cleared inside a guard on
-`petportsLaunch ~= nil`; a walk-off fall sets the latch and has no launch record,
-so the latch stuck and silently braked every LATER flight to a standstill in
-mid-air. **VERIFIED: 25 brake firings, 25 latch clears, paired exactly across 38
-takeoffs. Zero dry-air horizontal collapses in 178 airborne Arc ticks.**
+**BEACHED AQUATIC UNITS FLOP.** `arch.locomotion.beached`. A detector shared with
+the port's own rescue, a task yield, a full action-queue suppression, a forced
+state pick, and a vanilla fish's movement parameters. **VERIFIED: flop entered,
+hops carry, port re-homes at thirty seconds -- poll 1 of 6 through poll 6 of 6.**
+Took four runs; each failure is recorded in the entry because each one was a
+different mechanism.
 
-**THE INSTRUMENT THAT FOUND IT.** `arch.tooling.flighttrace`. `FLIGHT_TRACE` is
-OFF; leave it that way. It separated three hypotheses in one run after two rounds
-of 12 Hz reconstruction got it wrong twice -- see `proc.tooling.instrument`,
-which is the most reusable thing to come out of tonight.
+**THE PET STATE MACHINE IS NOW WRITTEN DOWN.** `fact.unit.statemachine`.
+`pickState(params)` calls `enterWith` and silently skips states that only define
+`enter`; `run()` is called once a second, not per tick; `reactTo` queues actions
+BEFORE `run()` starts; `groundPet.init`'s `self.autoPickState = false` is a
+vanilla typo that is harmless only by accident. Three test rounds were spent
+guessing at these.
 
 ---
 
-**ADVERSARIAL COURSE PASSED 2026-09-01.** 38 takeoffs, 38 landings, 1 landed
-off-plan, 3 stalls, all self-recovered. Against six identical ledge failures per
-session and three identical pool-exit perches at the start of the day.
+**WHAT IS NOT DONE, AND SHOULD NOT BE READ AS DONE.**
 
-**KNOWN OPEN, IN THE ORDER THEY WILL BITE:**
+- **`todo.pathing.fallbackpather` is OPEN.** It shipped a nil-global crash that
+  killed a unit, its recorded scope was wrong -- vanilla action states call
+  `approachPoint` too -- and its intended path is still unexercised because
+  `petports_allowSleep` is false on every chassis.
+- **The `flopping` animation is a placeholder** aliased to the run strip in all
+  five sheets. It reads as walking.
+- **The sinker wears a hue-rotated axolotter.** Orange is a testing aid and does
+  not reconsider the colour-blindness finding in the amphibious monsterpart.
+- **The sinker's jump problem is retired as `dead.locomotion.sinkerjump`** -- it
+  was never a liquid problem, and "it is in water and it moves badly" has now
+  pointed at liquid twice and been wrong twice.
 
-- `dead.pathing.latehandover` -- the surviving residual, about 0.2 tiles. The unit
-  reaches its planned column and arrives ~0.6 low, clipping a shoreline lip. Costs
-  nothing on every route measured. Filed as DEAD rather than TODO because the
-  large version of it was disproven; the small version is a known, accepted error.
-- `todo.dispatch.reachbudget` -- unchanged, and still the biggest design question.
-- `todo.module.hydratordeadline`, `todo.dispatch.sourcebackoff`,
-  `todo.pathing.leashreplan`, `todo.pathing.standpointchoice`,
-  `todo.port.nostandpoint` -- all unchanged.
-- `arch.pathing.originnudge` -- untouched again, and it walked a unit off a perch
-  into a pool once more before the latch fix removed the perches.
-- `todo.tooling.paneflightcallbacks` -- still half done.
-- The medic path through `columnsFor` is STILL unexercised.
-- ~~Upcycler pane string-table migration~~ -- WRONG, it closed 2026-08-30. All
-  four panes are on the shared table; the two `Upcycler running` hits left in the
-  config are comments. Corrected 2026-09-01.
-
-**Debug flags wanting a release pass** -- `TASK_DEBUG`, `VENT_DEBUG`, `DEBUG` in
-all four panes, `FLY_POINT_DEBUG`, `FLY_TELEMETRY`, `CARGO_TRACE` are ON.
-`FLIGHT_TRACE`, `DRAW_PLAN` and `PETPORTS_FILTER_DEBUG` are OFF and should stay
-off.
-
-**BUILD STAMPS AT THE END OF THIS SESSION.** `petportsTaskAction.lua` at
-`2026-09-01l trace off, latch fixed`; `petports_flyapproach.lua` at
-`2026-09-01a the swim run-in brakes for a jump`. `petports_petport.lua` unchanged
-from `2026-09-01h`.
-
-**A REAL LUA PARSER WAS AVAILABLE THIS SESSION** -- `liblua5.4.so.0` driven
-through Python ctypes, giving actual `luaL_loadbufferx` errors with line numbers.
-All 27 files parse. It is a 5.4 parser, so `goto`, `//` and `\u{}` would pass;
-those were swept for separately and the tree is clean. `petports_luacheck.py` is
-still absent from the uploaded tree.
-
-**LINE ENDINGS: `str_replace` WRITES LF INTO A CRLF FILE.** 151 LF-only lines
-were introduced into `petportsTaskAction.lua` this session and normalised back to
-CRLF before delivery. Check `file` on any CRLF file after an edit session.
-`petports_contract.lua` carries a stray bare CR that predates this and was not
-touched.
+**NEXT.** Fishing is designed but unbuilt (`todo.module.fishing`): the vanilla
+spawner is a requirable module, the selection is data, and the open question is
+what fishing is FOR rather than whether it works. The chassis roster, module
+list and acquisition sites now live on a chart that supersedes prose in
+`todo.module.designpass` and `todo.item.acquisition`.
 
 ## ARCHITECTURE
 
@@ -3577,6 +3562,99 @@ attempt look like it had no authority.
 which is 12 every time, so a run with four steered arcs shows one line. Do not
 read the count as attempts.
 
+### A beached aquatic unit flops, and four things had to change for it to
+`arch.locomotion.beached` -- see also `fact.unit.statemachine`, `arch.pathing.climbsteer`, `fact.pathing.dropfaults`, `arch.locomotion.classes`, `todo.unit.species`
+
+**BUILT AND VERIFIED IN GAME 2026-09-01**, replacing the backlog entry of the
+same name. An aquatic unit stranded out of water now hops, drops through
+platforms, and either finds water on its own or is collected by its port after
+thirty seconds. **THE FLOP ITSELF WAS TWENTY LINES AND EVERYTHING ELSE WAS THE
+WORK**, exactly as the backlog entry predicted -- it just named the wrong
+obstacle.
+
+**FOUR MECHANISMS, AND EVERY ONE OF THEM WAS FOUND BY A FAILED RUN.**
+
+    detector       petports_outOfMedium, the SAME call the port polls
+    yield          petportsTaskAction.update returns true when beached
+    suppression    petBehavior.run clears the action queue and returns
+    forced pick    self.state.pickState({petportsFlopState = true})
+
+**THE DETECTOR IS SHARED ON PURPOSE.** `petports_outOfMedium` is what the port's
+`mediumCheck` already polls, so the flop and the rescue cannot disagree about
+what beached means. It also settles the chassis question for free: `out` is true
+for an aquatic in air and FALSE for a flyer in air, because the answer is built
+from `petports_canFly` / `petports_canSwim` rather than from gravity. A walker
+returns `checked = false` and can never enter the state at all.
+
+**"mixed" IS THE COMMON READING, NOT "air".** Draining water around a unit leaves
+it straddling the waterline. The first build gated the 30-second window on `air`
+alone and would have given a drained unit the ordinary 10.
+
+**THE YIELD ALONE DOES NOTHING.** `petBehavior.run` re-queues the held task every
+tick, so yielding just ends the action and the next tick re-enters it. Measured:
+**91 yields in 8 seconds, 80ms apart, flop never reached.**
+
+**AND SUPPRESSING THE QUEUEING INSIDE run() IS ALSO NOT ENOUGH.**
+`groundPet.querySurroundings` calls `reactTo` for every nearby entity and THEN
+calls `run()`, and the reactTo handlers queue beg, follow, inspect, eat, play and
+sleep themselves. The queue is already full before `run()` starts. Measured:
+**inspectAction re-picked every two seconds through the whole beaching**, so the
+flop ticked in bursts. The fix is to clear `petBehavior.actionQueue` outright.
+
+**AND AN ACTION ALREADY IN FLIGHT HOLDS THE SLOT REGARDLESS.**
+`groundPet.update` only ticks the plain-state machine when `actionState` is
+empty, and vanilla's inspect, follow, beg, eat and pounce have no idea beaching
+exists. `self.actionState.endState()` is the catch-all; it runs the state's own
+`leavingState`, so a held task still reports through the ordinary path.
+
+**THE PHYSICS ARE A VANILLA FISH'S, READ OFF
+`/monsters/fishing/fishingchuckle.monstertype`.**
+
+    airJumpProfile.jumpSpeed   15.0     the chassis inherits 45
+    airFriction                0.5      the chassis declares 24
+    liquidFriction             1.5      the chassis declares 24
+    flopJumpInterval           0.3-1.5
+    bounceFactor               0.6      from vanilla flopState
+
+**THIS LANDED ON THE THIRD ATTEMPT AND BOTH MISSES ARE WORTH KEEPING.** Leaving
+the chassis friction alone braked every hop before it started -- 4 tiles in 17
+seconds. Zeroing it outright, copying `petportsArcMover`, let the inherited 45
+launch fly free and the unit ricocheted **five tiles a hop, between y 1128.8 and
+1134.2**. Rise scales with the SQUARE of launch speed, so 45 against 15 is nine
+times the height. The fish's numbers sit between the two misses.
+
+**THE WHOLE airJumpProfile IS PASSED, NOT JUST jumpSpeed**, so no question about
+how a partial JumpProfile merges. **controlParameters, NOT applyParameters** --
+it re-asserts per tick and lapses when the state stops, so there is no persistent
+override to leak and no cleanup to miss on an abnormal exit.
+
+**GRAVITY IS TURNED ON, AND THIS IS THE ONE PLACE THAT IS SAFE.** The aquatic
+chassis is `gravityEnabled` false, and every part of a flop needs gravity.
+The amphibious chassis is described in `arch.locomotion.classes` as "the otter",
+and it needed no transition code precisely because it never switches gravity at
+runtime -- `PathFinder:start` reads `baseParameters` and `mustEndOnGround` is
+captured at `PathMover:new`, so flipping it mid-route corrupts a live plan.
+**THAT OBJECTION DOES NOT APPLY HERE:** a beached unit has yielded its task and
+has no route.
+
+**`controlDown` IS KEPT, REVERSING WHAT THE BACKLOG ENTRY SAID.** That entry said
+"COPY THE JUMP, NOT THE `controlDown`", citing the drop-through fault. Water is
+almost always DOWN from wherever a unit is stranded and a platform between the
+two is the common case on a base, so a flopper that cannot pass a platform cannot
+save itself. The risk is bounded by the rescue: falling somewhere wrong ends in a
+re-home, and only one of falling and hovering can end in water.
+
+**THE RESCUE WAS ALREADY BUILT.** `mediumCheck` polls and re-homes; this adds
+`MEDIUM_STRIKE_LIMIT_BEACHED` 6 against the ordinary 2, selected on `air` or
+`mixed`. The split is SELF-RESCUE, not severity -- a unit wedged in terrain or
+sitting in a forbidden liquid has no way out, so making it wait three times as
+long buys nothing. **VERIFIED: poll 1 of 6 through poll 6 of 6, re-home at
+thirty seconds, unit back at its port and pathing.**
+
+**STILL PLACEHOLDER:** the `flopping` animation state exists in all five sheets
+but aliases the same run strip as everything else, so it reads as walking until
+real art lands.
+
 ### The flight trace, and what it is for
 `arch.tooling.flighttrace` -- see also `proc.tooling.instrument`, `arch.pathing.brakelatch`
 
@@ -6435,6 +6513,66 @@ session and a half. **USE `airForce` FOR ANY AIRBORNE HORIZONTAL COMMAND.**
 so long to see: half the calls behaved and half did not, and a quantity that
 works in one direction reads as a tuning problem rather than a wrong constant.
 
+### THE PET STATE MACHINE, AS IT ACTUALLY BEHAVES
+`fact.unit.statemachine` -- see also `arch.locomotion.beached`
+
+READ FROM `/scripts/stateMachine.lua` AND `/monsters/pets/groundPet.lua`,
+2026-09-01, after three failed runs guessing at it. Every line here cost a test
+round.
+
+**`pickState(params)` CALLS `enterWith`. `pickState()` CALLS `enter`.**
+
+    local enterFunctionName = "enter"
+    if params ~= nil then enterFunctionName = "enterWith" end
+
+A state that defines only one of them is SILENTLY SKIPPED by the other call
+shape. Passing params to select a state that implements only `enter` iterates
+every state, matches nothing, and returns false with no error. **A state meant to
+be reachable both ways must define both**, which is why `petportsFlopState` does.
+
+**WHICH MAKES A FORCED PICK DETERMINISTIC.** With params, ONLY states
+implementing `enterWith` are considered -- and the vanilla pet states, `idleState`
+and `wanderState`, define only `enter`. So naming a state with params bypasses
+list order entirely. Without params, order decides, and order is the scripts list
+order that `scanScripts` walks.
+
+**`scanScripts` REQUIRES THE GLOBAL TO EXIST AND TO LOOK RIGHT:**
+
+    (state["enter"] ~= nil or state["enterWith"] ~= nil) and state["update"] ~= nil
+
+A state table missing `update` is dropped from the list with no complaint.
+
+**TWO MACHINES, AND THE PLAIN ONE ONLY RUNS WHEN THE ACTION ONE IS EMPTY:**
+
+    if self.actionState.stateDesc() == "" and not self.state.update(dt) then
+      self.state.pickState()
+
+`(%a+State)%.lua` builds `self.state`, `(%a+Action)%.lua` builds
+`self.actionState`. **An action already in flight blocks every plain state**, and
+`endState()` is the only way to take the slot back from outside.
+
+**`petBehavior.run()` IS CALLED ONCE A SECOND, NOT PER TICK.** It comes from
+`groundPet.querySurroundings` on `querySurroundingsCooldown`, which the
+monstertypes set to 1. Anything that must react faster than a second cannot live
+in `run()`.
+
+**AND reactTo QUEUES ACTIONS BEFORE run() IS EVER CALLED.**
+`querySurroundings` calls `behavior.reactTo` for every nearby entity first, and
+the reactTo handlers call `queueAction` themselves. So `petBehavior.actionQueue`
+is ALREADY POPULATED when `run()` starts, and gating the queueing sites inside
+`run()` does not suppress anything. Clearing the queue is the only complete
+suppression.
+
+**`self.autoPickState = false` IN groundPet.init IS A VANILLA TYPO.** It sets a
+field on the script context, not on `self.actionState`, so the action machine's
+auto-pick stays enabled. Harmless TODAY only because auto-pick uses `enter` and
+every action state in this mod defines `enterWith` alone -- so it finds nothing.
+**ADDING AN `enter` TO ANY ACTION STATE WOULD MAKE IT FIRE UNBIDDEN.**
+
+**`approachPoint` IS CALLED BY VANILLA ACTION STATES**, not only by ours.
+`inspectAction.lua:33` calls it, and follow, beg and pounce are the same shape.
+See `todo.pathing.fallbackpather`, whose scope claim this falsifies.
+
 ### `inLiquid` IS TESTED BEFORE `onGround`, AND ITS THRESHOLD IS A CHASSIS PARAMETER
 `fact.pathing.liquidthreshold` -- see also `fact.pathing.edgebymedium`, `todo.locomotion.sinker`, `dd.pathing.coststeering`
 
@@ -8668,7 +8806,44 @@ target when grounded but short; and when landed far off in y, do NOT advance --
 that is a broken path and should surface as one.
 
 ### The fallback pather in `approachPoint` binds only `moveSwim`
-`todo.pathing.fallbackpather` -- see also `fact.pathing.smalljump`
+`todo.pathing.fallbackpather` -- see also `fact.pathing.smalljump`, `fact.unit.statemachine`
+
+**ATTEMPTED 2026-09-01, SHIPPED A CRASH, AND IS STILL NOT VERIFIED IN ITS OWN
+PATH.** Both fallback sites in `petports_flyapproach.lua` now build through
+`petports_freshPather` instead of a bare `PathMover:new`, and the ground site's
+`moveSwim` re-assertion was deleted as dead. The fly site's `moveFly` block
+SURVIVED, because `freshPather` binds `moveJump`, `moveWalk`, `moveArc`,
+`moveSwim`, `timedDrop` and `keepDropping` but NOT `moveFly`.
+
+**THE CRASH: `freshPather` IS A FILE-LOCAL, NOT A GLOBAL.** It is forward-declared
+`local freshPather` in `petportsTaskAction.lua` so `tryVentRoute` can call it
+above its own definition, and that declaration's own header says it must stay an
+assignment. A local is invisible across files, so the first version's bare call
+from `petports_flyapproach.lua` resolved to a nil global:
+
+    attempt to call a nil value
+      [C]: in global 'freshPather'
+      petports_flyapproach...:1328: in global 'approachPoint'
+      /monsters/pets/actions/inspectAction.lua:33: in field 'update'
+
+It killed the unit one tick after a beaching. `petports_freshPather` is the
+wrapper that file now exposes; a wrapper rather than promoting the local, because
+the forward declaration is load-bearing and two names for one function with
+different visibility is how this recurs.
+
+**AND THIS ENTRY'S MEASURED SCOPE WAS WRONG.** It said `approachPoint` has four
+callers, two in `petportsTaskAction` and two in `petportsSleepAction`, and
+concluded only a fresh spawn going straight to rest could reach the fallback.
+**VANILLA'S OWN ACTION STATES CALL `approachPoint`** -- the traceback above is
+`inspectAction` doing it, and follow, beg and pounce are the same shape. So the
+original wrong-jump was far more live than recorded, and the fix now sits on a
+hot path rather than a rare one.
+
+**WHY IT IS STILL OPEN.** The intended path -- a fresh spawn reaching
+`petportsSleepAction` before it has ever held a task -- remains unexercised,
+because every chassis carries `petports_allowSleep: false` and sleep is
+unreachable by configuration. What proved the code runs at all was a vanilla
+action hitting it by accident.
 
 **TRIAGED 2026-08-30 -- PRIORITY 6.** The highest-priority pathing item on the list. It is narrow but it is a REAL wrong-jump on a real path, and the fix -- have the fallback call `freshPather` -- is small.
 
@@ -8920,71 +9095,6 @@ agree on the gap between the header icon and the title text. See
 - **Slot targeting graphics** are effectively baked into the pane backgrounds,
   so they come after the same compression for the same reason.
 
-### A beached aquatic unit does nothing and nothing notices
-`todo.locomotion.beached` -- see also `todo.locomotion.sinker`, `fact.pathing.dropfaults`, `todo.pathing.recoveryladders`
-
-**TRIAGED 2026-08-30 -- BACKLOG, NO PRIORITY SET.** Recorded now while the vanilla precedent is fresh. The rescue already exists in the recovery ladders; what is missing is the detector, the animation and the suppression.
-
-**HALF BUILT ALREADY.** `environmentCheck` / `envUnsuitable` answers "can THIS
-chassis live at THIS port", withdraws a unit whose footprint stops suiting it,
-and brings it back when the port floods or drains. That is the SPAWN-SIDE half.
-What is missing is the case where an aquatic unit spawns legally into water and
-then ends up on dry land partway through a task. Nothing detects it and nothing
-reacts; it simply stands there.
-
-**VANILLA HAS THE ANSWER AND THE FILES ARE NAMED.** `/monsters/flopState.lua`
-and `/monsters/swimmingMonster.lua`, both read 2026-08-30.
-
-    -- swimmingMonster.lua, the detector
-    if not mcontroller.liquidMovement() then
-      if self.state.stateDesc() ~= "flopState" then
-        self.state.pickState({flop = true})
-      end
-    end
-
-`flopState` then jumps in a random direction on a timer, sets the `flopping`
-animation state, and returns true the moment `liquidMovement()` is true again --
-so the state ENDS ITSELF on rescue rather than being cancelled from outside.
-Larger vanilla fish flop; smaller ones (a different script, not read) just die.
-
-**THE DESIGN, AND IT IS A SMALL ONE.** Flop is the "save me" behaviour, not the
-rescue. A unit that flops long enough for the existing recovery ladders to
-teleport it home IS the correct outcome -- the port wants the unit back at work,
-and `rehomeUnit` is instant, free and always works. So this is a DETECTOR plus
-an ANIMATION plus a suppression, and the rescue already exists.
-
-**THREE THINGS TO SETTLE BEFORE WRITING IT.**
-
-**`flopState` USES `mcontroller.controlDown()`, WHICH THIS FILE ALREADY KNOWS IS
-UNSAFE.** See `fact.pathing.dropfaults`: it presses down and then checks whether
-it has landed, so the tick it arrives has already had a down issued and it falls
-through the surface it just reached. In vanilla that is harmless -- a fish on
-land has nowhere to fall. On a player's base, over a platform, a flopping unit
-would drop through the floor. COPY THE JUMP, NOT THE `controlDown`.
-
-**AN ACTION STATE WILL SUPPRESS IT.** groundPet's update reads
-
-    if self.actionState.stateDesc() == "" and not self.state.update(dt) then
-
-so a plain `%a+State` script only runs when NO action state holds the unit. An
-aquatic unit beached mid-task is inside `petportsTaskAction`, which means a
-flopState of ours would never be reached. Either the task action has to yield on
-`not liquidMovement()`, or the detection belongs inside the action rather than
-beside it. THIS IS THE REAL WORK; the flop itself is twenty lines.
-
-**AMPHIBIOUS IS EXEMPT.** That chassis keeps gravity and walks on land by
-design, so beaching is aquatic-only. The two share enough config that a check
-written against the wrong one would look like it worked.
-
-**WHAT COUNTS AS BEACHED** is not `liquidMovement()` alone for us --
-`PETPORTS_SUBMERGED_FILL` is 0.9 and already defines "in water" for the pathing
-side. Whether a shallow puddle counts as rescued needs a number, and it should
-be the same number, or a unit will flop its way into a puddle and stop.
-
-**BATCH IT.** A flop needs a `flopping` animation state in all four chassis
-animations. `todo.unit.species` and the `drone_placeholder` rename touch the same
-files, and the fade work already opened them once this session.
-
 ### Sinker locomotion -- ground pathing that will not swim
 `todo.locomotion.sinker` -- see also `fact.pathing.liquidthreshold`, `dead.locomotion.pelagic`, `todo.unit.species`
 
@@ -9076,7 +9186,8 @@ at once rather than one.
 hive and shroom biomes. That is the only species so far whose design says where a
 player finds it, and it belongs to `todo.item.acquisition` as much as here.
 
-**BATCH THE ANIMATION WORK.** A `flopping` state (`todo.locomotion.beached`), the
+**BATCH THE ANIMATION WORK.** The `flopping` state is already in all five sheets
+(`arch.locomotion.beached`), the
 per-sheet `invisible` blank (`todo.art.invisibleframe`) and this rename all touch
 the same four animation files. Opening them once is the whole reason to sequence
 these together.
