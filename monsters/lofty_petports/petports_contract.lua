@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-09-03a the trace reaches past a lid; boards follow the openings"
+local CONTRACT_BUILD_STAMP = "2026-09-03b a walker with no bottom under it stops walking downward"
 
 local contractStamped = false
 
@@ -1757,6 +1757,40 @@ local function platformUnderfoot()
 	return world.pointTileCollision(probe, { "Platform" })
 end
 
+--  How far below the feet still counts as water a walker can wade.
+PETPORTS_WADE_DEPTH = 4
+
+--  IS THERE A BOTTOM CLOSE ENOUGH TO WALK ON?
+--
+--  THIS IS WHAT SEPARATES WADING FROM FALLING IN, and until 2026-09-02 nothing
+--  did. A walker crossing a shin-deep pool and a walker that has just fallen off
+--  a cliff into open ocean report the same medium, hold the same kind of task,
+--  and want opposite things -- and the mode machine was answering `land` to
+--  both because only a FISH task was allowed to make a swimmer.
+--
+--  MEASURED: a unit missed its exit jump, fell back into deep water holding an
+--  upcycle task, and sank 54 tiles over 17 seconds at a steady 3 tiles a second.
+--  Nothing stopped it. The progress watchdog counts distance MOVED, and a unit
+--  falling is moving -- 15 tiles per five-second window against the 2.5 it needs
+--  -- so the one safeguard that could have caught it read the sink as healthy
+--  progress. It recovered only when the task failed on its own and left no task
+--  at all.
+--
+--  SOLID ONLY, AND PLATFORMS COUNT. Anything that stops a body is a floor worth
+--  standing on for this question; what matters is whether walking is an option
+--  at all, not whether it is a good one.
+local function wadeableBottom()
+	local position = mcontroller.position()
+	local bounds = mcontroller.boundBox()
+
+	local feet = position[2] + bounds[2]
+
+	return world.rectTileCollision({
+		position[1] + bounds[1], feet - PETPORTS_WADE_DEPTH,
+		position[1] + bounds[3], feet
+	}, { "Null", "Block", "Slippery", "Dynamic", "Platform" })
+end
+
 local function bodyFitsAt(position)
 	local box = rect.translate(mcontroller.boundBox(), position)
 	return not world.rectTileCollision(box, PETPORTS_DIVE_SOLID_SET)
@@ -2625,7 +2659,26 @@ function petports_desiredSwimMode(destination)
 		--  branch. Crossing a pool on the way to a crop means HOLDING a task, so
 		--  it takes the line below and stays a walker.
 		if self.petportsTask ~= nil then
-			if not taskWantsSwimming() then return PETPORTS_SWIM_MODE_LAND end
+			if not taskWantsSwimming() then
+				--  WADING IS FINE, DROWNING IS NOT. A task that is not worth
+				--  becoming a swimmer for is still not worth SINKING for. With a
+				--  bottom underfoot this is a pool being crossed and the walker
+				--  handles it, which is the behaviour the fish gate was added to
+				--  protect. Without one the unit is in open water it did not
+				--  choose, and falling through it is not a plan -- so it drops
+				--  out of this branch and the destination decides, which for the
+				--  dry target such a task always has means `exiting`.
+				if wadeableBottom() then return PETPORTS_SWIM_MODE_LAND end
+
+				if not self.petportsSinkNoted then
+					self.petportsSinkNoted = true
+					sb.logInfo("UNIT submerged at %s with no bottom within %s tiles and a "
+						.. "task that does not swim -- taking the water seriously rather "
+						.. "than walking down it",
+						sb.printJson(mcontroller.position()),
+						sb.printJson(PETPORTS_WADE_DEPTH))
+				end
+			else
 
 
 		--  THE BOARD MUST HAVE BEEN REACHED FIRST. A planned dive means the unit
@@ -2661,6 +2714,7 @@ function petports_desiredSwimMode(destination)
 			end
 
 			self.petportsDivePuddleNoted = nil
+			end
 		end
 	end
 
