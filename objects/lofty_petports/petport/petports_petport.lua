@@ -1290,7 +1290,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-01o retryable misses skip the backoff ladder"
+local PETPORT_BUILD_STAMP = "2026-09-01p tidy evicts lowest maxStack first"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -10249,6 +10249,10 @@ local function tidyWork()
   --  states and look identical from a silent port.
   local misfiled, homeless, full = 0, 0, 0
 
+  --  EVERY VIABLE MISFIT, SO ONE CAN BE CHOSEN RATHER THAN STUMBLED INTO. See
+  --  the sort below the loop.
+  local viable = {}
+
   for _, source in ipairs(sources) do
     if world.entityExists(source.id) then
       local items = world.containerItems(source.id)
@@ -10331,38 +10335,90 @@ local function tidyWork()
             elseif not roomFor then
               full = full + 1
             else
-              local stand, standWhy = servicePointNear("crate " .. tostring(source.id),
-                source.id, source.position, 4)
-
-              if stand == nil then
-                sb.logInfo("PETPORT %s tidy source %s SKIPPED: %s of %s",
-                  stationUniqueId(), sb.printJson(source.id), tostring(standWhy),
-                  sb.printJson(source.position))
-              else
-                sb.logInfo("PETPORT %s tidying %s x%s out of %s (slot %s)",
-                  stationUniqueId(), tostring(misfit.name),
-                  sb.printJson(misfit.count), sb.printJson(source.id),
-                  sb.printJson(misfit.slot))
-
-                return {
-                  id = workId,
-                  --  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
-                  mediumVerified = true,
-                  type = "tidy",
-                  target = source.id,
-                  item = misfit.name,
-                  count = misfit.count,
-                  slot = misfit.slot,
-                  position = stand,
-                  containerPosition = source.position,
-                  port = stationUniqueId(),
-                  dwell = 0
-                }
-              end
+              --  COLLECTED, NOT RETURNED. This used to return the FIRST viable
+              --  misfit it met -- source order then slot order, which is
+              --  whatever the container happened to be packed in. See the sort
+              --  below the loop for why the choice is worth making.
+              --
+              --  servicePointNear IS NOT CALLED HERE ANY MORE, deliberately. It
+              --  is the expensive test in this generator, and running it on
+              --  every candidate only to discard all but one was work thrown
+              --  away. It moves to the sorted pass, which stops at the first
+              --  success.
+              table.insert(viable, {
+                workId = workId,
+                source = source,
+                name = misfit.name,
+                count = misfit.count,
+                slot = misfit.slot,
+                stackSize = stackSizeFor(misfit.name,
+                  type(stack) == "table" and stack.parameters or nil)
+              })
             end
           end
         end
       end
+    end
+  end
+
+  --  DENSEST SLOTS FIRST: LOWEST maxStack WINS.
+  --
+  --  A slot is a slot whatever is in it, so every eviction reclaims exactly one
+  --  regardless of what it held. What differs is the PRICE of reclaiming it. A
+  --  slot holding one sword -- maxStack 1 -- is a slot spent on a single item;
+  --  a slot holding 900 dirt is a slot spent on nine hundred. Evicting the sword
+  --  buys the same space for a nine-hundredth of the contents, and what stays
+  --  behind is the stuff that packs.
+  --
+  --  IT MATTERS MORE SINCE FISHING LANDED. A treasure pool returns weapons,
+  --  currency and oddments -- almost all maxStack 1 -- so a fishing base fills
+  --  its crates with exactly the low-density items this now clears first. Before
+  --  fishing the misfits were mostly stackable produce and the ordering barely
+  --  showed.
+  --
+  --  STABLE ON A TIE, by slot then source, so two items of the same stack size
+  --  are still evicted in a fixed order rather than whatever the sort happens to
+  --  do -- an unstable comparator here would make the same crate produce
+  --  different work on identical ticks and make a log impossible to read twice.
+  table.sort(viable, function(a, b)
+    if a.stackSize ~= b.stackSize then return a.stackSize < b.stackSize end
+    if a.source.id ~= b.source.id then return a.source.id < b.source.id end
+    return (a.slot or 0) < (b.slot or 0)
+  end)
+
+  --  THE STANDING TEST RUNS HERE, IN ORDER, AND STOPS AT THE FIRST SUCCESS.
+  --  It is the expensive check in this generator, so it is paid for candidates
+  --  in preference order rather than for all of them.
+  for _, pick in ipairs(viable) do
+    local source = pick.source
+
+    local stand, standWhy = servicePointNear("crate " .. tostring(source.id),
+      source.id, source.position, 4)
+
+    if stand == nil then
+      sb.logInfo("PETPORT %s tidy source %s SKIPPED: %s of %s",
+        stationUniqueId(), sb.printJson(source.id), tostring(standWhy),
+        sb.printJson(source.position))
+    else
+      sb.logInfo("PETPORT %s tidying %s x%s out of %s (slot %s, maxStack %s, "
+        .. "%s viable candidate(s))",
+        stationUniqueId(), tostring(pick.name), sb.printJson(pick.count),
+        sb.printJson(source.id), sb.printJson(pick.slot),
+        sb.printJson(pick.stackSize), sb.printJson(#viable))
+
+      return {
+        id = pick.workId,
+        mediumVerified = true,
+        type = "tidy",
+        target = source.id,
+        item = pick.name,
+        count = pick.count,
+        slot = pick.slot,
+        position = stand,
+        containerPosition = source.position,
+        port = stationUniqueId(),
+        dwell = 0
+      }
     end
   end
 
