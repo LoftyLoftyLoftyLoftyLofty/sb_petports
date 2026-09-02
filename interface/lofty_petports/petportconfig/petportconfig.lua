@@ -193,6 +193,14 @@ local GROUP_WIDGET = {
 --
 --  `sep` MARKS THE START OF A MODULE BLOCK. Each module's settings are preceded
 --  by a divider so a player can see which module brought what.
+--  THE RARITY TIERS SHOWN IN THE STATS LIST EVEN AT ZERO.
+--
+--  Vanilla's four, in commonest-to-rarest order. They are named here rather than
+--  derived because the port can only report tiers it has COUNTED, and the whole
+--  point of the list is that a player sees "Legendary: 0" and learns that
+--  legendary fish exist.
+local FISH_RARITIES = { "common", "uncommon", "rare", "legendary" }
+
 local SETTING_ROWS = {
 	--  `default = false` ON BOTH DISPLAY TOGGLES, matching the port, which reads
 	--  each of them as `== true` so that absent means OFF. Without it the pane
@@ -1210,6 +1218,66 @@ local function paintStats(stats)
 	addLine(petports_format("petport.stats.watered", groupDigits(stats.watered)))
 	addLine(petports_format("petport.stats.harvested", groupDigits(stats.harvested)))
 	addLine(petports_format("petport.stats.livestock", groupDigits(stats.livestock)))
+
+	--  ONE BLOCK PER ACTIVITY, SEPARATED. Farming above, healing next, fishing
+	--  below -- three things a unit does rather than one undifferentiated column
+	--  of numbers. The parity note further down explains why a separator is also
+	--  the only place stripe colouring resets.
+	addSeparator()
+
+	--  EVERY CATEGORY, ALWAYS, EVEN AT ZERO.
+	--
+	--  A stat that appears only once it is non-zero teaches a player nothing --
+	--  they cannot discover that a pet CAN heal or fish by looking at a list
+	--  that hides those lines until it already has. "Heals delivered: 0" is a
+	--  feature announcement; a missing line is a mystery, and worse, it makes a
+	--  player wonder what else the pane is not telling them.
+	--
+	--  THIS IS WHY dosed IS HERE AT ALL. It has been in the port's paneStats
+	--  since the medic shipped and was never drawn, so the medic module's own
+	--  output has been invisible this whole time.
+	addLine(petports_format("petport.stats.dosed", groupDigits(stats.dosed)))
+
+	addSeparator()
+	addLine(petports_format("petport.stats.fished", groupDigits(stats.fished)))
+
+	--  ONE ROW PER RARITY, IN A FIXED ORDER, INCLUDING THE EMPTY ONES.
+	--
+	--  FIXED RATHER THAN SORTED BY COUNT. An earlier version ranked them by
+	--  catch count, which reads well as a one-off distribution and badly as a
+	--  live list: rows would reorder themselves under the player as counts
+	--  changed. Commonest-to-rarest is the order the rarities themselves imply.
+	--
+	--  THE FOUR ARE VANILLA'S AND ARE NAMED HERE BECAUSE THEY MUST BE SHOWN AT
+	--  ZERO. The port sends only tiers it has actually counted -- it cannot send
+	--  a zero for a tier that has never occurred -- so the baseline set has to
+	--  live somewhere, and the pane is where "what a player should be told
+	--  exists" is decided.
+	--
+	--  ANY OTHER TIER IS APPENDED AFTER. A fishing zone may declare its own
+	--  rarities; those cannot be shown at zero, but once one is caught it gets
+	--  its own row rather than being silently folded away.
+	local tiers = stats.fishedTiers or {}
+	local shown = {}
+
+	for _, tier in ipairs(FISH_RARITIES) do
+		shown[tier] = true
+		addLine(petports_format("petport.stats.fishedtier",
+			tier:sub(1, 1):upper() .. tier:sub(2),
+			groupDigits(tiers[tier] or 0)))
+	end
+
+	local extra = {}
+	for tier, count in pairs(tiers) do
+		if not shown[tier] then table.insert(extra, tier) end
+	end
+	table.sort(extra)
+
+	for _, tier in ipairs(extra) do
+		addLine(petports_format("petport.stats.fishedtier",
+			tier:sub(1, 1):upper() .. tier:sub(2),
+			groupDigits(tiers[tier])))
+	end
 
 	addSeparator()
 	addLine(petports_format("petport.stats.traveled", groupDigits(stats.traveled)))

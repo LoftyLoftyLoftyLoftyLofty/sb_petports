@@ -136,7 +136,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-01y units chase a moving fish instead of waiting"
+local BUILD_STAMP = "2026-09-01z approach points re-resolve when the target moves"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -3637,8 +3637,40 @@ end
 --
 --  Applies to "return" -- both the unit's own leash and the port's recall use
 --  that type, and both mean "come back to your port".
+--  HOW FAR A MOVING TARGET MAY DRIFT BEFORE ITS APPROACH POINT IS RE-RESOLVED.
+--
+--  1.5 tiles, which is about one body length. Tighter re-runs the flypoint or
+--  standable search almost every tick for a fish; looser and the unit visibly
+--  aims behind its target.
+local TARGET_DRIFT = 1.5
+
 local function approachTargetFor(stateData, rawPosition)
+  --  THE CACHE IS INVALIDATED WHEN THE TARGET HAS MOVED, AND THIS IS WHY
+  --  STRING-PULLING LOOKED LIKE IT LOCKED ON.
+  --
+  --  groundTarget is resolved once and returned forever after. That is right
+  --  for a crop or a crate, which is what it was written for. For a fish it
+  --  meant currentTarget correctly reported the LIVE position every tick, the
+  --  resolver turned the first one into a standing point, and every later call
+  --  handed back that first answer -- so the unit steered hard at the spot the
+  --  fish occupied when the lock was acquired and ignored where it actually
+  --  went. Measured as a unit swimming confidently to empty water.
+  --
+  --  THE RAW POSITION IS REMEMBERED, NOT THE RESOLVED ONE. Comparing against
+  --  the resolved point would measure how far the STANDING SPOT had drifted,
+  --  which is a different and much smaller number -- a fish can cross several
+  --  tiles while the nearest fittable point stays put.
+  if stateData.groundTarget ~= nil and stateData.groundTargetFrom ~= nil
+     and world.magnitude(rawPosition, stateData.groundTargetFrom) > TARGET_DRIFT then
+    stateData.groundTarget = nil
+    stateData.groundTargetFrom = nil
+  end
+
   if stateData.groundTarget ~= nil then return stateData.groundTarget end
+
+  --  REMEMBERED BEFORE THE RESOLVE, so a resolver that returns nil still
+  --  records where it was asked about and the drift test stays meaningful.
+  stateData.groundTargetFrom = rawPosition
 
   local task = stateData.task
   local homeward = task ~= nil and task.type == "return"

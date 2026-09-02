@@ -114,7 +114,18 @@ FLOP_JUMP_INTERVAL = {0.3, 1.5}
 --  petports_petBehavior.lua had one, so a run could not be told apart from the
 --  previous run's build -- and this state has now been wrong in three different
 --  ways across three logs. Same convention as petportsTaskAction's.
-FLOP_BUILD_STAMP = "2026-09-01b fish physics: jumpSpeed 15, friction 0.5/1.5"
+FLOP_BUILD_STAMP = "2026-09-01c flops only from air, not from any wrong medium"
+
+--  WHICH WRONG MEDIA A FLOP CAN ACTUALLY GET A UNIT OUT OF.
+--
+--  THE SAME PAIR THE PORT USES FOR ITS RESCUE TIMER, and for the same reason:
+--  petports_petport.lua's mediumCheck calls exactly these two "recoverable" and
+--  gives them thirty seconds instead of ten, because a unit on dry land can hop
+--  and drop its way back to water and one in the wrong liquid cannot.
+FLOP_MEDIA = {
+  air = true,
+  mixed = true
+}
 
 function petportsFlopState.enter()
   local report = petports_outOfMedium()
@@ -124,6 +135,64 @@ function petportsFlopState.enter()
   --  it can never be. See petports_outOfMedium's own header on why a bare
   --  boolean could not express this.
   if not report.checked or not report.out then return nil end
+
+  --  OUT OF ITS MEDIUM IS NOT THE SAME AS BEACHED, AND THIS FILE USED TO ASSUME
+  --  IT WAS.
+  --
+  --  petports_outOfMedium reports `out` for ANY medium the chassis may not
+  --  occupy. This header once claimed the check "gets the chassis question right
+  --  for free -- `out` is true for an aquatic in air and FALSE for a flyer in
+  --  air". Both true, and both beside the point: a FLYER IN WATER is also out of
+  --  its medium. Measured 2026-09-01 -- a flyer clipped the surface, the medium
+  --  test failed, and it entered a flop.
+  --
+  --  WHICH IS THE EXACT OPPOSITE OF THE RESCUE IT NEEDED. The flop turns gravity
+  --  ON and hops, because a stranded swimmer wants to fall toward water. A
+  --  submerged flyer wants to rise out of it; hopping just sinks it harder.
+  --
+  --  SO THE MEDIUM DECIDES, NOT THE CHASSIS. Flopping is the answer to "dry
+  --  land, and I need liquid" -- air or mixed. Anything else, including a flyer
+  --  in swim and any unit in a forbidden liquid, has no self-rescue and the
+  --  port's medium check re-homes it on the SHORT timer, which is the correct
+  --  and much faster outcome.
+  --  AND THE CHASSIS MUST ACTUALLY WANT LIQUID.
+  --
+  --  "mixed" IS AMBIGUOUS ON ITS OWN AND THE MEDIUM TEST ALONE MISSED IT. A body
+  --  straddling the waterline reads mixed whichever side it came from: an
+  --  aquatic there is half OUT of the water and should fall in, a flyer there is
+  --  half IN it and should rise out. Same reading, opposite rescue.
+  --
+  --  petports_canSwim IS WHAT SEPARATES THEM. A flop drops a body toward liquid,
+  --  which is only ever a rescue for something that lives in liquid. A flyer
+  --  cannot swim, so no medium makes flopping right for it -- it goes to the
+  --  port's re-home on the short timer instead, which is what it needs.
+  if not config.getParameter("petports_canSwim", false) then
+    if self.petportsFlopWrongMedium ~= "cannotswim" then
+      self.petportsFlopWrongMedium = "cannotswim"
+
+      sb.logInfo("UNIT is out of its medium at %s (reads %s) but cannot swim -- "
+        .. "flopping drops a body toward liquid and this chassis does not want "
+        .. "to be in any. Leaving this to the port's medium check.",
+        sb.printJson(report.position), tostring(report.medium))
+    end
+
+    return nil
+  end
+
+  if not FLOP_MEDIA[report.medium] then
+    if self.petportsFlopWrongMedium ~= report.medium then
+      self.petportsFlopWrongMedium = report.medium
+
+      sb.logInfo("UNIT is out of its medium at %s (reads %s) but flopping would "
+        .. "not help -- a flop only rescues a unit stranded in air. Leaving this "
+        .. "to the port's medium check.",
+        sb.printJson(report.position), tostring(report.medium))
+    end
+
+    return nil
+  end
+
+  self.petportsFlopWrongMedium = nil
 
   return {
     jumpTimer = 0,

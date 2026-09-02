@@ -138,6 +138,13 @@ function petBehavior.init()
   self.petportsTask = self.petportsTask or nil
 end
 
+--  HOW FAR ABOVE ITSELF A DROWNING NON-SWIMMER WILL LOOK FOR AIR.
+--
+--  3 tiles. A surface graze is a matter of tenths, so one tile almost always
+--  does it; three gives a little room for a unit that sank slightly before the
+--  medium check noticed, without turning a nudge into a teleport across a cave.
+local SURFACE_NUDGE_REACH = 3
+
 function petBehavior.queueAction(type, args, score)
   table.insert(petBehavior.actionQueue, {type = type, args = args, score = score})
 end
@@ -192,6 +199,68 @@ function petBehavior.run()
 
   --  Re-assert the held task. Every tick, unconditionally -- see the header.
   if beached then
+    --  A NON-SWIMMER THAT CLIPPED THE WATER GETS ONE NUDGE UPWARD.
+    --
+    --  MEASURED 2026-09-01: a flyer string-pulling across a pond grazed the
+    --  surface, failed its medium test, and then simply waited for the port's
+    --  re-home -- because petportsFlopState correctly refuses it. A flop drops a
+    --  body toward liquid, which is the wrong direction for something drowning.
+    --
+    --  BUT WAITING IS ALSO WRONG. Rising a tile is trivially within a flyer's
+    --  means and the whole episode is usually a graze of a few tenths of a tile.
+    --  Ten seconds of stillness for that is a bug the player can see.
+    --
+    --  ONCE PER EPISODE, NOT A RESCUE LOOP. If one nudge does not clear it the
+    --  unit is genuinely stuck -- wedged under an overhang, or in a pool with no
+    --  air above it -- and repeating would be a unit bouncing against a ceiling
+    --  until the timer ran out. The port's medium check is the answer to that,
+    --  and it is already counting.
+    --
+    --  setPosition, NOT AN IMPULSE. A flyer carries airFriction 24 and
+    --  liquidFriction 24, so a velocity nudge is eaten within a few ticks and
+    --  may not clear the surface at all. Placement is the sanctioned call for
+    --  exactly this -- see the flop state's note on controlDown.
+    --
+    --  THE DESTINATION IS TESTED BEFORE IT IS USED, both for terrain and for
+    --  medium, so this can never place a unit inside a wall or somewhere its
+    --  chassis likes even less than where it started.
+    if not config.getParameter("petports_canSwim", false)
+       and not self.petportsSurfaceNudged then
+
+      self.petportsSurfaceNudged = true
+
+      local here = mcontroller.position()
+      local bounds = mcontroller.boundBox()
+      local moved = nil
+
+      for rise = 1, SURFACE_NUDGE_REACH do
+        local candidate = { here[1], here[2] + rise }
+
+        --  THE BOX IS TRANSLATED BY HAND. rect.lua is not in any chassis's
+        --  scripts list, so rect.translate here would be a nil call -- four
+        --  sums cost less than adding a shared library to five monstertypes.
+        local box = {
+          candidate[1] + bounds[1], candidate[2] + bounds[2],
+          candidate[1] + bounds[3], candidate[2] + bounds[4]
+        }
+
+        if not world.rectTileCollision(box, { "Null", "Block", "Dynamic" })
+           and petports_mediumAllows(candidate, bounds) then
+          mcontroller.setPosition(candidate)
+          mcontroller.setVelocity({ 0, 0 })
+          moved = candidate
+          break
+        end
+      end
+
+      sb.logInfo("BEHAVIOR surface nudge for a non-swimmer at %s (medium %s): %s",
+        sb.printJson(here), tostring(mediumReport.medium),
+        moved ~= nil
+          and ("lifted to " .. sb.printJson(moved))
+          or ("nothing clear within " .. sb.printJson(SURFACE_NUDGE_REACH)
+              .. " tiles above -- leaving it to the port"))
+    end
+
     --  END WHATEVER ACTION IS ALREADY RUNNING. SUPPRESSION ALONE CANNOT.
     --
     --  groundPet.update only ticks the plain-state machine when the action slot
@@ -327,6 +396,10 @@ function petBehavior.run()
   if self.petportsTask ~= nil then
     --  Change-gated the other way: one line when suppression lifts, so the log
     --  shows a beginning and an end rather than a beginning and silence.
+    --  A NEW EPISODE GETS A NEW NUDGE. Cleared here rather than on entry so a
+    --  unit that grazes the same pond twice is helped both times.
+    self.petportsSurfaceNudged = nil
+
     if self.petportsBeachedQuiet then
       self.petportsBeachedQuiet = nil
       sb.logInfo("BEHAVIOR resuming task actions -- unit is back in its medium, "

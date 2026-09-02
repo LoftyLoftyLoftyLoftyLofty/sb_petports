@@ -1290,7 +1290,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-01p tidy evicts lowest maxStack first"
+local PETPORT_BUILD_STAMP = "2026-09-01q fishing stats reach the pane"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -3971,6 +3971,31 @@ metrics.paneStats = function()
     dosed = math.floor(stats.dosed or 0),
     harvested = math.floor(stats.harvested or 0),
     livestock = math.floor(stats.livestock or 0),
+
+    --  FISHING. `fished` is the total; `fishedTiers` is a map of tier name to
+    --  count, built by walking the stats table rather than naming the four
+    --  vanilla rarities.
+    --
+    --  WALKED, NOT WHITELISTED, BECAUSE THE TIER NAMES ARE NOT OURS. They come
+    --  from whichever rarities table the roll used -- vanilla's four, or a
+    --  fishing zone's own -- so a fixed list here would silently drop a modded
+    --  tier that the port had counted correctly. The pane renders whatever
+    --  arrives.
+    fished = math.floor(stats.fished or 0),
+    fishedTiers = (function()
+      local tiers = nil
+
+      for key, value in pairs(stats) do
+        local tier = type(key) == "string" and key:match("^fished_(.+)$") or nil
+
+        if tier ~= nil and type(value) == "number" and value > 0 then
+          tiers = tiers or {}
+          tiers[tier] = math.floor(value)
+        end
+      end
+
+      return tiers
+    end)(),
     headpats = math.floor(stats.headpats or 0),
 
     --  QUANTIZED TO TENS ONLY WHILE ON A TASK, EXACT AT REST. The raw total on

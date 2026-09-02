@@ -82,7 +82,7 @@
 --  delegate, and stays one.
 local vanillaSetJumpState = setJumpState
 
-local BUILD_STAMP = "2026-09-01c fallback pathers via petports_freshPather"
+local BUILD_STAMP = "2026-09-01d string-pull for moving targets when the line is clear"
 local stampLogged = false
 
 --  DELETE ME ONCE THE ANSWER IS IN THE LOG.
@@ -520,6 +520,34 @@ local FLY_SWEEP_STEP = 0.8
 --  would refuse every shortcut passing under one.
 local FLY_SWEEP_SET = { "Null", "Block", "Dynamic" }
 
+--  HOW LONG A CLEAR-LINE VERDICT IS TRUSTED BEFORE IT IS RE-TESTED.
+--
+--  flyPathClear walks the whole line with a rect test and a medium test per
+--  step, which is cheap as a rarely-hit fallback and not cheap every tick. The
+--  line SHORTENS as the unit closes, so the check gets cheaper exactly as it
+--  starts mattering; a fifth of a second is short enough that a fish swimming
+--  behind terrain is noticed within a couple of body lengths.
+local STRING_PULL_RECHECK = 0.2
+
+--  WHICH TASKS MAY ABANDON THE PATHFINDER FOR A STRAIGHT LINE.
+--
+--  ALL THREE MOVING-TARGET TASKS AND NOTHING ELSE. A fish chases a lure, a farm
+--  animal wanders its pen, and a medic patient walks wherever it likes -- for
+--  all three the pathfinder is re-planning against a position that has already
+--  changed, which is the cost this avoids. Everything else this function serves
+--  is a fixed point: a crate, a vent mouth, a station. Pathing to those is
+--  correct and a straight line to them is often wrong.
+--
+--  READ OFF self.petportsTask RATHER THAN PASSED IN, because approachPoint is
+--  vanilla's signature and is called from four places that would all have to
+--  learn a new argument to answer a question only this file asks.
+local STRING_PULL_TASKS = {
+  fish = true,
+  animal = true,
+  medic = true
+}
+
+
 --  Can this body travel the straight line from `from` to `to`?
 --
 --  TWO CONDITIONS ON EVERY SAMPLE, geometry and MEDIUM. One-tile plan edges are
@@ -538,6 +566,28 @@ local FLY_SWEEP_SET = { "Null", "Block", "Dynamic" }
 --
 --  Conservative by construction. A refused shortcut costs one tick of vanilla
 --  behaviour; an approved shortcut through geometry costs a wedged unit.
+--  AIM THE BODY AT A POINT AND OPEN THE THROTTLE.
+--
+--  Vanilla's flyInGeneralDirection, factored out of the no-route fallback below
+--  so the string-pull path can use the same three lines rather than a second
+--  copy that drifts from it.
+--
+--  IT IS NOT A PLAN AND MAKES NO CLAIM TO BE. There is no braking, no arrival
+--  handling and no obstacle test -- the CALLER owes all three. approachPoint's
+--  FLY_ARRIVAL check covers the first two; flyPathClear is the third, and
+--  neither caller issues this without having asked it first.
+local function steerDirectly(toTarget, length, running)
+  local speed = mcontroller.baseParameters().flySpeed
+
+  mcontroller.controlFly({
+    toTarget[1] / length * speed,
+    toTarget[2] / length * speed
+  })
+
+  mcontroller.controlFace(toTarget[1])
+  setMovementState(running)
+end
+
 local function flyPathClear(from, to)
   local span = world.distance(to, from)
   local length = math.sqrt(span[1] * span[1] + span[2] * span[2])
@@ -565,6 +615,24 @@ local function flyPathClear(from, to)
   end
 
   return true
+end
+
+--  MAY THIS UNIT STRING-PULL RIGHT NOW, AND IS THE LINE ACTUALLY CLEAR?
+--
+--  CACHED ON A TIMER, NOT ON THE TARGET. Caching per target position would
+--  never hit -- the whole point is that these targets move every tick.
+local function stringPullClear(here, targetPosition, dt)
+  local task = self.petportsTask
+  if task == nil or not STRING_PULL_TASKS[task.type] then return false end
+
+  self.petportsPullTimer = (self.petportsPullTimer or 0) - (dt or 0)
+
+  if self.petportsPullTimer <= 0 then
+    self.petportsPullTimer = STRING_PULL_RECHECK
+    self.petportsPullClear = flyPathClear(here, targetPosition)
+  end
+
+  return self.petportsPullClear == true
 end
 
 --  THE MEDIUM HALF OF flyPathClear, WITHOUT THE GEOMETRY HALF.
@@ -1326,6 +1394,46 @@ function approachPoint(dt, targetPosition, stopDistance, running)
   --  RAW, NO GROUND RESOLVE. See the header.
   self.approachPosition = targetPosition
 
+  --  STRING-PULL BEFORE PATHING, FOR MOVING TARGETS ONLY.
+  --
+  --  THE PATHFINDER IS THE WRONG TOOL FOR A TARGET THAT MOVES. It plans against
+  --  a position, and by the time a route exists the fish has left it -- so the
+  --  unit walks a good route to nowhere and replans, repeatedly. When the line
+  --  is genuinely clear there is nothing for a route to contribute: the shortest
+  --  path IS the straight line, and steering follows the target continuously
+  --  instead of re-deriving a plan every time it twitches.
+  --
+  --  flyPathClear IS A SWEPT-BODY TEST, NOT A RAY. It walks the line stepping
+  --  the whole boundBox and refuses on terrain OR on leaving this chassis's
+  --  medium -- so an aquatic will not string-pull along a line that clips the
+  --  surface, which a corner-cast would have missed and which would beach it.
+  --
+  --  THE PATHER IS DROPPED ON THE TRANSITION BACK. Skipping pather:move leaves
+  --  its plan stale, computed from where the unit used to be; resuming it after
+  --  a spell of steering would follow a route from the wrong origin.
+  if stringPullClear(here, targetPosition, dt) then
+    if self.petportsPulling ~= true then
+      self.petportsPulling = true
+      sb.logInfo("UNIT STRING-PULL engaged at %s for %s target %s -- the line is "
+        .. "clear, steering directly instead of planning",
+        sb.printJson(here),
+        tostring(self.petportsTask and self.petportsTask.type),
+        sb.printJson(targetPosition))
+    end
+
+    steerDirectly(toTarget, targetDistance, running)
+    return false
+  end
+
+  if self.petportsPulling then
+    self.petportsPulling = false
+    sb.logInfo("UNIT STRING-PULL released at %s: the line to %s is no longer "
+      .. "clear -- handing back to the pathfinder",
+      sb.printJson(here), sb.printJson(targetPosition))
+
+    petports_freshPather("string-pull released, line blocked")
+  end
+
   --  SAME FIX AS THE GROUND BRANCH ABOVE, 2026-09-01: build through freshPather
   --  rather than by hand, so the pather gets moveJump, moveWalk, moveArc,
   --  moveSwim, timedDrop and keepDropping instead of vanilla's for all but one.
@@ -1494,15 +1602,7 @@ function approachPoint(dt, targetPosition, stopDistance, running)
         --  Normalised to flySpeed rather than passing the raw displacement, so
         --  a distant target does not command a speed the controller will simply
         --  clamp and a near one does not crawl.
-        local speed = mcontroller.baseParameters().flySpeed
-
-        mcontroller.controlFly({
-          toTarget[1] / length * speed,
-          toTarget[2] / length * speed
-        })
-
-        mcontroller.controlFace(toTarget[1])
-        setMovementState(running)
+        steerDirectly(toTarget, length, running)
 
         return false
       end
