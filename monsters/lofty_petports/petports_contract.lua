@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-09-02w boards are hunted at the waterline, not at the fish"
+local CONTRACT_BUILD_STAMP = "2026-09-02z pairs score on the walk, so ties stop favouring the left"
 
 local contractStamped = false
 
@@ -1615,6 +1615,10 @@ function petports_diveForget()
 	self.petportsDivePlan = nil
 	self.petportsDiveEntry = nil
 	self.petportsDivePuddleNoted = nil
+
+	--  Cleared with the plan so a pending re-resolve cannot leak into whatever
+	--  the unit does next.
+	self.petportsDiveRetarget = nil
 	self.petportsDiveMarks = nil
 	self.petportsDiveEntryMark = nil
 	self.petportsDiveLaunchMark = nil
@@ -1697,6 +1701,39 @@ end
 --  PETPORTS_DIVE_SOLID_SET is the set that means "solid to a dive".
 local function diveSighted(from, to)
 	return not world.lineTileCollision(from, to, PETPORTS_DIVE_SOLID_SET)
+end
+
+--  IS THERE A PLATFORM UNDER THE FEET, AND ONLY A PLATFORM?
+--
+--  THE DROP-THROUGH RETRY IS MEANINGLESS WITHOUT ONE, AND WORSE THAN
+--  MEANINGLESS. controlJump with controlDown drops through a platform; on solid
+--  ground the same pair is just a jump, and this chassis's airJumpProfile
+--  jumpSpeed of 45 at g 120 is an 8.44 tile apex.
+--
+--  MEASURED 2026-09-02, the cleanest repro of it:
+--
+--      UNIT DIVE launched ... aligned drop-through, no hop, predicted 0.234523 s
+--      UNIT DIVE SUCCEEDED ... (rose 8.00378 tiles above the board, drop-through)
+--
+--  Eight tiles on a dive solved for none. It reached the water in the end, which
+--  is why it logged SUCCEEDED, but it went up a storey first. The other three
+--  drop-throughs in the same log rose 0.2, 0.99 and 1.06 -- those had a platform
+--  and released; this one did not, so the jump simply happened.
+--
+--  ONLY A PLATFORM. A tile that is BOTH -- a platform drawn over solid, or a
+--  solid tile the probe clips -- cannot be fallen through either, so solid is
+--  tested first and wins.
+local function platformUnderfoot()
+	local position = mcontroller.position()
+	local bounds = mcontroller.boundBox()
+
+	--  Half a tile below the soles: inside the tile being stood on, not inside
+	--  the body.
+	local probe = { position[1], position[2] + bounds[2] - 0.5 }
+
+	if world.pointTileCollision(probe, PETPORTS_DIVE_SOLID_SET) then return false end
+
+	return world.pointTileCollision(probe, { "Platform" })
 end
 
 local function bodyFitsAt(position)
@@ -1817,6 +1854,44 @@ local function traceSurface(from, spanLow, spanHigh)
 	end
 
 	return nil, "the water around " .. sb.printJson(from) .. " has no reachable surface"
+end
+
+--  How many body-sized samples to take along the line to the fish.
+PETPORTS_DIVE_SWIM_SAMPLES = 14
+
+--  CAN THE UNIT SIMPLY SWIM AT THE FISH FROM WHERE IT IS?
+--
+--  A SWEPT BODY, NOT A RAY, AND THE DIFFERENCE IS THE WHOLE POINT. A ray passes
+--  through a one-tile gap that a 1.6-wide body cannot -- which is exactly the
+--  case where two nearly separate pools touch at a single tile, and abandoning a
+--  good board for a hole the unit cannot fit through would strand it mid-pool.
+--  Sampling bodyFitsAt along the line asks the question a ray only approximates.
+--
+--  IT DOES NOT ASK WHETHER THE LINE IS WET. Being submerged is tested separately
+--  by the caller and is about the UNIT; this is about what is between it and the
+--  fish. A line that leaves the water and comes back is still swimmable by a
+--  chassis that has just proven it can cross a waterline in both directions.
+--
+--  NOT A SUBSTITUTE FOR THE PATHER. This says "there is nothing in the way", and
+--  the free-mover machinery still has to plan the actual route. A false yes
+--  costs one abandoned board and a plan that fails honestly; a false no costs a
+--  walk to a diving board that was never needed.
+local function swimReachable(target)
+	if target == nil then return false end
+
+	local from = mcontroller.position()
+
+	for i = 0, PETPORTS_DIVE_SWIM_SAMPLES do
+		local t = i / PETPORTS_DIVE_SWIM_SAMPLES
+		local at = {
+			from[1] + ((target[1] - from[1]) * t),
+			from[2] + ((target[2] - from[2]) * t)
+		}
+
+		if not bodyFitsAt(at) then return false end
+	end
+
+	return true
 end
 
 --  BOARDS THAT HAVE ALREADY REFUSED, AND WHY THIS IS NOT THE "BEST BOARD" WORK.
@@ -1995,16 +2070,38 @@ local function pickBoardAndEntry(entries, fish, spanLow, spanHigh)
 						local dx = math.abs(entry[1] - spot[1])
 						local drop = spot[2] - entry[2]
 						local aligned = dx <= PETPORTS_DIVE_DROP_ALIGN
+						local walk = math.abs(spot[1] - mcontroller.position()[1])
 
-						--  Aligned pairs outrank every offset pair outright; within
-						--  a class, less offset first, then less drop.
-						local score = (aligned and 0 or 1000) + (dx * 10) + drop
+						--  ALIGNMENT FIRST, THEN THE WALK, THEN THE REST.
+						--
+						--  THE WALK TERM IS WHAT FIXES THE LEFT BIAS. Scored on
+						--  offset and drop alone, aligned pairs TIE EXACTLY -- dx
+						--  is 0 and the drop is the same waterline -- so the
+						--  winner was simply whichever column the scan reached
+						--  first, and the scan runs spanLow upward. Observed
+						--  2026-09-02 as a standing preference for holes on the
+						--  left regardless of where the unit was standing.
+						--
+						--  IT OUTRANKS dx WITHIN THE ALIGNED CLASS ON PURPOSE.
+						--  Every aligned pair already works -- five for five in
+						--  the 2026-09-02 log, each rising 0.667 tiles -- so
+						--  splitting hairs over a tile of offset while walking
+						--  twenty tiles further is the wrong trade. Between two
+						--  dives that both work, take the nearer one.
+						--
+						--  ALIGNMENT STILL WINS OUTRIGHT. The 1000 is larger than
+						--  any walk the span can produce (PETPORTS_DIVE_SPAN_MAX
+						--  is 72), so no amount of nearness promotes an offset
+						--  pair over an aligned one.
+						local score = (aligned and 0 or 1000)
+							+ walk + dx + (drop * 0.1)
 
 						if best == nil or score < best.score then
 							best = {
 								launch = { spot[1], spot[2] },
 								entry = { entry[1], entry[2] },
-								score = score, dx = dx, drop = drop, aligned = aligned
+								score = score, dx = dx, drop = drop,
+								aligned = aligned, walk = walk
 							}
 						end
 					end
@@ -2113,11 +2210,11 @@ function petports_diveApproach(fishPosition, taskId)
 	}
 
 	sb.logInfo("UNIT DIVE plan for fish at %s: %s opening(s) from %s tiles traced; "
-		.. "chose board %s -> hole %s (%s, dx %s, drop %s)",
+		.. "chose board %s -> hole %s (%s, dx %s, drop %s, walk %s)",
 		sb.printJson(fishPosition), sb.printJson(#entries), sb.printJson(examined),
 		sb.printJson(launch), sb.printJson(entry),
 		pair.aligned and "ALIGNED" or "offset",
-		sb.printJson(pair.dx), sb.printJson(pair.drop))
+		sb.printJson(pair.dx), sb.printJson(pair.drop), sb.printJson(pair.walk))
 
 	return launch, entry
 end
@@ -2472,7 +2569,12 @@ function petports_desiredSwimMode(destination)
 		--  and nothing to be confused by.
 			local plan = self.petportsDivePlan
 
-			if plan ~= nil and not plan.reached then
+			--  `abandoned` COUNTS AS ARRIVED, because it answers the same
+			--  question by a better route: the gate exists to stop a unit
+			--  committing to the wrong water, and a body-width clear run to the
+			--  fish is proof this is the right water. See the abandon block in
+			--  petports_swimModeTick.
+			if plan ~= nil and not plan.reached and not plan.abandoned then
 				if not self.petportsDivePuddleNoted then
 					self.petportsDivePuddleNoted = true
 					sb.logInfo("UNIT submerged at %s but has not reached its board at %s "
@@ -2643,7 +2745,13 @@ function petports_swimModeTick()
 	--  un-arrived by walking away from it.
 	local plan = self.petportsDivePlan
 
-	if plan ~= nil and not plan.reached and plan.launch ~= nil then
+	--  AN ABANDONED PLAN NEVER ARRIVES. Without this the unit could swim past its
+	--  discarded board, latch `reached`, and -- if it happened to be dry and
+	--  grounded at that moment -- dive off a board it had already decided it did
+	--  not need. `abandoned` is a decision, not a position, so no later position
+	--  should undo it.
+	if plan ~= nil and not plan.reached and not plan.abandoned
+	   and plan.launch ~= nil then
 		local gap = world.magnitude(mcontroller.position(), plan.launch)
 
 		if gap <= PETPORTS_DIVE_BOARD_ARRIVAL then
@@ -2652,6 +2760,63 @@ function petports_swimModeTick()
 			sb.logInfo("UNIT DIVE reached its board at %s (%s from %s) -- clear to enter the water",
 				sb.printJson(plan.launch), sb.printJson(gap),
 				sb.printJson(mcontroller.position()))
+		end
+	end
+
+	local medium = petports_mediumAt(mcontroller.position(), mcontroller.boundBox())
+
+	--  ABANDON THE BOARD IF THE FISH IS ALREADY SWIMMABLE FROM HERE.
+	--
+	--  A WALK TO A DIVING BOARD IS A MEANS, NOT A GOAL. The unit routinely gets
+	--  fully submerged on the way -- crossing the pool it is going to dive into
+	--  is often the shortest path to the board over it -- and at that moment the
+	--  board has nothing left to offer. Every tile it walks after that is away
+	--  from the fish.
+	--
+	--  SUBMERGED AND UNOBSTRUCTED, BOTH. Submerged alone is the puddle problem
+	--  that PETPORTS_DIVE_BOARD_ARRIVAL exists to stop; unobstructed alone would
+	--  fire while the unit stands dry on a ledge with a clear line down. Together
+	--  they say something the plan cannot argue with: the unit is IN water and
+	--  nothing is between it and the target.
+	--
+	--  "IN THE TRACED TILES" WAS THE OTHER CANDIDATE AND IS WEAKER. The trace
+	--  floods contiguously, so two nearly separate pools joined at a single tile
+	--  read as one body -- the unit would abandon its board for water it cannot
+	--  actually cross. swimReachable sweeps the BODY along the line instead, so a
+	--  gap too narrow for 1.6 tiles answers no.
+	--
+	--  ONE-WAY, LIKE `reached`. Once taken, the mode change follows and the
+	--  hysteresis holds it; nothing re-walks to a board it has already given up.
+	if plan ~= nil and not plan.reached and not plan.abandoned
+	   and medium == "swim" then
+
+		local fish = petports_currentTaskDestination()
+
+		if swimReachable(fish) then
+			plan.abandoned = true
+
+			--  THE CACHED APPROACH TARGET IS NOW WRONG AND NOTHING ELSE WILL
+			--  NOTICE. stateData.groundTarget still holds the BOARD, and it is
+			--  only invalidated when the TARGET drifts -- the unit changing its
+			--  mind is not a drift. Measured 2026-09-02, one tick after this
+			--  fired:
+			--
+			--      UNIT FLY path ended with pathfinding: target [2489.5,1152.8]
+			--          still 7.95624 away
+			--      UNIT STEERING REFUSED ... the straight line leaves this
+			--          chassis's medium
+			--      UNIT progress window: moved 0 (need 2.5) in 5 s
+			--
+			--  The unit became a swimmer and then tried to FLY to a diving board
+			--  standing in air, which canFly false refuses -- correctly, and the
+			--  refusal is why it stalled rather than steering itself out of the
+			--  water. Abandoning the board has to abandon the target too.
+			self.petportsDiveRetarget = true
+
+			sb.logInfo("UNIT DIVE abandoning its board at %s: already submerged at %s "
+				.. "with a clear body-width run to the fish at %s -- swimming instead",
+				sb.printJson(plan.launch), sb.printJson(mcontroller.position()),
+				sb.printJson(fish))
 		end
 	end
 
@@ -2671,8 +2836,6 @@ function petports_swimModeTick()
 	--  Hopping mid-air does nothing except overwrite a fall that was already
 	--  going the right way, and it would re-fire every tick the unit was near the
 	--  board while airborne.
-	local medium = petports_mediumAt(mcontroller.position(), mcontroller.boundBox())
-
 	if plan ~= nil and plan.reached and not petports_diving()
 	   and petports_swimMode() == PETPORTS_SWIM_MODE_LAND
 	   and medium == "air" and mcontroller.onGround() then
@@ -2728,7 +2891,16 @@ function petports_swimModeTick()
 		local launched, why = petports_diveLaunch(plan)
 
 		if not launched then
-			local dropped, dropWhy = petports_diveLaunch(plan, 0)
+			--  THE RETRY NEEDS A PLATFORM TO DROP THROUGH. Without one,
+			--  controlJump is not a release, it is an eight tile jump -- see
+			--  platformUnderfoot. A board with solid ground under it and no room
+			--  to hop is simply not divable, and saying so is better than
+			--  launching the unit over the pool.
+			local dropped, dropWhy = false, "there is no platform under the feet to drop through"
+
+			if platformUnderfoot() then
+				dropped, dropWhy = petports_diveLaunch(plan, 0)
+			end
 
 			if not dropped then
 				--  BLACKLIST THE BOARD, THEN DROP THE PLAN. Dropping alone

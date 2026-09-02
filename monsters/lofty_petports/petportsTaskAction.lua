@@ -136,7 +136,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-02l dive plan keyed on the task id"
+local BUILD_STAMP = "2026-09-02z an abandoned plan supplies no target"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -3694,6 +3694,23 @@ local function approachTargetFor(stateData, rawPosition)
   --  the resolved point would measure how far the STANDING SPOT had drifted,
   --  which is a different and much smaller number -- a fish can cross several
   --  tiles while the nearest fittable point stays put.
+  --  A CHANGE OF MIND IS NOT A DRIFT, AND THE TEST BELOW ONLY CATCHES DRIFT.
+  --
+  --  The cache is invalidated when the TARGET moves. When the unit abandons its
+  --  diving board mid-walk -- see the abandon block in petports_swimModeTick --
+  --  the target has not moved at all; what changed is that the board stopped
+  --  being the right place to go. Nothing in a drift test can see that, so the
+  --  decision has to say so itself.
+  --
+  --  MEASURED 2026-09-02: without this the unit went aquatic and kept flying at
+  --  the board, which sits in AIR, and a canSwim-only chassis refuses to steer
+  --  there -- five seconds of "moved 0" until the progress watchdog struck.
+  if self.petportsDiveRetarget then
+    self.petportsDiveRetarget = nil
+    stateData.groundTarget = nil
+    stateData.groundTargetFrom = nil
+  end
+
   if stateData.groundTarget ~= nil and stateData.groundTargetFrom ~= nil
      and world.magnitude(rawPosition, stateData.groundTargetFrom) > TARGET_DRIFT then
     stateData.groundTarget = nil
@@ -3748,9 +3765,27 @@ local function approachTargetFor(stateData, rawPosition)
   --  the unit to the launch point; the dive that uses the entry is separate, and
   --  wiring the target first means the trace can be judged on its own log before
   --  anything ballistic depends on it.
+  --  AN ABANDONED PLAN SUPPLIES NO TARGET, AND petportsDiveRetarget ALONE COULD
+  --  NOT ACHIEVE THAT. The flag clears the cache, but the mode is only re-chosen
+  --  at the TOP of the next tick -- so this branch ran again in the same tick,
+  --  still in `land`, and the sticky plan handed back the very board the unit had
+  --  just given up. Cache cleared, cache refilled, flag spent.
+  --
+  --  MEASURED 2026-09-02, after the retarget flag had supposedly fixed this:
+  --
+  --      UNIT DIVE abandoning its board at [2493.5,1152.8] ... swimming instead
+  --      UNIT FLY path ended with pathfinding: target [2493.5,1152.8]
+  --      UNIT STEERING REFUSED at [2493.5,1152.8]
+  --
+  --  ONE TICK WITH NO TARGET IS THE COST, and it is the right cost. The walker
+  --  resolve below will usually answer nil over open water, the task holds, and
+  --  the next tick resolves the fish itself as a free mover.
+  local divePlan = self.petportsDivePlan
+
   if not homeward and task ~= nil and task.type == "fish"
      and petports_gravitySwitchable()
-     and petports_swimMode() == PETPORTS_SWIM_MODE_LAND then
+     and petports_swimMode() == PETPORTS_SWIM_MODE_LAND
+     and not (divePlan ~= nil and divePlan.abandoned) then
 
     local launch, entryOrWhy = petports_diveApproach(rawPosition, task.id)
 
