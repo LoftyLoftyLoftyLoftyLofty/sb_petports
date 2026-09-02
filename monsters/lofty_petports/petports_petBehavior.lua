@@ -194,6 +194,18 @@ function petBehavior.run()
   --
   --  WALKERS NEVER PAY FOR THIS. petports_outOfMedium short-circuits on
   --  petports_freeMover, which is one baseParameters read.
+  --  SECOND ASSERTION SITE, AND IT IS NOT REDUNDANT WITH THE ONE IN
+  --  petportsTaskAction.update. That one only runs while a task action HOLDS the
+  --  unit; this one runs while it does not -- station-keeping, idling, or the
+  --  gap between two tasks. controlParameters lapses every tick, so a submerged
+  --  unit would sink through every such gap if only the task site asserted.
+  --
+  --  ITS CADENCE IS NOT VERIFIED -- see the note further down on run() possibly
+  --  being called on the 1s querySurroundings cooldown rather than per tick. If
+  --  a unit is seen sinking while idle, that is the first suspect, and the fix
+  --  is a third site rather than moving this one.
+  petports_swimModeTick()
+
   local mediumReport = petports_outOfMedium()
   local beached = mediumReport.checked and mediumReport.out
 

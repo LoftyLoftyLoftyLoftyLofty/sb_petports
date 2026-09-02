@@ -136,7 +136,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-01z approach points re-resolve when the target moves"
+local BUILD_STAMP = "2026-09-02l dive plan keyed on the task id"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -2139,7 +2139,10 @@ function petportsJumpMover(pather)
     --  because A* routes down through platforms; this is not following a plan
     --  edge, it is a correction back to a point the unit was at a tick ago, and
     --  no platform can have appeared underneath it in between.
-    elseif mcontroller.baseParameters().gravityEnabled
+    --  petports_freeMover, NOT A RAW gravityEnabled READ -- see its header.
+    --  This correction is for a WALKER swimming; a free mover has its own
+    --  descent case above and must not take both.
+    elseif not petports_freeMover()
            and gap <= JUMP_SWIM_CHASE then
       local medium = petports_mediumAt(mcontroller.position())
 
@@ -2802,6 +2805,28 @@ function petportsArcMover(pather)
 end
 
 freshPather = function(why)
+  --  MODE FIRST, BEFORE ANYTHING READS baseParameters.
+  --
+  --  petports_pathOptions and PathMover:new both read the movement parameters
+  --  this can rewrite -- gravityEnabled decides which edge types
+  --  platformerPathStart emits and what mustEndOnGround defaults to -- so a flip
+  --  after either one builds a pather that disagrees with the physics it is
+  --  steering.
+  --
+  --  THIS IS THE ONLY CALL SITE, AND THAT IS THE SAFETY ARGUMENT RATHER THAN A
+  --  CONVENIENCE. dd.locomotion.otter refused runtime gravity switching because
+  --  a flip underneath a live plan corrupts it; here there is no live plan yet,
+  --  because building one is the next statement. Anything that wants a mode
+  --  change asks for a pather rebuild and gets both, in that order.
+  --
+  --  A NO-OP FOR EVERY OTHER CHASSIS. petports_desiredSwimMode returns `land`
+  --  immediately unless petports_gravitySwitchable, and setSwimMode writes
+  --  nothing when the mode is unchanged.
+  if petports_gravitySwitchable() then
+    petports_setSwimMode(
+      petports_desiredSwimMode(petports_currentTaskDestination()), why)
+  end
+
   local options = petports_pathOptions()
   options.run = false
 
@@ -2829,6 +2854,15 @@ freshPather = function(why)
   })
 
   self.pather.finder.exploreRate = function() return EXPLORE_RATE end
+
+  --  TWO MORE INSTANCE SHADOWS, SAME TECHNIQUE AS exploreRate ABOVE AND FOR THE
+  --  SAME REASON: vanilla's PathFinder gates on a flag that is unreadable for a
+  --  swim-mode unit. See petportsCanPathfind and petportsPathStart -- between
+  --  them they are the difference between a floating unit that plans and one
+  --  that sits still. Assigned to the INSTANCE, so PathFinder.canPathfind and
+  --  PathFinder.start stay reachable and no other entity is affected.
+  self.pather.finder.canPathfind = petportsCanPathfind
+  self.pather.finder.start = petportsPathStart
 
   --  REPLACEMENT moveJump. See the header on petportsJumpMover below.
   --
@@ -3694,6 +3728,49 @@ local function approachTargetFor(stateData, rawPosition)
   --  vouch by accident later.
   local verified = task ~= nil and task.mediumVerified or nil
 
+  --  A DRY UNIT CHASING A FISH AIMS AT A DIVING BOARD, NOT AT THE FISH.
+  --
+  --  Every branch below answers "where can a body stand near this", and near a
+  --  fish the honest answer is usually nowhere -- there is no seabed under open
+  --  water, so standableNear returns nil and the task fails at dispatch without
+  --  the unit moving. Before the training wheels came off there WAS ground under
+  --  the test pool, which is the only reason this path ever appeared to work:
+  --  measured 2026-09-02, a fish at y 1134.88 resolved to [2495.5,1128.8], the
+  --  seabed six tiles beneath it, and the unit walked a 35-edge route to the
+  --  bottom of the sea to reach a fish that was not there.
+  --
+  --  ONLY WHILE STILL A WALKER. Once the unit is in the water petports_swimMode
+  --  is aquatic, standableNear takes its free-mover branch, and the fish itself
+  --  is a legal target -- so this is the on-land half only, and it stops
+  --  applying the moment the dive works.
+  --
+  --  THE ENTRY POINT IS RESOLVED AND THROWN AWAY HERE. Increment one only walks
+  --  the unit to the launch point; the dive that uses the entry is separate, and
+  --  wiring the target first means the trace can be judged on its own log before
+  --  anything ballistic depends on it.
+  if not homeward and task ~= nil and task.type == "fish"
+     and petports_gravitySwitchable()
+     and petports_swimMode() == PETPORTS_SWIM_MODE_LAND then
+
+    local launch, entryOrWhy = petports_diveApproach(rawPosition, task.id)
+
+    if launch ~= nil then
+      stateData.groundTarget = launch
+      stateData.petportsDiveEntry = entryOrWhy
+      return stateData.groundTarget
+    end
+
+    --  Change-gated: this resolves twice a second while a fish task is held and
+    --  the reason does not change between ticks.
+    if self.petportsDiveWhy ~= entryOrWhy then
+      self.petportsDiveWhy = entryOrWhy
+      sb.logInfo("UNIT DIVE unavailable for fish at %s: %s",
+        sb.printJson(rawPosition), tostring(entryOrWhy))
+    end
+
+    return nil
+  end
+
   if homeward then
     stateData.groundTarget = standableNear(rawPosition, 0, nil, verified)
 
@@ -4483,6 +4560,17 @@ function petportsTaskAction.update(dt, stateData)
   --  CHEAP ENOUGH TO RUN PER TICK: petports_outOfMedium short-circuits on
   --  petports_freeMover for every walking chassis, which is a single
   --  baseParameters read, and only a free mover pays for the bounds test.
+  --  RE-ASSERT THE SWIM MODE'S PHYSICS BEFORE ANYTHING ELSE READS THEM.
+  --
+  --  controlParameters LAPSES EVERY TICK, which is why this is here rather than
+  --  a one-shot write beside the mode decision in freshPather. See
+  --  petports_assertSwimMode -- mcontroller.applyParameters does not exist on a
+  --  monster, so there is no persistent write available.
+  --
+  --  A NO-OP FOR EVERY OTHER CHASSIS and for a switchable one in `land`: it
+  --  returns on the gravitySwitchable flag, then on the mode.
+  petports_swimModeTick()
+
   local beached = petports_outOfMedium()
   if beached.checked and beached.out then
     sb.logInfo("UNIT beached mid-task at %s (medium %s) -- yielding the task "

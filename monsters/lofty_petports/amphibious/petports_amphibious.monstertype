@@ -160,10 +160,56 @@
     //  baseParameters and mustEndOnGround is captured at PathMover:new. This is
     //  the version that needs none of it.
     //
-    //  petports_canFly and petports_canSwim are ABSENT on purpose: they are
-    //  free-mover permissions and a walking chassis is governed by physics, not
-    //  permission. petports_mediumAllows short-circuits for walkers -- after
-    //  the forbidden-liquid test, which applies to everything.
+    //  petports_canFly AND petports_canSwim ARE DECLARED, AND THIS REVERSES AN
+    //  EARLIER DECISION ON PURPOSE.
+    //
+    //  They used to be absent, on the reasoning that they are free-mover
+    //  permissions and a walking chassis is governed by physics rather than
+    //  permission. That was true for exactly as long as this chassis could never
+    //  stop being a walker.
+    //
+    //  petports_freeMover() is `not mcontroller.baseParameters().gravityEnabled`
+    //  -- it reads PHYSICS, not config -- so the moment swim mode turns gravity
+    //  off, every resolver in the mod starts treating this unit as a free mover
+    //  and starts asking petports_media() what it may occupy.
+    //
+    //  THE DEFAULTS ARE THE EXACT INVERSE OF WHAT THIS CHASSIS NEEDS. petports_media
+    //  defaults canFly TRUE and canSwim FALSE. Undeclared, a floating amphibious
+    //  unit would believe it may occupy air and may NOT occupy water: every
+    //  underwater petports_flyPointNear resolve refused, petports_outOfMedium
+    //  reporting `out` while submerged, and the port's mediumCheck re-homing it
+    //  about ten seconds later. The toggle cannot work until these are stated.
+    //
+    //  INERT WHILE GRAVITY IS ON, which is what makes them safe to land ahead of
+    //  the toggle itself. petports_mediumAllows short-circuits for walkers after
+    //  the forbidden-liquid test, so nothing reads these until freeMover() is
+    //  true. Same for petportsFlopState: its canSwim gate sits behind
+    //  petports_outOfMedium's `checked`, which is false for a walker.
+    //
+    //  canFly FALSE IS NOT A FORMALITY. Left defaulting to true, a unit whose
+    //  gravity is off would count AIR as a legal medium and could resolve a fly
+    //  point out of the water and hold there with no gravity to bring it down.
+    "petports_canFly" : false,
+    "petports_canSwim" : true,
+
+    //  THIS CHASSIS MAY CHANGE WHAT KIND OF MOVER IT IS AT RUNTIME.
+    //
+    //  Read by petports_gravitySwitchable. See the SWIM MODE header in
+    //  petports_contract.lua for the three modes and what each one writes.
+    //
+    //  A DECLARATION RATHER THAN AN INFERENCE, so no future chassis inherits
+    //  this by accident. The drone and the sinker are walkers that must never
+    //  switch; the aquatic and flyer chassis are already free movers and must
+    //  never be handed a gravity write at all.
+    //
+    //  IT ALSO SWITCHES OFF THE MEDIUM CHECK. petports_outOfMedium reports
+    //  `checked = false` for a switchable chassis, which stops the port's 30s
+    //  re-home, petportsFlopState, the task-action yield and petBehavior's
+    //  beached suppression from firing on a unit that is in water on purpose.
+    //  The forbidden-liquid deny-list below is UNAFFECTED -- it is tested above
+    //  every short-circuit in petports_mediumAllows.
+    "petports_gravitySwitchable" : true,
+
     //  SEARCH COSTS -- AND THESE ARE A PROBE, NOT A TUNING.
     //
     //  MEASURED FAILURE: an amphibious unit already submerged, needing a route
@@ -309,6 +355,61 @@
       "runSpeed" : 12,
       "flySpeed" : 15,
       "airForce" : 50.0,
+
+	  //  THE AQUATIC CHASSIS'S CALIBRATED LIQUID SET, MIRRORED VERBATIM.
+	  //
+	  //  NOT RE-DERIVED. These four were measured across four in-game runs on
+	  //  petports_aquatic and their reasoning is recorded there in full -- read
+	  //  that block, not this one, before changing any of them. Copied rather
+	  //  than referenced because a monstertype cannot include another one.
+	  //
+	  //  WHY A WALKER NEEDS THEM AT ALL. controlFly is the swim primitive as
+	  //  well as the flight one, so a gravity chassis that goes underwater is
+	  //  governed by exactly these parameters the moment it stops walking. The
+	  //  amphibious chassis declared NONE of them and inherited
+	  //  default_actor_movement.config's, which is why it swam nothing like an
+	  //  aquatic unit despite being the class built to swim.
+	  //
+	  //  liquidImpedance 0 IS THE ONE THAT MATTERS MOST. Measured on aquatic:
+	  //  left at the default, a unit configured for flySpeed 12 covered 6.17
+	  //  tiles/s -- exactly half. Read logged POSITIONS, not
+	  //  mcontroller.velocity(), when checking this; friction takes its cut each
+	  //  engine tick and the script samples post-friction.
+	  //
+	  //  liquidBuoyancy 0 IS A REAL BEHAVIOUR CHANGE HERE, UNLIKE ON AQUATIC.
+	  //  There it computes to nothing because there is no gravity to oppose. This
+	  //  chassis HAS gravity while wading, so zero buoyancy means it sinks rather
+	  //  than bobbing. That is wanted -- a wading unit should walk the bottom,
+	  //  and swim mode turns gravity off anyway -- but it is the first suspect if
+	  //  shallow-water behaviour changes unexpectedly.
+	  //
+	  //  airForce AND airFriction ARE DELIBERATELY NOT MIRRORED. On a gravity
+	  //  chassis those govern jump arcs, and the arc mover is tuned against the
+	  //  current pair. Mirroring 9999/24 would change every jump this unit makes
+	  //  to fix its swimming.
+	  //
+	  //  flySpeed LEFT AT 15, NOT LOWERED TO THE AQUATIC'S 12. Drag-limited speed
+	  //  is liquidForce/liquidFriction, ~416 here, so flySpeed governs outright
+	  //  and 15 is a speed decision rather than part of the calibration. Left
+	  //  alone so this edit changes physics and not pace; lower it to 12 if the
+	  //  two chassis should visibly match.
+	  //  liquidBuoyancy IS DELIBERATELY ABSENT, AND WAS BRIEFLY 0.0 BY MISTAKE.
+	  //
+	  //  It was mirrored across from petports_aquatic with the rest of the liquid
+	  //  set, and the comment there says plainly why it is zero: there is NO
+	  //  GRAVITY on that chassis, so buoyancy has nothing to oppose and should
+	  //  compute to nothing. This chassis has gravity, and 0.0 meant a unit that
+	  //  spawned into a submerged port sank straight to the seabed. Measured
+	  //  2026-09-02.
+	  //
+	  //  INHERITED RATHER THAN SET TO A NUMBER, because the inherited value is
+	  //  the one this chassis had for its whole working life before the mirror,
+	  //  and picking a replacement would be a guess where restoring is a fact.
+	  //  petports_setSwimMode still asserts 1.0 for `exiting`, which is a
+	  //  deliberate override of whatever this is, not a contradiction of it.
+	  "liquidForce" : 9999.0,
+	  "liquidFriction" : 24.0,
+	  "liquidImpedance" : 0.0,
 	  
 	  "gravityMultiplier" : 1.5
     },

@@ -114,7 +114,7 @@ FLOP_JUMP_INTERVAL = {0.3, 1.5}
 --  petports_petBehavior.lua had one, so a run could not be told apart from the
 --  previous run's build -- and this state has now been wrong in three different
 --  ways across three logs. Same convention as petportsTaskAction's.
-FLOP_BUILD_STAMP = "2026-09-01c flops only from air, not from any wrong medium"
+FLOP_BUILD_STAMP = "2026-09-02a never for a gravity-switchable chassis"
 
 --  WHICH WRONG MEDIA A FLOP CAN ACTUALLY GET A UNIT OUT OF.
 --
@@ -128,6 +128,24 @@ FLOP_MEDIA = {
 }
 
 function petportsFlopState.enter()
+  --  A CHASSIS THAT SWITCHES ITS OWN GRAVITY NEVER FLOPS.
+  --
+  --  REDUNDANT TODAY AND DELIBERATELY SO. petports_outOfMedium already reports
+  --  `checked = false` for a gravity-switchable chassis, so the next line would
+  --  refuse anyway -- but that is a COUPLING, not a rule, and it would go quiet
+  --  the day outOfMedium is rewritten. This states the rule where it belongs.
+  --
+  --  IT IS NOT A TIDINESS GATE. A flop turns gravity ON and hops, and
+  --  petports_setSwimMode turns it off and holds it off. Two writers on one
+  --  parameter, one per tick and one per pather build, is a fight rather than a
+  --  bug -- and the losing side is whichever wrote last, which is not something
+  --  a log makes obvious.
+  --
+  --  NOTHING IS LOST. Flopping is the self-rescue for a unit STRANDED in the
+  --  wrong medium. This chassis is never stranded: it is amphibious, it walks on
+  --  land by design, and when it is in water that is a mode it selected.
+  if petports_gravitySwitchable() then return nil end
+
   local report = petports_outOfMedium()
 
   --  `checked` false means the question does not apply to this chassis -- a

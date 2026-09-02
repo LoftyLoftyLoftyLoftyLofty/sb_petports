@@ -82,7 +82,7 @@
 --  delegate, and stays one.
 local vanillaSetJumpState = setJumpState
 
-local BUILD_STAMP = "2026-09-01d string-pull for moving targets when the line is clear"
+local BUILD_STAMP = "2026-09-02c gravity reads routed through freeMover"
 local stampLogged = false
 
 --  DELETE ME ONCE THE ANSWER IS IN THE LOG.
@@ -1173,7 +1173,11 @@ function petportsFreeMover(pather)
     mcontroller.controlDown()
   end
 
-  if mcontroller.baseParameters().gravityEnabled then
+  --  petports_freeMover, NOT A RAW gravityEnabled READ -- see its header. This
+  --  branch is why a swim-mode unit still moved at walkSpeed 8 instead of
+  --  flySpeed 15: the accessor reported gravity on, so it took the walker
+  --  actuation and controlApproachVelocity ignores flySpeed and liquidForce.
+  if not petports_freeMover() then
     --  Vanilla's actuation, unchanged, including walkSpeed. A swimming ground
     --  unit's speed is a separate tuning question from its steering, and
     --  changing both at once is how a fix stops being attributable.
@@ -1201,7 +1205,8 @@ function petportsFreeMover(pather)
 end
 
 function setJumpState()
-  if mcontroller.baseParameters().gravityEnabled then
+  --  petports_freeMover, NOT A RAW gravityEnabled READ -- see its header.
+  if not petports_freeMover() then
     return vanillaSetJumpState()
   end
 
@@ -1246,7 +1251,8 @@ function approachPoint(dt, targetPosition, stopDistance, running)
   --  avoidLiquid argument, the moveSwim binding and the closing log line differ,
   --  so when Starbound changes groundPet.lua the diff to re-check is exactly
   --  this one function and the three deviations are marked.
-  if mcontroller.baseParameters().gravityEnabled then
+  --  petports_freeMover, NOT A RAW gravityEnabled READ -- see its header.
+  if not petports_freeMover() then
     local toTarget = world.distance(targetPosition, mcontroller.position())
     local targetDistance = world.magnitude(targetPosition, mcontroller.position())
 
