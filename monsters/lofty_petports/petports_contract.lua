@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-09-02z pairs score on the walk, so ties stop favouring the left"
+local CONTRACT_BUILD_STAMP = "2026-09-03a the trace reaches past a lid; boards follow the openings"
 
 local contractStamped = false
 
@@ -1518,6 +1518,27 @@ PETPORTS_DIVE_TRACE_BUDGET = 400
 --  How far above the fish the trace may look, in tiles.
 PETPORTS_DIVE_TRACE_RISE = 96
 
+--  How far the TRACE may reach sideways past the fish and the unit.
+--
+--  MUCH WIDER THAN THE BOARD WINDOW, AND THEY ARE NOW SEPARATE NUMBERS. Sharing
+--  one window was right when the complaint was "the unit's own platform is not a
+--  candidate"; it is wrong for the trace, which is not looking for footing at
+--  all. It is looking for the EDGE OF A LID, and a lid is as wide as whatever
+--  the player built.
+--
+--  MEASURED 2026-09-02 on an islet with the port on top and the fish directly
+--  beneath: "no surface within 400 tiles ... sealed, or a pool larger than the
+--  budget". The budget was NOT the constraint. Simulated against the same shape,
+--  a 12-tile window fails on any islet wider than about twenty tiles while a
+--  48-tile reach solves all of them inside the SAME 400 budget -- the flood was
+--  filling a boxed-in region it could never escape, not searching too little.
+--
+--  IT COSTS ALMOST NOTHING IN OPEN WATER. The frontier pops the highest node
+--  first, so a pool with sky above it is answered in the four to seven tiles
+--  measured previously; this bound only engages when the water is genuinely
+--  roofed, which is when it is needed.
+PETPORTS_DIVE_TRACE_REACH = 48
+
 --  How far the search reaches SIDEWAYS PAST the two columns that matter.
 --
 --  THE WINDOW SPANS THE FISH AND THE UNIT, NOT JUST THE FISH, and that is the
@@ -1929,13 +1950,22 @@ local function diveRefusedAt(point)
 	return refused ~= nil and refused[diveRefusedKey(point)] == true
 end
 
---  HOW FAR AN ENTRY MAY SIT FROM THE FISH.
+--  HOW MANY OPENINGS ARE CARRIED FORWARD INTO PAIRING, NEAREST THE FISH FIRST.
 --
---  THE POINT OF TRACING CONTIGUOUSLY WAS TO FIND THIS POOL'S SURFACE, not its
---  most convenient corner. With every opening collected rather than just the
---  first, nothing otherwise stops a board pairing with a hole at the far end of
---  a long pool and dropping the unit twenty tiles from the fish it was sent for.
-PETPORTS_DIVE_ENTRY_REACH = 20.0
+--  REPLACES A DISTANCE BOUND, AND THE CHANGE IS NOT COSMETIC. This was
+--  PETPORTS_DIVE_ENTRY_REACH, twenty tiles from the fish (retired). That was
+--  sound while the trace could only reach twenty-four tiles anyway; with a reach
+--  of PETPORTS_DIVE_TRACE_REACH it would throw away precisely the openings the
+--  wider trace exists to find -- an islet's edge is far from a fish under its
+--  middle, and it is the ONLY way in.
+--
+--  A COUNT BOUNDS THE COST WHERE A DISTANCE DOES NOT. Pairing is columns times
+--  openings rays, and a wide trace can return seventy-six of them; against a
+--  board window that must now also widen, that is thousands of casts in one
+--  tick. Twelve nearest keeps it in the hundreds and discards only openings that
+--  were going to score badly anyway -- distance from the fish is already what
+--  makes an opening worse.
+PETPORTS_DIVE_ENTRY_KEEP = 12
 
 --  A BOARD AND A HOLE, CHOSEN TOGETHER.
 --
@@ -1967,19 +1997,23 @@ PETPORTS_DIVE_ENTRY_REACH = 20.0
 --  will never look under, nor the reverse. Spans the fish and the unit with
 --  PETPORTS_DIVE_SPAN_MARGIN either side, clamped toward the fish at
 --  PETPORTS_DIVE_SPAN_MAX.
-local function diveSpan(fish)
+local function diveSpan(fish, reach)
 	local here = mcontroller.position()[1]
 
-	local low = math.floor(math.min(fish[1], here)) - PETPORTS_DIVE_SPAN_MARGIN
-	local high = math.ceil(math.max(fish[1], here)) + PETPORTS_DIVE_SPAN_MARGIN
+	reach = reach or PETPORTS_DIVE_SPAN_MARGIN
+
+	local low = math.floor(math.min(fish[1], here)) - reach
+	local high = math.ceil(math.max(fish[1], here)) + reach
 
 	--  CLAMPED TOWARD THE FISH. If the unit is a long way off, the openings
 	--  worth having are the ones near the target, not the ones near the walker.
-	if (high - low) > PETPORTS_DIVE_SPAN_MAX then
+	local widest = math.max(PETPORTS_DIVE_SPAN_MAX, reach * 2)
+
+	if (high - low) > widest then
 		if fish[1] < here then
-			high = low + PETPORTS_DIVE_SPAN_MAX
+			high = low + widest
 		else
-			low = high - PETPORTS_DIVE_SPAN_MAX
+			low = high - widest
 		end
 	end
 
@@ -2058,12 +2092,17 @@ local function pickBoardAndEntry(entries, fish, spanLow, spanHigh)
 				local sighted = false
 
 				for _, entry in ipairs(entries) do
-					--  THE HOLE MUST BE BELOW THE BOARD AND NEAR THE FISH. One above
-					--  the board cannot be fallen into, and one at the far end of the
-					--  pool is not where the fish is.
-					if entry[2] < spot[2]
-					   and math.abs(entry[1] - fish[1]) <= PETPORTS_DIVE_ENTRY_REACH
-					   and diveSighted(spot, entry) then
+					--  THE HOLE MUST BE BELOW THE BOARD. One above it cannot be
+					--  fallen into.
+					--
+					--  NO DISTANCE TEST HERE ANY MORE. It used to also refuse a hole
+					--  more than PETPORTS_DIVE_ENTRY_REACH from the fish; that bound
+					--  is retired, because the whole point of the wider trace is to
+					--  find openings a long way from a fish under a lid. Distance is
+					--  now handled where it belongs -- by keeping only the nearest
+					--  PETPORTS_DIVE_ENTRY_KEEP openings, and by the walk term in
+					--  the score below.
+					if entry[2] < spot[2] and diveSighted(spot, entry) then
 
 						sighted = true
 
@@ -2163,11 +2202,17 @@ function petports_diveApproach(fishPosition, taskId)
 		self.petportsDiveRefused = nil
 	end
 
-	--  ONE WINDOW FOR BOTH HALVES. See diveSpan: it covers the fish AND the unit,
-	--  so the column the unit is standing on is always a candidate.
-	local spanLow, spanHigh = diveSpan(fishPosition)
+	--  TWO WINDOWS, BECAUSE THE TWO HALVES ARE LOOKING FOR DIFFERENT THINGS.
+	--
+	--  The trace hunts the EDGE OF A LID and must be free to run as wide as the
+	--  player built it -- PETPORTS_DIVE_TRACE_REACH. The board scan hunts DRY
+	--  FOOTING and only wants columns near something worth diving into. Sharing
+	--  one window meant the narrower need silently bounded the wider one, and a
+	--  fish under an islet was unreachable because the flood could not escape a
+	--  box it was told to stay inside.
+	local traceLow, traceHigh = diveSpan(fishPosition, PETPORTS_DIVE_TRACE_REACH)
 
-	local entries, why, examined = traceSurface(fishPosition, spanLow, spanHigh)
+	local entries, why, examined = traceSurface(fishPosition, traceLow, traceHigh)
 
 	--  CLEARED ON EVERY FAILURE, AND THAT MATTERS MORE THAN IT LOOKS.
 	--  petports_desiredSwimMode treats a stored entry as "the fish's water is
@@ -2181,17 +2226,46 @@ function petports_diveApproach(fishPosition, taskId)
 		return nil, why
 	end
 
-	local pair = pickBoardAndEntry(entries, fishPosition, spanLow, spanHigh)
+	--  NEAREST OPENINGS FIRST, THEN CAPPED. Both halves of this bound the pairing
+	--  cost: sorting decides WHICH openings survive, the cap decides how many.
+	--  See PETPORTS_DIVE_ENTRY_KEEP.
+	table.sort(entries, function(a, b)
+		return math.abs(a[1] - fishPosition[1]) < math.abs(b[1] - fishPosition[1])
+	end)
+
+	while #entries > PETPORTS_DIVE_ENTRY_KEEP do
+		table.remove(entries)
+	end
+
+	--  THE BOARD WINDOW IS DERIVED FROM THE OPENINGS THAT SURVIVED, not from the
+	--  fish alone. A hole at an islet's edge needs a board at that edge, which
+	--  the fish-centred window would not have reached -- and looking for footing
+	--  anywhere else is looking where no dive can start.
+	local boardLow = math.floor(fishPosition[1])
+	local boardHigh = boardLow
+
+	for _, entry in ipairs(entries) do
+		boardLow = math.min(boardLow, math.floor(entry[1]))
+		boardHigh = math.max(boardHigh, math.ceil(entry[1]))
+	end
+
+	local unitLow, unitHigh = diveSpan(fishPosition)
+
+	boardLow = math.min(boardLow - PETPORTS_DIVE_SPAN_MARGIN, unitLow)
+	boardHigh = math.max(boardHigh + PETPORTS_DIVE_SPAN_MARGIN, unitHigh)
+
+	local pair = pickBoardAndEntry(entries, fishPosition, boardLow, boardHigh)
 
 	if pair == nil then
 		self.petportsDivePlan = nil
 		self.petportsDiveEntry = nil
 
-		return nil, string.format("%s opening(s) found near %s (traced %s tiles, "
-			.. "columns %s..%s, unit at %s) but no dry footing in that span can "
-			.. "see any of them",
+		return nil, string.format("%s opening(s) kept near %s (traced %s tiles over "
+			.. "columns %s..%s) but no dry footing over columns %s..%s can see any "
+			.. "of them, unit at %s",
 			sb.printJson(#entries), sb.printJson(fishPosition),
-			sb.printJson(examined), sb.printJson(spanLow), sb.printJson(spanHigh),
+			sb.printJson(examined), sb.printJson(traceLow), sb.printJson(traceHigh),
+			sb.printJson(boardLow), sb.printJson(boardHigh),
 			sb.printJson(mcontroller.position()[1]))
 	end
 

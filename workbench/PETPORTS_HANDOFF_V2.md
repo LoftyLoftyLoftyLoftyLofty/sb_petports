@@ -50,79 +50,61 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-01 (sinker locomotion, arc planning, beached flop)
+### What is built, as of 2026-09-02 (amphibious swim mode, water entry, the dive)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-THREE PIECES OF WORK, EACH ONE VERIFIED IN GAME, AND ALL THREE FOUND BY READING
-SOURCE RATHER THAN BY GUESSING. The session's recurring lesson is in
-`proc.pathing.readsource`: every one of these had a plausible wrong theory that a
-source read killed in minutes.
+ONE PIECE OF WORK, SHIPPED IN TWENTY-SIX BUILDS, AND THE FIRST SESSION WHERE THE
+DIAGNOSTICS MATTERED MORE THAN THE FIXES. Three consecutive builds failed on the
+same visible symptom for three unrelated causes; only log lines that named the
+numbers behind a decision separated them. `proc.tooling.instrument` and
+`proc.tooling.batchedits` are the durable residue.
 
 ---
 
-**SINKER LOCOMOTION EXISTS AND IS A REAL CHASSIS.** `fact.pathing.liquidthreshold`,
-`todo.locomotion.sinker`. `neighbors()` tests `inLiquid` BEFORE `onGround`, so a
-submerged node never reaches `getWalkingNeighbors` and no cost setting can
-produce a walk edge underwater. The lever is `minimumLiquidPercentage` above 1.0,
-an ActorMovementParameters field: the search stops believing water exists and a
-gravity-enabled chassis walks the seabed. `petports_sinker` ships with the crab
-as its creature (`todo.unit.species`), orange placeholder art, and its own
-category, animation and monsterpart. **VERIFIED: planned AND executed, walking
-the bottom.**
+**AN AMPHIBIOUS UNIT CHASES A FISH INTO OPEN WATER AND COMES BACK OUT.**
+`arch.locomotion.swimmode`, `arch.locomotion.dive`. It walks to a diving board,
+hops off, swims the fish down, and climbs out to whatever it does next. Deep
+water with no seabed under the fish is the case it was built for and the one it
+is tested against. **VERIFIED: thirteen dives, thirteen landings, no failures, no
+refusals, no stalls.**
 
-**THE LAUNCH SOLVER NO LONGER FLATTENS A CLIMB INTO A PARABOLA.**
-`arch.pathing.solvelaunch`, `arch.pathing.climbsteer`. The reach clamp was gated
-on `plannedVx ~= 0`, so it skipped the one case where the plan asked for zero
-horizontal reach -- turning A*'s deliberate climb-then-traverse into a diagonal
-that flew through the ledge the climb existed to clear. **Removing four words was
-the fix.** Its other half is a narrow, acquire-only steering exception for arcs
-whose planned launch vx was zero. **VERIFIED: zero stalls across five takeoffs
-and 27 tiles of climb, against four-plus identical laps on one ledge before.**
+**GRAVITY IS SWITCHED AT RUNTIME, REVERSING dd.locomotion.otter.**
+`dd.locomotion.otterswitch`. The chassis holds one of four modes -- `land`,
+`aquatic`, `exiting`, `diving` -- and `petports_freeMover` reads the MODE, not
+the physics, because a control override is invisible to `baseParameters`
+(`fact.unit.movementparams`). Two vanilla `PathFinder` methods are shadowed on
+the instance so a floating unit can plan at all (`fact.pathing.canpathfind`).
 
-**`airForce` HAS FULL AIRBORNE AUTHORITY; `groundForce` DOES NOT.**
-`fact.pathing.airauthority`. Measured at exactly 50.0 accel, `airForce` 50 against
-mass 1. This closes a question `arch.pathing.nosteer` left open for two sessions
-and explains why the earlier steering attempt looked impossible: wrong quantity,
-not a doomed idea.
-
-**BEACHED AQUATIC UNITS FLOP.** `arch.locomotion.beached`. A detector shared with
-the port's own rescue, a task yield, a full action-queue suppression, a forced
-state pick, and a vanilla fish's movement parameters. **VERIFIED: flop entered,
-hops carry, port re-homes at thirty seconds -- poll 1 of 6 through poll 6 of 6.**
-Took four runs; each failure is recorded in the entry because each one was a
-different mechanism.
-
-**THE PET STATE MACHINE IS NOW WRITTEN DOWN.** `fact.unit.statemachine`.
-`pickState(params)` calls `enterWith` and silently skips states that only define
-`enter`; `run()` is called once a second, not per tick; `reactTo` queues actions
-BEFORE `run()` starts; `groundPet.init`'s `self.autoPickState = false` is a
-vanilla typo that is harmless only by accident. Three test rounds were spent
-guessing at these.
+**THE WATER'S SURFACE IS TRACED, NOT LOOKED UP.** `arch.locomotion.dive`. A flood
+from the fish that prefers up, branching sideways only under a solid ceiling,
+collecting every opening the body fits through. `world.oceanLevel` is the obvious
+shortcut and is wrong -- `dead.locomotion.oceanlevel`. Boards and holes are then
+scored as PAIRS, biased hard toward vertical alignment, because every aligned
+dive in every log has landed and no offset one has been needed.
 
 ---
 
-**WHAT IS NOT DONE, AND SHOULD NOT BE READ AS DONE.**
+**KNOWN IMPERFECT, AND DELIBERATELY LEFT:**
 
-- **`todo.pathing.fallbackpather` is OPEN.** It shipped a nil-global crash that
-  killed a unit, its recorded scope was wrong -- vanilla action states call
-  `approachPoint` too -- and its intended path is still unexercised because
-  `petports_allowSleep` is false on every chassis.
-- **The `flopping` animation is a placeholder** aliased to the run strip in all
-  five sheets. It reads as walking.
-- **The sinker wears a hue-rotated axolotter.** Orange is a testing aid and does
-  not reconsider the colour-blindness finding in the amphibious monsterpart.
-- **The sinker's jump problem is retired as `dead.locomotion.sinkerjump`** -- it
-  was never a liquid problem, and "it is in water and it moves badly" has now
-  pointed at liquid twice and been wrong twice.
+- **A drop-through rises about a tile** when it should rise nothing, because
+  `controlJump` imparts velocity before the platform releases
+  (`todo.locomotion.dropthroughrise`). Cosmetic; the aligned-pair bias means it
+  is rarely chosen.
+- **An abandoned board replans rather than handing straight to string-pull**
+  (`todo.locomotion.stringpullhandoff`). The clear line is already proven at
+  that moment, so the replan is redundant work.
+- **The lure can teleport outside network coverage**
+  (`todo.dispatch.lureescape`). Noticed, not chased.
+- **`PETPORTS_DIVE_DEBUG` and `FLY_POINT_DEBUG` are both on.** Together they were
+  twelve thousand log lines in sixty-five seconds. Turn them off before shipping.
 
-**NEXT.** Fishing is designed but unbuilt (`todo.module.fishing`): the vanilla
-spawner is a requirable module, the selection is data, and the open question is
-what fishing is FOR rather than whether it works. The chassis roster, module
-list and acquisition sites now live on a chart that supersedes prose in
-`todo.module.designpass` and `todo.item.acquisition`.
+**NEXT.** The dive is content-complete for the terrain it was built against.
+What is untested is a pool the trace cannot solve at all -- fully sealed, or
+wider than `PETPORTS_DIVE_TRACE_BUDGET` -- where the unit should back off and let
+the port re-dispatch. That path exists and has never been exercised.
 
 ## ARCHITECTURE
 
@@ -995,18 +977,25 @@ water is neither. Vanilla works around this by not pathfinding at all --
 something, which is fine for ambient wildlife and useless for a unit that must
 reach a named crate two rooms away.
 
-**WHY THE OTTER NEEDED NOTHING.** The capstone was specified as runtime
-`gravityEnabled` toggling with a mode chosen per destination. It turned out the
-engine's search already models the boundary -- see the traps section. What
-toggling would still buy is neutral buoyancy, so the unit swims mid-water rather
-than walking the bottom. That is a feel difference and it is the only reason to
-revisit this.
+**WHY THE OTTER NEEDED NOTHING -- SUPERSEDED 2026-09-02 BY
+`dd.locomotion.otterswitch` AND `arch.locomotion.swimmode`.** The capstone was
+specified as runtime `gravityEnabled` toggling with a mode chosen per
+destination, and this entry said the engine's search already modelled the
+boundary so none was needed. That holds for walking a seabed and does NOT hold
+for a fish, which is never on the floor. The toggle was built.
 
-If it is ever built: the toggle must land in BASE parameters via
-`applyParameters`, because `PathFinder:start` hands `mcontroller.baseParameters()`
-straight to `world.platformerPathStart` and `canPathfind` reads it directly.
+**THE PRESCRIPTION BELOW WAS ALSO WRONG AND IS KEPT AS A WARNING.** It said the
+toggle must land in BASE parameters via `applyParameters`. There is no
+`applyParameters` on an ActorMovementController -- see
+`fact.unit.movementparams` -- and a `controlParameters` override is invisible to
+`baseParameters()`, so no write can make that accessor agree. What was true is
+the reasoning about `PathFinder:start` and `canPathfind` reading it directly;
+`fact.pathing.canpathfind` records how that was worked around, by shadowing both
+on the pather instance rather than by changing what the accessor says.
+
 `mustEndOnGround` is captured once at `PathMover:new`, which `freshPather`
-rebuilds per task -- fine until a unit needs to change medium MID-task.
+rebuilds per task. That remains the constraint, and it is why the mode is chosen
+at `freshPather` and nowhere else.
 
 ### Liquid permissions
 `arch.locomotion.liquidpermissions` -- see also `arch.locomotion.classes`
@@ -3631,8 +3620,9 @@ override to leak and no cleanup to miss on an abnormal exit.
 **GRAVITY IS TURNED ON, AND THIS IS THE ONE PLACE THAT IS SAFE.** The aquatic
 chassis is `gravityEnabled` false, and every part of a flop needs gravity.
 The amphibious chassis is described in `arch.locomotion.classes` as "the otter",
-and it needed no transition code precisely because it never switches gravity at
-runtime -- `PathFinder:start` reads `baseParameters` and `mustEndOnGround` is
+and at the time it needed no transition code precisely because it never switched
+gravity at runtime -- it does now, see `dd.locomotion.otterswitch`, under exactly
+the timing constraint this paragraph goes on to state -- `PathFinder:start` reads `baseParameters` and `mustEndOnGround` is
 captured at `PathMover:new`, so flipping it mid-route corrupts a live plan.
 **THAT OBJECTION DOES NOT APPLY HERE:** a beached unit has yielded its task and
 has no route.
@@ -3688,6 +3678,109 @@ Plus one chassis line per flight -- `liquidFriction`, `liquidImpedance`,
 be checked against the numbers it is supposedly overriding rather than against a
 guess at engine defaults. `groundFriction` reads null; the other four report
 exactly what the monstertype says.
+
+### Swim mode: one chassis that changes what kind of mover it is
+`arch.locomotion.swimmode` -- see also `dd.locomotion.otterswitch`, `fact.unit.movementparams`, `fact.pathing.canpathfind`, `arch.locomotion.dive`, `arch.locomotion.classes`
+
+**BUILT 2026-09-02.** The amphibious chassis holds one of four modes and every
+resolver in the mod branches on it rather than on physics:
+
+    land      gravity on,  chassis buoyancy   an ordinary walker
+    aquatic   gravity off                     the aquatic chassis
+    exiting   gravity on,  buoyancy 1.0       gravity, but afloat
+    diving    gravity on,  controlDown held   committed to a trajectory
+
+**THE PROBLEM IT SOLVES.** Every walker resolver answers "where can a body
+stand", so asking one about a fish returns the seabed beneath it. Measured: unit
+at [2493.18,1128.8], fish at [2493.97,1136.25], gap 7.45 against `FISH_REACH`
+5.0. Over real water there is no seabed in the search box at all and the task
+fails at dispatch without the unit moving.
+
+**petports_freeMover READS THE MODE, NOT THE PHYSICS**, and it has to -- see
+`fact.unit.movementparams`. Six other places used to read
+`baseParameters().gravityEnabled` directly and now call it instead, because with
+a mode in play those two questions have different answers.
+
+**THE THRESHOLDS ARE ASYMMETRIC.** A water mode is entered only at `swim` and
+left only at `air`; `mixed` holds the current mode. Symmetric thresholds produced
+a LIMIT CYCLE at the surface -- `exiting` floats on buoyancy 1.0, `land` sinks on
+the chassis value, so each drove the unit into the other's territory, y bouncing
+1146 to 1149 on a one-second period for a whole log. A rate limit cannot fix
+that; it only sets the period. `mixed` carries no information about DIRECTION,
+and the current mode is the only record of it.
+
+**ENTRY IS GATED ON THE TASK, EXIT IS NOT.** Only a fish task turns a walker into
+a swimmer -- every other submerged behaviour was already correct with gravity on,
+and a harvest route crossing a puddle used to throw away a working plan and spend
+two seconds rebuilding. But once a unit IS a swimmer it must get out regardless
+of what it does next, or it floats in deep water with a harvest to do.
+
+**FOUR THINGS HANG OFF petports_outOfMedium AND ALL FOUR ARE WRONG HERE**, so a
+gravity-switchable chassis reports `checked = false`: the port's 30s re-home,
+`petportsFlopState`, the task-action yield, and petBehavior's beached
+suppression. The forbidden-liquid deny-list is unaffected -- it is tested above
+every short-circuit in `petports_mediumAllows`.
+
+**THE MODE IS RE-ASKED EVERY TICK AND A CHANGE FORCES A PATHER REBUILD.** Getting
+wet is not an event anything reports; it is a position, one tick after another.
+The rebuild is mandatory rather than tidy -- `mustEndOnGround` is captured at
+`PathMover:new`, so a live plan built under one mode is invalid under the other.
+
+### The dive: finding a hole, a board, and getting wet
+`arch.locomotion.dive` -- see also `arch.locomotion.swimmode`, `fact.unit.platformdrop`, `dead.locomotion.oceanlevel`, `todo.locomotion.dropthroughrise`
+
+**BUILT 2026-09-02, IN FOUR PARTS.**
+
+**ONE. TRACE THE SURFACE.** A flood from the fish that prefers up -- liquid
+settles downward, so the top of a connected body is where its air boundary is --
+branching sideways only where the ceiling is solid, which is the capped-tank case
+that makes it necessary. It collects EVERY opening the body fits through, not the
+first. Platforms are absent from `PETPORTS_DIVE_SOLID_SET` because a dive goes
+straight through one.
+
+**THE HOLE IS WIDTH-CHECKED INSIDE THE TRACE, NOT AFTER IT.** The body is 1.6
+wide, deliberately above 1.5 so the pathfinder rejects one-tile tunnels, and a
+too-narrow opening is not a failure -- the trace keeps spreading and may find a
+wider one in the same pool.
+
+**TWO. PAIR A BOARD WITH A HOLE.** Neither is meaningful alone, and choosing them
+in sequence was a real bug: an unlucky first opening discarded every board in the
+pool, and the nearest footing won even behind a wall. One `diveSighted` ray per
+pair, scored `(aligned and 0 or 1000) + walk + dx + drop*0.1`.
+
+**ALIGNMENT IS THE QUALITY METRIC AND IT IS MEASURED, NOT INVENTED.** An aligned
+pair writes no horizontal velocity at all -- no drag to fight, nothing to solve
+wrong, no swept flight across terrain. Every aligned dive in every log has landed.
+The walk term outranks `dx` within the aligned class because every aligned pair
+already works, so a tile of offset is not worth twenty tiles of walking; without
+it, aligned pairs tied exactly and the scan order decided, which read as a
+standing preference for the left.
+
+**THE SEARCH WINDOW SPANS THE FISH AND THE UNIT.** Both halves used to orbit the
+fish, so a unit parked on a platform directly over the water was never
+considered. The unit's own column is the one column it is known to be able to
+reach. Boards are hunted at the WATERLINE, seeded from the nearest opening in x,
+never at the fish's own depth.
+
+**THREE. LAUNCH.** Aligned pairs hop and drop; offset pairs get horizontal
+velocity re-asserted per tick, because `airFriction` decays a one-shot launch and
+the solve has no drag term. The path is swept with the same `bodyFitsAt` the
+trace used on the hole, because after launch there is no steering. A refused
+sweep retries once with no hop -- the hop is the only part that goes UP, so under
+a low ceiling it is the hop that is refused -- and that retry requires a real
+platform underfoot (`fact.unit.platformdrop`).
+
+**FOUR. LAND, OR FAIL.** Submerged is success. Solid ground while still dry is
+failure. Past the arc's own prediction plus three seconds is failure. Both
+failures strike the board off so the trace stops re-offering it, and drop the
+plan so the port can re-dispatch.
+
+**THE BOARD IS ABANDONED IF THE FISH BECOMES SWIMMABLE ON THE WAY.** Submerged
+AND a body-width clear run to the fish, both. Crossing the pool is often the
+shortest path to the board above it, and at that moment the board has nothing
+left to offer. "Am I inside the traced tiles" was the other candidate and is
+weaker: the trace floods contiguously, so two nearly separate pools joined at one
+tile read as one body. A swept BODY answers what a ray only approximates.
 
 ## DESIGN DECISIONS
 
@@ -4967,6 +5060,38 @@ mashing E collapses to one of each per window. A second, port-side counting
 cooldown was built and removed: two clocks that can drift against each other
 is one clock too many for a stat whose whole job is matching what the player
 saw.
+
+### The otter switches gravity after all
+`dd.locomotion.otterswitch` -- see also `arch.locomotion.swimmode`, `fact.unit.movementparams`, `fact.pathing.canpathfind`, `arch.locomotion.classes`
+
+**DECIDED 2026-09-02, AND IT REVERSES A POSITION THIS DOCUMENT HELD IN THREE
+PLACES.** `arch.locomotion.classes` calls the amphibious chassis "the otter" and
+says it needed no transition code precisely because it never switches gravity at
+runtime. `arch.locomotion.beached` repeats the objection: `PathFinder:start`
+reads `baseParameters` and `mustEndOnGround` is captured at `PathMover:new`, so
+flipping mid-route corrupts a live plan. Retired as a blanket rule: opened as
+dd.locomotion.otter (retired).
+
+**THE OBJECTION WAS CORRECT AND IS NOT A BAN, IT IS A CONSTRAINT ON TIMING.** A
+flip underneath a live plan corrupts it; a flip immediately before the pather is
+built has no live plan to corrupt. So the mode is chosen at exactly one place --
+`freshPather` -- and anything wanting a mode change asks for a rebuild and gets
+both, in that order. That is the same exemption `arch.locomotion.beached` already
+claimed for a unit that has yielded its task.
+
+**WHAT FORCED IT.** There is no seabed under a fish in open water, and every
+walker resolver in the mod answers "where can a body stand". No amount of tuning
+a walker gets it to a target that is not on the floor. The alternatives were a
+second chassis or a mode; a mode reuses the entire free-mover stack that already
+exists and is keyed off one boolean.
+
+**WHAT IT COST, AND THIS IS THE PART WORTH REMEMBERING.** The flip alone was two
+lines. Everything else was consequences of it: the permission flags had to be
+declared, capabilities had to stop reporting the mode (`fact.port.capabilitiesstatic`),
+the medium check had to be exempted, the flop state had to be locked out, two
+`PathFinder` methods had to be shadowed, and the thresholds had to gain
+hysteresis. A cheap switch with an expensive blast radius is still an expensive
+switch.
 
 ## DESIGN INTENT -- PLANNED
 
@@ -7843,6 +7968,132 @@ contour detour is validated but never travelled).
 `dst` for the current edge. Their separation is the edge span, per edge, free, in
 every log this mod has ever produced.
 
+### There is no applyParameters on a monster, and a control override is invisible
+`fact.unit.movementparams` -- see also `arch.locomotion.swimmode`, `proc.pathing.readsource`
+
+**MEASURED 2026-09-02, TWICE, AND THE SECOND HALF IS THE SURPRISING ONE.**
+
+**THERE ARE TWO mcontroller TABLES AND THE WIKI DOCUMENTS THEM SEPARATELY.**
+MovementController -- projectiles and vehicles -- has `applyParameters` and
+`resetParameters`. ActorMovementController -- monsters, npcs, tech, status
+effects, active items -- HAS NEITHER. It exposes `baseParameters()` to read and
+`controlParameters()` to write, and nothing else. Calling `applyParameters` threw
+`attempt to call a nil value` on every pather build, killed the unit script, and
+the port respawned it about sixty times in one log.
+
+**A controlParameters OVERRIDE CHANGES THE PHYSICS AND baseParameters CANNOT SEE
+IT.** This is the fact everything else was built around:
+
+    UNIT swim mode land -> aquatic ... asked gravity false,
+    baseParameters now reports gravityEnabled true, onGround false,
+    liquidMovement true, freeMover false
+
+The unit was floating -- `onGround` false, plainly not sinking -- and the
+accessor still said gravity was on. With no `applyParameters` to write the base
+with, NOTHING CAN EVER MAKE THAT ACCESSOR AGREE WITH THE OVERRIDE. Any code that
+needs to know "is this thing flying" must be told, not ask the physics.
+
+**IT COST 1684 FAILED RESOLVES IN 44 SECONDS** before that was understood: the
+unit floated correctly while every resolver still treated it as a walker and hunted
+for a seabed under a submerged port, forever.
+
+**setAutoClearControls(false) WOULD MAKE CONTROLS PERSIST AND IS NOT USED.** It is
+global to every control, so `controlFly` and `controlApproachVelocity` would
+persist too and the last movement command would repeat forever.
+
+**dd.locomotion.otter's PLAN TO USE applyParameters WAS NEVER EXECUTED**, so the
+call had never once been proven in this mod. It was inherited from a design note
+as though it had been. `petportsFlopState`'s header names `applyParameters` too,
+and only ever as the thing it chose NOT to use.
+
+### controlJump is a press, controlDown is a hold, and neither drops a unit from rest
+`fact.unit.platformdrop` -- see also `arch.locomotion.dive`, `todo.locomotion.dropthroughrise`
+
+**MEASURED 2026-09-02, THREE SEPARATE WAYS, AND THEY ARE THREE DIFFERENT FAULTS.**
+
+**FROM REST, controlDown DOES NOTHING.** Held from a standing start it reads as a
+crouch and the unit stays put. The fault already recorded against
+`petportsTimedDrop` is that the fall-through state's duration is not observable,
+so no release condition can be right -- that is about not knowing when it ENDS.
+This is that from rest it does not BEGIN.
+
+**HELD, controlJump IS A POGO STICK.** It is a press, not a state: every tick it
+is asserted is another jump the moment the feet touch anything. A drop-through
+launched from [2493.15,1152.8] was at [2493.8,1156.32] two seconds later -- three
+and a half tiles ABOVE the board it was trying to fall off. The platform
+drop-through is ONE press of jump while down is HELD; the asymmetry is the whole
+mechanism.
+
+**ON SOLID GROUND, THE PAIR IS JUST A JUMP.** With no platform to release, jump
+plus down is an ordinary jump, and this chassis's `airJumpProfile` jumpSpeed of
+45 at g 120 is an 8.44 tile apex. Logged: `rose 8.00378 tiles above the board,
+drop-through`, on a dive solved for none. A drop-through must verify a platform
+underfoot first, testing solid BEFORE platform so a tile that is both refuses.
+
+**THIS HYPOTHESIS WAS MARKED DISPROVEN AND WAS RIGHT.** Three drop-throughs
+rising 0.2, 0.99 and 1.06 tiles were taken as evidence against a full jump; they
+had platforms and released. One clean repro at 8.00 against a predicted 8.44
+revived it. Rises are only comparable between launches of the same KIND.
+
+### canPathfind is two gates, and a floating gravity chassis fails both
+`fact.pathing.canpathfind` -- see also `arch.locomotion.swimmode`, `proc.pathing.readsource`, `fact.unit.movementparams`
+
+**READ FROM /scripts/pathing.lua 2026-09-02, after weeks of being quoted
+second-hand in this mod's comments. The quotes were right.**
+
+    function PathFinder:canPathfind()
+      return mcontroller.onGround() or not mcontroller.baseParameters().gravityEnabled
+    end
+
+For a swim-mode unit the second half is FALSE -- the override is invisible to the
+accessor -- so the gate reduces to `onGround()`. The unit plans when it happens
+to touch terrain and sits still when it does not, which presents as
+intermittency: "occasionally swims to the target, most of the time just sits".
+
+**IT IS TWO GATES AND THE SECOND IS THE NASTY ONE.** `PathFinder:explore`
+re-asks on completion -- `if result == true and self:canPathfind()` -- so a
+search that FINISHES while floating has its result thrown away, and because that
+branch does not clear `self.aStar` the finder re-explores the same search forever
+without ever latching. A unit can fail having started legally, by drifting off
+the ground mid-search.
+
+**PathFinder:start TAKES A SCRATCH COPY, WHICH IS THE SEAM.** It reads
+`mcontroller.baseParameters()` into a local and MUTATES it -- setting
+`airJumpProfile.jumpSpeed` -- before handing it to `world.platformerPathStart`.
+Writing one more field into that table is the same kind of act, and it is the
+only way to reach edge-type selection, because the parameters argument comes from
+an accessor no control override can touch.
+
+**BOTH ARE SHADOWED ON THE INSTANCE**, the same technique `freshPather` already
+used for `finder.exploreRate` and the movers, so `PathFinder` itself is untouched
+and no other entity is affected.
+
+### A unit's capabilities are a property of the chassis, never of what it is doing
+`fact.port.capabilitiesstatic` -- see also `fact.port.typecapabilities`, `arch.locomotion.swimmode`, `dd.port.envpresence`
+
+**MEASURED 2026-09-02, THREE TENTHS OF A SECOND APART:**
+
+    UNIT swim mode diving -> aquatic ... freeMover true
+    PETPORT RETIRING unit: the port is out of the water and this chassis
+        cannot leave it (footprint wet false, dry true)
+
+`petports_capabilities` read `petports_freeMover()`, which had just become
+mode-aware. A unit that happened to be mid-dive told the port it was a free mover
+that swims and cannot fly, so the port saw a fish in a dry socket and retired it
+-- state and cargo written back, door shut, on a pet doing exactly what it had
+been dispatched to do.
+
+**THE PORT POLLS ON ITS OWN CLOCK AND THE MODE CHANGES ON THE UNIT'S.** Any
+answer assembled from transient state will eventually be sampled at the wrong
+moment; the interval only decides how often. A gravity-switchable chassis
+therefore reports as a WALKER for this question always, and expresses "can be in
+water" through `avoidLiquid` being false, which earns it the amphibious verdict.
+
+**THE SINKER WAS NEVER EXPOSED TO THIS** -- `avoidLiquid` false and gravity
+enabled means it never reports as a free mover at all, so it already took the
+walker branch. Worth stating because the symptom invites relaxing the habitat
+rules, and the habitat rules were correct.
+
 ## DISPROVEN
 
 ### Sinker jumping underwater was never a liquid problem
@@ -8322,6 +8573,30 @@ overlaps to be at or above `PETPORTS_SUBMERGED_FILL`, so a swimmer riding just
 under a surface can read "air" without having gone anywhere. Ten seconds of a
 genuinely beached unit costs nothing; teleporting a working one off a job because
 it bobbed is a visible bug.
+
+### world.oceanLevel cannot find the surface of a pool
+`dead.locomotion.oceanlevel` -- see also `arch.locomotion.dive`, `todo.module.fishing`
+
+**PROPOSED AND REFUSED 2026-09-02, BEFORE ANY CODE WAS WRITTEN.** The dive needs
+the surface of the water a fish is in. `world.oceanLevel(position)` returns a
+surface, is already used twice in this mod -- `fishingSpot` computes its depth
+band from it -- and would replace a bounded flood search with one call.
+
+**IT ANSWERS A DIFFERENT QUESTION.** It reports the WORLD's ocean level, which
+says nothing about the particular body of water a fish happens to be in. A
+player-built tank thirty tiles up has a surface `oceanLevel` has never heard of;
+so does a cave pool below sea level. The premise of the whole feature is
+adversarial player terrain, and on an ocean world it would look correct in every
+test right up until someone built a fish tank.
+
+**THE ONLY TRUSTWORTHY SURFACE IS ONE REACHED CONTIGUOUSLY FROM THE FISH**, which
+is what `arch.locomotion.dive` traces. The cost turned out not to matter -- real
+traces measured four to seven tiles on open pools -- so this was never a speed
+trade, just a correctness one.
+
+**KEPT AS A DEAD ENTRY BECAUSE IT IS THE OBVIOUS OPTIMISATION.** Anyone looking
+at a 400-tile trace budget will reach for `oceanLevel` within a minute, and the
+reason it fails is invisible on the test world where it works.
 
 ## REFERENCE
 
@@ -9800,6 +10075,52 @@ where the search does not complete in a tick and the unit stands still through
 it. `maxFScore` is 1200 and an unreachable search can run to `maxNodesToSearch`
 70000, so the ceiling here is seconds, not milliseconds.
 
+### Hand an abandoned board straight to string-pull
+`todo.locomotion.stringpullhandoff` -- see also `arch.locomotion.dive`, `arch.locomotion.swimmode`
+
+**FILED 2026-09-02.** When a unit abandons its diving board it has just proven a
+body-width clear run to the fish -- that IS the abandon condition. It then drops
+the cached target and lets the pather replan from scratch, which is visible as a
+short stall.
+
+**THE PROOF IS ALREADY IN HAND AT THAT MOMENT**, so the replan is redundant work
+answering a question `swimReachable` just answered. Handing directly to the
+string-pull mover would skip it.
+
+**NOT DONE BECAUSE IT IS AN OPTIMISATION AND WAS COMPETING WITH A BUG.** The
+stall had two causes stacked -- a stale approach target, then an abandoned plan
+re-supplying the board -- and adding a shortcut while either was live would have
+made neither attributable. Worth doing now that the abandon produces a
+fish-targeted plan cleanly.
+
+### A drop-through rises about a tile when it should rise nothing
+`todo.locomotion.dropthroughrise` -- see also `fact.unit.platformdrop`, `arch.locomotion.dive`
+
+**FILED 2026-09-02.** A no-hop drop-through writes `vy0 = 0` and should not rise
+at all. Measured rises of 0.20, 0.99 and 1.06 tiles on genuine drop-throughs
+where the platform did release: `controlJump` imparts real upward velocity before
+the release truncates it.
+
+**COSMETIC, AND NOW RARE.** The aligned-pair bias in `arch.locomotion.dive`
+prefers boards that hop, so drop-throughs are chosen only where a low ceiling
+refuses the hop. It reads as a small unwanted bounce.
+
+**THE LIKELY FIX IS THE ONE petportsTaskAction ALREADY USES**, placing the body
+through with `setPosition` -- see `scootThroughPlatform`. It was not used here
+because a dive wants to leave the board with some authority anyway, and that
+reasoning is weaker for the no-hop case, which by definition does not.
+
+### The lure can teleport outside network coverage
+`todo.dispatch.lureescape` -- see also `todo.module.fishing`, `arch.dispatch.union`
+
+**FILED 2026-09-02, OBSERVED NOT INVESTIGATED.** The fishing lure spawns inside
+network coverage but its teleport target selection can put it outside. Noticed
+while testing the dive, where it cost a couple of runs.
+
+**NOT CHASED BECAUSE IT WOULD HAVE CONFOUNDED THE TEST**, and it is minor: the
+fish tracker ages out and the port re-dispatches. The fix is presumably to clamp
+the teleport pick to the same rects `petports_beaconsFor` already uses.
+
 ## PROCESS
 
 ### A correction filed against a decision does not correct the decision
@@ -10421,3 +10742,32 @@ one that event is "a plan is running", so the reset sits beside
 that must accompany it. 72 path-end lines and 0 steering lines is a latch; 1871
 steering lines against a handful of plans is a same-tick clear. Neither is
 visible by reading the log; both are obvious the moment two counts are compared.
+
+### An aborted edit batch writes nothing, so re-read the file
+`proc.tooling.batchedits` -- see also `proc.pathing.readsource`, `proc.tooling.instrument`
+
+**LEARNED 2026-09-02, AND IT SHIPPED A CRASH.** Edits are applied by a script
+that performs several exact-string replacements and writes the file ONCE at the
+end, with an assertion per replacement. One assertion failed. The exception
+aborted the script before the write, so EVERY replacement in that batch was
+discarded -- including the ones that had already succeeded and reported OK.
+
+**THE FAILURE WAS NOT THE ABORT, IT WAS WHAT WAS CONCLUDED FROM IT.** A failed
+anchor was read as "that particular edit is not needed" and the session moved on
+with a follow-up script covering the remaining steps. The correct reading is
+"THE FILE IS NOT IN THE STATE YOU THINK IT IS". The net result was a function
+that declared a list, returned that list, and never filled it, with the old
+single-value return still in place.
+
+**IT PRESENTED AS SOMETHING ELSE ENTIRELY.** `ipairs` walked a `{x,y}` point as
+two numbers, every tick died indexing a number, the unit script was killed, and
+the port respawned it -- which reads from outside as a failed media check, not as
+a Lua fault.
+
+**THE RULE. After any aborted batch, re-read the function and verify every
+return path before running anything else.** Not the diff, not the remaining
+edits: the function.
+
+**AND `#t` ON A POINT IS 2**, so a length check cannot tell a list of openings
+from a single opening. Guards on shape must test `type(t[1])`, not `#t`. That is
+what made the bad value survive one build undetected.
