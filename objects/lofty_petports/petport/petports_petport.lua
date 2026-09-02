@@ -5233,20 +5233,45 @@ function petportMedicHeals(class)
   return settings[class] ~= false
 end
 
---  EVERY TREATABLE PATIENT IN COVERAGE, WORST FIRST.
+--  EVERY TREATABLE PATIENT IN NETWORK COVERAGE, WORST FIRST.
 --
 --  WORST FIRST RATHER THAN NEAREST, which is a departure from every other task
 --  in this mod and is inherited deliberately from nicemice_resolveHealTarget. A
 --  medic walking past someone at 90% to reach someone at 20% is correct; a
 --  hauler walking past the near crate is not.
 local function medicPatients()
-  local rect = coverageRect()
+  --  THE WHOLE NETWORK'S COVERAGE, NOT JUST OUR OWN RECT. Every other network-
+  --  scoped generator already assembles this union at dispatch time -- see
+  --  collectionWork -- and medic was the outlier: a wounded crewmate standing
+  --  one port over was invisible to a medic that could plainly reach them.
+  --  Queues stay port-owned; a union is a VIEW, not an ownership change.
+  local rects = self.networkRects
+  if rects == nil or #rects == 0 then rects = { coverageRect() } end
 
   --  MONSTER IS IN THE FILTER AND IS THE WHOLE POINT. Two of the five classes
   --  -- farm animals and capture-pod pets -- are monsters, and Nicemice's
   --  equivalent query asks for npc and player only.
-  local candidates = world.entityQuery({rect[1], rect[2]}, {rect[3], rect[4]},
-    { includedTypes = { "npc", "player", "monster" } })
+  --
+  --  DEDUPED BY ID, WHICH THE SINGLE-RECT VERSION NEVER HAD TO DO. Ports in a
+  --  network routinely sit inside each other's rects, so a patient in the
+  --  overlap would be listed twice, sorted twice, and -- since the second copy
+  --  carries the same id -- would burn a claim attempt against work already
+  --  taken. The heal cooldown would have caught the double DOSE, but not the
+  --  double dispatch.
+  local candidates = {}
+  local seen = {}
+
+  for _, area in ipairs(rects) do
+    local found = world.entityQuery({area[1], area[2]}, {area[3], area[4]},
+      { includedTypes = { "npc", "player", "monster" } })
+
+    for _, id in ipairs(found or {}) do
+      if not seen[id] then
+        seen[id] = true
+        table.insert(candidates, id)
+      end
+    end
+  end
 
   local out = {}
 
@@ -9787,7 +9812,10 @@ local function medicWork()
   --  absence is why the first build of this never dispatched anything.
 
   local patients = medicPatients()
-  if #patients == 0 then return nil, "no treatable patient in coverage" end
+  if #patients == 0 then
+    return nil, string.format("no treatable patient in network coverage (%s rects)",
+      #(self.networkRects or {}))
+  end
 
   --  NO DOSE IN HAND? GO AND GET ONE. This leg was missing from the first
   --  build and the symptom was total silence: medicWork required the unit to
