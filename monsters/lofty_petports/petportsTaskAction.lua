@@ -136,7 +136,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-01w treasure pool: damage-kind maps, isTreasurePool guard"
+local BUILD_STAMP = "2026-09-01y units chase a moving fish instead of waiting"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -689,6 +689,11 @@ local MEDIC_REACH = 5.0
 --
 --  Tolerance here is doing the work a re-resolve would otherwise have to.
 local FISH_REACH = 5.0
+
+--  HOW OFTEN A UNIT RE-AIMS AT A FISH THAT HAS MOVED OUT OF REACH. Twice a
+--  second: fast enough to follow something swimming, slow enough that the pather
+--  gets to run a path rather than being re-pointed mid-step.
+local FISH_RETARGET_INTERVAL = 0.5
 
 --  A TREASURE POOL NAME OUT OF WHATEVER SHAPE THE MONSTERTYPE DECLARED.
 --
@@ -2962,7 +2967,18 @@ local TASK_MOVING_DISTANCE = 2.0
 --  update(), which is where this now runs from.
 local TASK_MOVING_INTERVAL = 0.2
 
-local function report(stateData, outcome, reason, cargo)
+--  `retry` MEANS "FAILED, BUT DO NOT REST ON IT".
+--
+--  A task can fail for two very different reasons and the port cannot tell them
+--  apart from the reason string alone. Either the attempt was expensive and
+--  fruitless -- no route, nowhere to stand, target gone -- or the unit got there
+--  and the world simply moved. The backoff ladder is built for the first;
+--  applying it to the second pins a unit next to a target it could reach on the
+--  very next tick.
+--
+--  A FLAG RATHER THAN A REASON MATCH, because the port would otherwise be
+--  string-matching prose this file is free to reword.
+local function report(stateData, outcome, reason, cargo, retry)
   local task = stateData.task
 
   sb.logInfo("UNIT reporting %s for %s: %s (ended at %s, target %s, hops %s, moved %s)",
@@ -2976,6 +2992,7 @@ local function report(stateData, outcome, reason, cargo)
       outcome = outcome,
       reason = reason,
       cargo = cargo,
+      retry = retry == true,
       --  How many tiles a watering sweep actually wetted. The port spends one
       --  item per tile from this number rather than from the tile list it
       --  handed out, so a sweep that ended early is not charged for tiles it
@@ -3574,8 +3591,19 @@ local function currentTarget(task)
   --  "animal" resolves live for the same reason "collect" does, and more so:
   --  a farm animal wanders while the unit walks to it, so the position it was
   --  dispatched against is stale on arrival.
+  --  FISH BELONGS WITH THESE THREE, AND LEAVING IT OUT WAS THE WHOLE BUG.
+  --
+  --  These are the task types whose target is a live entity that can move, so
+  --  the unit re-aims at where it IS rather than where it was when the port
+  --  dispatched. Without fish here the unit walked to a snapshot, found nothing,
+  --  and stood on it -- measured 12.3 seconds between dispatch and the miss
+  --  report, nearly all of it stationary.
+  --
+  --  A FISH MOVES FURTHER AND FASTER THAN ANY OF THE OTHER THREE. A crop does
+  --  not move at all, a drop only falls, and an animal wanders inside a pen; a
+  --  fish is actively chasing a lure at swimSpeed 3 and darting at biteSpeed 30.
   if task.type ~= "collect" and task.type ~= "harvest"
-     and task.type ~= "animal" then
+     and task.type ~= "animal" and task.type ~= "fish" then
     return task.position
   end
 
@@ -6486,14 +6514,45 @@ function petportsTaskAction.update(dt, stateData)
     local gap = there and world.magnitude(mcontroller.position(), there) or nil
 
     if gap == nil or gap > FISH_REACH then
-      --  NOT A FAILURE YET. The fish is chasing a lure, so the gap closes and
-      --  opens on its own; the dwell timer below is what decides we have been
-      --  reaching for it long enough.
+      --  GO AFTER IT AGAIN RATHER THAN WAIT FOR IT TO COME BACK.
+      --
+      --  `arrived` latches once the unit reaches its approach point, and every
+      --  other task can rely on that because their targets stay put. A fish does
+      --  not, so a latched `arrived` leaves the unit standing still for the whole
+      --  dwell while the fish swims away -- which is what "sits in place for a
+      --  while" was. Measured: 12.3s from dispatch to the miss report, nearly
+      --  all of it stationary.
+      --
+      --  CLEARING groundTarget IS THE OTHER HALF. approachTargetFor caches its
+      --  answer and returns the cache on every later call, so the live position
+      --  from currentTarget would resolve straight back to the same stale
+      --  standing spot without this.
+      --
+      --  RATE LIMITED, because re-resolving a standing position and re-aiming
+      --  the pather every tick is expensive and gives a unit that twitches
+      --  rather than swims. Twice a second tracks a fish and still lets a path
+      --  run.
+      --
+      --  THE DWELL IS NOW A CHASE BUDGET rather than a wait. It still bounds the
+      --  whole attempt; it simply is not spent standing still any more.
+      stateData.fishRetarget = (stateData.fishRetarget or 0) - dt
+
+      if stateData.fishRetarget <= 0 then
+        stateData.fishRetarget = FISH_RETARGET_INTERVAL
+        stateData.arrived = false
+        stateData.groundTarget = nil
+        stateData.approachTimer = APPROACH_TIMEOUT
+      end
+
       stateData.dwellTimer = stateData.dwellTimer - dt
       if stateData.dwellTimer <= 0 then
+        --  RETRYABLE. The unit reached the fish's last known position and the
+        --  fish had left it -- which is what a fish chasing a lure does, and is
+        --  not evidence that anything is wrong. The port re-dispatches against
+        --  the fish's CURRENT position rather than resting on a stale one.
         report(stateData, "failed", string.format(
           "arrived but the fish is %s away (reach %s) -- it kept moving",
-          sb.printJson(gap or "unknown"), sb.printJson(FISH_REACH)))
+          sb.printJson(gap or "unknown"), sb.printJson(FISH_REACH)), nil, true)
         return true
       end
       return false

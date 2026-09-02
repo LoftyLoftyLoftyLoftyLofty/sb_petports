@@ -662,6 +662,16 @@ DIAG_DWELL = 3.0
 --  and only past that does the port conclude it should stop asking often.
 FAILURE_BACKOFF = { 1.0, 2.0, 5.0, 10.0, 30.0 }
 
+--  HOW MANY TIMES A TASK MAY FAIL WITHOUT EARNING A BACKOFF, when the unit
+--  reported the failure as retryable -- it arrived and the target had moved.
+--
+--  4 IS A GUESS BOUNDED BY A REAL CONSTRAINT rather than a tuned number. Fish
+--  sit above harvest in the dispatch ladder, so every retry is a crop not being
+--  picked; four attempts at a fish that keeps dodging is a few seconds of
+--  chasing before the port gives up and does something useful. Raise it if fish
+--  turn out to be caught on the fifth attempt more often than not.
+RETRY_ALLOWANCE = 4
+
 --  THE FLOOR A ROUTING FAILURE STARTS AT, SKIPPING THE RAMP ABOVE.
 --
 --  The ramp assumes a cheap retry. A routing failure costs the unit its entire
@@ -1280,7 +1290,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-01n fish dispatch, chassis gate, catch stats"
+local PETPORT_BUILD_STAMP = "2026-09-01o retryable misses skip the backoff ladder"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -1822,6 +1832,12 @@ function init()
   --  entity ids do not survive a reload, so neither should this.
   self.workFailures = {}
 
+  --  BESIDE workFailures AND WITH THE SAME LIFETIME. Counts retryable misses per
+  --  task id so a target that keeps moving cannot be chased forever -- see
+  --  RETRY_ALLOWANCE. Not persisted: a reloaded port should give a fish a fresh
+  --  set of attempts rather than inherit a grudge from before the chunk unloaded.
+  self.retryAllowance = {}
+
   --  Outcome from the unit. Reported by uniqueId because entity ids do not
   --  survive a reload and the unit may have respawned since dispatch.
   --  MID-TASK PROGRESS, WHICH IS ONLY EVER A COSMETIC.
@@ -1906,10 +1922,39 @@ function init()
     --  the same early clear.
     if report.outcome == "done" then
       self.workFailures[report.id] = nil
+      self.retryAllowance[report.id] = nil
       self.unreachableFailures = 0
       if report.id == "return:" .. stationUniqueId() then
         self.recallFailures = 0
       end
+    elseif report.retry == true
+       and (self.retryAllowance[report.id] or 0) < RETRY_ALLOWANCE then
+      --  FAILED, BUT THE UNIT GOT THERE AND THE TARGET MOVED.
+      --
+      --  The backoff ladder's own header says it is tuned for "a target that
+      --  might succeed in a moment... where retrying after one second costs one
+      --  second". A fish that swam out of reach is exactly that, and the unit is
+      --  already standing in the water next to it -- so the whole ramp is wrong
+      --  for it. Measured before this: a miss cost a full backoff, and a fish
+      --  that dodged twice pinned the unit for tens of seconds beside a fish it
+      --  could have reached on the next tick.
+      --
+      --  THE EXISTING RECORD IS CLEARED, not merely left alone. Arriving is
+      --  evidence the target is reachable; carrying a count earned by an older,
+      --  different failure would ramp the next real one from the wrong rung.
+      --
+      --  BOUNDED, BECAUSE UNBOUNDED RETRY IS ITS OWN FAILURE. Fish sit ABOVE
+      --  harvest in the ladder, so a fish that evades forever would block every
+      --  crop in coverage for its whole lifetime. After RETRY_ALLOWANCE
+      --  attempts this falls through to the ordinary backoff and the port gets
+      --  on with something else.
+      self.retryAllowance[report.id] = (self.retryAllowance[report.id] or 0) + 1
+      self.workFailures[report.id] = nil
+
+      sb.logInfo("PETPORT %s task %s missed but is retryable (%s of %s): %s",
+        stationUniqueId(), report.id,
+        sb.printJson(self.retryAllowance[report.id]),
+        sb.printJson(RETRY_ALLOWANCE), report.reason or "no detail")
     else
       noteFailure(report.id, report.reason or "no detail")
     end
