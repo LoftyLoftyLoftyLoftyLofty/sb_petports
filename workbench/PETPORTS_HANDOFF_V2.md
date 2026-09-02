@@ -50,7 +50,7 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-02 (amphibious swim mode, water entry, the dive)
+### What is built, as of 2026-09-03 (amphibious swim mode, water entry, the dive)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
@@ -87,8 +87,19 @@ dive in every log has landed and no offset one has been needed.
 
 ---
 
+**ADVERSARIAL TERRAIN IS THE STANDING TEST.** Islets with the port on top and the
+fish directly beneath, fish under lids, lava. Three separate failures came out of
+it and all three are fixed: the trace could not escape a boxed region, a walker
+that fell back in sank instead of swimming, and the lure drifted out of coverage
+on patrol. **VERIFIED: a failed hop out of lava now recovers.**
+
+---
+
 **KNOWN IMPERFECT, AND DELIBERATELY LEFT:**
 
+- **The progress watchdog counts motion, not progress**
+  (`todo.unit.progressdirection`). It read a 54-tile sink as healthy. The sink is
+  fixed; the blind spot is not, and it covers anything falling or circling.
 - **A drop-through rises about a tile** when it should rise nothing, because
   `controlJump` imparts velocity before the platform releases
   (`todo.locomotion.dropthroughrise`). Cosmetic; the aligned-pair bias means it
@@ -96,8 +107,6 @@ dive in every log has landed and no offset one has been needed.
 - **An abandoned board replans rather than handing straight to string-pull**
   (`todo.locomotion.stringpullhandoff`). The clear line is already proven at
   that moment, so the replan is redundant work.
-- **The lure can teleport outside network coverage**
-  (`todo.dispatch.lureescape`). Noticed, not chased.
 - **`PETPORTS_DIVE_DEBUG` and `FLY_POINT_DEBUG` are both on.** Together they were
   twelve thousand log lines in sixty-five seconds. Turn them off before shipping.
 
@@ -3715,6 +3724,16 @@ and a harvest route crossing a puddle used to throw away a working plan and spen
 two seconds rebuilding. But once a unit IS a swimmer it must get out regardless
 of what it does next, or it floats in deep water with a harvest to do.
 
+**AND THAT GATE NEEDED A FLOOR UNDER IT, ADDED 2026-09-03.** A walker crossing a
+shin-deep pool and a walker that has just fallen into open ocean report the same
+medium and hold the same kind of task; only a FISH task could make a swimmer, so
+the second one stayed a walker and sank. Measured: a missed exit jump, an upcycle
+task in hand, 54 tiles down over 17 seconds at a steady 3 tiles a second, ending
+only when the task failed on its own. `wadeableBottom` is the discriminator --
+solid or platform within `PETPORTS_WADE_DEPTH` of the feet. With a bottom it is a
+pool being crossed; without one the destination decides, which for such a task
+means `exiting`. See `todo.unit.progressdirection` for why nothing caught it.
+
 **FOUR THINGS HANG OFF petports_outOfMedium AND ALL FOUR ARE WRONG HERE**, so a
 gravity-switchable chassis reports `checked = false`: the port's 30s re-home,
 `petportsFlopState`, the task-action yield, and petBehavior's beached
@@ -3756,11 +3775,27 @@ already works, so a tile of offset is not worth twenty tiles of walking; without
 it, aligned pairs tied exactly and the scan order decided, which read as a
 standing preference for the left.
 
-**THE SEARCH WINDOW SPANS THE FISH AND THE UNIT.** Both halves used to orbit the
-fish, so a unit parked on a platform directly over the water was never
-considered. The unit's own column is the one column it is known to be able to
-reach. Boards are hunted at the WATERLINE, seeded from the nearest opening in x,
+**THERE ARE TWO SEARCH WINDOWS, AND THEY ARE NOT THE SAME SHAPE.** Boards are
+hunted over a narrow window spanning the fish and the unit -- the unit's own
+column is the one column it is known to be able to reach, and both halves used to
+orbit the fish, so a unit parked on a platform directly over the water was never
+considered. Boards are seeded at the WATERLINE, from the nearest opening in x,
 never at the fish's own depth.
+
+**THE TRACE GETS A MUCH WIDER ONE, ADDED 2026-09-03.** It is not looking for
+footing; it is looking for the EDGE OF A LID, and a lid is as wide as whatever
+the player built. Measured on an islet with the port on top and the fish directly
+beneath: "no surface within 400 tiles ... sealed, or a pool larger than the
+budget", where the budget was NOT the constraint -- the flood was filling a boxed
+region it had been told to stay inside. Simulated, a 12-tile window fails on any
+islet wider than about twenty tiles while 48 solves all of them inside the SAME
+budget. The board window is then derived from the openings that survived, because
+a hole at an islet's edge needs a board at that edge.
+
+**OPENINGS ARE CAPPED BY COUNT, NOT BY DISTANCE.** A 20-tile bound from the fish
+was retired: against a wide trace it discards precisely the openings the widening
+exists to find. A count also bounds the pairing cost, which distance does not --
+pairing is columns times openings rays, and a wide trace can return seventy-six.
 
 **THREE. LAUNCH.** Aligned pairs hop and drop; offset pairs get horizontal
 velocity re-asserted per tick, because `airFriction` decays a one-shot launch and
@@ -10110,16 +10145,59 @@ through with `setPosition` -- see `scootThroughPlatform`. It was not used here
 because a dive wants to leave the board with some authority anyway, and that
 reasoning is weaker for the no-hop case, which by definition does not.
 
-### The lure can teleport outside network coverage
+### The lure left coverage on patrol, not on teleport
 `todo.dispatch.lureescape` -- see also `todo.module.fishing`, `arch.dispatch.union`
 
-**FILED 2026-09-02, OBSERVED NOT INVESTIGATED.** The fishing lure spawns inside
-network coverage but its teleport target selection can put it outside. Noticed
-while testing the dive, where it cost a couple of runs.
+**FILED AND FIXED 2026-09-03. KEPT BECAUSE THE OBVIOUS DIAGNOSIS WAS WRONG.**
+Reported as the lure escaping when it chose a teleport point, and the fix was
+assumed to be clamping the teleport pick. `lureSpotValid` was already testing
+`insideCoverage` on every candidate; the teleport had never been the problem.
 
-**NOT CHASED BECAUSE IT WOULD HAVE CONFOUNDED THE TEST**, and it is minor: the
-fish tracker ages out and the port re-dispatches. The fix is presumably to clamp
-the teleport pick to the same rects `petports_beaconsFor` already uses.
+**IT WAS THE PATROL, AND THE ASYMMETRY IS THE WHOLE BUG.** Coverage was tested
+inside the TIMED terrain lookahead -- every `petports_patrolCheck` seconds,
+against a point two tiles ahead -- while `setPosition` ran EVERY TICK. Between
+checks the lure moved `patrolSpeed * patrolCheck` unverified, so a teleport
+landing just inside an edge could cross it before the next check fired.
+Simulated against the measured tuning: 0.325 tiles outside from a start 0.3
+inside an edge, and exactly zero from mid-rect -- which is why it read as
+"occasionally" and why the logs that were looked at showed nothing.
+
+**BRIEF EXCURSIONS ARE NOT HARMLESS HERE.** `getSpawn` picks a neighbourhood
+around the lure, so a lure a fraction outside spawns a fish the port cannot
+dispatch to, and a fish holds a 150-second tracking slot -- the consequence
+outlives the excursion by two orders of magnitude.
+
+**THE FIX SPLITS THE TWO TESTS BY COST.** The terrain queries stay on their
+timer; `insideCoverage` is arithmetic over a handful of rects with no world call
+in it and now runs every tick, against the position actually being written
+rather than a point two tiles ahead. A teleport also zeroes the patrol timer,
+because a jump invalidates a lookahead measured around the old position.
+
+**AND THE LURE HAD NO BUILD STAMP**, so a stale copy was indistinguishable from a
+current one in a log. Added to the line every lure prints on spawn.
+
+### The progress watchdog counts motion, not progress
+`todo.unit.progressdirection` -- see also `arch.locomotion.swimmode`, `arch.dispatch.leash`
+
+**FILED 2026-09-03, AND IT IS A GAP IN A GENERAL SAFETY NET RATHER THAN A
+SWIMMING BUG.** A unit that missed its exit jump fell back into deep water and
+sank 54 tiles over 17 seconds at a steady 3 tiles a second. The watchdog never
+fired, because it measures distance MOVED over a window -- 15 tiles per
+five-second window against the 2.5 it needs -- and a unit falling is moving. The
+one safeguard that could have caught it read the plunge as healthy progress.
+
+**THE SINK ITSELF IS FIXED** by the wade test in `arch.locomotion.swimmode`, so
+this is not currently reachable by that route. It is filed because the watchdog
+will miss ANY future failure that involves motion in the wrong direction, and
+that class is not small: anything falling, drifting, or circling satisfies it.
+
+**THE OBVIOUS FIX IS TO MEASURE CLOSING DISTANCE TO THE TARGET** rather than
+path length travelled, which is a different quantity and is already available at
+every call site that has a target. The reason to be careful is that legitimate
+routes go AWAY from a target -- around terrain, through a vent -- so a naive
+closing-distance test would fail the units it is meant to protect. That is
+presumably why it counts motion, and it is why this is filed rather than
+changed.
 
 ## PROCESS
 

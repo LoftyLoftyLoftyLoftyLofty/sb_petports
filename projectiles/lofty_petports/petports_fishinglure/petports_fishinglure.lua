@@ -191,7 +191,11 @@ function init()
       return nil
     end)
 
-  sb.logInfo("petports: fishing lure %s up at %s, owner %s, ttl %s",
+  --  BUILD STAMP ON THE ONE LINE EVERY LURE PRINTS. This file had none, so a
+  --  stale copy was indistinguishable from a current one in a log -- which is
+  --  the exact failure the stamps in every other script exist to catch.
+  sb.logInfo("petports: fishing lure %s up at %s, owner %s, ttl %s "
+    .. "(build 2026-09-03a coverage checked per tick)",
     sb.printJson(entity.id()), sb.printJson(mcontroller.position()),
     sb.printJson(self.ownerId), sb.printJson(projectile.timeToLive()))
 end
@@ -359,6 +363,13 @@ local function teleportFrom(fishPosition, why)
         --  straight back to the depth it started at on the very next tick.
         self.holdY = candidate[2]
 
+        --  THE PATROL LOOKAHEAD IS ALSO STALE NOW. It was measured against the
+        --  terrain around the OLD position, and this is a jump rather than a
+        --  step -- the new surroundings have nothing to do with the old ones.
+        --  Zeroing the timer makes the next tick re-measure instead of coasting
+        --  up to patrolCheck seconds on an answer about somewhere else.
+        self.patrolTimer = 0
+
         --  AND THE PATROL NOW HEADS AWAY FROM THE FISH.
         --
         --  The teleport picks a candidate at a UNIFORM ANGLE, so half the time
@@ -446,23 +457,51 @@ end
 local function patrol(dt)
   local here = mcontroller.position()
 
+  --  THE TERRAIN LOOKAHEAD IS TIMED. It costs a lineTileCollision and a
+  --  liquidAt, and terrain two tiles away does not change between ticks.
   self.patrolTimer = self.patrolTimer - dt
   if self.patrolTimer <= 0 then
     self.patrolTimer = self.patrolCheck
 
     local ahead = { here[1] + (self.direction * 2), self.holdY }
 
-    local blocked = world.lineTileCollision({ here[1], self.holdY }, ahead)
-      or not world.liquidAt(ahead)
-      or not insideCoverage(self.coverage, ahead)
-
-    if blocked then self.direction = -self.direction end
+    if world.lineTileCollision({ here[1], self.holdY }, ahead)
+       or not world.liquidAt(ahead) then
+      self.direction = -self.direction
+    end
   end
 
-  mcontroller.setPosition({
-    here[1] + (self.direction * self.patrolSpeed * dt),
-    self.holdY
-  })
+  --  COVERAGE IS TESTED EVERY TICK, ON THE POSITION ACTUALLY BEING WRITTEN.
+  --
+  --  IT USED TO RIDE ALONG WITH THE TIMED LOOKAHEAD AND THAT IS HOW THE LURE
+  --  GOT OUT. The check ran every patrolCheck seconds against a point two tiles
+  --  ahead, while setPosition ran EVERY tick -- so between checks the lure moved
+  --  patrolSpeed * patrolCheck unverified, and a teleport landing just inside an
+  --  edge could cross it before the next check fired. The lookahead then
+  --  reversed and it came back, so the excursion was brief and self-correcting,
+  --  which is exactly why it read as "occasionally escapes" rather than as a
+  --  lure sitting outside coverage.
+  --
+  --  BRIEF IS NOT HARMLESS. `getSpawn` picks a neighbourhood around the lure, so
+  --  a lure a fraction outside the rect spawns fish the port cannot dispatch to
+  --  -- and a fish is a 150-second tracking slot, so one bad spawn outlives the
+  --  excursion that caused it by a long way.
+  --
+  --  CHEAP ENOUGH TO DO PROPERLY. insideCoverage is arithmetic over a handful of
+  --  rects with no world calls in it, unlike the two queries above; there was
+  --  never a reason for it to share their cadence.
+  local step = self.direction * self.patrolSpeed * dt
+  local destination = { here[1] + step, self.holdY }
+
+  if not insideCoverage(self.coverage, destination) then
+    --  TURN AND STAY PUT FOR THIS TICK. Stepping the other way instead would
+    --  double the speed for one frame; the next tick moves normally.
+    self.direction = -self.direction
+    mcontroller.setVelocity({ 0, 0 })
+    return
+  end
+
+  mcontroller.setPosition(destination)
   mcontroller.setVelocity({ 0, 0 })
 end
 
