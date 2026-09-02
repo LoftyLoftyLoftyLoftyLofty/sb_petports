@@ -82,6 +82,22 @@
   //  approacher and 4 for a lurker. Moving at that range puts the fish back into
   //  the outer branch of its own state, where it clears its lookTimer and swims
   //  in calmly at `swimSpeed` 3. The dart is never reached.
+  //  HOW OFTEN THE LURE TRIES TO SPAWN A FISH. Vanilla's is {2, 6}; this is
+  //  double, which halves the rate.
+  //
+  //  A ROD IS NOT AN AUTOMATED FLEET. Vanilla's interval assumes a player
+  //  standing there casting, reeling and walking away -- a petport lure sits in
+  //  the water for 150 seconds and a unit catches in one to four. At vanilla's
+  //  rate the loop produced fish faster than a base could absorb them and filled
+  //  crates in minutes.
+  //
+  //  IT IS NOT THE ONLY LIMITER AND WAS NEVER MEANT TO BE. The lure holds one
+  //  fish at a time and the port refuses to dispatch a unit that is already
+  //  carrying, so the real cycle is spawn plus catch plus deposit. Doubling this
+  //  lengthens the first term only, which is why it halves throughput rather
+  //  than quartering it.
+  "spawnTimeRange" : [4, 12],
+
   "petports_teleportRange" : 4.0,
 
   //  Horizontal drift, so the lure is a moving target rather than a point. The
