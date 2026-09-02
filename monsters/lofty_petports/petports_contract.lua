@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-09-02s boards need sight of the hole; stale traces cleared"
+local CONTRACT_BUILD_STAMP = "2026-09-02w boards are hunted at the waterline, not at the fish"
 
 local contractStamped = false
 
@@ -1515,13 +1515,41 @@ end
 --  its own surface is not one a unit should be swimming in.
 PETPORTS_DIVE_TRACE_BUDGET = 400
 
---  How far the trace may wander from the fish's own column, and how far above
---  the fish it may look. Both are tile counts.
-PETPORTS_DIVE_TRACE_SPREAD = 24
+--  How far above the fish the trace may look, in tiles.
 PETPORTS_DIVE_TRACE_RISE = 96
 
---  How far left and right of the hole to look for dry footing to launch from.
-PETPORTS_DIVE_LAUNCH_SPREAD = 12
+--  How far the search reaches SIDEWAYS PAST the two columns that matter.
+--
+--  THE WINDOW SPANS THE FISH AND THE UNIT, NOT JUST THE FISH, and that is the
+--  fix rather than a bigger number. Both the trace and the board scan used to be
+--  centred on the fish -- the trace at 24 tiles, the boards at 12 -- so a unit
+--  parked on a platform directly over the water was never considered, because
+--  the fish happened to be off to the left. Measured 2026-09-02: "2 opening(s)
+--  found near [2503.08,1135.13] but no dry footing within 12 tiles can see any
+--  of them", over and over, while the unit stood on perfectly good footing above
+--  the same pool.
+--
+--  THE UNIT'S OWN COLUMN IS THE ONE COLUMN WE KNOW IT CAN REACH. Leaving it out
+--  of the search is the least defensible omission available: every other
+--  candidate needs a walk that might not exist, and this one is already stood on.
+PETPORTS_DIVE_SPAN_MARGIN = 12
+
+--  Hard cap on the width of that window, in tiles.
+--
+--  A FISH AND A UNIT CAN BE ARBITRARILY FAR APART, and the span is derived from
+--  their separation, so without this a distant fish turns a bounded search into
+--  an unbounded one. Clamped toward the FISH when it bites, because the fish is
+--  what the task is about and openings near it are the ones worth having.
+PETPORTS_DIVE_SPAN_MAX = 72
+
+--  RETIRED: PETPORTS_DIVE_LAUNCH_SPREAD.
+--
+--  It bounded the board scan at 12 tiles either side of the hole, which is the
+--  window that hid the unit's own platform from the search. Replaced by
+--  PETPORTS_DIVE_SPAN_MARGIN and PETPORTS_DIVE_SPAN_MAX, which span the fish and
+--  the unit instead of orbiting one of them. Named here rather than deleted
+--  silently, because "widen the launch spread" is the obvious wrong fix and this
+--  says why it was not the answer.
 
 --  WHAT COUNTS AS SOLID TO A DIVE, WHICH IS NOT WHAT COUNTS AS STANDABLE.
 --
@@ -1679,7 +1707,7 @@ end
 --  TRACE UP FROM THE FISH TO THE SURFACE OF THE WATER IT IS ACTUALLY IN.
 --
 --  Returns the entry position, or nil and a reason.
-local function traceSurface(from)
+local function traceSurface(from, spanLow, spanHigh)
 	local startX = math.floor(from[1])
 	local startY = math.floor(from[2])
 
@@ -1694,6 +1722,7 @@ local function traceSurface(from)
 
 	local seen = { [startX .. "," .. startY] = true }
 	local frontier = { { startX, startY } }
+	local entries = {}
 	local examined = 0
 
 	while #frontier > 0 and examined < PETPORTS_DIVE_TRACE_BUDGET do
@@ -1720,16 +1749,20 @@ local function traceSurface(from)
 				local entry = { x + 0.5, y + 0.5 }
 
 				if bodyFitsAt(entry) then
-					self.petportsDiveEntryMark = entry
-					return entry, nil, examined
+					--  COLLECTED, NOT RETURNED. The first surface the body fits
+					--  through is not necessarily the one worth aiming at --
+					--  pickBoardAndEntry pairs every opening against every board
+					--  rather than taking either on its own. Walking on costs
+					--  nothing: these tiles were being visited regardless and the
+					--  budget is unchanged.
+					table.insert(entries, entry)
+					diveDebugMark(entry, PETPORTS_DIVE_COLOR_ENTRY)
+				else
+					--  Air over water, refused: the body does not fit. Marked
+					--  distinctly, because "no surface" and "every surface is a
+					--  slot" are different terrain problems.
+					diveDebugMark(entry, PETPORTS_DIVE_COLOR_NARROW)
 				end
-
-				--  Found air over water and refused it: the body does not fit.
-				--  Marked distinctly, because "no surface" and "every surface is
-				--  a slot" are different terrain problems with the same message.
-				diveDebugMark(entry, PETPORTS_DIVE_COLOR_NARROW)
-				--  Too narrow. Not a failure -- keep looking, other columns of
-				--  the same pool may open up.
 			end
 
 			if tileIsSolid(x, y + 1) then
@@ -1742,7 +1775,7 @@ local function traceSurface(from)
 				local key = nx .. "," .. y
 
 				if not seen[key]
-				   and math.abs(nx - startX) <= PETPORTS_DIVE_TRACE_SPREAD
+				   and nx >= spanLow and nx <= spanHigh
 				   and tileIsWater(nx, y) then
 					seen[key] = true
 					table.insert(frontier, { nx, y })
@@ -1764,7 +1797,7 @@ local function traceSurface(from)
 				local sideKey = nx .. "," .. y
 
 				if not seen[sideKey]
-				   and math.abs(nx - startX) <= PETPORTS_DIVE_TRACE_SPREAD
+				   and nx >= spanLow and nx <= spanHigh
 				   and tileIsWater(nx, y) then
 					seen[sideKey] = true
 					table.insert(frontier, { nx, y })
@@ -1772,6 +1805,11 @@ local function traceSurface(from)
 			end
 		end
 	end
+
+	--  A BUDGET EXHAUSTED WITH ENTRIES IN HAND IS NOT A FAILURE. It only means
+	--  the pool is bigger than the search, and the openings already found are as
+	--  real as any the rest of it would have held.
+	if #entries > 0 then return entries, nil, examined end
 
 	if examined >= PETPORTS_DIVE_TRACE_BUDGET then
 		return nil, string.format("no surface within %s tiles of %s -- sealed, or a pool larger than the budget",
@@ -1816,60 +1854,172 @@ local function diveRefusedAt(point)
 	return refused ~= nil and refused[diveRefusedKey(point)] == true
 end
 
---  DRY GROUND NEAR THE HOLE, NEAREST FIRST.
+--  HOW FAR AN ENTRY MAY SIT FROM THE FISH.
 --
---  avoidLiquid TRUE, WHICH IS THE OPPOSITE OF WHAT THIS CHASSIS USUALLY PASSES.
---  petports_avoidLiquid() is false for an amphibious unit, so the ordinary
---  resolvers will happily hand back a submerged standing spot -- which is a fine
---  place to stand and a useless place to dive FROM. findGroundPosition's own
---  post-check refuses any ground position with liquid over it when this is set,
---  so vanilla answers the question directly.
-local function launchPointNear(entry)
-	local best, bestDistance = nil, nil
+--  THE POINT OF TRACING CONTIGUOUSLY WAS TO FIND THIS POOL'S SURFACE, not its
+--  most convenient corner. With every opening collected rather than just the
+--  first, nothing otherwise stops a board pairing with a hole at the far end of
+--  a long pool and dropping the unit twenty tiles from the fish it was sent for.
+PETPORTS_DIVE_ENTRY_REACH = 20.0
 
-	for offset = -PETPORTS_DIVE_LAUNCH_SPREAD, PETPORTS_DIVE_LAUNCH_SPREAD do
-		local x = math.floor(entry[1] + offset) + 0.5
+--  A BOARD AND A HOLE, CHOSEN TOGETHER.
+--
+--  NEITHER IS MEANINGFUL ALONE, AND CHOOSING THEM IN SEQUENCE WAS THE BUG. The
+--  trace used to stop at the first surface the body fit through, and boards were
+--  then scored by distance to that one hole -- so an unlucky first opening threw
+--  away every board in the pool, and the nearest footing won even when it sat
+--  behind a wall. Measured 2026-09-02: a board on the left, an entry further
+--  left, and something solid between them, chosen again and again.
+--
+--  SCORED ON HORIZONTAL OFFSET, NOT ON DISTANCE, AND THE LOG IS THE ARGUMENT.
+--  Of eight dives on 2026-09-02, the five ALIGNED ones all landed, each rising
+--  0.667 tiles with no horizontal solve at all. Alignment is not a tidiness
+--  preference: |dx| <= PETPORTS_DIVE_DROP_ALIGN is the case that writes no vx,
+--  so there is no drag to fight, no velocity to get wrong, and no swept flight
+--  across terrain to be refused by. Distance cannot express that -- it prefers a
+--  board a tile away diagonally over one two tiles directly above, and the
+--  second is strictly the better dive.
+--
+--  VERTICAL DROP BREAKS TIES, SHORTEST FIRST, because a shorter fall is less
+--  flight to be interrupted and lands nearer the surface the fish is under.
+--
+--  COST. One ray per pair, so columns times entries -- a few hundred
+--  lineTileCollision calls at the current spreads. It runs ONCE PER TASK now the
+--  plan is sticky, beside a trace that already spends comparably.
+--  THE COLUMN WINDOW BOTH HALVES OF THE SEARCH USE.
+--
+--  ONE WINDOW, NOT TWO, so the trace cannot collect an opening the board scan
+--  will never look under, nor the reverse. Spans the fish and the unit with
+--  PETPORTS_DIVE_SPAN_MARGIN either side, clamped toward the fish at
+--  PETPORTS_DIVE_SPAN_MAX.
+local function diveSpan(fish)
+	local here = mcontroller.position()[1]
 
-		local ok, spot = pcall(findGroundPosition, { x, entry[2] }, -4, 8, true)
+	local low = math.floor(math.min(fish[1], here)) - PETPORTS_DIVE_SPAN_MARGIN
+	local high = math.ceil(math.max(fish[1], here)) + PETPORTS_DIVE_SPAN_MARGIN
 
-		if ok and type(spot) == "table" and type(spot[1]) == "number"
-		   and type(spot[2]) == "number" then
-			diveDebugMark({ spot[1], spot[2] }, PETPORTS_DIVE_COLOR_FOOTING)
+	--  CLAMPED TOWARD THE FISH. If the unit is a long way off, the openings
+	--  worth having are the ones near the target, not the ones near the walker.
+	if (high - low) > PETPORTS_DIVE_SPAN_MAX then
+		if fish[1] < here then
+			high = low + PETPORTS_DIVE_SPAN_MAX
+		else
+			low = high - PETPORTS_DIVE_SPAN_MAX
+		end
+	end
 
-			if diveRefusedAt(spot) then
-				--  Proven unusable by a swept flight. Skipped, not scored.
-				spot = nil
+	return low, high
+end
+
+local function pickBoardAndEntry(entries, fish, spanLow, spanHigh)
+	--  A LIST OF POINTS, NOT A POINT. Shipped 2026-09-02 with traceSurface still
+	--  returning a single {x,y} from an early return that an aborted edit had
+	--  failed to remove: ipairs walked that table as two NUMBERS and every tick
+	--  died on `attempt to index a number value (local 'entry')`, which killed
+	--  the unit script and read from outside as a failed media check.
+	--
+	--  CHEAP AND LOUD. One type test per call against a crash that presents as
+	--  something else entirely.
+	if type(entries) ~= "table" or type(entries[1]) ~= "table" then
+		sb.logInfo("UNIT DIVE cannot choose a board: traceSurface returned %s, "
+			.. "which is not a list of openings",
+			sb.printJson(entries))
+		return nil
+	end
+
+	local best = nil
+
+	for column = spanLow, spanHigh do
+		local x = column + 0.5
+
+		--  SEEDED AT THE WATER SURFACE, NOT AT THE FISH.
+		--
+		--  THIS LINE READ fish[2] AND THAT WAS THE WHOLE FAILURE. Dry footing sits
+		--  at the WATERLINE; a fish sits wherever it likes, which is usually well
+		--  under it. Measured 2026-09-02: fish at y 1127.66, surface openings at
+		--  about 1149, so the search swept y 1119..1143 -- twenty tiles below any
+		--  dry ground in the world -- and reported "41 opening(s) found ... but no
+		--  dry footing in that span can see any of them". Forty-one real holes and
+		--  not one board, because it was looking in the wrong half of the ocean.
+		--
+		--  IT IS A REGRESSION FROM THE PAIRING REWRITE. launchPointNear seeded at
+		--  entry[2], correctly; when the signature changed from one entry to a
+		--  list plus a fish, the seed followed the wrong argument.
+		--
+		--  THE NEAREST OPENING IN X DECIDES THE HEIGHT, so a pool with surfaces at
+		--  several levels -- a stepped shoreline, a cave pool above a bay -- gets
+		--  the level belonging to this column rather than one global guess. Pure
+		--  arithmetic over the entry list, so it costs no world calls; the single
+		--  findGroundPosition per column is unchanged.
+		local seedY, seedGap = nil, nil
+
+		for _, entry in ipairs(entries) do
+			local gap = math.abs(entry[1] - x)
+
+			if seedGap == nil or gap < seedGap then
+				seedY, seedGap = entry[2], gap
 			end
 		end
 
-		if ok and type(spot) == "table" and not diveSighted(spot, entry) then
-			--  A WALL BETWEEN THE BOARD AND THE HOLE DISQUALIFIES IT.
-			--
-			--  The scan used to score purely on distance, so the nearest footing
-			--  won even when it sat on the far side of a wall from the water --
-			--  which is how the unit kept choosing a board on the left with the
-			--  entry further left and something solid in between. Distance to a
-			--  hole you cannot reach is not a useful thing to be nearest to.
-			--
-			--  A RAY, NOT THE SWEEP, AND DELIBERATELY THE CHEAPER TEST. This runs
-			--  for every candidate column; the body sweep in petports_diveLaunch
-			--  is the real answer and runs once, for the winner. A ray cannot see
-			--  that a gap is too narrow, so a board can still be refused later --
-			--  but it catches a WALL, which is what this was picking.
-			diveDebugMark({ spot[1], spot[2] }, PETPORTS_DIVE_COLOR_NARROW)
-			spot = nil
-		end
+		--  avoidLiquid TRUE, WHICH IS THE OPPOSITE OF WHAT THIS CHASSIS USUALLY
+		--  PASSES. petports_avoidLiquid() is false for an amphibious unit, so the
+		--  ordinary resolvers hand back submerged standing spots -- fine to stand
+		--  on, useless to dive FROM. findGroundPosition refuses wet ground when
+		--  this flag is set, so vanilla answers the question directly.
+		--
+		--  ASYMMETRIC WINDOW, MOSTLY UPWARD. A board is above the water it drops
+		--  into by definition; below the surface there is only more water.
+		local ok, spot = pcall(findGroundPosition, { x, seedY }, -4, 12, true)
 
-		if ok and type(spot) == "table" then
-			local distance = world.magnitude(spot, entry)
+		if ok and type(spot) == "table" and type(spot[1]) == "number"
+		   and type(spot[2]) == "number" then
 
-			if bestDistance == nil or distance < bestDistance then
-				best, bestDistance = { spot[1], spot[2] }, distance
+			diveDebugMark({ spot[1], spot[2] }, PETPORTS_DIVE_COLOR_FOOTING)
+
+			--  Proven unusable by an actual swept flight. Skipped, not scored.
+			if diveRefusedAt(spot) then spot = nil end
+
+			if spot ~= nil then
+				local sighted = false
+
+				for _, entry in ipairs(entries) do
+					--  THE HOLE MUST BE BELOW THE BOARD AND NEAR THE FISH. One above
+					--  the board cannot be fallen into, and one at the far end of the
+					--  pool is not where the fish is.
+					if entry[2] < spot[2]
+					   and math.abs(entry[1] - fish[1]) <= PETPORTS_DIVE_ENTRY_REACH
+					   and diveSighted(spot, entry) then
+
+						sighted = true
+
+						local dx = math.abs(entry[1] - spot[1])
+						local drop = spot[2] - entry[2]
+						local aligned = dx <= PETPORTS_DIVE_DROP_ALIGN
+
+						--  Aligned pairs outrank every offset pair outright; within
+						--  a class, less offset first, then less drop.
+						local score = (aligned and 0 or 1000) + (dx * 10) + drop
+
+						if best == nil or score < best.score then
+							best = {
+								launch = { spot[1], spot[2] },
+								entry = { entry[1], entry[2] },
+								score = score, dx = dx, drop = drop, aligned = aligned
+							}
+						end
+					end
+				end
+
+				--  A BOARD THAT CAN SEE NO HOLE AT ALL IS WORTH DRAWING, and it is a
+				--  different fact from a board that merely lost on score.
+				if not sighted then
+					diveDebugMark({ spot[1], spot[2] }, PETPORTS_DIVE_COLOR_NARROW)
+				end
 			end
 		end
 	end
 
-	return best, bestDistance
+	return best
 end
 
 --  WHERE SHOULD A DRY UNIT GO TO GET AT A FISH?
@@ -1916,7 +2066,11 @@ function petports_diveApproach(fishPosition, taskId)
 		self.petportsDiveRefused = nil
 	end
 
-	local entry, why, examined = traceSurface(fishPosition)
+	--  ONE WINDOW FOR BOTH HALVES. See diveSpan: it covers the fish AND the unit,
+	--  so the column the unit is standing on is always a candidate.
+	local spanLow, spanHigh = diveSpan(fishPosition)
+
+	local entries, why, examined = traceSurface(fishPosition, spanLow, spanHigh)
 
 	--  CLEARED ON EVERY FAILURE, AND THAT MATTERS MORE THAN IT LOOKS.
 	--  petports_desiredSwimMode treats a stored entry as "the fish's water is
@@ -1924,19 +2078,29 @@ function petports_diveApproach(fishPosition, taskId)
 	--  fish in a different pool would keep refusing swim mode for water the unit
 	--  is legitimately in. No plan means no gate, which fails toward letting the
 	--  unit swim rather than toward stranding it.
-	if entry == nil then
+	if entries == nil then
 		self.petportsDiveEntry = nil
 		self.petportsDivePlan = nil
 		return nil, why
 	end
 
-	local launch, gap = launchPointNear(entry)
+	local pair = pickBoardAndEntry(entries, fishPosition, spanLow, spanHigh)
 
-	if launch == nil then
-		return nil, string.format("surface at %s but no dry footing within %s tiles of it",
-			sb.printJson(entry), sb.printJson(PETPORTS_DIVE_LAUNCH_SPREAD))
+	if pair == nil then
+		self.petportsDivePlan = nil
+		self.petportsDiveEntry = nil
+
+		return nil, string.format("%s opening(s) found near %s (traced %s tiles, "
+			.. "columns %s..%s, unit at %s) but no dry footing in that span can "
+			.. "see any of them",
+			sb.printJson(#entries), sb.printJson(fishPosition),
+			sb.printJson(examined), sb.printJson(spanLow), sb.printJson(spanHigh),
+			sb.printJson(mcontroller.position()[1]))
 	end
 
+	local launch, entry = pair.launch, pair.entry
+
+	self.petportsDiveEntryMark = { entry[1], entry[2] }
 	self.petportsDiveLaunchMark = { launch[1], launch[2] }
 
 	--  REAL STATE, NOT JUST A DEBUG MARK. petports_desiredSwimMode reads this to
@@ -1948,9 +2112,12 @@ function petports_diveApproach(fishPosition, taskId)
 		entry = { entry[1], entry[2] }
 	}
 
-	sb.logInfo("UNIT DIVE plan for fish at %s: surface %s (traced %s tiles), launch %s, gap %s",
-		sb.printJson(fishPosition), sb.printJson(entry), sb.printJson(examined),
-		sb.printJson(launch), sb.printJson(gap))
+	sb.logInfo("UNIT DIVE plan for fish at %s: %s opening(s) from %s tiles traced; "
+		.. "chose board %s -> hole %s (%s, dx %s, drop %s)",
+		sb.printJson(fishPosition), sb.printJson(#entries), sb.printJson(examined),
+		sb.printJson(launch), sb.printJson(entry),
+		pair.aligned and "ALIGNED" or "offset",
+		sb.printJson(pair.dx), sb.printJson(pair.drop))
 
 	return launch, entry
 end
