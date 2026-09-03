@@ -57,6 +57,11 @@
 --  does the containerAddItems for a deposit. The seed lands on petData, so it
 --  never has to exist anywhere it could be dropped.
 --
+--  "fuelfetch" -- IDENTICAL TO withdraw, and deliberately so. Walk to a crate
+--  marked as a pet feeder and stand there; the port consumes one treat and
+--  feeds it. dd.fuel.autoeat decides WHETHER the trip happens; this end only
+--  walks.
+--
 --  "replant" -- walk to a tile an intent names and put the seed back in the
 --  ground with world.placeObject. The seed and the crop share one name, so
 --  there is nothing to look up: what was harvested is what gets planted.
@@ -136,7 +141,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-02z an abandoned plan supplies no target"
+local BUILD_STAMP = "2026-09-03o the module slows the burn"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -4523,8 +4528,61 @@ local function flightTrace(dt, stateData)
   stateData.petportsTrace = { pos = here, grounded = grounded, tick = tick, flight = flight }
 end
 
+--  FUEL BURNS WHILE WORKING, AND ONLY WHILE WORKING.
+--
+--  arch.fuel.burn. vanilla drains hunger at a flat rate from groundPet.lua's
+--  tickResources regardless of what the unit is doing, which contradicts the
+--  load-bearing claim that upkeep is proportional to the work a fleet does. So
+--  petResourceDeltas.hunger is pinned to 0 in every monstertype and the burn
+--  is driven from here instead.
+--
+--  A PARKED FLEET IS FREE, DELIBERATELY. A player who over-builds is not
+--  punished for it; idle units simply cost nothing.
+--
+--  STATION-KEEPING IS NOT WORK EITHER, and that is what the task.port test
+--  buys. A leash task has no port, holds no claim and is owed no report -- it
+--  is a tethered unit walking home, which is most of what it does when it is
+--  not working. Charging fuel for it would make a fleet that has nothing to do
+--  more expensive than one that is busy.
+--
+--  MIGRATION, AND IT IS NOT DECORATION. groundPet.lua seeds storage.petResources
+--  ONCE, with `or config.getParameter`, so a unit that existed before this
+--  shipped has a table with no petports_fuel key in it. The RESOURCE is fine --
+--  defaultPercentage 100 fills it on load -- but petResources() enumerates that
+--  table to build the sync the port mirrors, so without this the pane draws an
+--  empty bar for every unit that predates the feature.
+local function burnFuel(dt, task)
+  if task == nil or task.port == nil then return end
+
+  if storage.petResources ~= nil and storage.petResources.petports_fuel == nil then
+    storage.petResources.petports_fuel = status.resource("petports_fuel")
+  end
+
+  --  THE MODULE HOOK GOES HERE, NOT IN THE MONSTERTYPE. petports_fuelDrain is
+  --  the chassis cost; an efficiency module divides it, and until those items
+  --  exist the divisor is 1 and this reads as the chassis rate alone.
+  local rate = tonumber(config.getParameter("petports_fuelDrain", 1.0)) or 1.0
+
+  --  THE EFFICIENCY MODULE, ARRIVING WITH THE MODULE PUSH RATHER THAN BEING
+  --  LOOKED UP HERE. petports_setModuleEffects sets it; the port derives it
+  --  from FUEL_EFFICIENCY_BONUS, so the minutes are written down once.
+  --
+  --  NIL UNTIL THE PORT HAS PUSHED ONCE, which is why the fallback is 1.0 and
+  --  not 0 -- a unit spawned and burning before its first module push should
+  --  burn at the chassis rate, not become immortal.
+  rate = rate * (tonumber(self.petportsFuelScale) or 1.0)
+
+  if rate <= 0 then return end
+
+  status.modifyResource("petports_fuel", -(rate * dt))
+end
+
 function petportsTaskAction.update(dt, stateData)
   local task = stateData.task
+
+  --  BEFORE ANY EARLY RETURN BELOW. Every one of them is a tick the unit spent
+  --  on this task, so a task that exits through one has still cost fuel.
+  burnFuel(dt, task)
 
   --  HAND THE STATE BACK WHEN REAL WORK ARRIVES.
   --
@@ -5870,7 +5928,11 @@ function petportsTaskAction.update(dt, stateData)
   elseif task.type == "collect" or task.type == "harvest"
      or task.type == "replant" or task.type == "water"
      or task.type == "animal" or task.type == "medic"
-     or task.type == "withdraw" or task.type == "fish" then
+     or task.type == "withdraw" or task.type == "fish"
+     --  fuelfetch IS A WITHDRAW IN EVERY RESPECT THE UNIT CAN SEE: walk to a
+     --  crate, stand there, report. The port does the containerConsume and the
+     --  feeding, so the unit needs no container primitive and no new act.
+     or task.type == "fuelfetch" then
     approachTo = approachTargetFor(stateData, target)
 
     if approachTo == nil then

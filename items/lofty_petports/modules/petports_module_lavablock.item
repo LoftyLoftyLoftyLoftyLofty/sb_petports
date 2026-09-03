@@ -28,8 +28,8 @@
 
 {
 	"itemName" : "petports_module_lavablock",
-	"price" : 400,
-	"rarity" : "Uncommon",
+	"price" : 1500,
+	"rarity" : "Rare",
 
 	//  Shared with the other modules, so the categories.config.patch label and
 	//  the petports_filtergroups.config subgroup that already exist cover this

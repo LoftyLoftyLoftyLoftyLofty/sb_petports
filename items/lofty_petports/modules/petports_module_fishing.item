@@ -34,8 +34,8 @@
 
 {
 	"itemName" : "petports_module_fishing",
-	"price" : 900,
-	"rarity" : "Legendary",
+	"price" : 1500,
+	"rarity" : "Rare",
 
 	//  Shared with the other modules, so the categories.config.patch label and
 	//  the petports_filtergroups.config subgroup that already exist cover this

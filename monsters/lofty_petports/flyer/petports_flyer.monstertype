@@ -115,12 +115,11 @@
 
       "/monsters/pets/actions/followAction.lua",
       "/monsters/pets/actions/inspectAction.lua",
-      "/monsters/pets/actions/eatAction.lua",
-      "/monsters/pets/actions/begAction.lua",
       "/monsters/pets/actions/pounceAction.lua",
 
       "/scripts/lofty_petports/petports_work.lua",
       "/scripts/lofty_petports/petports_habitat.lua",
+      "/scripts/lofty_petports/petports_flavors.lua",
       "/monsters/lofty_petports/petports_petBehavior.lua",
       "/monsters/lofty_petports/petports_contract.lua",
       "/monsters/lofty_petports/petports_placement.lua",
@@ -146,15 +145,39 @@
 
     "petports_allowSleep" : false,
 
+    //  FUEL BURNED PER SECOND OF WORK, and only of WORK -- a parked fleet
+    //  is free. 900 capacity at 1.0 is fifteen minutes of uptime on a full
+    //  tank. Per chassis so a heavier unit can cost more without touching
+    //  code; an efficiency module divides it.
+    "petports_fuelDrain" : 1.0,
+
     "petResources" : {
       "sleepy" : 10,
       "hunger" : 60,
+      "petports_fuel" : 900,
       "playful" : 10,
       "curiosity" : 60
     },
     "petResourceDeltas" : {
       "sleepy" : 1,
-      "hunger" : 0.5,
+      //  FUEL IS ITS OWN RESOURCE, AND VANILLA HUNGER IS PINNED DEAD.
+      //
+      //  hunger COUNTS UP and 900 counting DOWN is what a fuel bar is, so this
+      //  does not reuse it. Redefining hunger to mean fullness would leave
+      //  status.resource("hunger") returning its own opposite forever, for every
+      //  future reader, to save one resource declaration.
+      //
+      //  THE DELTA BELOW IS ZERO RATHER THAN THE LINE BEING DELETED. Absent means
+      //  groundPet.lua's tickResources never touches it, which is the same result
+      //  by accident instead of on purpose -- and a zero is where a reader looks
+      //  when asking why hunger never moves.
+      //
+      //  eatAction.lua and begAction.lua are gone from the scripts list above, so
+      //  hungerStarvingLevel and the eat / beg / starving actionParams below are
+      //  now INERT. Left in place rather than stripped: they are vanilla's shape
+      //  and the behaviour rewrite may want them back. Do not tune them expecting
+      //  the fuel system to answer.
+      "hunger" : 0,
       "playful" : 1,
       "curiosity" : 1
     },
@@ -384,6 +407,7 @@
         "health"    : { "maxStat" : "maxHealth", "deltaStat" : "healthRegen", "defaultPercentage" : 100 },
         "sleepy"    : { "maxValue" : 100, "defaultPercentage" : 10 },
         "hunger"    : { "maxValue" : 100, "defaultPercentage" : 10 },
+        "petports_fuel" : { "maxValue" : 900, "defaultPercentage" : 100 },
         "playful"   : { "maxValue" : 100, "defaultPercentage" : 10 },
         "curiosity" : { "maxValue" : 100, "defaultPercentage" : 10 }
       }

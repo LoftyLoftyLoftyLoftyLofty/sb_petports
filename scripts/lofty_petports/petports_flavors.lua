@@ -227,3 +227,69 @@ function petports_flavorItem(flavorId)
 
 	return flavor.item
 end
+
+--  WHICH FLAVOR DOES THIS UNIT PREFER? ONE RESOLVER, AND IT LIVES HERE.
+--
+--  arch.fuel.preference. The unit has monster.seed() and its own monstertype;
+--  the port has petData.seed and the pane has neither. Three callers, so the
+--  derivation is written once in the shared script rather than three times that
+--  agree until one of them is edited -- the same reasoning arch.pathing.oneanchor
+--  records for standing points, and the same failure if it is ignored.
+--
+--  ELIGIBILITY IS THE CHASSIS'S, NOT THE SEED'S. "Ants enjoy sugar": a chassis
+--  may declare petports_fuelFlavors to narrow what it can ever crave, so a
+--  dog-shaped unit never rolls a seeded craving for chocolate. Absent or empty
+--  means ALL flavors, which is what almost every chassis wants and what every
+--  chassis shipped before this existed.
+--
+--  MODULO OVER THE ELIGIBLE LIST, NOT OVER SEVEN. A player whose modlist removes
+--  a flavor has a shorter list and the modulo simply lands somewhere else, with
+--  no dangling preference for an item that can no longer be made. The cost is
+--  that changing the list RESHUFFLES existing units -- see the caller, which
+--  latches the answer and only re-rolls when the latched flavor stops being
+--  eligible.
+--
+--  NIL MEANS NO FLAVOR CAN BE PREFERRED, and the caller must treat that as "every
+--  treat is worth the plain amount" rather than as an error. A chassis that names
+--  only flavors nobody installed lands here, and a unit that eats nothing is a
+--  worse answer than a unit with no favourite.
+function petports_preferredFlavor(seed, eligible)
+	local allowed = nil
+
+	if type(eligible) == "table" and #eligible > 0 then
+		allowed = {}
+		for _, id in ipairs(eligible) do allowed[id] = true end
+	end
+
+	local candidates = {}
+	for _, flavor in ipairs(petports_flavors()) do
+		if flavor.id ~= nil and (allowed == nil or allowed[flavor.id]) then
+			table.insert(candidates, flavor.id)
+		end
+	end
+
+	if #candidates == 0 then return nil end
+
+	--  math.floor BEFORE the modulo. monster.seed() is not guaranteed integral
+	--  and Lua 5.1's % on a float returns a float, which would index nothing.
+	local n = math.floor(tonumber(seed) or 0)
+	if n < 0 then n = -n end
+
+	return candidates[(n % #candidates) + 1]
+end
+
+--  IS THIS FLAVOR STILL A LEGAL PREFERENCE FOR THIS CHASSIS? Used to decide
+--  whether a latched preference survives a modlist or monstertype change.
+function petports_flavorEligible(flavorId, eligible)
+	if flavorId == nil then return false end
+	if petports_flavor(flavorId) == nil then return false end
+
+	if type(eligible) == "table" and #eligible > 0 then
+		for _, id in ipairs(eligible) do
+			if id == flavorId then return true end
+		end
+		return false
+	end
+
+	return true
+end

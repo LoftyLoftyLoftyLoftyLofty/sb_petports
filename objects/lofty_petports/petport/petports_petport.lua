@@ -498,6 +498,10 @@ end
 --  what I want".
 BEACON_REQUESTS_KEY = "petports_beaconRequests"
 
+--  MUST MATCH FIELDS.feeder IN petports_beacon.lua. The beacon writes it,
+--  the container scan reads it, and nothing else in the mod names it.
+BEACON_FEEDER_KEY = "petports_beaconFeeder"
+
 --  THE SHAPE THAT CAME BEFORE THE LIST. Read only so a beacon configured under
 --  the earlier build keeps working until its pane is next opened, which is when
 --  it gets rewritten as a one-entry list. See restockRequestsOf.
@@ -757,6 +761,35 @@ metrics.add = function(key, amount)
 
   self.petData.stats = self.petData.stats or {}
   self.petData.stats[key] = (self.petData.stats[key] or 0) + amount
+end
+
+--  A TREAT EATEN, COUNTED TWICE ON PURPOSE -- exactly the fish rule.
+--
+--  `fed` is the total and every flavor is a key beside it, so the flavors
+--  can be checked against the total. A flavor that never arrives reads as a
+--  plumbing break rather than as a player who never made it, which matters
+--  because the flavor is threaded from the item tag through the unit and
+--  back over a callScriptedEntity return.
+--
+--  ONE PER TREAT, and unlike a fish there is no ambiguity about the count:
+--  a feed is exactly one item by construction on both paths.
+--
+--  A GLOBAL because feedFromCrate is one, and for the same reason -- the
+--  manual-feed handler that calls this sits thousands of lines above it.
+function countFed(flavor)
+  metrics.add("fed", 1)
+
+  if type(flavor) == "string" and flavor ~= "" then
+    metrics.add("fed_" .. flavor, 1)
+  else
+    --  LOUD, BECAUSE THE TOTAL AND THE FLAVORS ARE COUNTED SEPARATELY AND A
+    --  SILENT MISS LOOKS LIKE BAD LUCK. This is exactly how the flavor rows
+    --  sat at zero while the total climbed: the flavor never arrived and
+    --  nothing said so.
+    sb.logError("PETPORT %s counted a treat with no flavor (%s) -- the "
+      .. "per-flavor rows will not add up to the total",
+      stationUniqueId(), tostring(flavor))
+  end
 end
 
 --  The port's coverage rect: the region it keeps resident, the area its unit
@@ -1295,7 +1328,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-03d the colour reaches the unit"
+local PETPORT_BUILD_STAMP = "2026-09-03o efficiency in minutes, not multipliers"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -1518,11 +1551,21 @@ function init()
     --  NOT FOLDED INTO THE LOOP. A `seen` table beside `taken` would be a
     --  second copy of a rule the pane also applies, which is exactly the
     --  split petports_modules.lua exists to prevent. One call, one function.
-    local duplicate = petports_moduleSetDuplicate(records)
+    local duplicate, family = petports_moduleSetDuplicate(records)
 
     if duplicate ~= nil then
-      sb.logError("PETPORT %s refusing module set: %s socketed twice",
-        stationUniqueId(), tostring(duplicate))
+      --  TWO REASONS, ONE REFUSAL. A repeated item and a second module from the
+      --  same exclusivity family are both "you cannot have both of these"; only
+      --  the log line needs to tell them apart.
+      if family ~= nil then
+        sb.logError("PETPORT %s refusing module set: %s conflicts with the "
+          .. "%s module already socketed", stationUniqueId(),
+          tostring(duplicate), tostring(family))
+      else
+        sb.logError("PETPORT %s refusing module set: %s socketed twice",
+          stationUniqueId(), tostring(duplicate))
+      end
+
       return refuse()
     end
 
@@ -1614,14 +1657,33 @@ function init()
 
   --  FEED. One treat, consumed on drop if the unit has room for it.
   --
-  --  NOT BUILT: nothing eats a treat yet -- that is the last gap between the
-  --  flavor work and it mattering. Logged rather than silently dropped, so the
-  --  wiring can be verified before there is anything on the far end of it.
+  --  THE PORT FORWARDS AND DOES NOT DECIDE. What a treat is worth depends on
+  --  the unit's preferred flavor, which is derived from its seed and its
+  --  chassis's eligibility list -- both of which live unit-side. Resolving it
+  --  here would be a second copy of petports_preferredFlavor answering the same
+  --  question, which is the split arch.pathing.oneanchor exists to warn about.
+  --
+  --  TRUE ONLY IF THE TREAT WAS ACTUALLY EATEN. The pane holds the promise and
+  --  debits ONE from the cursor on a true, so a full unit, a despawned unit or a
+  --  non-treat all leave the player holding their item.
   message.setHandler("petports_feedUnit", simpleHandler(function(payload)
     if type(payload) ~= "table" or payload.item == nil then return false end
-    sb.logInfo("PETPORT %s feed requested with %s -- nothing consumes fuel yet",
-      stationUniqueId(), sb.printJson(payload.item))
-    return false
+    if self.petId == nil or not world.entityExists(self.petId) then return false end
+
+    local ok, meal = pcall(world.callScriptedEntity, self.petId,
+      "petports_feedFuel", payload.item)
+
+    if not ok then
+      sb.logError("PETPORT %s feed threw: %s", stationUniqueId(), tostring(meal))
+      return false
+    end
+
+    if type(meal) ~= "table" or (tonumber(meal.amount) or 0) <= 0 then
+      return false
+    end
+
+    countFed(meal.flavor)
+    return true
   end))
 
   --  PER-UNIT DISPLAY TOGGLES. These live on petData rather than on the port,
@@ -2101,6 +2163,22 @@ function init()
        and self.task.type == "withdraw" and self.task.id == report.id then
       withdrawSeed(self.task.target, self.task.seed, self.task.id,
         self.task.count)
+    end
+
+    --  Arrived at a feeder crate. SAME SHAPE AS withdraw ABOVE -- the unit
+    --  walked and stood, the container work happens here -- but the treat never
+    --  becomes cargo. It is consumed and eaten in one step, so there is no
+    --  state in which a unit is carrying its own dinner and something else can
+    --  decide to deposit it.
+    --
+    --  THE CONSUME IS CONDITIONAL ON THE UNIT ACTUALLY EATING IT. Feeding first
+    --  and debiting after would destroy a treat whenever the unit turned out to
+    --  be full; consuming first and feeding after would eat one from the crate
+    --  and drop it on the floor if the call failed. So: take it, and put it
+    --  back if it was refused.
+    if report.outcome == "done" and self.task ~= nil
+       and self.task.type == "fuelfetch" and self.task.id == report.id then
+      feedFromCrate(self.task.target, self.task.treat, self.task.id)
     end
 
     --  Arrived at a crate holding over-quota stock. IDENTICAL to a tidy: take
@@ -2923,6 +3001,18 @@ local function scanContainers()
                   filter = filter,
                   requests = requests,
 
+                  --  MAY PETS EAT FROM THIS CRATE? dd.fuel.selffeed. Read here
+                  --  because this loop is already holding the beacon item and
+                  --  its parameters, and a second pass to fetch one boolean
+                  --  would be a second pass over every container in the
+                  --  network.
+                  --
+                  --  ABSENT IS TRUE, matching the beacon's own DEFAULTS: the
+                  --  flag is cleared rather than stored when on, so every
+                  --  beacon placed before it existed feeds pets.
+                  feeder = not (item.parameters ~= nil
+                    and item.parameters[BEACON_FEEDER_KEY] == false),
+
                   --  The deciding beacon's slot. Eviction needs it: a beacon
                   --  rarely matches its own crate's filter, and without the
                   --  exemption a crate hauls away its own configuration.
@@ -3248,6 +3338,18 @@ PANE_MIRROR_INTERVAL = 0.5
 --  writes. petportconfig.lua's BLIP_COUNT carries the matching note.
 PANE_FUEL_BLIPS = 20
 
+--  THE ONE NUMBER IN THIS FEATURE THAT IS WRITTEN DOWN TWICE.
+--
+--  It must equal petports_fuel.maxValue in every monstertype. The port cannot
+--  ask the unit for it -- paneFuelBlips runs off cached petData with no unit
+--  present, which is the whole reason the mirror exists -- and the sync carries
+--  resource VALUES, not their ceilings.
+--
+--  IF THEY DISAGREE THE BAR IS WRONG BUT NOTHING ERRORS, which is the bad kind
+--  of drift. A chassis wanting a different tank size needs a real answer here
+--  rather than a second constant.
+PANE_FUEL_MAX = 900
+
 --  The pane draws four at most, so there is no point mirroring more. Ordered
 --  worst-first: a red condition should never be pushed off the row by an
 --  informational one.
@@ -3298,17 +3400,110 @@ local function paneBodyKind()
   return kind
 end
 
+--  IS THERE ANYTHING IN THE TANK? Reads the MIRROR rather than the unit,
+--  because findWork runs on the port's tick and a callScriptedEntity per
+--  dispatch decision is a cost paid every tick to learn a number that moves by
+--  one per second. The mirror lags by the anchor tick, which is 1s against a
+--  900s tank.
+--  THE LOW-WATER MARK. dd.fuel.autoeat.
+--
+--  A FRACTION OF THE TANK, NOT A FIXED NUMBER, so a chassis with a different
+--  ceiling gets the same behaviour rather than the same threshold. 0.25 is
+--  dd.fuel.selffeed's gate for the thrown-on-the-ground source, reused so the
+--  design carries one threshold instead of two that drift apart.
+PETPORTS_FUEL_LOW = 0.25
+
+--  MUST MATCH petports_contract.lua. The unit decides what a treat is actually
+--  worth when it eats one; the port only needs the numbers to decide whether a
+--  fetch would WASTE one, so a disagreement here costs a wasted trip rather
+--  than a wrong refill.
+PETPORTS_FUEL_PLAIN     = 60
+PETPORTS_FUEL_PREFERRED = 120
+
+--  These two are the ONLY readers of the raw mirrored value. paneFuelBlips
+--  quantises for display and says so; anything wanting the real number comes
+--  here.
+local function petportFuelValue()
+  local resources = self.petData and self.petData.storage and self.petData.storage.petResources
+  if type(resources) ~= "table" then return nil end
+  return tonumber(resources.petports_fuel)
+end
+
+--  HOW MUCH A UNIT COULD ABSORB RIGHT NOW. nil when there is nothing to read,
+--  which the caller must treat as "do not fetch" rather than as zero -- a unit
+--  with no reading is one that predates the resource, not one that is starving.
+function petportFuelHeadroom()
+  local fuel = petportFuelValue()
+  if fuel == nil then return nil end
+  return math.max(0, PANE_FUEL_MAX - fuel)
+end
+
+--  SHOULD THIS UNIT GO LOOKING? Below the mark and nowhere near full.
+function petportFuelWanted()
+  local fuel = petportFuelValue()
+  if fuel == nil then return false end
+  return fuel < (PANE_FUEL_MAX * PETPORTS_FUEL_LOW)
+end
+
+--  THE UNIT'S FLAVOR, ASKED OF THE UNIT. arch.fuel.preference keeps one
+--  resolver and it is unit-side; the port must not derive this itself.
+--
+--  CACHED BRIEFLY, NOT STORED. A dispatch decision runs every tick and a
+--  callScriptedEntity per tick to learn a value that changes almost never is
+--  the cost this avoids -- but caching it on petData would make the port the
+--  SECOND place the answer lives, which is what oneanchor warns about. This
+--  cache is deliberately not durable: it dies with the port script.
+--
+--  A STALE ANSWER COSTS ONE WASTED TRIP, NOT DAMAGE, so a plain TTL is enough
+--  here rather than the asymmetric treatment reachability verdicts get.
+FLAVOR_CACHE_TTL = 5.0
+
+function petportUnitFlavor()
+  if self.petId == nil or not world.entityExists(self.petId) then return nil end
+
+  if self.flavorCached ~= nil and self.flavorAsked ~= nil
+     and (world.time() - self.flavorAsked) < FLAVOR_CACHE_TTL then
+    return self.flavorCached
+  end
+
+  local ok, flavor = pcall(world.callScriptedEntity, self.petId, "petports_unitFlavor")
+  if not ok then return nil end
+
+  self.flavorAsked  = world.time()
+  self.flavorCached = flavor
+
+  return flavor
+end
+
+function petportFuelled()
+  local resources = self.petData and self.petData.storage and self.petData.storage.petResources
+  if type(resources) ~= "table" then return true end
+
+  local fuel = tonumber(resources.petports_fuel)
+  if fuel == nil then return true end
+
+  return fuel > 0
+end
+
 local function paneFuelBlips()
   local resources = self.petData and self.petData.storage and self.petData.storage.petResources
   if type(resources) ~= "table" then return PANE_FUEL_BLIPS end
 
-  local hunger = tonumber(resources.hunger)
-  if hunger == nil then return PANE_FUEL_BLIPS end
+  --  petports_fuel, NOT hunger, AND THE BAR USED TO READ BACKWARDS BECAUSE OF
+  --  IT. vanilla hunger counts UP toward starving, so scaling it into a bar
+  --  labelled fuel filled the bar as the unit got hungrier. Nobody noticed,
+  --  because nothing drained it in a way anyone watched.
+  local fuel = tonumber(resources.petports_fuel)
+
+  --  A UNIT THAT PREDATES THE FUEL RESOURCE READS FULL, NOT EMPTY. Its
+  --  petResources table has no such key until burnFuel migrates it on the
+  --  first worked tick, and an empty bar on a healthy unit is a bug report.
+  if fuel == nil then return PANE_FUEL_BLIPS end
 
   --  QUANTISED HERE AND NOWHERE ELSE. See the gate note above -- this is what
   --  keeps the mirror cheap, so a caller wanting the raw number must read the
   --  resource rather than scaling this back up.
-  local blips = math.floor((hunger / 100.0) * PANE_FUEL_BLIPS + 0.5)
+  local blips = math.floor((fuel / PANE_FUEL_MAX) * PANE_FUEL_BLIPS + 0.5)
   return math.max(0, math.min(PANE_FUEL_BLIPS, blips))
 end
 
@@ -3689,6 +3884,46 @@ CAMOUFLAGE_FLAG = "camouflage"
 --  has no opinion about its length, so there is nothing to push.
 HYDRATOR_FLAG = "hydrator"
 
+--  FUEL EFFICIENCY. THE ITEM SAYS WHICH TIER, THE PORT OWNS THE MINUTES --
+--  arch.module.hydrator's split, and the reason the item files carry a flag and
+--  no numbers at all.
+--
+--  AUTHORED AS UPTIME SECONDS, NOT AS A MULTIPLIER. The design is "+2, +5 and
+--  +10 minutes on a full tank", and tier 1's multiplier is 900/1020 =
+--  0.88235... -- a number nobody can read, check, or change with confidence. So
+--  the bonus is written as the thing that was decided and the rate is derived.
+--
+--  SLOWER BURN, NOT A BIGGER TANK, AND THE DIFFERENCE IS REAL. Both reach 17,
+--  20 and 25 minutes on a full tank. Only slower burn makes a treat worth more:
+--  at tier 3 a 60-fuel plain treat buys 100 seconds of work instead of 60,
+--  which is what "more work per food" means and what the tank version would not
+--  have delivered.
+FUEL_EFFICIENCY_BONUS = {
+  fuelefficiency1 = 120,
+  fuelefficiency2 = 300,
+  fuelefficiency3 = 600
+}
+
+--  THE MULTIPLIER APPLIED TO petports_fuelDrain, or 1.0 for a bare unit.
+--
+--  MUTUAL EXCLUSIVITY IS ENFORCED AT THE SLOT, not here -- the three tiers
+--  share the "fuelEfficiency" category so two can never be socketed. This still
+--  takes the BEST rather than summing, because a rule that depends on another
+--  rule holding is one refactor away from being wrong, and "two tiers stack
+--  into 25 minutes" is a silent balance change rather than an error.
+function petportFuelScale()
+  local bonus = 0
+
+  for _, flag in ipairs(petportModuleFlags()) do
+    local tier = FUEL_EFFICIENCY_BONUS[flag]
+    if tier ~= nil and tier > bonus then bonus = tier end
+  end
+
+  if bonus <= 0 then return 1.0 end
+
+  return PANE_FUEL_MAX / (PANE_FUEL_MAX + bonus)
+end
+
 --  FARMING IS A MODULE NOW, NOT A PORT SWITCH.
 --
 --  It used to be the fourth participation group, alongside hauling, sorting and
@@ -3971,8 +4206,11 @@ function pushModuleEffects()
   --  raising, so a missing contract here would look exactly like a status
   --  effect that does not work -- hence the log line above, which fires
   --  whether or not the far end exists.
+  --  THE FUEL SCALE RIDES ALONG RATHER THAN GETTING ITS OWN PUSH. It is
+  --  derived entirely from the flags, which are already in the signature
+  --  above, so a module swap re-pushes it and nothing else can change it.
   world.callScriptedEntity(self.petId, "petports_setModuleEffects", effects,
-    MODULE_EFFECT_CATEGORY, liquids, flags, baseTeam)
+    MODULE_EFFECT_CATEGORY, liquids, flags, baseTeam, petportFuelScale())
 end
 
 --------------------------------------------------------------------------------
@@ -4183,6 +4421,27 @@ metrics.paneStats = function()
 
       return tiers
     end)(),
+    --  TREATS. Same shape as fishing directly above -- a total plus a map
+    --  walked out of the stats table rather than a whitelist here. The
+    --  flavor names ARE ours, unlike the fish tiers, but the walk is still
+    --  the right call: a third party adding a flavor to the manifest gets
+    --  counted with no change to this.
+    fed = math.floor(stats.fed or 0),
+    fedFlavors = (function()
+      local flavors = nil
+
+      for key, value in pairs(stats) do
+        local flavor = type(key) == "string" and key:match("^fed_(.+)$") or nil
+
+        if flavor ~= nil and type(value) == "number" and value > 0 then
+          flavors = flavors or {}
+          flavors[flavor] = math.floor(value)
+        end
+      end
+
+      return flavors
+    end)(),
+
     headpats = math.floor(stats.headpats or 0),
 
     --  QUANTIZED TO TENS ONLY WHILE ON A TASK, EXACT AT REST. The raw total on
@@ -4285,6 +4544,7 @@ function mirrorPaneState(dt)
       diagnostics = paneDiagnostics(),
       moduleSlots = petportModuleSlots(),
 
+
       --  MEDIC. Two fields, and they answer different questions: whether the
       --  five patient boxes should EXIST at all, and what they should read.
       --
@@ -4337,7 +4597,22 @@ function mirrorPaneState(dt)
       --  on nothing every poll.
       petId = (self.petId ~= nil and world.entityExists(self.petId)) and self.petId or nil,
 
-      flavor = self.petData.flavor,
+      --  THE UNIT'S PREFERRED FLAVOR. detailsFlavorValue has rendered "--" since
+      --  the Details tab shipped, and this key is WHY it kept doing so after the
+      --  preference existed: self.petData.flavor is a hook nothing has ever
+      --  written. The widget, the pane's setter and this key were all in place,
+      --  waiting on a value that was never produced.
+      --
+      --  IT ALSO ATE THE FIX. A second `flavor` key was added higher in this same
+      --  constructor and this line silently won, because a later key overwrites
+      --  an earlier one -- so the value was computed correctly and then thrown
+      --  away. ONE KEY PER FIELD IN THIS TABLE.
+      --
+      --  THE RAW ID, NOT THE LABEL, for the same reason bodyKind above is a kind
+      --  and not a word: the manifest holds the wording, the pane loads the
+      --  manifest, and a port sending "Savory" would be a second place the
+      --  display name lives.
+      flavor = petportUnitFlavor(),
       stats = metrics.paneStats(),
 
       --  NOT BUILT, AND ABSENT RATHER THAN FAKED. The pane renders a blank for
@@ -9719,6 +9994,229 @@ local function withdrawWaterWork()
 	return nil, string.format("%s dry run(s), no liquid in storage for any", #runs)
 end
 
+--  GO AND GET FOOD.
+--
+--  dd.fuel.autoeat is the constraint on this and was decided before it existed.
+--  TWO RULES, AND NEITHER IS SUFFICIENT ALONE:
+--
+--    the LOW-WATER MARK stops a unit grazing -- headroom alone means it eats
+--    whenever 60 fits, so it fetches once a minute forever;
+--
+--    the HEADROOM CHECK stops it wasting what the player farmed. A player may
+--    burn 119 of a treat topping a unit off because they CHOSE to. A unit doing
+--    that to itself, repeatedly, unsupervised, is a different thing.
+--
+--  25% IS REUSED, NOT INVENTED -- dd.fuel.selffeed already gates the
+--  thrown-on-the-ground source there. At 900 that is 225, comfortably more than
+--  a preferred treat, so a unit that decides to eat can always take one with no
+--  waste at all.
+--
+--  PREFERRED FIRST, THEN ANYTHING. Two passes over the same crates rather than
+--  one pass with a score: the unit should cross the base for its own flavor
+--  before settling, and a nearest-first sort within each pass is what
+--  petports_beaconsFor already returns.
+--
+--  THE FLAVOR COMES FROM THE UNIT, NOT FROM HERE. arch.fuel.preference keeps
+--  the derivation unit-side; this asks and caches the answer for the tick.
+--  TAKE ONE TREAT OUT OF A CRATE AND FEED IT. Called on the arrival report.
+--
+--  A GLOBAL, NOT A local, AND THAT IS NOT A STYLE CHOICE. The report handler
+--  that calls this sits ~7800 lines ABOVE it, where a local declared here is
+--  not in scope at all -- it would resolve to a nil global and throw inside a
+--  message handler. Hoisting the definition instead would put a container
+--  primitive in the middle of the pane mirrors; the file already keeps
+--  petportFuelled and petportUnitFlavor global for the same reason.
+--
+--  ORDER MATTERS AND IS PUT BACK ON REFUSAL. world.containerConsume first, so
+--  two ports cannot feed the same treat; then the unit; then a return to the
+--  crate if the unit would not take it. The refusal is not hypothetical -- a
+--  unit can be topped up by the player while this trip is in flight.
+--  THE ORDER A UNIT WANTS TREATS IN. Preferred first, then every other flavor,
+--  then plain. Lifted out of fuelFetchWork because the ARRIVAL needs the same
+--  order: the generator uses it to choose a crate, the feed uses it to empty
+--  what that crate turned out to hold.
+local function fuelTreatOrder(preferred)
+  local wanted = {}
+
+  if preferred ~= nil then
+    local item = petports_flavorItem(preferred)
+    if item ~= nil then
+      table.insert(wanted, { name = item, value = PETPORTS_FUEL_PREFERRED })
+    end
+  end
+
+  for _, flavor in ipairs(petports_flavors()) do
+    local item = petports_flavorItem(flavor.id)
+    if item ~= nil and flavor.id ~= preferred then
+      table.insert(wanted, { name = item, value = PETPORTS_FUEL_PLAIN })
+    end
+  end
+
+  table.insert(wanted, { name = "petports_petfuel", value = PETPORTS_FUEL_PLAIN })
+
+  return wanted
+end
+
+--  A HARD CEILING ON ONE SITTING. 900 of tank against a 60-fuel plain treat is
+--  fifteen, so this cannot be reached by a unit that is eating normally -- it
+--  is here so a bug in the refusal path cannot empty a crate in one tick.
+FUEL_MEAL_LIMIT = 32
+
+function feedFromCrate(containerId, treatName, workId)
+  if containerId == nil or treatName == nil then return end
+  if not world.entityExists(containerId) then return end
+
+  --  IT EATS A MEAL, NOT A BITE. dd.fuel.autoeat says a unit does not go
+  --  looking until it is below the mark and then FILLS AS FAR AS IT CAN, and
+  --  the first version only did the first half: it ate the single treat it had
+  --  walked for, left at 285 of 900, and was then above the 25% mark -- so it
+  --  never came back. A unit topped itself up by one treat and stopped.
+  --
+  --  THE UNIT IS THE TERMINATOR, NOT THE HEADROOM SUM. The port's mirror
+  --  refreshes on the anchor tick and would be stale within one bite of a loop,
+  --  so nothing here tries to predict when the unit is full -- it feeds until
+  --  petports_feedFuel returns nil, which is the unit answering from its own real
+  --  resource. The refused treat goes straight back in the crate.
+  --
+  --  AND IT REFUSES EARLY, BECAUSE THE FEED IS SPARING. A treat worth more
+  --  than the remaining headroom is declined whole rather than half-eaten, so
+  --  a meal now ends a little under the cap instead of exactly at it. That is
+  --  the intended shape: the leftover is still in the crate.
+  --
+  --  THE WHOLE CRATE, IN PREFERENCE ORDER, NOT JUST WHAT IT CAME FOR. A crate
+  --  holding two savory and ten plain feeds a savory-preferring unit both
+  --  savories and then plains. Ordering by preference here rather than only in
+  --  the generator is what makes that true -- otherwise a unit that arrived for
+  --  the last savory would leave the plains untouched and still be hungry.
+  local preferred = petportUnitFlavor()
+  local order     = fuelTreatOrder(preferred)
+
+  --  THE TREAT IT WALKED FOR GOES FIRST WHATEVER THE ORDER SAYS. The generator
+  --  already decided that one was worth the trip against the headroom it could
+  --  see; re-deciding here on a staler reading would be a second opinion with
+  --  worse information.
+  table.insert(order, 1, { name = treatName, value = PETPORTS_FUEL_PLAIN })
+
+  local meals, seen = 0, {}
+
+  for _, treat in ipairs(order) do
+    if not seen[treat.name] then
+      seen[treat.name] = true
+
+      local hungry = true
+
+      while hungry and meals < FUEL_MEAL_LIMIT do
+        local item = { name = treat.name, count = 1 }
+
+        local okTake, taken = pcall(world.containerConsume, containerId, item)
+        if not okTake or taken ~= true then break end
+
+        --  SPARING. dd.fuel.autoeat: a player may choose to burn 119 of a
+        --  treat topping a unit off; a unit doing it to itself, repeatedly,
+        --  unsupervised, is a different thing. The unit refuses what it
+        --  cannot finish and that refusal ends the meal.
+        local okFeed, meal = pcall(world.callScriptedEntity, self.petId,
+          "petports_feedFuel", item, true)
+
+        if okFeed and type(meal) == "table"
+           and (tonumber(meal.amount) or 0) > 0 then
+          countFed(meal.flavor)
+          meals = meals + 1
+        else
+          --  FULL, OR THE UNIT IS GONE. Put it back and stop entirely -- a
+          --  refusal is about the UNIT, so trying the next flavor would just
+          --  take another treat out and hand it straight back.
+          hungry = false
+
+          local okBack, left = pcall(world.containerAddItems, containerId, item)
+          if not okBack or (type(left) == "table" and (left.count or 0) > 0) then
+            sb.logError("PETPORT %s could not return %s to crate %s after a "
+              .. "refused feed -- one treat lost", stationUniqueId(),
+              tostring(treat.name), tostring(containerId))
+          end
+
+          break
+        end
+      end
+
+      if not hungry then break end
+    end
+  end
+
+  if meals == 0 then
+    sb.logInfo("PETPORT %s fuel fetch %s: crate held nothing this unit would eat",
+      stationUniqueId(), tostring(workId))
+    return
+  end
+
+  sb.logInfo("PETPORT %s fed unit %s treat(s) from crate %s",
+    stationUniqueId(), tostring(meals), tostring(containerId))
+end
+
+local function fuelFetchWork()
+  if not petportFuelWanted() then
+    return nil, "unit is above the fuel low-water mark"
+  end
+
+  local headroom = petportFuelHeadroom()
+  if headroom == nil then return nil, "no fuel reading for the unit" end
+
+  local preferred = petportUnitFlavor()
+  local crates    = 0
+
+  --  PASS ORDER IS THE WHOLE PREFERENCE MECHANIC, and feedFromCrate uses the
+  --  same list on arrival so the trip and the meal cannot disagree about which
+  --  flavor is better.
+  local wanted = fuelTreatOrder(preferred)
+
+  for _, treat in ipairs(wanted) do
+
+    --  THE HEADROOM CHECK. A treat worth more than the unit can absorb is
+    --  skipped rather than eaten -- the next one down the list may fit, which
+    --  is why this is inside the loop and not a guard above it.
+    if treat.value <= headroom then
+      for _, behavior in ipairs({ "deposit", "restock" }) do
+        for _, beacon in ipairs(petports_beaconsFor(behavior)) do
+          if beacon.feeder ~= false and world.entityExists(beacon.id) then
+            crates = crates + 1
+
+            local workId = "fuelfetch:" .. tostring(beacon.id) .. ":" .. treat.name
+            local failure = self.workFailures[workId]
+            local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
+
+            if not backedOff and claimFree(workId) then
+              local available = world.containerAvailable(beacon.id,
+                { name = treat.name, count = 1 })
+
+              if type(available) == "number" and available >= 1
+                 and servicePointNear("feeder " .. tostring(beacon.id),
+                   beacon.id, beacon.position, 4) ~= nil then
+                return {
+                  id = workId,
+                  mediumVerified = true,
+                  type = "fuelfetch",
+                  port = stationUniqueId(),
+                  target = beacon.id,
+                  treat = treat.name,
+                  position = world.entityPosition(beacon.id)
+                }
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  if crates == 0 then
+    return nil, "no container in the network is marked as a pet feeder"
+  end
+
+  return nil, string.format(
+    "%s feeder crate(s), none holding a treat this unit can use (headroom %s)",
+    crates, tostring(math.floor(headroom)))
+end
+
 local function withdrawWork()
 	--  CARRYING SOMETHING IS NOT A REASON NOT TO FETCH A SEED.
 	--
@@ -11361,6 +11859,27 @@ local function findWork()
   local recall = returnWork()
   if dispatchable(recall) ~= nil then return recall end
 
+  --  FOOD SITS DIRECTLY UNDER RECALL, AND ABOVE THE FUEL GATE. THAT ORDER IS
+  --  THE WHOLE THING, AND IT IS THE OPPOSITE OF WHERE AN ACQUIRE BELONGS.
+  --
+  --  Fetching a treat IS an acquire, so the obvious home is with the others,
+  --  below the gate. That deadlocks the network the first time auto-eating
+  --  fails to fire in time: a unit at zero would be refused every generator
+  --  including the one that would have fed it, and nothing short of a player
+  --  with the pane open could ever start it again.
+  --
+  --  So it goes beside recall as the other thing a DRY unit is always allowed
+  --  to do. dd.fuel.autoeat expects it to fire at 25% and the gate never to be
+  --  reached at all; this placement is what makes zero recoverable when that
+  --  expectation is wrong.
+  local grub, noGrub = fuelFetchWork()
+  if dispatchable(grub) ~= nil then return grub end
+
+  if noGrub ~= nil and noGrub ~= self.fuelReason then
+    self.fuelReason = noGrub
+    sb.logInfo("PETPORT %s fuel fetch idle: %s", stationUniqueId(), tostring(noGrub))
+  end
+
   --  MEDIC SITS DIRECTLY BELOW RECALL AND ABOVE EVERYTHING ELSE.
   --
   --  BELOW RECALL because a stranded unit cannot reach a patient either, and the
@@ -11425,6 +11944,34 @@ local function findWork()
 
   local drop, noDrop = depositWork()
   if dispatchable(drop) ~= nil then return drop end
+
+  --  FUEL GATES THE ACQUISITION OF WORK, NOT THE EXECUTION OF IT.
+  --
+  --  dd.fuel.fedproductive. A unit that runs dry finishes what it is doing and
+  --  then stops taking on new tasks; it never abandons a job halfway.
+  --
+  --  THE LINE IS HERE AND NOT PER-GENERATOR, because the chain above it is
+  --  already exactly the set that SPENDS what the unit is holding -- recall,
+  --  medic, replant, water, restockDeliver, deposit -- and everything below it
+  --  ACQUIRES. That ordering predates fuel and was chosen for precedence, but it
+  --  is the same split, so one boundary expresses it rather than a flag on each
+  --  rung that could be forgotten on the next generator somebody adds.
+  --
+  --  WHY THE SPLIT MATTERS AT ALL: a fetch-then-use flow is TWO dispatches, not
+  --  one. withdrawWork then replantWork, restockFetchWork then
+  --  restockDeliverWork, and the medic fetching a dose before it heals. Gating
+  --  the whole chain would let a unit collect medical goods, run dry, and walk
+  --  home still holding them -- which is not "finishes what it is doing" by any
+  --  reading a player would accept.
+  --
+  --  RECALL IS ABOVE THIS AND MUST STAY THERE. A dry unit still comes home.
+  --
+  --  A UNIT WITH NO FUEL KEY READS AS FUELLED. It predates the resource and its
+  --  mirror has no such value until burnFuel migrates it; refusing all work to
+  --  a healthy unit on the strength of a missing key is the worse failure.
+  if not petportFuelled() then
+    return nil, "out of fuel -- finishing what it holds, taking nothing new"
+  end
 
 	--  ORDERING IS NOT A GUARD.
 	--

@@ -40,7 +40,7 @@
 
 {
 	"itemName" : "petports_module_hydrator",
-	"price" : 350,
+	"price" : 500,
 	"rarity" : "Uncommon",
 
 	//  Shared with the other modules, so the categories.config.patch label and

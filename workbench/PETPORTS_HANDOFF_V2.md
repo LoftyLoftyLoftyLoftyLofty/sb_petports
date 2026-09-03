@@ -50,81 +50,80 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-03 (the RGB lamp module, end to end)
+### What is built, as of 2026-09-03 (fuel, and the handoff catching up with itself)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-ONE MODULE, FIFTEEN PANE BUILDS, AND THE WORK WAS ALMOST ALL IN THE WIDGET
-LAYER. The colour wire and the light effect landed in a single build and worked
-first time. Everything that cost rounds was a textbox in a list row -- an input
-path this mod had never used and the engine does not make easy.
+HALF THIS SESSION WENT ON THE DOCUMENT RATHER THAN THE MOD, and that was the
+right call rather than a detour. See the top of the BACKLOG note and
+`proc.tooling.gapcheck`.
 
 ---
 
-**THE RGB LAMP MODULE WORKS END TO END.** `arch.module.rgblight`. Socket it and
-three rows appear in the settings list -- Red, Green, Blue, each a spinner pair
-and a typed field. A change reaches the deployed unit's light in three hops in
-under 40ms, measured:
+**FUEL IS REAL AND VERIFIED IN GAME.** `arch.fuel.burn`, `arch.fuel.eat`,
+`arch.fuel.preference`. `petports_fuel` is the mod's own resource -- 900 full,
+0 empty, burned at 1.0/sec by `burnFuel` and ONLY while a unit holds dispatched
+work. Confirmed on 2026-09-03: the bar drains under load, holds flat when parked
+AND while walking home on the leash, and survives a recall at the level it left
+at. `eatAction.lua` and `begAction.lua` are out of all five scripts lists.
 
-        PETPORT ... pushing light to unit 128: {"r":25,...}
-        UNIT light colour set to [25,140,140]
-        PETPORTS rgblight: lamp is now [25,140,140]
+**A UNIT EATS, AND PREFERS ONE FLAVOR OUT OF SEVEN.** 60 plain, 120 preferred,
+rolled from `monster.seed()` over the chassis's eligible list and latched.
+Measured: `rolled preferred flavor savory from seed 8460483614048173112`, then
+`ate petports_petfuel_savory for 120 fuel`. The feed slot debits exactly one
+treat, on the port's answer rather than on the click, and every refusal sounds.
 
-The colour lives on `petData`, so it survives the module coming out and going
-back in. It defaults to vanilla's [140,140,140], so an untouched RGB module is
-indistinguishable from the common lamp it upgrades.
-
-**A UNIT MAY NOT HOLD TWO MODULES OF THE SAME ITEM.** `dd.module.oneofakind`.
-Refused in the pane before the cursor is taken, backstopped by the port, one
-predicate in one shared file. This supersedes "two hydrators are one hydrator".
-
-**THE PANE HAS SOUND.** `fact.pane.panesound`. Every refusal on a module slot
-clicks, and the one swap that is invisible -- a module dropped onto a slot
-holding the same module -- gets a pickup sound, because nothing on screen moves.
+**A DRY UNIT TAKES NO NEW WORK AND STILL COMES HOME.** `dd.fuel.fedproductive`.
+One boundary in `findWork`, placed where the chain already split between
+generators that SPEND what a unit holds and generators that ACQUIRE -- so a unit
+that runs dry mid-errand still delivers what it is carrying. Verified.
 
 ---
 
-**THE WIDGET LAYER IS WHERE THE SESSION WENT**, and the durable residue is three
-entries. A textbox CAN be built inside a list row, and cannot be given the left
-click by any config change -- `fact.pane.rowdispatch`, read from `StarWidget.cpp`
-after two config fixes failed (`dead.pane.rowzlevel`). The row button takes the
-press and hands focus over. A field fed by a polled remote mirror needs three
-separate books to survive being typed into -- `dd.pane.fieldbooks` -- and each
-one is there because leaving it out produced a specific visible fault, all three
-in the log.
+**THE HANDOFF LOST A WHOLE SUBSYSTEM AND THE LINTER NOW CATCHES IT.**
+`proc.tooling.gapcheck`. The fishing system was built across seven commits on
+2026-09-01 and never written down, because STATUS is destroyed on rewrite and
+the rewrite that followed recorded diving instead. Checks 10 and 11 in
+`petports_handoff.py` read `git log` for the gap since this file was last
+committed and turn it into a finding at the moment STATUS is rewritten. Tested
+against the actual commit range: it fires, and names the three fishing commits.
 
-**ONE EXISTING FACT WAS CONTRADICTED AND CORRECTED.** `fact.pane.textboxpoll`
-claimed textbox callbacks do not fire per keystroke. Instrumented directly: 105
-fires in one session, one per character. The conclusion it carried -- poll, do
-not build on the callback -- was right for the wrong reason.
+**TWELVE BACKLOG ENTRIES WERE AUDITED AGAINST THE TREE.** Three were stale, two
+moved to DESIGN DECISIONS as the decisions they had become, one deleted, three
+closed, four deferred with reopening conditions. `todo.pathing.arrivedstall` and
+`todo.unit.progressdirection` turned out to be two halves of one problem filed
+three days apart and now reference each other.
 
 ---
 
 **KNOWN IMPERFECT, AND DELIBERATELY LEFT:**
 
-- **No art for the module.** `petports_module_rgblight.png` does not exist; the
-  item logs a missing asset until it does.
-- **The colour field has no Enter.** A focused field releases on a click on any
-  other row or a tab change, and not on Enter -- see `fact.pane.textboxpoll` for
-  why that route is closed.
-- **The port's sound handler is dead weight** now the local route is proven
-  (`todo.pane.portsound`), and the petvent has been playing an empty sound pool
-  since it shipped (`todo.vent.silentsound`).
-- **A spinner steps by one.** The arrow auto-repeats at about 7Hz on hold, so end
-  to end is roughly 36 seconds; the field is the answer for anything far away.
-- **`PETPORTS_DIVE_DEBUG` and `FLY_POINT_DEBUG` are both still on.** Twelve
-  thousand log lines in sixty-five seconds together. Turn them off before
+- **THE FISHING SYSTEM IS STILL UNDOCUMENTED.** This is the debt the whole
+  session opened with and it is NOT paid. There is no `arch.*` entry for a
+  merged spawner, a lure projectile, a module item and 246 lines of references.
+  `todo.module.fishing` still calls it an investigation.
+- **The feed slot is invisible.** An empty `itemslot` draws no art, so it is a
+  16x16 hitbox on bare background at `[240, 116]` on the Details tab.
+- **`detailsFlavorValue` still shows `--`.** The readout is wired; the port has
+  never had a flavor to put in pane state, and now does.
+- **`PANE_FUEL_MAX` is written down twice.** It must equal
+  `petports_fuel.maxValue` in every monstertype, and nothing errors if it does
+  not -- see `arch.fuel.burn`.
+- **No Lua syntax check ran on any of this.** There is no `luac` available and
+  `petports_luacheck.py` is not in `workbench/tools`. Load order was the test.
+- **`petports_amphibious.monstertype` has mixed line endings** -- 470 CRLF
+  against 14 bare LF. `todo.tooling.crlfdrift` names only
+  `petports_petport.lua` and undercounts.
+- **`PETPORTS_DIVE_DEBUG` and `FLY_POINT_DEBUG` are both still on**, along with
+  `PETPORTS_DRAW_DEBUG`, `TASK_DEBUG` and `THINK_DEBUG`. Turn them off before
   shipping.
 
-**AND A THIRD LAMP LANDED THE SAME DAY.** `arch.module.huelight`. The Prismatic
-Lamp sweeps the hue wheel on a timer, tuned from `effectConfig`. Four files,
-nothing existing touched -- it is the floor of what a module costs, because it
-grants a capability rather than a setting.
-
-**NEXT.** Art, mostly -- two module icons and the wider art pass the mod is
-otherwise waiting on.
+**NEXT.** The fishing backfill, then the go-and-find-food work generator
+(`dd.fuel.autoeat` is the constraint on it, decided before the code), then the
+three Fuel Efficiency items and the mutual-exclusivity categories the light
+modules need too.
 
 ## ARCHITECTURE
 
@@ -1465,7 +1464,7 @@ would judge reachability from `[2498.5,1147.8]` while the unit walks to
 `[2499.5,1153.8]`.
 
 ### The origin nudge -- a pre-flight on where the search will START from
-`arch.pathing.originnudge` -- see also `fact.pathing.originnode`, `fact.pathing.ongroundtest`, `todo.pathing.nodeformula`
+`arch.pathing.originnudge` -- see also `fact.pathing.originnode`, `fact.pathing.ongroundtest`, `dd.pathing.nodeformula`
 
 Vanilla checks the TARGET is standable and never checks the origin at all --
 there is no such line in `pathing.lua`. `petportsTaskAction` now does, in
@@ -4005,6 +4004,388 @@ releases its own field after committing -- pressing a commit button is the least
 ambiguous "done with this" in the pane, so the caret should not survive it.
 
 
+### Fuel burns while working, and only while working
+`arch.fuel.burn` -- see also `dd.fuel.hungerwhileworking`, `dd.fuel.fedproductive`, `arch.fuel.eat`
+
+**BUILT 2026-09-03.** `petports_fuel` is a resource of the mod's own, declared in
+every monstertype at `maxValue 900, defaultPercentage 100`, and burned by
+`burnFuel` at the head of `petportsTaskAction.update`.
+
+**IT IS NOT VANILLA'S `hunger`, AND THAT SUPERSEDES `dd.fuel.hungerwhileworking`.**
+That entry chose to reuse the real resource because "everything downstream keeps
+reading it, so `hungerStarvingLevel` and `scoreAction` need no changes". True
+while hunger counted UP. The bar counts DOWN -- 900 full, 0 empty -- so the
+premise is gone, and redefining `hunger` to mean fullness would leave
+`status.resource("hunger")` returning its own opposite forever to save one
+declaration.
+
+**900 AT 1.0/SEC IS FIFTEEN MINUTES OF UPTIME.** The rate is
+`petports_fuelDrain`, per chassis, and an efficiency module divides it -- the
+hook is marked in `burnFuel` and the divisor is 1 until those items exist.
+
+**`petResourceDeltas.hunger` IS PINNED TO 0, NOT DELETED.** Absent means
+`groundPet.lua`'s `tickResources` never touches it, which is the same result by
+accident rather than on purpose, and a zero is where a reader looks when asking
+why hunger never moves.
+
+**STATION-KEEPING IS NOT WORK.** The burn is gated on `task.port ~= nil`, which
+is the line the file already drew between dispatched work and a leash task. A
+parked fleet is free and so is a unit walking home, both verified in game.
+
+**MIGRATION IS NOT DECORATION.** `groundPet.lua` seeds `storage.petResources`
+once with `or config.getParameter`, so a unit predating this has no such key.
+The resource is fine -- `defaultPercentage` fills it -- but `petResources()`
+enumerates that table to build the sync the port mirrors, so `burnFuel` writes
+the key on the first worked tick or the pane draws an empty bar forever.
+
+**`eatAction.lua` AND `begAction.lua` ARE OUT OF ALL FIVE SCRIPTS LISTS.** Safe
+because `performAction` guards with `if petBehavior.actions[action.type]`, so
+`reactToItemDrop` and `reactToPlayer` still queue `eat` and `beg`, find nothing
+registered, and short-circuit before touching `actionCooldowns`. Vanilla's
+`itemFoodLiking` rejects any item whose type is not `consumable`, and treats are
+plain items, so that path could never have eaten one anyway.
+
+**THE FIRST AND LAST BLIP ARE WORTH HALF OF THE OTHER EIGHTEEN.**
+`paneFuelBlips` ROUNDS rather than floors -- `floor(fuel / 900 * 20 + 0.5)` --
+so the count falls from 20 to 19 at 877.5 fuel, after 22.5 spent, not 45.
+Timing the first blip to measure a burn rate therefore reads roughly half the
+true interval, which is how a correct tier-3 module looked wrong on a
+stopwatch. MEASURE THE RESOURCE, NOT THE BAR: set it to 900, work for a
+measured minute, read `status.resource("petports_fuel")` -- about 840 bare
+against about 864 at tier 3. The rounding is defensible, since a lit blip
+meaning "at least half a blip left" keeps the bar off empty while a unit still
+has fuel; it is just not uniform and nothing in the pane says so.
+
+**`PANE_FUEL_MAX = 900` IN THE PORT IS THE ONE NUMBER WRITTEN DOWN TWICE.** It
+must equal `petports_fuel.maxValue` in every monstertype. `paneFuelBlips` runs
+off cached `petData` with no unit present -- the whole point of the mirror --
+and the sync carries values, not ceilings. If they disagree the bar is wrong and
+nothing errors.
+
+### One treat, one call, and the unit decides what it is worth
+`arch.fuel.eat` -- see also `arch.fuel.preference`, `dd.fuel.selffeed`, `dd.fuel.flavor`
+
+**BUILT 2026-09-03. MANUAL AND AUTOMATIC.** `petports_feedFuel(descriptor,
+sparing)` refuses anything without the `petports_fuel` tag and returns ONE
+TABLE -- `{ amount, flavor }`, or nil. 60 plain, 120 preferred. The
+thrown-on-the-ground source in `dd.fuel.selffeed` is still not built.
+
+**ONE TABLE BECAUSE `callScriptedEntity` DOES NOT CARRY A SECOND RETURN.** It
+returned `amount, flavor` for one build and the port saw the amount and never
+the flavor: totals counted, every per-flavor row stayed at zero. Every other
+call site in the mod binds `ok, oneValue`, so there was no working example to
+copy and the assumption went in untested. DO NOT GO BACK TO MULTIPLE RETURNS.
+
+**THE PORT FORWARDS AND DECIDES NOTHING.** What a treat is worth depends on the
+unit's seed and its chassis's eligibility list, both of which live unit-side.
+Resolving it in the port would be a second copy of `petports_preferredFlavor`
+answering the same question -- the split `arch.pathing.oneanchor` exists to warn
+about.
+
+**A PARTIAL SWALLOW IS A FULL TREAT WHEN A PLAYER CHOSE IT, AND A REFUSAL WHEN
+NOBODY DID.** The `sparing` argument is what tells them apart, and the
+automatic path passes it.
+
+Manual: a unit at 899 of 900 eats a preferred treat, gains 1, and the rest is
+lost. Refusing would mean a nearly-full unit cannot be topped up before a long
+job, and with a refusal sound wired the player reads that as a broken slot.
+
+**THE AUTOMATIC PATH SHIPPED DOING THE MANUAL THING AND IT WAS MEASURED.** A
+fetched meal from 217.98 took five clean 120s and then a sixth treat that
+delivered 82.02 -- 37.98 burned, every meal, by a unit nobody was watching.
+`dd.fuel.autoeat` had said not to do this before the code existed; the headroom
+check went into the GENERATOR, which decides whether a trip is worth making,
+and not into the meal, which feeds until the unit refuses. The unit only
+refuses when completely full.
+
+**THE TEST IS UNIT-SIDE BECAUSE NOTHING ELSE HAS A LIVE NUMBER.** The port
+mirrors fuel on the anchor tick, stale after the first bite of a loop that eats
+six. CONSEQUENCE: an automatic meal now ends a little UNDER the cap rather than
+exactly at it, which is correct and is not a failed top-up.
+
+**THE CURSOR IS DEBITED ON THE ANSWER, NOT ON THE CLICK.** `tell` discards what
+`world.sendEntityMessage` returns, so the first version fed one treat forever:
+the pane read the cursor and never took anything. `feedSlotClicked` now holds
+the promise and `pollFeed` debits exactly ONE on a confirmed true, mirroring
+`pendingTake`. It re-reads the cursor rather than trusting the remembered stack,
+because a player can move it while the message is in flight.
+
+**IT EATS A MEAL, NOT A BITE.** The first version ate the single treat it walked
+for, left at 285 of 900, was then above the 25% mark and never came back -- a
+unit topped itself up by one treat, forever. `feedFromCrate` now drains the
+crate in preference order until the unit refuses, sharing `fuelTreatOrder` with
+the generator so the trip and the meal cannot disagree about which flavor is
+better. `FUEL_MEAL_LIMIT` is a bug-stop, not a balance number.
+
+**TREATS ARE COUNTED BY FLAVOR, THE SAME WAY FISH ARE COUNTED BY TIER.** `fed`
+plus a `fed_<flavor>` key each, walked out of `stats` into `fedFlavors`. The
+pane takes its baseline from the flavor MANIFEST rather than a hardcoded list
+the way `FISH_RARITIES` must, because flavors are ours. `countFed` logs loudly
+on a missing flavor, because a total that climbs while the rows stay at zero is
+indistinguishable from a player who never made one -- which is exactly how the
+two-return bug hid.
+
+**EVERY REFUSAL SOUNDS THE SAME, DELIBERATELY.** Not a treat, full unit and
+despawned unit all mean "that did not happen". Telling them apart needs a reason
+string over the wire for a distinction the player does not act on differently.
+
+**THE SLOT IS INVISIBLE AND THAT IS NOT A BUG YET.** `feedSlot` sits on the
+Details tab at `[240, 116]`, and an empty `itemslot` draws no art of its own, so
+it is a 16x16 hitbox on bare background. It needs a backing image -- see
+`todo.art.panes`.
+
+### Preferred flavor, derived from the seed, resolved in one place
+`arch.fuel.preference` -- see also `arch.fuel.eat`, `dd.fuel.flavor`, `arch.pathing.oneanchor`
+
+**BUILT 2026-09-03.** `petports_preferredFlavor(seed, eligible)` and
+`petports_flavorEligible` live in `petports_flavors.lua`; `petports_unitFlavor`
+in the contract latches the answer in unit `storage`.
+
+**ELIGIBILITY IS THE CHASSIS'S, NOT THE SEED'S.** A monstertype may declare
+`petports_fuelFlavors` to narrow what it can ever crave -- "ants enjoy sugar",
+and a dog-shaped unit never rolls a seeded craving for chocolate. Absent or
+empty means all flavors, which is what every chassis ships with today. A
+specialised fleet juggles fewer flavors but competes harder for them.
+
+**MODULO OVER THE ELIGIBLE LIST, NOT OVER SEVEN.** A modlist that removes a
+flavor shortens the list and the modulo lands elsewhere, so no unit is left
+preferring an item that can no longer be made.
+
+**LATCHED, AND RE-ROLLED ONLY ON INVALIDATION.** Deriving live would reshuffle
+every unit's favourite whenever the eligible set changed, including when it
+GREW and the old answer was still perfectly valid. The latch means a modlist
+change moves one unit's favourite rather than all of them.
+
+**KNOWN LIMIT: THE LATCH IS UNIT `storage`, WHICH DIES WITH THE UNIT.** A recall
+and redeploy re-derives from the same seed, so the answer is identical unless
+eligibility changed in between -- in which case a redeploy reshuffles where a
+live unit would not have. Small, and worth knowing before it is reported as a
+bug.
+
+**`petports_flavors.lua` HAD TO BE ADDED TO ALL FIVE SCRIPTS LISTS.** Only the
+port, the upcycler and the two panes required it, because until eating existed
+nothing unit-side asked a flavor question. Safe to load there: no requires, no
+top-level work, manifest lazy behind a `pcall`.
+
+**THE READOUT IS LIVE, AND IT TOOK THREE HOOKS AND A DUPLICATE KEY TO GET
+THERE.** `detailsFlavorValue`, the pane's setter and `mirrorPaneState`'s
+`flavor` key were all laid down in advance for a feature that did not exist,
+and all three had been sitting on a value nobody produced.
+
+**WIRING IT ADDED A SECOND `flavor` KEY TO THE SAME TABLE INSTEAD OF FINDING
+THE FIRST**, and a later key overwrites an earlier one -- so the value was
+computed correctly on every mirror write and thrown away one line later. The
+readout kept showing `--` through three builds that all looked right in the
+log. ONE KEY PER FIELD IN THAT CONSTRUCTOR; it now holds 26 and no duplicates.
+
+**THE PANE RESOLVES THE WORDING, THE PORT SENDS THE ID.** `flavorLabel` reads
+`label` from the manifest, so the Details readout and the stats rows match the
+upcycler. The capitalise fallback is not dead code: `plain` has no manifest
+entry at all.
+
+### Modules can declare a family, and two from one family cannot be socketed
+`arch.module.exclusivity` -- see also `arch.module.hydrator`, `arch.fuel.efficiency`
+
+**BUILT 2026-09-03, VERIFIED IN GAME.** An item may carry
+`mutualExclusivityCategories`, a list of names. The three lamps all say
+`light`; the three efficiency tiers all say `fuelEfficiency`.
+
+**`petports_moduleSetDuplicate` GREW A SECOND RETURN AND KEPT ITS FIRST.** It
+still answers with the offending item name, and now optionally the category, so
+a caller that ignores the second value behaves exactly as before -- neither call
+site HAD to change. Both did, only to tell the two cases apart in the log. The
+player sees one refusal either way: the cursor keeps the item, the slot does not
+change, the refuse sound plays.
+
+**IT DOES NOT CONTRADICT THAT FILE'S REJECTION OF A UNIQUENESS FLAG**, and the
+header records why. That argument was that a module wanting uniqueness and not
+SAYING so would behave differently from one that did, for no visible reason --
+true, because uniqueness is a property every module either has or has not. A
+category is not like that: a module is in a family or in none, and absent
+genuinely means none. There is nothing to forget.
+
+**READ WITH `root.itemConfig`, NOT FROM A TABLE.** A third party can put a
+module in the `light` family without being listed anywhere, and the pane and the
+port ask the same question of the same asset -- the property the whole file
+exists for.
+
+### Fuel Efficiency I, II and III
+`arch.fuel.efficiency` -- see also `arch.fuel.burn`, `arch.module.exclusivity`, `arch.module.hydrator`
+
+**BUILT 2026-09-03.** Three items, Common / Uncommon / Rare, carrying flags
+`fuelefficiency1..3` and nothing else. `FUEL_EFFICIENCY_BONUS` in the port holds
+120 / 300 / 600 seconds; `petportFuelScale` returns `900 / (900 + bonus)`.
+
+**AUTHORED AS UPTIME SECONDS, NOT AS MULTIPLIERS.** The decision was "+2, +5 and
++10 minutes on a full tank". Tier 1's multiplier is 0.88235..., which nobody can
+read, check or retune with confidence, so the table holds the number that was
+actually decided and the rate is derived from it.
+
+**SLOWER BURN, NOT A BIGGER TANK, AND THE DIFFERENCE IS THE POINT.** Both reach
+17 / 20 / 25 minutes on a full tank. Only slower burn makes a TREAT worth more:
+at tier 3 a 60-fuel plain treat buys 100 seconds of work instead of 60, which is
+what the roster means by "more work per food".
+
+**THE SCALE RIDES ON THE EXISTING MODULE PUSH.** It is derived entirely from the
+flags, which are already in that push's signature, so a module swap re-pushes it
+and nothing else can change it. No new message and no new hook.
+
+**THE UNIT'S FALLBACK IS 1.0 AND MUST STAY 1.0.** `self.petportsFuelScale` is
+nil until the port has pushed once. A nil read as zero would make every unit
+that has not yet had a module push burn nothing and run forever.
+
+**BEST TIER, NOT SUM, EVEN THOUGH THE CATEGORY MAKES TWO IMPOSSIBLE.** A rule
+that leans on another rule holding is one refactor from being wrong, and two
+tiers stacking to 25 minutes would be a silent balance change rather than an
+error.
+
+**THE ICONS DO NOT EXIST.** All three point at `petports_module_light.png` so
+they load and can be tested, which is what the RGB item's own comment
+recommends.
+
+### The fishing spawner is a merge of two forks, not a copy of either
+`arch.fishing.spawner` -- see also `arch.fishing.lure`, `arch.fishing.dispatch`
+
+**BUILT 2026-09-01, SHIPPED, AND UNDOCUMENTED UNTIL 2026-09-03** -- see
+`proc.tooling.gapcheck` for how a whole subsystem went unwritten.
+
+`petports_fishingspawner.lua` merges vanilla's `/scripts/fishing/
+fishingspawner.lua` with Project Irisil's `lofty_irisil_fancyfishingspawner.lua`.
+Vanilla picks fish by BIOME -- `world.type()` must have a pool, the position must
+be minDepth below ocean level, split shallow/deep and day/night. Irisil picks by
+LIQUID ID and lure type from parameters a zone stagehand pushes in, with no biome
+or depth test at all.
+
+**WHY BOTH.** Vanilla alone means fishing works only on ocean, toxic, arctic and
+magma worlds -- a base pond on a forest world is unfishable however deep it is
+dug, because `world.type()` decides before position is consulted. That is a
+severe restriction for a base-automation mod. Irisil alone works only inside a
+hand-placed dungeon zone, which is right for a content mod shipping those
+dungeons and useless for a port dropped in open sea.
+
+**IT STARTS IN VANILLA MODE AND NEVER SWITCHES BACK.** Zone parameters arrive by
+message or never arrive; `setParams` switches it, and a lure told about a zone is
+in that zone.
+
+**NO DEPENDENCY IN EITHER DIRECTION.** It reads vanilla's config for its own mode
+and accepts a zone table for the other; it never requires Irisil's files. If
+Irisil is installed its zones push parameters at our lure because they broadcast
+to every projectile in range -- WE DO NOT GO LOOKING, THEY FIND US.
+
+**THE GLOBAL IS `PetportsFishingSpawner` ON PURPOSE.** Vanilla and Irisil BOTH
+define `FishingSpawner` and already collide silently, last require winning.
+Adding a third would break rod fishing for anyone running both.
+
+**THE BIAS OVERRIDE IS WHY THE FORK EXISTS AT ALL.** Both upstreams seed
+`spawnBias` from `initialBias` (0.2 in vanilla's) and drop it per successful
+spawn. The roll is `math.random() + spawnBias` against 0.001 / 0.04 / 0.2 / 100,
+so at bias 0.2 legendary, rare and uncommon are not improbable -- they are
+UNREACHABLE. Fine for a rod, wrong for a port: a player burns the bias off in two
+catches, while a petport lure lives 150 seconds, holds one fish, and is replaced
+by a fresh lure with a fresh spawner -- resetting the bias faster than it could
+decay. The lure passes 0. `nil` means "use the config's", so an indifferent
+caller gets upstream behaviour.
+
+**THE BACKGROUND-MATERIAL TEST APPLIES IN VANILLA MODE ONLY.** Vanilla refuses a
+spawn point in front of background blocks, keeping fish out of the walls of a
+build. A hand-placed dungeon pool is background-walled BY CONSTRUCTION, so
+applying it in zone mode would refuse every position in the zone -- which is why
+Irisil dropped it, not because it is wrong.
+
+**THE TIER NAME COMES BACK WITH THE FISH**, because it is knowable only inside
+the pick: nothing downstream can recover "rare" from a monster type without
+re-deriving the whole table. The port wants it for per-rarity statistics.
+
+### The lure is the spawner, and the teleport is why it is not vanilla's
+`arch.fishing.lure` -- see also `arch.fishing.spawner`, `arch.fishing.dispatch`
+
+**BUILT 2026-09-01.** A fork of `/projectiles/fishing/fishinglure.lua`. The
+spawner lives on the LURE -- not the rod, not the port -- and spawns a fish every
+few seconds for as long as it sits in liquid.
+
+**REMOVED FROM VANILLA'S:** rod controls and line maths (there is no rod);
+`rotation` and `linePosition` (no rod, no rope); and `fleeFromLure`, which
+vanilla broadcasts to every monster within 9 tiles every second to scare wildlife
+off a fishing spot -- `world.monsterQuery` RETURNS OUR OWN UNITS, and a lure that
+shouts at the fleet is not wanted even while nothing answers it.
+
+**ADDED:** one fish at a time (enforced here because this is what knows whether
+its fish is still alive); horizontal patrol reversing at walls, dry water and the
+edge of coverage; a coverage rect it may not leave; and the teleport.
+
+**THE TELEPORT IS THE WHOLE REASON THE FILE EXISTS.** A fish that cannot hook
+darts at the lure forever, so the lure moves away from one that has closed in.
+**LINE OF SIGHT IS CHECKED AND IT IS NOT OPTIONAL**: the fish's own `updateLure`
+despawns it outright when `world.lineTileCollision(fishPos, lurePos)` is true, so
+a teleport landing behind terrain does not move the lure away from the fish, it
+KILLS the fish. Every candidate is tested from the FISH'S position. Failing means
+staying put, which is the safe direction -- an oscillating fish looks bad, a fish
+deleted by its own lure is worse.
+
+**LURKER VERSUS APPROACHER IS DECIDED BY WHICH SCRIPT THE MONSTERTYPE LISTS**,
+not by a parameter: `approachState.enter` and `lurkState.enter` both gate on
+`storage.stateStage == "approach"`. It matters because a lurker outside
+biteDistance idles FACING the lure via `setBodyDirection(self.toLure)`, so a lure
+well above or below leaves it angled at the sky or the seabed. An approacher's
+facing follows its travel and the same offset reads as normal swimming. Read once
+per fish and cached -- `root.monsterParameters` is cheap but not free and the
+answer cannot change for a type.
+
+**PATROL DRIVES POSITION, NOT VELOCITY.** A force fighting the fishinglure
+physics profile's gravity lost slowly and the lure sank the entire time it was
+alive; `petports_patrolForce` was removed with that approach.
+
+**COVERAGE IS A LIST OF RECTS, NOT ONE.** The first build took a single rect and
+clamped the lure to the port that spawned it, which is visibly wrong the moment
+two ports share water -- fish could only appear in one of them. Empty or absent
+means unbounded, which is what makes the lure testable by hand with
+`/spawnprojectile`.
+
+**THE PORT IS THE SOURCE ENTITY, WHICH BUYS TEARDOWN FOR FREE.** Vanilla's update
+already ends with `else projectile.die()` when the source is gone, so breaking or
+unloading a port kills the lure, which nils its fish's `lureId`, which lets the
+fish despawn itself. Nothing holds a reference to anything.
+
+### One lure per port, and the port never chooses the fish
+`arch.fishing.dispatch` -- see also `arch.fishing.lure`, `arch.dispatch.eligibility`
+
+**BUILT 2026-09-01.** `lureWork` keeps exactly one lure alive while the socketed
+unit can fish; `fishWork` dispatches at whatever the lure reports.
+
+**THE MODULE IS THE ONLY SWITCH.** No participation group, no port checkbox: a
+player who does not want fish unsockets the module.
+
+**ONE LURE, NOT ONE FISH.** The lure enforces its own budget because it is the
+only thing that knows both that it spawned a fish and whether that fish is still
+alive. The port never asks.
+
+**NOTHING IS PERSISTED.** `self.lureId` dies with the chunk, which is correct --
+the lure is spawned with the port as source entity and vanilla kills a lure whose
+source is gone. A reloaded port finds no lure and makes a new one; there is no
+stale id to reconcile and no cleanup pass to write.
+
+**IT SITS ABOVE HARVEST IN THE LADDER BECAUSE ITS TARGET EXPIRES ON ITS OWN.**
+Every other generator names a crop, crate, drop or animal, all of which wait
+indefinitely. A fish times out on its approach window, swims out of coverage, or
+loses sight of its lure and despawns -- so a dispatch that is merely slow is a
+dispatch that produces nothing.
+
+**NO CLAIM, DELIBERATELY.** Two ports sharing water each run their own lure, and
+there is only ever one candidate and one reason -- which is also why there is no
+reject-reason tally like `animalWork`'s.
+
+**SPAWN RATE WAS HALVED FROM VANILLA'S.** `spawnTimeRange` is `[4, 12]` against
+vanilla's `{2, 6}`: a rod assumes a player casting, reeling and walking away,
+while a petport lure sits for 150 seconds and a unit catches in one to four. At
+vanilla's rate the loop filled crates in minutes. It was never the only limiter
+-- the lure holds one fish and the port refuses a carrying unit -- so doubling it
+lengthens the first term only and halves throughput rather than quartering it.
+
+**STATS ARE PER RARITY, ALWAYS SHOWN INCLUDING AT ZERO.** `fished` plus
+`fishedTiers`, walked out of the stats table. `FISH_RARITIES` is hardcoded in the
+pane because the tiers are NOT ours -- a zone declares its own -- which is the
+one way the treat rows in `arch.fuel.eat` improve on this.
+
 ## DESIGN DECISIONS
 
 ### The port band splits by what the player SEES, not by what the code owns
@@ -4492,8 +4873,50 @@ flavors their fleet's rolled preferences justify and leaves the rest as fodder,
 and that self-balances with no rule enforcing it. Seven is the ceiling of the
 cost and it is one restock crate wide.
 
+### The automatic path must not waste treats, and must not graze
+`dd.fuel.autoeat` -- see also `arch.fuel.eat`, `dd.fuel.selffeed`, `plan.fuel.storageread`
+
+**DECIDED 2026-09-03, BEFORE THE WORK GENERATOR EXISTS**, because it is a
+constraint ON that generator and the shape of it is already settled.
+
+`arch.fuel.eat` lets a unit at 899 of 900 eat a 120 treat and throw away 119.
+That is fine when a PLAYER does it -- they chose to, and refusing would mean a
+nearly-full unit cannot be topped up before a long job. **A UNIT DOING IT TO
+ITSELF, UNSUPERVISED, IS A DIFFERENT THING**: nobody chose it, it happens
+repeatedly, and it burns a resource the player farmed.
+
+**TWO RULES, AND NEITHER IS SUFFICIENT ALONE.**
+
+- **A PER-TREAT HEADROOM CHECK.** The automatic path picks the treat, so it can
+  compare that treat's value against the unit's real headroom and skip one it
+  would waste. Manual feeding keeps its current behaviour.
+- **A LOW-WATER MARK, or units graze.** Headroom alone means a unit eats
+  whenever 60 fits -- so it stops and fetches roughly once a minute, forever.
+  It must not go looking until it is BELOW the mark, then fill as far as it can.
+
+**THE MARK IS 25%, REUSED RATHER THAN INVENTED.** `dd.fuel.selffeed` already
+gates the thrown-on-the-ground source at "below 25% hunger only". One threshold
+in the design beats two that drift. At 900 that is 225 -- comfortably more than
+a preferred treat, so a unit that decides to eat can always take at least one
+with no waste at all.
+
+**CONSEQUENCE FOR `dd.fuel.fedproductive`, AND IT IS THE POINT.** Once this
+exists, a fleet with treats in reach never reaches zero, so the `findWork` fuel
+gate stops being ordinary behaviour and becomes the backstop for a network that
+is genuinely out of food. The dry-unit behaviour verified on 2026-09-03 is the
+FAILURE MODE, not the steady state.
+
 ### Hunger drains only while working
 `dd.fuel.hungerwhileworking` -- see also `dd.fuel.fedproductive`
+
+**PARTLY SUPERSEDED 2026-09-03 BY `arch.fuel.burn`.** The clock-versus-meter
+answer below is BUILT and unchanged: the vanilla delta is zeroed and the
+decrement is driven from `petportsTaskAction`. What did not survive is the
+choice of resource. This entry reused vanilla `hunger` on the reasoning that
+everything downstream keeps reading the real one -- which held only while hunger
+counted UP. The bar counts DOWN, so `petports_fuel` is its own resource and the
+sentence below about `hungerStarvingLevel` and `scoreAction` needing no changes
+is now moot rather than wrong: both actions are out of the scripts lists.
 
 **THIS SETTLES THE CLOCK-VERSUS-METER QUESTION.** Vanilla's `petResourceDeltas`
 drains hunger at 0.5/sec regardless of activity, which contradicts "upkeep is
@@ -5422,6 +5845,82 @@ like it had invented a number. THE BOX AND THE VALUE MUST NOT BE ALLOWED TO
 DISAGREE. The caret cost is paid only when the clamp bites, so a valid entry is
 still never written back and "0100" still does not snap to "100".
 
+### The debug colour legend does not match the game
+`dd.pathing.debugcolours` -- see also `proc.pathing.debugpath`
+
+**DECIDED 2026-08-30, MOVED OUT OF THE BACKLOG 2026-09-03.** A legend that
+disagrees with the game costs a moment of confusion to one reader who already
+has the source open, and is not worth a change to shipping code. That is a
+decision and not a task nobody got to, which is why it no longer sits in a list
+of things to do.
+
+**THE DECISION COVERS THE LEGEND ONLY. POSSIBILITY 2 BELOW IS STILL OPEN** and
+is a different question -- if the `workbench/` copy of `pathing.lua` is not the
+version the game runs, a whole session of engine reasoning was read out of the
+wrong file. Nothing has been done about it. Do not let this entry's WILL NOT FIX
+be read as covering that.
+
+
+`DRAW_PLAN` uses vanilla's `debugPathEdgeColor` from `/scripts/pathing.lua`,
+which maps:
+
+    Walk blue   Jump green   Drop cyan   Swim white   Fly magenta
+    Land yellow   Arc red (yellow at the apex, where target velocity y is 0)
+
+**IN GAME, WHITE IS WALK AND MAGENTA IS JUMP.** Observed directly by the mod
+author against a plan whose actions were independently known from the log.
+
+Two possibilities and they are not equally comfortable:
+
+1.  the colours do not render as named, which is cosmetic; or
+2.  **the `pathing.lua` in `workbench/` is not the version the game runs**,
+    which is not cosmetic at all -- a whole session's engine reasoning was read
+    out of that file.
+
+UNRESOLVED. Settle it by dumping a known plan's actions alongside a screenshot,
+or by diffing the workbench copy against the game's unpacked assets. Until then,
+**do not read edge ACTIONS off a screenshot** -- get them from the log or from
+`/entityeval`, both of which are unambiguous.
+
+### `petports_nodePosition` does not match `roundToNode` -- DELIBERATELY NOT FIXED
+`dd.pathing.nodeformula` -- see also `ref.pathing.nodelattice`, `fact.pathing.ongroundtest`
+
+**DECIDED 2026-08-30, MOVED OUT OF THE BACKLOG 2026-09-03.** The divergences are
+understood, nothing has been traced to them, and a MEASURED failure attributable
+to the formula is the only thing that reopens this. A standing decision with a
+named reopening condition is not a backlog item waiting for its turn, and
+leaving it in the backlog implied work that nobody intends to do.
+
+
+Two known divergences from the engine, both understood, neither fixed, and that
+is a decision rather than a backlog item that got missed.
+
+**THE Y FORMULA.** `ceil` where the engine uses `round`; diverges for
+`frac(y) in (0, 0.3)`, ours a tile high. Full derivation in
+`ref.pathing.nodelattice`.
+
+**THE PREDICATE.** `originIsPlannable` asks `validStandingPosition`, which is
+not the engine's `onGround` -- five differences in `fact.pathing.ongroundtest`.
+
+**WHY NOT NOW.** Nothing measurable is broken. A settled unit rests at
+`frac 0.80`, outside the divergence window; it was 0.97% of grounded samples in
+a clean log, all landing transients. Every difference makes the Lua stricter, so
+both faults land as a wasted tick in a mechanism that already fails open. And
+critically, **NOT ONE SAMPLE IN ANY LOG DISCRIMINATES THE TWO FORMULAS** -- every
+measured `edge 1 src` sat at `frac 0.73` to `0.80`, where they agree. The C++ is
+the only evidence, so a fix could not be verified by the change it produced.
+
+**WHAT WOULD MAKE IT URGENT.** A chassis whose `boundBox` bottom is not -0.8; a
+`petports_pathOptions` that pads `boundBox`, since `roundToNode` reads the
+pathOptions box and not the controller's; ice underfoot, per difference 1;
+`petports_flyPointNear` declining targets it should accept, since a shifted
+anchor loses the bottom row of its window and its refusals are silent.
+
+**HOW TO MEASURE IT WHEN THAT DAY COMES, FOR FREE.** The engine hands over its
+own answer: `edges[1].source.position` on any acquired plan IS
+`roundToNode(position)`. Log `petports_nodePosition` beside it and shout on
+mismatch. No probing, no re-derivation, data already flowing through the log.
+
 
 ## DESIGN INTENT -- PLANNED
 
@@ -5446,6 +5945,20 @@ without sharing a body.
 
 ### Networked storage reading
 `plan.fuel.storageread`
+
+**CORRECTED 2026-09-03, IN BOTH DIRECTIONS, AND NOT YET REWRITTEN.**
+
+THE OPEN QUESTION BELOW IS ANSWERED. It calls it UNVERIFIED whether
+`world.containerItems` can be read from an object script against an arbitrary
+loaded container. The port calls it 43 times, and the comment at
+`petports_petport.lua` line 2755 says the loop already does it for every
+container in the network. The design may lean on it.
+
+THE LAST TWO PARAGRAPHS ARE ABOUT FEEDER OBJECTS, WHICH `dd.fuel.selffeed`
+CUT. The dead-feeder cases and the fullness light describe a device that does
+not exist. Kept until this is rewritten, because the DEDUPLICATION point --
+one network-level alert rather than one per unit -- survives the cut and is
+the part worth carrying forward.
 
 The capability that makes self-feeding work: a unit needs to find food in crates
 across its network, not just in feeders.
@@ -8543,6 +9056,31 @@ resolves by member path -- `Widget::focus` sets the flag and calls
 `window()->setFocus(this)` -- so the button that took the click can give it away.
 
 
+### `landedTreasurePool` has four shapes and the one that ships is a damage-kind map
+`fact.fishing.treasurepool` -- see also `arch.fishing.dispatch`
+
+**MEASURED 2026-09-01.** `fishingchuckle` declares a bare string,
+`"landedTreasurePool" : "fishinglegendary"`, and the first build assumed that was
+the shape. `fishingjerk` declares a TABLE, and handing it to
+`root.createTreasure` threw `LuaConversionException: Error converting LuaValue` --
+a caught fish that produced nothing and was despawned anyway.
+
+**THE FOUR SHAPES:** a bare name; a flat list `{ "poolName" }`; a map KEYED BY
+DAMAGE KIND; and level-keyed pairs `{ { 1, "poolName" } }`.
+
+**THE THIRD IS WHAT ACTUALLY SHIPS**, measured on `fishingjerk`:
+`{"default":"fishingcommon","fire":"lofty_crispy_fishingcommon", ...}`. A
+monster's pool can vary by the damage kind that killed it, and other mods patch
+entries into that map.
+
+**`ipairs` FINDS NOTHING IN IT.** The first version walked the value with
+`ipairs`, which yields nothing on a string-keyed table, so it concluded the fish
+had no pool and reported a catch with no loot -- a silent failure, not a throw.
+The type test has to come BEFORE the array walk.
+
+**`default` IS THE RIGHT KEY FOR US.** A unit does not kill a fish -- it rolls the
+pool and despawns it -- so there is no damage kind to key on.
+
 ## DISPROVEN
 
 ### Sinker jumping underwater was never a liquid problem
@@ -9300,7 +9838,7 @@ lattice-aligned anchor near this target" and does not care which lattice point,
 because candidates are sorted by true distance afterwards. It acquired a second
 caller with a stricter requirement and nobody re-derived it.
 
-**DELIBERATELY NOT FIXED -- see `todo.pathing.nodeformula`.** A settled unit
+**DELIBERATELY NOT FIXED -- see `dd.pathing.nodeformula`.** A settled unit
 rests at `frac 0.80`, outside the window, so this is only reachable on
 transient heights. Measured at 0.97% of grounded samples in a clean log, and
 NOT ONE sample in any log discriminates the two formulas.
@@ -9495,6 +10033,11 @@ the chassis ever gets narrower or `LAND_BRAKE_REACH` ever grows.
 ### The planner cancels jumps the movement controller does not
 `todo.pathing.jumpmodel` -- see also `fact.pathing.partialjump`
 
+**DEFERRED 2026-09-03 -- ONLY IF IT BECOMES AN ISSUE.** No emergent pathing
+fault in the field points at this, and the unit roster has grown a great deal
+since it was last measured. It reopens on an OBSERVED wall-clip or ceiling
+overshoot in play, not on a re-read of the reasoning below.
+
 **TRIAGED 2026-08-30 -- PRIORITY 3.** THE WALL-CLIP CASE NOW LIVES HERE ALONE. A separate adversarial-testing entry was struck on 2026-08-30 once the courses passed, and the one scenario it still named -- an arc whose plan is wrong at both ends -- belongs here. Still unmeasured against the current solver, and now joined by branch 1's ceiling overshoot from `arch.pathing.solvelaunch`.
 
 **THE LAST STRUCTURAL PATHING PROBLEM, AND IT IS UPSTREAM OF ANYTHING THIS FILE
@@ -9546,7 +10089,15 @@ meet physics apex. **Run it alone**, not stacked on a behavioural change.
 ### moveLand is still vanilla's, and it is four lines
 `todo.pathing.moveland` -- see also `fact.pathing.arcmoverthrottle`
 
-**NOT TRIAGED IN THE 2026-08-30 PASS.** Every other backlog entry was given a priority or a decision that day and this one was not raised, so its absence here is a GAP rather than a judgement. Partly overtaken by the arrival brake either way -- see the entry body.
+**DEFERRED 2026-09-03 -- ONLY IF IT BECOMES AN ISSUE.** `moveLand` is still
+vanilla's four lines, confirmed by grep: there is no override anywhere in the
+tree. Nothing in the field has been traced to it, and the arrival brake already
+took away the failure that used to reach it. It reopens on an OBSERVED landing
+fault, and nothing else.
+
+**THE 2026-08-30 GAP IS NOW ANSWERED.** Every other backlog entry was given a
+priority or a decision that day and this one was not raised, so its absence was
+a GAP rather than a judgement. This deferral is the judgement it never got.
 
 **PARTLY OVERTAKEN, NOT FIXED.** The arc mover now stops the unit on arrival, so
 the specific failure that kept reaching this -- landing at flight speed and
@@ -9659,70 +10210,16 @@ The fix is to bind the full set, or better, to have the fallback call
 alone deliberately on 2026-08-28 so the multiplier change could be measured
 without a second variable.
 
-### The debug colour legend does not match the game
-`todo.pathing.debugcolours` -- see also `proc.pathing.debugpath`
-
-**TRIAGED 2026-08-30 -- WILL NOT FIX.** A debug legend that disagrees with the game costs a moment of confusion to one reader who already has the source open. Not worth a change to shipping code.
-
-`DRAW_PLAN` uses vanilla's `debugPathEdgeColor` from `/scripts/pathing.lua`,
-which maps:
-
-    Walk blue   Jump green   Drop cyan   Swim white   Fly magenta
-    Land yellow   Arc red (yellow at the apex, where target velocity y is 0)
-
-**IN GAME, WHITE IS WALK AND MAGENTA IS JUMP.** Observed directly by the mod
-author against a plan whose actions were independently known from the log.
-
-Two possibilities and they are not equally comfortable:
-
-1.  the colours do not render as named, which is cosmetic; or
-2.  **the `pathing.lua` in `workbench/` is not the version the game runs**,
-    which is not cosmetic at all -- a whole session's engine reasoning was read
-    out of that file.
-
-UNRESOLVED. Settle it by dumping a known plan's actions alongside a screenshot,
-or by diffing the workbench copy against the game's unpacked assets. Until then,
-**do not read edge ACTIONS off a screenshot** -- get them from the log or from
-`/entityeval`, both of which are unambiguous.
-
-### `petports_nodePosition` does not match `roundToNode` -- DELIBERATELY NOT FIXED
-`todo.pathing.nodeformula` -- see also `ref.pathing.nodelattice`, `fact.pathing.ongroundtest`
-
-**TRIAGED 2026-08-30 -- WILL NOT FIX WITHOUT EVIDENCE.** The divergences are understood and nothing has been traced to them. If it is not broken it does not get touched; a MEASURED failure attributable to the formula reopens this and nothing else does.
-
-Two known divergences from the engine, both understood, neither fixed, and that
-is a decision rather than a backlog item that got missed.
-
-**THE Y FORMULA.** `ceil` where the engine uses `round`; diverges for
-`frac(y) in (0, 0.3)`, ours a tile high. Full derivation in
-`ref.pathing.nodelattice`.
-
-**THE PREDICATE.** `originIsPlannable` asks `validStandingPosition`, which is
-not the engine's `onGround` -- five differences in `fact.pathing.ongroundtest`.
-
-**WHY NOT NOW.** Nothing measurable is broken. A settled unit rests at
-`frac 0.80`, outside the divergence window; it was 0.97% of grounded samples in
-a clean log, all landing transients. Every difference makes the Lua stricter, so
-both faults land as a wasted tick in a mechanism that already fails open. And
-critically, **NOT ONE SAMPLE IN ANY LOG DISCRIMINATES THE TWO FORMULAS** -- every
-measured `edge 1 src` sat at `frac 0.73` to `0.80`, where they agree. The C++ is
-the only evidence, so a fix could not be verified by the change it produced.
-
-**WHAT WOULD MAKE IT URGENT.** A chassis whose `boundBox` bottom is not -0.8; a
-`petports_pathOptions` that pads `boundBox`, since `roundToNode` reads the
-pathOptions box and not the controller's; ice underfoot, per difference 1;
-`petports_flyPointNear` declining targets it should accept, since a shifted
-anchor loses the bottom row of its window and its refusals are silent.
-
-**HOW TO MEASURE IT WHEN THAT DAY COMES, FOR FREE.** The engine hands over its
-own answer: `edges[1].source.position` on any acquired plan IS
-`roundToNode(position)`. Log `petports_nodePosition` beside it and shout on
-mismatch. No probing, no re-derivation, data already flowing through the log.
-
 ### Three overlapping recovery ladders
 `todo.pathing.recoveryladders`
 
-**TRIAGED 2026-08-30 -- PRIORITY 1.** Most of the stuck-unit cases the ladders were built for are now closed, so this is closer to dead weight than to risk. The substring-matched strandedness check is the part that would still bite.
+**CLOSED 2026-09-03 -- THE LADDERS SERVE THEIR PURPOSES WELL ENOUGH.** All
+three are still present and verified in place; the overlap was never the
+problem the entry assumed it might become, and by 2026-09-03 the stuck-unit
+cases they were built for had closed to the point where consolidating them
+would be a change with nothing to gain. Kept, not deleted, because the
+substring match below is a real fragility and this is where it is written
+down: reopen if a reworded log line ever silently stops matching.
 
 `RECALL_LIMIT` -> `STRANDED_LIMIT` -> `rehomeUnit`, on top of `TASK_DEADLINE` and
 a four-tier `FAILURE_BACKOFF`. rehomeUnit is instant, free and always works.
@@ -10004,6 +10501,16 @@ so it has to answer this itself or the machinery arrives with nothing to find.
 ### A fishing module
 `todo.module.fishing` -- see also `arch.module.effects`, `todo.module.designpass`
 
+**CLOSED 2026-09-03. IT WAS BUILT ON 2026-09-01, THE SAME DAY THIS WAS FILED,
+AND THIS ENTRY WAS WRONG FOR TWO DAYS.** See `arch.fishing.spawner`,
+`arch.fishing.lure`, `arch.fishing.dispatch` and `fact.fishing.treasurepool`.
+
+**KEPT RATHER THAN DELETED, BECAUSE THE ANALYSIS BELOW WAS RIGHT.** It called
+fishing a TASK rather than a CAPABILITY -- needing a work generator, a claim, a
+target class and a deadline instead of a status effect -- and that is exactly
+what got built. The investigation reached the correct answer; only the status
+line went stale, and `proc.tooling.gapcheck` records why nothing caught it.
+
 **FILED 2026-09-01 -- AN INVESTIGATION, NOT A COMMITMENT.** Whether a fishing
 module is reasonable to build is the question; nothing is decided.
 
@@ -10068,6 +10575,14 @@ one outcome worse than silence.
 
 ### Finish the petport pane
 `todo.pane.statstab` -- see also `arch.pane.hoverlayer`, `arch.pane.statslist`
+
+**UPDATED 2026-09-03 -- A FISHING BLOCK LANDED IN THIS TAB AND THIS ENTRY DID
+NOT KNOW.** The Stats tab now carries one row per rarity tier, in a fixed
+order, shown even at zero, with a zone free to declare its own tier and have it
+appended after -- `petportconfig.lua` around line 1658, one block per activity
+with farming, healing and fishing separated. The entry below was written on
+2026-08-30 and listed the only remainders as dressing and a per-treat block,
+which was true of the tab as it stood and stopped being true two days later.
 
 **TRIAGED 2026-08-30 -- BOTH REMAINDERS ARE BLOCKED ON SOMETHING ELSE.** The dressing goes with the art pass; the per-treat block cannot exist until food consumption works. Note that `todo.unit.maidrank` owns icons that render here, so part of THAT entry gates this one being called complete.
 
@@ -10273,7 +10788,17 @@ quietly not-burning is indistinguishable from a machine quietly done.
 ### A recall with nowhere to stand says nothing to the player
 `todo.port.nostandpoint` -- see also `todo.pathing.standpointchoice`, `todo.unit.complaints`, `arch.port.reporthandler`
 
-**TRIAGED 2026-08-30 -- BACKLOG, NO PRIORITY SET.**
+**CLOSED 2026-09-03 -- THE MECHANISM BELOW IS OUT OF DATE AND THE BRANCH IS
+BELIEVED UNREACHABLE.** `returnWork` no longer calls `findStandingPoint` twice;
+that pair moved into `homePosition` and now sits behind `homePointNear`.
+`returnWork` calls `homePosition()` once, and the comment above the surviving
+`rehomeUnit` call says the branch is unreachable for a port-tethered chassis,
+which always has an answer.
+
+**THE PLAYER-FACING COMPLAINT WAS NEVER WRONG**, and is preserved below: a
+teleport is the loudest thing the port does and it happens silently. If a
+silent rehome is ever seen in the wild, this entry is the design for the fix
+and `todo.port.errorindicator` is where the pane-side work lives.
 
 `returnWork` calls `findStandingPoint` twice -- an 8x8 box on the port, then the
 full coverage rect -- and when BOTH return nil it calls `rehomeUnit("no standing
@@ -10294,8 +10819,17 @@ or filling in a floor leaves the warning up forever.
 ### `findStandingPoint` returns the highest point in a random column
 `todo.pathing.standpointchoice` -- see also `todo.port.nostandpoint`, `fact.pathing.floatingtarget`, `arch.port.coverage`
 
-**TRIAGED 2026-08-30 -- BACKLOG, NO PRIORITY SET. NOT YET OBSERVED FAILING**,
-because the path that would expose it is gated off -- see below.
+**CLOSED 2026-09-03 -- THE FUNCTION HAS BEEN DEMOTED OUT OF THE WAY.**
+`homePointNear` asks the unit first, and the comment above the fallback now
+says outright that `findStandingPoint` "is no longer on the path any live unit
+takes home". Its two surviving callers are `diagnosticWork` and a last-ditch
+branch in `homePosition` that only runs for a port with nothing socketed. The
+defects below are all still real; none is reachable by a unit doing its job.
+
+**THE CODE NAMES A THIRD DEFECT THIS ENTRY NEVER DID.** The fallback comment in
+`petports_petport.lua` lists random column, descends from the top, AND cannot
+see platforms. Only the first two were ever written down here. Recorded on
+closing so the count does not shrink again if anyone reopens it.
 
     for y = rect[4], rect[2], -1
       if world.pointTileCollision(below) and not world.pointTileCollision(here)
@@ -10353,16 +10887,6 @@ mod exists to avoid. A complaint may deserve different defaults from a carried
 item, since a complaint is rare and actionable where a carried icon is constant;
 undecided.
 
-### The backoff ladder reorder is unexercised
-`todo.port.backoffladder` -- see also `arch.port.reporthandler`
-
-**TRIAGED 2026-08-30 -- PRIORITY 0.** A verification stub, not work. Watch one real arrival failure, confirm the counts climb and the intervals escalate, delete the entry.
-
-The fix is in and the patrol it caused is gone, but no arrival failure has
-happened SINCE -- the closing log has zero backoff lines. On the next genuine
-arrival failure, confirm the counts climb past 1 and the intervals escalate.
-If they do, delete this entry.
-
 ### The unit's invisibility is borrowed from the spinner sheet
 `todo.art.invisibleframe` -- see also `todo.art.panes`, `todo.unit.species`
 
@@ -10413,9 +10937,18 @@ and the stripe fills `row_180_11.png` / `_alt.png` are generated uniform
 fills, not designed art.
 
 ### The stall watchdog cannot tell "no progress" from "arrived, target moved"
-`todo.pathing.arrivedstall`
+`todo.pathing.arrivedstall` -- see also `todo.unit.progressdirection`
 
-**TRIAGED 2026-08-30 -- PRIORITY 2, AND A PREREQUISITE FOR `todo.pathing.movingtarget`.** Once targets move there will be genuine arrivals, stale-target arrivals and real stalls all producing the same log line. Separating them first is what makes the moving-target work measurable instead of guesswork.
+**DEFERRED 2026-09-03 -- NOT WORTH ACTING ON AT PRESENT.** The wasted dispatch
+it costs has not become a problem, and `todo.pathing.movingtarget` is itself
+deferred, so the prerequisite has nothing waiting behind it.
+
+**THIS IS ONE HALF OF A PROBLEM AND `todo.unit.progressdirection` IS THE OTHER.**
+Filed three days apart, both about the same watchdog, and until 2026-09-03
+neither referenced the other: this one says it cannot tell arrival from a
+stall, and that one says it counts motion rather than progress, which is how a
+unit sank 54 tiles and read as healthy. Anyone rebuilding the watchdog should
+read both, because fixing either alone leaves the measure wrong.
 
 MEASURED 2026-08-30, on the run that finally milked the cow:
 
@@ -10433,6 +10966,14 @@ real stall.
 
 ### Farm animals move and nothing re-resolves the target
 `todo.pathing.movingtarget` -- see also `todo.pathing.arrivedstall`, `todo.farming.animalsmove`
+
+**DEFERRED 2026-09-03 -- SHIPS AS IT IS, AND FINE-TUNED LATER IF IT IS EVER
+HIT.** The impact fell out on its own: terrestrial targets move far slower than
+the fish that made this urgent, so a stale `groundTarget` on a ground chassis
+costs very little. The fast case that motivated the entry belongs to the
+chassis that chase fish, and those already have string-pull. If a terrestrial
+case ever does bite, the paragraph below is still the design and the layering
+requirement in it still stands.
 
 **THE COW FIX IS THE PLAYER FIX, AND THAT IS THE POINT OF THIS PARAGRAPH.** The
 medic task targets a WOUNDED ALLY -- a player, a tenant, a crew member -- and
@@ -10649,7 +11190,7 @@ because a jump invalidates a lookahead measured around the old position.
 current one in a log. Added to the line every lure prints on spawn.
 
 ### The progress watchdog counts motion, not progress
-`todo.unit.progressdirection` -- see also `arch.locomotion.swimmode`, `arch.dispatch.leash`
+`todo.unit.progressdirection` -- see also `arch.locomotion.swimmode`, `arch.dispatch.leash`, `todo.pathing.arrivedstall`
 
 **FILED 2026-09-03, AND IT IS A GAP IN A GENERAL SAFETY NET RATHER THAN A
 SWIMMING BUG.** A unit that missed its exit jump fell back into deep water and
@@ -11387,4 +11928,58 @@ pattern obvious.
 reference to a `local` is indistinguishable from a reference to a legitimate
 global, which is the same blind spot `proc.tooling.paneheck` records for
 callback registration -- and a candidate for it to grow.
+
+
+### The handoff linter reads git, because the gap is not visible in the text
+`proc.tooling.gapcheck` -- see also `proc.tooling.session`, `arch.fuel.burn`
+
+**ADDED 2026-09-03, AFTER THE DOCUMENT LOST A WHOLE SUBSYSTEM.**
+
+**WHAT HAPPENED.** The fishing system was built across seven commits between
+2026-09-01 17:33 and 2026-09-02 01:11. The handoff was last written at 16:05 on
+2026-09-01 -- before any of them -- and the entry it filed that day,
+`todo.module.fishing`, calls fishing an investigation nobody has committed to.
+The next handoff write was 2026-09-02 16:32, by which point the session had
+moved to diving, and its STATUS recorded diving. Four more writes followed and
+each recorded the session in front of it. Nothing in checks 1 to 9 could see it:
+every entry was well formed, and the one that was wrong was wrong about the
+WORLD.
+
+**THE ROOT CAUSE IS THAT STATUS IS DESTRUCTIVE BY DESIGN.** It is rewritten
+wholesale and never appended to, which is correct -- it is the one section that
+must not accumulate. The cost is that it is also the only place a
+finished-but-unwritten system would have been mentioned, so a rewrite takes that
+mention with it. `todo.locomotion.sinker` failed the same way in the other
+direction: it was authored FOUR HOURS AFTER the chassis it asks for was
+committed, from the session's memory of where things stood rather than from the
+tree.
+
+**THE OBVIOUS CHECK WAS MEASURED AND REJECTED.** "Flag files that changed since
+the handoff was written and that no entry mentions" sounds right and is not: the
+document names 37 of 128 source files, because it describes SYSTEMS and not
+files. That check fires on 91 things on its first run, and `proc.tooling.paneheck`
+already records what happens to a check that gets cleared rather than read.
+
+**SO IT MEASURES THE GAP INSTEAD.** `git log <last commit that touched the
+handoff>..HEAD` needs no vocabulary and cannot drift. It PRINTS on every run,
+and becomes a FINDING only when the working copy's STATUS heading differs from
+the committed one -- a rewrite in progress, which is the exact moment the
+previous STATUS is destroyed. Check 11 closes the escape hatch by flagging a
+STATUS body that changed under an unchanged heading, which is either the
+wholesale-rewrite rule being broken or a rewrite check 10 cannot see.
+
+**TESTED AGAINST THE REAL EVENT.** A worktree at `4cfe870` with the handoff
+replaced by the version `c94c55e` was about to commit reports 11 commits since
+`bf8f266` and names `fishing ix part 1`, `fishing ix part 2` and
+`fishing kinda sorta working now` among them.
+
+**WORK COMMITTED IN THE SAME COMMIT AS THE HANDOFF IS INVISIBLE, BY DESIGN** --
+it is being written up as it lands. Both checks degrade to SILENCE, never to an
+error, if git cannot answer, so the linter still runs on a loose copy.
+
+**IT DOES NOT COVER FORWARD REFERENCES FROM CODE.** Twice on 2026-09-03 a tag
+was cited in a `.lua` comment before the entry existed -- `arch.fuel.burn` and
+friends, written into the build and only filed afterwards. Check 9 catches that
+inside the document and nothing catches it outside. WRITE THE ENTRY OR DO NOT
+CITE THE TAG.
 

@@ -55,6 +55,15 @@
 	//  petports_no_upcycling KEEPS IT OUT OF THE CONVERTER. Without it a module
 	//  is just another surplus item to a unit hauling to an upcycler, and the
 	//  first thing a player would notice is their modules turning into treats.
+	//  ONE LAMP PER UNIT. The three lamps are alternatives, not a stack: a
+	//  unit carrying two would emit two lights and the player would have
+	//  wasted a slot to do it.
+	//
+	//  A FAMILY, NOT A UNIQUENESS FLAG -- see petports_modules.lua for why
+	//  those are different. Absent means "in no family" and there is nothing
+	//  to forget.
+	"mutualExclusivityCategories" : [ "light" ],
+
 	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],
 
 	"maxStack" : 1,

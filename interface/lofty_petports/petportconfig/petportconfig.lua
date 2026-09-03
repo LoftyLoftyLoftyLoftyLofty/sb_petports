@@ -34,12 +34,37 @@ require "/scripts/lofty_petports/petports_strings.lua"
 --  object the port applies to the payload -- see the file's own header.
 require "/scripts/lofty_petports/petports_modules.lua"
 
+--  THE FLAVOR MANIFEST, FOR THE TREAT ROWS IN THE STATS TAB. The upcycler pane
+--  already loads this from the same place; the stats block needs it to know
+--  which flavors to show at zero.
+require "/scripts/lofty_petports/petports_flavors.lua"
+
+--  A FLAVOR ID AS A WORD A PLAYER READS. The manifest carries a label per
+--  flavor -- "savory" is "Savory" -- and that is the wording the upcycler
+--  already shows, so the two panes cannot disagree about what a flavor is
+--  called.
+--
+--  THE FALLBACK IS NOT DEAD CODE. "plain" is not in the manifest at all: an
+--  unflavored treat is what the upcycler makes with an empty reagent slot, so
+--  it has no entry and no label. Anything a modlist removed after a unit ate
+--  some lands here too.
+local function flavorLabel(id)
+	if type(id) ~= "string" or id == "" then return nil end
+
+	local flavor = petports_flavor(id)
+	if type(flavor) == "table" and type(flavor.label) == "string" then
+		return flavor.label
+	end
+
+	return id:sub(1, 1):upper() .. id:sub(2)
+end
+
 local DEBUG = true
 
 --  Bump on every change to this file. A pane has no visible version and a stale
 --  copy is indistinguishable from an unfixed one -- which cost a cycle on the
 --  upcycler before the stamp existed.
-local PANE_BUILD_STAMP = "2026-09-03p the name field lets go too"
+local PANE_BUILD_STAMP = "2026-09-03u a family clash refuses too"
 
 local PANE_STATE_KEY = "petports_paneState"
 
@@ -1716,6 +1741,56 @@ local function paintStats(stats)
 	end
 
 	addSeparator()
+	addLine(petports_format("petport.stats.fed", groupDigits(stats.fed)))
+
+	--  ONE ROW PER FLAVOR, ALWAYS, INCLUDING AT ZERO -- the fishing block above
+	--  and its reasoning apply here unchanged.
+	--
+	--  BUT THE BASELINE COMES FROM THE MANIFEST, NOT FROM A LIST IN THIS FILE,
+	--  AND THAT IS THE ONE PLACE THIS IMPROVES ON THE FISH ROWS. FISH_RARITIES is
+	--  hardcoded because the tiers are not ours -- they belong to whichever
+	--  rarities table a fishing zone declares, so the pane has to guess a
+	--  baseline. Flavors ARE ours: petports_flavors() is the manifest the
+	--  upcycler already produces from, so a modlist that adds or removes one gets
+	--  the right rows with no edit here.
+	--
+	--  PLAIN IS LISTED SEPARATELY BECAUSE IT IS NOT IN THE MANIFEST. An
+	--  unflavored treat is what the upcycler makes with an empty reagent slot,
+	--  and it is the one every player will have the most of -- a stats block that
+	--  omitted it would be missing its biggest row.
+	local flavors = stats.fedFlavors or {}
+	local drawn = {}
+
+	local order = { "plain" }
+	for _, flavor in ipairs(petports_flavors()) do
+		if flavor.id ~= nil and flavor.id ~= "plain" then
+			table.insert(order, flavor.id)
+		end
+	end
+
+	for _, flavor in ipairs(order) do
+		drawn[flavor] = true
+		addLine(petports_format("petport.stats.fedflavor",
+			flavorLabel(flavor),
+			groupDigits(flavors[flavor] or 0)))
+	end
+
+	--  ANYTHING COUNTED BUT NOT IN THE MANIFEST STILL GETS A ROW. A flavor
+	--  removed from a modlist after a unit ate some of it would otherwise take
+	--  its history off the board silently.
+	local orphans = {}
+	for flavor, count in pairs(flavors) do
+		if not drawn[flavor] then table.insert(orphans, flavor) end
+	end
+	table.sort(orphans)
+
+	for _, flavor in ipairs(orphans) do
+		addLine(petports_format("petport.stats.fedflavor",
+			flavorLabel(flavor),
+			groupDigits(flavors[flavor])))
+	end
+
+	addSeparator()
 	addLine(petports_format("petport.stats.traveled", groupDigits(stats.traveled)))
 	addLine(petports_format("petport.stats.headpats", groupDigits(stats.headpats)))
 
@@ -1950,7 +2025,7 @@ local function refresh(force)
 	paintDiagnostics(state.diagnostics)
 
 	paintModules(state)
-	widget.setText("detailsFlavorValue", state.flavor or "--")
+	widget.setText("detailsFlavorValue", flavorLabel(state.flavor) or "--")
 	widget.setText("detailsSerial", state.serial and ("Serial " .. state.serial) or "")
 
 	paintStats(state.stats)
@@ -2111,10 +2186,19 @@ function moduleSlotClicked(widgetName)
 	--
 	--  A SWAP THAT EMPTIES A SLOT PASSES TRIVIALLY, since removing an item
 	--  cannot create a pair. No special case is needed for it.
-	local duplicate = petports_moduleSetDuplicate(moduleRecords(index, cursor))
+	local duplicate, family = petports_moduleSetDuplicate(moduleRecords(index, cursor))
 
 	if duplicate ~= nil then
-		dbg("refusing module swap: %s is already socketed", tostring(duplicate))
+		--  THE PLAYER GETS THE SAME REFUSAL EITHER WAY -- the cursor keeps the
+		--  item and the slot does not change. Only the debug line distinguishes a
+		--  repeat from a family clash.
+		if family ~= nil then
+			dbg("refusing module swap: %s conflicts with the %s already socketed",
+				tostring(duplicate), tostring(family))
+		else
+			dbg("refusing module swap: %s is already socketed", tostring(duplicate))
+		end
+
 		paneSound("refuse")
 		return
 	end
@@ -2184,14 +2268,72 @@ function moduleSlotClicked(widgetName)
 	--  right thing: it repaints when, and only when, the port's state changes.
 end
 
+local pendingFeed = nil
+
+--  ONE TREAT, AND THE PORT TAKES IT OR DOES NOT. The slot is a drop zone rather
+--  than storage: nothing is ever held here, so nothing here needs serialising.
+--
+--  THE CURSOR IS DEBITED ON THE ANSWER, NOT ON THE CLICK, and that is the whole
+--  reason this is a promise instead of a tell. `tell` discards what
+--  world.sendEntityMessage returns, so an optimistic debit would destroy a treat
+--  every time the unit was full, despawned, or handed something that was not a
+--  treat at all -- and a debit that never happens feeds one treat forever.
+--
+--  ONE PER CLICK, NOT THE STACK. A cursor holding forty treats feeds one and
+--  keeps thirty-nine, which is what an itemslot drop zone should do.
+--
+--  Mirrors pollTake below, including its ordering hazard in reverse: here the
+--  PORT commits first and the debit follows, so a promise that never answers
+--  leaves the player holding a treat the unit already ate. That is the safe
+--  direction of the two.
 function feedSlotClicked()
+	if pendingFeed ~= nil then return end
+
 	local cursor = player.swapSlotItem()
 	if cursor == nil then return end
 
-	--  ONE TREAT, AND THE PORT TAKES IT OR DOES NOT. The slot is a drop zone
-	--  rather than storage: nothing is ever held here, so nothing here needs
-	--  serialising.
-	tell("petports_feedUnit", { item = cursor })
+	local id = portId()
+	if id == nil then return end
+
+	pendingFeed = world.sendEntityMessage(id, "petports_feedUnit",
+		{ item = { name = cursor.name, count = 1, parameters = cursor.parameters } })
+end
+
+local function pollFeed()
+	if pendingFeed == nil then return end
+	if not pendingFeed:finished() then return end
+
+	local promise = pendingFeed
+	pendingFeed = nil
+
+	if not promise:succeeded() or promise:result() ~= true then
+		--  ONE SOUND FOR EVERY REFUSAL, and the reasons are deliberately not
+		--  distinguished: not a treat, a full unit and a despawned unit all mean
+		--  "the thing you just tried did not happen", which is exactly what the
+		--  refusal sound says. Telling them apart would need a reason string over
+		--  the wire for a distinction the player does not act on differently.
+		paneSound("refuse")
+		dbg("feed refused -- treat not taken")
+		return
+	end
+
+	--  RE-READ THE CURSOR RATHER THAN TRUSTING THE ONE FROM THE CLICK. A player
+	--  can move their cursor while the message is in flight, and debiting a
+	--  remembered stack would take an item they are no longer holding.
+	local cursor = player.swapSlotItem()
+	if type(cursor) ~= "table" or cursor.name == nil then return end
+
+	local count = (tonumber(cursor.count) or 1) - 1
+
+	if count <= 0 then
+		player.setSwapSlotItem(nil)
+	else
+		player.setSwapSlotItem({ name = cursor.name, count = count,
+			parameters = cursor.parameters })
+	end
+
+	paneSound("swap")
+	dbg("fed one %s", tostring(cursor.name))
 	refresh(true)
 end
 
@@ -3003,6 +3145,7 @@ end
 
 function update(dt)
 	pollTake()
+	pollFeed()
 	refresh(false)
 
 	--  OUTSIDE THE SIGNATURE GATE, like the two below, and for the same kind of

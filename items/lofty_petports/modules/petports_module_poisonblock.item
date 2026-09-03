@@ -46,7 +46,7 @@
 
 {
 	"itemName" : "petports_module_poisonblock",
-	"price" : 400,
+	"price" : 500,
 	"rarity" : "Uncommon",
 
 	//  Shared with the lamp module, so the categories.config.patch label and the

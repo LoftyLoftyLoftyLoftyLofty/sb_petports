@@ -36,7 +36,13 @@
 --  answers the same as one crafted after.
 local DEFAULTS =
 {
-	enabled = true
+	enabled = true,
+
+	--  ABSENT MEANS A CONTAINER PETS MAY EAT FROM, so every beacon placed before
+	--  this existed feeds pets rather than silently refusing to. Being the
+	--  DEFAULT is what makes that true: a true here is cleared rather than
+	--  stored, so on is indistinguishable from never having been set.
+	feeder = true
 }
 
 --  Everything the pane can read or write, and nothing else. A parameter not
@@ -54,6 +60,15 @@ local FIELDS =
 	--  compare equal to one anyway, so it is always written rather than
 	--  compared away.
 	filter = "petports_beaconFilter",
+
+	--  PETS MAY EAT FROM THIS CONTAINER. dd.fuel.selffeed.
+	--
+	--  THE CHECKBOX SHIPPED WITHOUT THIS LINE AND DID NOTHING FOR IT.
+	--  feederToggled set the pane state and called write(), the handler logged
+	--  the write as accepted, and the loop over FIELDS dropped the one field
+	--  that was not in it. The toggle held while the pane was open and
+	--  evaporated on close.
+	feeder = "petports_beaconFeeder",
 
 	--  RESTOCK BEACON ONLY -- and this table is deliberately the UNION of every
 	--  beacon type's fields rather than one table per type.

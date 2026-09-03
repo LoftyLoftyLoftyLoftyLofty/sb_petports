@@ -1,0 +1,51 @@
+//  PETPORTS -- FUEL EFFICIENCY MODULE I
+//
+//  MORE WORK PER TREAT, NOT A BIGGER TANK. The capacity is fixed at 900 on the
+//  chassis; this multiplies petports_fuelDrain, so a unit wearing one gets
+//  17 minutes from a full tank INSTEAD OF FIFTEEN and -- the part that
+//  matters -- a 60-fuel plain treat buys more than 60 seconds of work.
+//
+//  THE +120-SECOND BONUS IS NOT WRITTEN HERE. FUEL_EFFICIENCY_BONUS in
+//  petports_petport.lua owns it, the same split arch.module.hydrator uses: the
+//  item says WHICH capability, the port owns the numbers. Retuning the tiers is
+//  one table in one file and no item edits.
+//
+//  THE FLAG IS THE WHOLE MECHANISM. petportFuelScale reads it out of the flag
+//  union and sends the multiplier with the module push; the unit multiplies its
+//  chassis rate by what arrives and looks nothing up.
+//
+//  ONE TIER PER UNIT. All three share the "fuelEfficiency" category, so the slot
+//  refuses a second the way the three lamps refuse each other. petportFuelScale
+//  still takes the BEST rather than summing, because a rule that leans on
+//  another rule holding is one refactor from being wrong.
+//
+//  THE ART DOES NOT EXIST YET and this points at the plain lamp's icon so the
+//  item loads and can be tested. Replace the inventoryIcon when it is drawn.
+//
+//  MAXSTACK 1 -- see the plain lamp module. player.swapSlotItem() returns the
+//  WHOLE cursor stack and the pane refuses a stack rather than trusting this.
+
+{
+	"itemName" : "petports_module_fuelefficiency1",
+	"price" : 250,
+
+	"rarity" : "Common",
+
+	"category" : "petports_module",
+
+	"inventoryIcon" : "petports_module_fuelefficiency1.png",
+
+	"description" : "A tuned regulator. A unit burns its reserve more slowly, so every treat goes further.",
+	"shortdescription" : "Fuel Efficiency I",
+
+	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],
+
+	"maxStack" : 1,
+
+	//  ONE TIER PER UNIT -- see the header.
+	"mutualExclusivityCategories" : [ "fuelEfficiency" ],
+
+	//  NO petports_moduleEffects. This grants no status effect: the whole of its
+	//  behaviour is the port reading the flag below and scaling the burn.
+	"petports_moduleFlags" : [ "fuelefficiency1" ]
+}

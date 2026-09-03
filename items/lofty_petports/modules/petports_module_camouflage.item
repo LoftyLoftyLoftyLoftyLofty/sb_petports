@@ -34,8 +34,8 @@
 
 {
 	"itemName" : "petports_module_camouflage",
-	"price" : 350,
-	"rarity" : "Uncommon",
+	"price" : 2500,
+	"rarity" : "Legendary",
 
 	//  Shared with the other modules, so the categories.config.patch label and
 	//  the petports_filtergroups.config subgroup that already exist cover this

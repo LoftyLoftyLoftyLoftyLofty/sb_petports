@@ -39,8 +39,8 @@
 
 {
 	"itemName" : "petports_module_oblivious",
-	"price" : 250,
-	"rarity" : "Common",
+	"price" : 500,
+	"rarity" : "Uncommon",
 
 	//  Shared with the other modules, so the categories.config.patch label and
 	//  the petports_filtergroups.config subgroup that already exist cover this

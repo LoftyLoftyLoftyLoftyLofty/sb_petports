@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-09-03c the unit holds a lamp colour"
+local CONTRACT_BUILD_STAMP = "2026-09-03o the port hands over a burn rate"
 
 local contractStamped = false
 
@@ -367,11 +367,22 @@ function petports_setLightColor(r, g, b)
   return true
 end
 
-function petports_setModuleEffects(effects, category, liquids, flags, baseTeam)
+function petports_setModuleEffects(effects, category, liquids, flags, baseTeam,
+                                   fuelScale)
   category = category or "petports_modules"
   effects = effects or {}
 
   petports_applyModuleFlags(flags or {}, baseTeam)
+
+  --  THE PORT DECIDED THIS, THE UNIT ONLY MULTIPLIES BY IT. The chassis rate
+  --  is this side's -- petports_fuelDrain, per monstertype -- and the module
+  --  bonus is the port's. Neither knows the other's number and neither needs
+  --  to. See burnFuel in petportsTaskAction.lua, which reads this off self.
+  --
+  --  A MISSING SCALE IS 1.0, NOT 0. An older port, or any push predating this
+  --  argument, must leave the unit burning at its chassis rate; a nil treated
+  --  as zero would make every such unit run forever on one tank.
+  self.petportsFuelScale = tonumber(fuelScale) or 1.0
 
   --  petportsAvoidLiquids is the SET this unit refuses.
   --  petportsLiquidVerdict is the memo of per-id answers derived from it, and it
@@ -4685,4 +4696,135 @@ function interact()
 
   --  nil: no interact action, same as vanilla's fall-through.
   return nil
+end
+
+--  EATING. ONE TREAT, ONE CALL, AND THE UNIT DECIDES WHAT IT IS WORTH.
+--
+--  arch.fuel.eat. The port forwards a descriptor and nothing else. Preference
+--  is resolved HERE because this is the only place that natively holds both
+--  halves of the question -- monster.seed() and the chassis's own
+--  petports_fuelFlavors -- so no version of it has to travel over the wire and
+--  no second copy can disagree with this one.
+--
+--  A WRONG FLAVOR IS EXACTLY AS GOOD AS NO FLAVOR, NEVER WORSE. dd.fuel.flavor
+--  is explicit that there must be no way to feed a unit something bad for it:
+--  a player who ignores reagents loses a bonus and is never punished, and one
+--  who flavors the wrong thing has wasted a reagent rather than ruined a batch.
+PETPORTS_FUEL_PLAIN     = 60
+PETPORTS_FUEL_PREFERRED = 120
+
+--  THE LATCH. Derived from the seed, so it is stable without being stored --
+--  but stored anyway, because the derivation runs over the ELIGIBLE list and
+--  that list can change under a unit. Re-rolled only when the latched flavor
+--  stops being eligible, which is the difference between "a modlist change
+--  moved my unit's favourite" and "a modlist change moved EVERY unit's
+--  favourite".
+function petports_unitFlavor()
+  local eligible = config.getParameter("petports_fuelFlavors", nil)
+
+  if storage.petportsFlavor ~= nil
+     and petports_flavorEligible(storage.petportsFlavor, eligible) then
+    return storage.petportsFlavor
+  end
+
+  storage.petportsFlavor = petports_preferredFlavor(monster.seed(), eligible)
+
+  sb.logInfo("UNIT rolled preferred flavor %s from seed %s",
+    tostring(storage.petportsFlavor), tostring(monster.seed()))
+
+  return storage.petportsFlavor
+end
+
+--  RETURNS ONE TABLE, OR nil. `{ amount = n, flavor = id }` on a treat eaten,
+--  nil when nothing was taken and the player keeps it -- a slot that swallows a
+--  treat and does nothing reads as a broken machine.
+--
+--  ONE TABLE BECAUSE callScriptedEntity DOES NOT CARRY A SECOND RETURN VALUE.
+--  This returned `amount, flavor` for one build and the port saw the amount
+--  and never the flavor: totals counted, every per-flavor row stayed at zero.
+--  Nothing else in the mod had ever asked for two -- every other call site
+--  binds `ok, oneValue` -- so there was no working example to have copied and
+--  the assumption went in untested. DO NOT GO BACK TO MULTIPLE RETURNS.
+--
+--  THE SECOND RETURN IS THE TREAT'S FLAVOR, NOT THE UNIT'S PREFERENCE. The port
+--  counts what was actually eaten, so a unit that prefers savory and eats sour
+--  must increment sour. Carried back from here rather than re-derived on the
+--  port for the same reason the amount is: this is the side holding the item
+--  and the tag test that decided it.
+--
+--  A PARTIAL SWALLOW IS A FULL TREAT WHEN A PLAYER CHOSE IT, AND A REFUSAL WHEN
+--  NOBODY DID. `sparing` is what tells the two apart.
+--
+--  Manual: a unit at 880 of 900 eats a plain treat, gains 20, and the treat is
+--  gone. Refusing would mean a nearly-full unit cannot be topped up before a
+--  long job, and with a refusal sound wired the player reads that as a broken
+--  slot rather than as thrift.
+--
+--  Automatic: dd.fuel.autoeat says the opposite, and MEASURED IN GAME on
+--  2026-09-03 the automatic path did the manual thing. A meal from 217.98 took
+--  five clean 120s and then a sixth treat that delivered 82.02 -- 37.98 of a
+--  treat the player farmed, burned by a unit nobody was watching, on every
+--  meal.
+--
+--  THE TEST LIVES HERE BECAUSE THIS IS THE ONLY SIDE WITH A LIVE NUMBER. The
+--  port mirrors fuel on the anchor tick, which is stale after the first bite
+--  of a loop that eats six.
+function petports_feedFuel(descriptor, sparing)
+  if type(descriptor) ~= "table" or type(descriptor.name) ~= "string" then
+    return nil
+  end
+
+  if not root.itemHasTag(descriptor.name, "petports_fuel") then return nil end
+
+  local maximum = status.resourceMax("petports_fuel")
+  local current = status.resource("petports_fuel")
+  if maximum == nil or current == nil or current >= maximum then return nil end
+
+  --  THE FLAVOR TAG IS THE ITEM'S, THE PREFERENCE IS THE UNIT'S. Matching on
+  --  the tag rather than the item name is what lets a rarity tier or a third
+  --  party's treat count as the same flavor without being listed anywhere.
+  local preferred = petports_unitFlavor()
+  local amount    = PETPORTS_FUEL_PLAIN
+  local eaten     = nil
+
+  --  ONE WALK OF THE MANIFEST ANSWERS BOTH QUESTIONS. What flavor is this, and
+  --  is it the one this unit likes. Plain treats carry petports_flavor_plain
+  --  and land here as "plain", which is a real answer rather than a nil -- the
+  --  stats row for unflavored treats is a row a player should see.
+  for _, flavor in ipairs(petports_flavors()) do
+    if root.itemHasTag(descriptor.name, "petports_flavor_" .. flavor.id) then
+      eaten = flavor.id
+      break
+    end
+  end
+
+  if eaten == nil and root.itemHasTag(descriptor.name, "petports_flavor_plain") then
+    eaten = "plain"
+  end
+
+  if preferred ~= nil and eaten == preferred then
+    amount = PETPORTS_FUEL_PREFERRED
+  end
+
+  --  SPARING REFUSES RATHER THAN OVERFILLS, and refusing is what ends the
+  --  port's meal loop -- so this is also the stop signal for a unit that is
+  --  full enough, not just a rule about waste.
+  if sparing == true and amount > (maximum - current) then
+    return nil
+  end
+
+  status.modifyResource("petports_fuel", amount)
+
+  --  KEEP THE MIRROR HONEST IMMEDIATELY. The port only resamples on its anchor
+  --  tick, and a player who feeds a unit and sees no bar movement for a second
+  --  will feed it again.
+  if storage.petResources ~= nil then
+    storage.petResources.petports_fuel = status.resource("petports_fuel")
+  end
+
+  sb.logInfo("UNIT ate %s (%s) for %s fuel (prefers %s), now %s",
+    tostring(descriptor.name), tostring(eaten), tostring(amount),
+    tostring(preferred), tostring(status.resource("petports_fuel")))
+
+  return { amount = amount, flavor = eaten }
 end

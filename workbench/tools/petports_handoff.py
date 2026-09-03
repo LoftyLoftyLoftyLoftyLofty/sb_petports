@@ -30,6 +30,8 @@ Checks:
   7  No `arch` entry declares itself unbuilt.
   8  Every `plan` entry carries a date.
   9  Every tag cited in a BODY resolves too, not just in `see also`.
+ 10  A STATUS rewrite accounts for the commits that landed since the last one.
+ 11  STATUS is not edited in place without its heading changing.
 
 CHECKS 7 TO 9 EXIST BECAUSE 1 TO 6 CHECK SHAPE AND NOT TRUTH. On 2026-08-31 a
 fully well-formed entry describing a family of "filter beacons" was found in
@@ -67,6 +69,56 @@ section reserved for what IS built, and that is greppable.
      two-direction grep matches strings and not markup, so nothing is lost by
      dropping them and a false reference is gained by keeping them.
 
+CHECKS 10 AND 11 EXIST BECAUSE STATUS IS DESTRUCTIVE BY DESIGN. It is rewritten
+wholesale every session and never appended to, which is right -- it is the one
+section that must not accumulate. The cost is that it is also the only place a
+finished-but-unwritten system would have been mentioned, so a rewrite silently
+takes that mention with it.
+
+On 2026-09-01 the fishing system was built across seven commits between 17:33
+and 01:11 the next day. The handoff was last written at 16:05, before any of
+them, and the entry it filed -- `todo.module.fishing` -- calls fishing an
+investigation that has not been committed to. The next handoff write was
+2026-09-02 16:32, by which point the session had moved to diving, and its STATUS
+recorded diving. Four more writes followed and each recorded the session in
+front of it. The document has no architecture entry for fishing at all, while
+the tree has a merged spawner, a lure projectile, a module item, and fishing
+named on 246 lines across the task action, the port and its pane. Nothing in
+checks 1 to 9 could see it: the entries that exist are all
+well formed, and the one that is wrong is wrong about the world.
+
+THE OBVIOUS CHECK WAS MEASURED AND REJECTED. "Flag files that changed since the
+handoff was last written and that no entry mentions" sounds right and is not:
+the document names 37 of 128 source files, because it describes systems and not
+files. That check fires on 91 things on its first run, and check 8 already says
+what happens to a check that has to be cleared rather than read.
+
+ 10  is therefore about the GAP and not about coverage. `git log
+     <last commit that touched this file>..HEAD` is the list of work that has
+     landed since the document was last written, needs no vocabulary and cannot
+     drift. It is PRINTED on every run, which is worth having on its own, and it
+     becomes a FINDING only when the STATUS heading differs from the committed
+     one -- that is a rewrite in progress, and it is the exact moment the
+     previous STATUS is destroyed. Quiet on an ordinary edit, loud at the one
+     event that ate fishing.
+
+     WORK COMMITTED IN THE SAME COMMIT AS THE HANDOFF IS INVISIBLE HERE, and
+     that is correct rather than a hole -- it is being written up as it lands,
+     which is the behaviour the check wants.
+
+ 11  closes 10's escape hatch and enforces a rule the document already states.
+     STATUS says of itself that it is rewritten wholesale, never edited. A body
+     that changed under an unchanged heading is either that rule being broken,
+     or a rewrite that 10 cannot see. Both want looking at.
+
+     IT IS THE ONE CHECK HERE THAT WILL FIRE ON A TYPO FIX. If that turns out to
+     cost more than it catches, delete it -- 10 is the check that matters and it
+     does not depend on this one.
+
+BOTH DEGRADE TO SILENCE, never to an error, if git cannot answer: not a
+repository, file not tracked, no git on the path. The linter has to keep working
+on a loose copy of the document.
+
 Also prints a census, which doubles as a progress readout while the v1
 document is being carved up: entries per category, and per topic.
 
@@ -74,7 +126,9 @@ Usage:  petports_handoff.py PETPORTS_HANDOFF.md [--quiet]
 Exit 1 on any finding.
 """
 
+import os
 import re
+import subprocess
 import sys
 from collections import Counter, defaultdict
 
@@ -95,7 +149,7 @@ CATEGORIES = {
 TOPICS = {
 	'port', 'unit', 'locomotion', 'pathing', 'dispatch',
 	'network', 'vent', 'cargo', 'filter', 'beacon',
-	'farming', 'upcycler', 'fuel', 'module', 'pane',
+	'farming', 'fishing', 'upcycler', 'fuel', 'module', 'pane',
 	'item', 'art', 'tooling',
 }
 
@@ -250,6 +304,94 @@ def check(entries, findings):
 	return findings
 
 
+#  CR IS STRIPPED FROM EVERYTHING GIT HANDS BACK, and that is load-bearing.
+#  The working copy of the handoff is CRLF and `git show` returns what was
+#  committed, which is LF. Comparing the two without this finds a difference on
+#  every line of the file and reports a rewrite on every run.
+def git_run(repo, *args):
+	try:
+		p = subprocess.run(('git', '-C', repo) + args,
+		                   capture_output=True, text=True, timeout=10)
+	except (OSError, subprocess.SubprocessError):
+		return None
+
+	if p.returncode != 0:
+		return None
+
+	return p.stdout.replace('\r', '')
+
+
+#  The STATUS section holds exactly one entry, so its heading and body can be
+#  pulled from a whole document without parsing the rest of it -- which matters,
+#  because this has to run over the COMMITTED text as well as the working copy.
+def status_entry(text):
+	heading, body, section = None, [], None
+
+	for line in text.split('\n'):
+		if line.startswith('## '):
+			if heading is not None:
+				break
+			section = line[3:].strip()
+		elif section == 'STATUS':
+			if line.startswith('### '):
+				if heading is not None:
+					break
+				heading = line[4:].strip()
+			elif heading is not None:
+				body.append(line)
+
+	return heading, '\n'.join(body).strip()
+
+
+def gap(path, findings, quiet):
+	full = os.path.abspath(path)
+
+	repo = git_run(os.path.dirname(full) or '.', 'rev-parse', '--show-toplevel')
+	if not repo or not repo.strip():
+		return
+
+	repo = repo.strip()
+	rel = os.path.relpath(full, repo).replace(os.sep, '/')
+
+	last = git_run(repo, 'log', '-1', '--format=%H', '--', rel)
+	if not last or not last.strip():
+		return
+
+	last = last.strip()
+	was = git_run(repo, 'show', f'{last}:{rel}')
+	if was is None:
+		return
+
+	log = git_run(repo, 'log', '--format=%h  %ad  %s',
+	              '--date=format:%Y-%m-%d %H:%M', f'{last}..HEAD')
+	commits = [c for c in (log or '').split('\n') if c.strip()]
+
+	old_head, old_body = status_entry(was)
+	new_head, new_body = status_entry(open(path, encoding='utf-8').read())
+
+	if commits and not quiet:
+		print(f"\n  {len(commits)} commit(s) since this file was last "
+		      f"committed, at {last[:7]}")
+		for c in commits:
+			print(f"    {c}")
+
+	#  CHECK 10. A rewrite is in progress and there is work behind it that the
+	#  outgoing STATUS was the last thing mentioning.
+	if commits and old_head and new_head and old_head != new_head:
+		findings.append(f"UNFILED WORK  status -- STATUS is being rewritten, "
+		                f"and {len(commits)} commit(s) have landed since this "
+		                f"file was last committed ({last[:7]}). File them or "
+		                f"say why not; the rewrite is the last chance to")
+
+	#  CHECK 11. See the docstring -- this is the one to delete first if it
+	#  costs more than it catches.
+	if old_head and new_head and old_head == new_head and old_body != new_body:
+		findings.append(f"EDITED STATUS status -- the STATUS body changed and "
+		                f"its heading did not. STATUS is rewritten wholesale, "
+		                f"never edited; if this IS a rewrite the heading has to "
+		                f"say so, because check 10 reads the heading")
+
+
 def census(entries):
 	print(f"\n{len(entries)} tagged entries\n")
 
@@ -292,6 +434,8 @@ def main():
 
 	if not quiet:
 		census(entries)
+
+	gap(args[0], findings, quiet)
 
 	if not findings:
 		print("\nhandoff lint: clean")

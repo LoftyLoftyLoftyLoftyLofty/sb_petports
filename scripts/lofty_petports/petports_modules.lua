@@ -44,10 +44,51 @@
 --  check's in the pane; both already refuse. This answers exactly one thing, so
 --  that a caller reading `nil` learns "no duplicates" and not "no duplicates,
 --  probably, unless the payload was malformed in some other way".
+--  MUTUAL EXCLUSIVITY, ON TOP OF THE SAME-ITEM RULE ABOVE.
+--
+--  An item may declare mutualExclusivityCategories, a list of names. Two
+--  modules sharing any name cannot be socketed together: the three lamps all
+--  say "light", the three efficiency tiers all say "fuelEfficiency".
+--
+--  THIS DOES NOT CONTRADICT THE HEADER'S REJECTION OF A UNIQUENESS FLAG. That
+--  argument was that a module wanting to be unique and not SAYING so would
+--  behave differently from one that did, for no reason a player could see --
+--  true, because uniqueness is a property every module either has or has not.
+--  A CATEGORY IS NOT LIKE THAT: a module is in a family or it is in none, and
+--  absent genuinely means "in none". There is nothing to forget.
+--
+--  READ WITH root.itemConfig, NOT FROM A TABLE IN THIS FILE, so a third party
+--  can put a module in the light family without being listed anywhere -- and
+--  so the pane and the port ask the same question of the same asset, which is
+--  the property the whole file exists for.
+local function exclusivityOf(name)
+	if type(name) ~= "string" or name == "" then return nil end
+
+	local ok, config = pcall(root.itemConfig, name)
+	if not ok or type(config) ~= "table" or type(config.config) ~= "table" then
+		return nil
+	end
+
+	local categories = config.config.mutualExclusivityCategories
+	if type(categories) ~= "table" then return nil end
+
+	return categories
+end
+
+--  RETURNS THE OFFENDING ITEM NAME, or nil when the set is legal.
+--
+--  ONE FUNCTION AND ONE RETURN SHAPE, because the callers only ever ask "may
+--  this set exist" and say the same thing either way. A same-item clash and a
+--  same-category clash are both "you cannot have both of these".
+--
+--  THE SECOND RETURN IS THE CATEGORY, and it is optional -- a caller that
+--  ignores it gets exactly the old behaviour, which is why neither call site
+--  had to change to keep working.
 function petports_moduleSetDuplicate(records)
 	if type(records) ~= "table" then return nil end
 
 	local seen = {}
+	local families = {}
 
 	for _, record in ipairs(records) do
 		local item = type(record) == "table" and record.item or nil
@@ -56,6 +97,20 @@ function petports_moduleSetDuplicate(records)
 		if type(name) == "string" and name ~= "" then
 			if seen[name] then return name end
 			seen[name] = true
+
+			for _, category in ipairs(exclusivityOf(name) or {}) do
+				if type(category) == "string" and category ~= "" then
+
+					--  A CLASH REPORTS THE ITEM BEING ADDED, not the one already
+					--  in place. The player is holding the new one and that is
+					--  what the message and the refusal sound are about.
+					if families[category] ~= nil then
+						return name, category
+					end
+
+					families[category] = name
+				end
+			end
 		end
 	end
 
