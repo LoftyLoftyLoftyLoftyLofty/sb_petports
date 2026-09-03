@@ -17,7 +17,7 @@
 		"petports_module_lamp" : {
 			"active" : true,
 			"position" : [ 0.0, 0.0 ],
-			"color" : [ 140, 140, 140 ],
+			"color" : [ 80, 80, 80 ],
 			"pointLight" : true
 		}
 	}

@@ -1,0 +1,45 @@
+//  PETPORTS -- HUE LAMP MODULE
+//
+//  THE THIRD LAMP, AND THE ONLY ONE WITH NO SETTINGS AT ALL. Its colour walks
+//  the wheel on a timer, so there is nothing for a player to configure and
+//  nothing for the port to store.
+//
+//  IT IS NOT AN UPGRADE OVER THE RGB LAMP AND SHOULD NOT BE PRICED AS ONE.
+//  That one can be any colour, including this one's colours, one at a time;
+//  this one cannot be made to hold still. A sidegrade, so it sits at the same
+//  rarity -- change the one word below if it should read as rarer.
+//
+//  NO petports_moduleFlags. The RGB lamp declares `rgblight` because it grants
+//  three settings rows and the pane keys them on that flag. This module grants
+//  no UI, so it needs no flag, no mirror field, no port handler and no push --
+//  which is the whole reason it was cheap to add.
+//
+//  THREE LAMPS CAN BE SOCKETED AT ONCE and that is three lights, which is a
+//  player spending three slots to make a unit brighter and confusing. They are
+//  separate items, so dd.module.oneofakind does not object -- that rule refuses
+//  two of the SAME item, which is the case where the second one does nothing.
+//
+//  MAXSTACK 1 IS A REQUIREMENT, NOT A PREFERENCE -- see the plain lamp module,
+//  which explains why at length.
+
+{
+	"itemName" : "petports_module_light_rainbow",
+	"price" : 1200,
+	"rarity" : "Rare",
+
+	"category" : "petports_module",
+
+	//  THE ART DOES NOT EXIST YET. Until this file is beside it, the item logs a
+	//  missing asset on load; copy another lamp's icon over as a placeholder if
+	//  you want to test before the real one is drawn.
+	"inventoryIcon" : "petports_module_light_rainbow.png",
+
+	"description" : "A lamp assembly with a drifting emitter. Socket it into a unit and it cycles through every colour it has.",
+	"shortdescription" : "Prismatic Lamp Module",
+
+	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],
+
+	"maxStack" : 1,
+
+	"petports_moduleEffects" : [ "petports_module_huelight" ]
+}

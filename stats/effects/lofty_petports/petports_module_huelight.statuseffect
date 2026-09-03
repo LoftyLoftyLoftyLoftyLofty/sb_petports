@@ -1,0 +1,63 @@
+//  PETPORTS -- HUE LAMP MODULE EFFECT
+//
+//  THE RGB LAMP'S EFFECT WITH THE COLOUR ON A CLOCK. Same shape: an
+//  animationConfig that declares the light, and a script that recolours it.
+//
+//  animationConfig IS WHAT GRANTS THE SCRIPT ITS animator, and that is not
+//  incidental -- a status effect only gains access to the animator table when
+//  this property is non-nil, so the light and the script that drives it have to
+//  arrive together or the script has nothing to talk to.
+//
+//  ---- THE KNOBS ----------------------------------------------------------
+//
+//  ALL THREE ARE READ ONCE AT init, so retuning the sweep is an edit here and a
+//  resocket, with no Lua touched.
+//
+//  huePeriod   SECONDS FOR A FULL TURN, AND ITS SIGN IS THE DIRECTION.
+//              NEGATIVE runs the wheel widdershins, which is the shipped
+//              default. A period rather than a rate because a period is a
+//              number a person can picture. Eight is slow enough to read as a
+//              colour rather than a strobe and fast enough to see move while
+//              standing still. Only ZERO is refused -- that is a division by
+//              zero, and it falls back to this default.
+//
+//  saturation  0 is white, 1 is the full wheel. Below about 0.6 the sweep reads
+//              as a shifting white rather than as colour, which is a legitimate
+//              thing to want from a lamp and a poor thing to get by accident.
+//
+//  intensity   BRIGHTNESS IN 0..255, AND THE ONLY BRIGHTNESS KNOB. This is a
+//              LIGHT, not a sprite, so dropping it dims the room rather than
+//              greying the unit. Stated in 0..255 because that is the unit the
+//              other two lamps already use -- the plain lamp is authored at 140
+//              and the RGB lamp defaults to it -- so the three are comparable
+//              at a glance. 80 is deliberately dimmer than both: a colour that
+//              moves draws the eye without having to be bright.
+//
+//  ---------------------------------------------------------------------------
+//
+//  scriptDelta 5 IS TWELVE UPDATES A SECOND, which against an eight second
+//  period is a step of roughly two levels per tick on a ramping channel. Smooth
+//  enough that the change reads as a fade. Lowering it costs work on every lit
+//  unit in the fleet for a smoothness nobody asked for.
+//
+//  APPLIED PERSISTENTLY AND NEVER BY DURATION. The port calls
+//  status.setPersistentEffects, which holds an effect for as long as it is in
+//  the set. defaultDuration is unread on that path and is stated at vanilla's
+//  lamp value so an effect applied some other way later behaves sanely.
+
+{
+	"name" : "petports_module_huelight",
+
+	"effectConfig" : {
+		"huePeriod" : -8,
+		"saturation" : 1.0,
+		"intensity" : 80
+	},
+
+	"defaultDuration" : 5,
+
+	"scripts" : [ "petports_module_huelight.lua" ],
+	"scriptDelta" : 5,
+
+	"animationConfig" : "petports_module_huelight.animation"
+}

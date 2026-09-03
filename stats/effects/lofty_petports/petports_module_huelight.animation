@@ -1,0 +1,42 @@
+//  PETPORTS -- HUE LAMP MODULE LIGHT
+//
+//  THE COLOUR HERE IS A STARTING VALUE AND NOTHING MORE. The script overwrites
+//  it on the first update, which is a twelfth of a second after the effect is
+//  applied, so this is only ever seen on the frame between.
+//
+//  DIM CYAN, BECAUSE THAT IS THE FIRST FRAME THE SCRIPT COMPUTES, AND NEITHER
+//  HALF OF THAT IS GUESSABLE.
+//
+//  CYAN: the script seeds hue 0, and wave(0) is 0 -- so RED is the channel
+//  switched off at hue 0. That is the source function's own phase convention,
+//  not a porting slip; verified against the original across the whole wheel.
+//  The sweep then runs backwards from there by default, blue, magenta, red,
+//  yellow, green and round, which is every hue in an order nobody has to like.
+//
+//  DIM: 80 rather than 255, because `intensity` in the .statuseffect scales
+//  every channel and 80 is what it ships at. THIS NUMBER TRACKS THAT ONE. Retune
+//  the intensity and this seed is stale -- worth one frame at a twelfth of a
+//  second, which is the whole exposure, so it is not worth a mechanism.
+//
+//  Seeding this to match the first computed frame is what keeps the handover
+//  invisible; seeding it grey like the other two lamps would put one frame of
+//  grey in front of every socket.
+//
+//  POSITION IS [0, 0] BECAUSE THAT IS THE BODY CENTRE, which is what lets the
+//  flip script the vanilla augment needs go away. Every unit chassis in this
+//  mod has its collisionPoly centred on the origin, so a centred light looks
+//  identical mirrored.
+//
+//  THE LIGHT'S NAME IS WHAT THE SCRIPT ADDRESSES. animator.setLightColor takes
+//  it, so it is spelled once here and once in the script and nowhere else.
+
+{
+	"lights" : {
+		"petports_module_huelamp" : {
+			"active" : true,
+			"position" : [ 0.0, 0.0 ],
+			"color" : [ 0, 80, 80 ],
+			"pointLight" : true
+		}
+	}
+}

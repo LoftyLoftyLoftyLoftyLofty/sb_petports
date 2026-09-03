@@ -118,10 +118,13 @@ not build on the callback -- was right for the wrong reason.
   thousand log lines in sixty-five seconds together. Turn them off before
   shipping.
 
-**NEXT.** Art, mostly -- the module icon, and the wider art pass the mod is
-otherwise waiting on. `todo.module.huecycle` is filed and nearly free now that
-the effect and the script exist, since it needs neither the pane rows nor the
-wire.
+**AND A THIRD LAMP LANDED THE SAME DAY.** `arch.module.huelight`. The Prismatic
+Lamp sweeps the hue wheel on a timer, tuned from `effectConfig`. Four files,
+nothing existing touched -- it is the floor of what a module costs, because it
+grants a capability rather than a setting.
+
+**NEXT.** Art, mostly -- two module icons and the wider art pass the mod is
+otherwise waiting on.
 
 ## ARCHITECTURE
 
@@ -3888,6 +3891,81 @@ one; two separate items, two separate effects, and a unit carrying both gets two
 lights. Both default to vanilla's [140,140,140], so an untouched RGB module is
 indistinguishable from the lamp it upgrades -- which makes "did the module work"
 answerable before any value is moved.
+
+### A third lamp, and how little a module can be
+`arch.module.huelight` -- see also `arch.module.rgblight`, `arch.module.effects`, `fact.unit.effectanimator`
+
+**BUILT 2026-09-03, THE SAME DAY AS THE RGB LAMP AND IN A FRACTION OF THE
+WORK.** Opened as todo.module.huecycle (retired). The Prismatic Lamp walks the
+hue wheel on a timer: four new files, nothing existing touched.
+
+**IT IS THE FLOOR OF WHAT A MODULE COSTS, AND THAT IS WHY IT IS WORTH AN ENTRY.**
+No pane rows, no `petData`, no mirror field, no port handler, no push, no flag.
+An item naming an effect, and an effect with a script and an animation. Every
+module that grants a pure capability can be this small; the RGB lamp is large
+because it grants a SETTING, and the difference between those two is the whole
+cost.
+
+**A THIRD LAMP RATHER THAN A MODE OF THE SECOND.** A mode would need a fourth
+settings row and a rule for what the three colour rows mean while it is on. As
+a separate item there is nothing to rule on -- and `dd.module.oneofakind` does
+not object to owning all three at once, because that rule refuses two of the
+SAME item, which is the case where the second one does nothing. Three lamps is
+three lights and three slots spent, which is a player's business.
+
+**IT IS A SIDEGRADE, NOT AN UPGRADE.** The RGB lamp can be any colour including
+all of this one's, one at a time; this one cannot be made to hold still. Same
+rarity for that reason.
+
+**EVERY KNOB IS IN `effectConfig`**, read once at init, so retuning is an asset
+edit and a resocket with no Lua touched -- `huePeriod`, `saturation`,
+`intensity`.
+
+**THE SIGN OF `huePeriod` IS THE DIRECTION, AND ONLY ZERO IS REFUSED.** It was
+guarded against negatives too, on the reasoning that a backwards sweep looked
+like a typo; it was wanted on the first day the module existed, and the shipped
+default is now negative. Nothing downstream needed changing -- a negative period
+makes the accumulator count down, and Lua's `%` returns a non-negative result
+for a positive divisor, so the wheel simply turns the other way.
+
+**BRIGHTNESS IS ONE KNOB IN 0..255, NOT TWO.** It was briefly both -- a `value`
+in 0..1 in the config and an intensity in 0..255 scaling the finished colour --
+which multiplied together and gave two ways to say one thing. 0..255 survived
+because it is the unit the other two lamps already state their colour in.
+
+**IT IS APPLIED BEFORE THE ROUNDING, NOT AFTER, AND THAT IS THE LOAD-BEARING
+HALF.** Scaling the finished colour undoes the rounding `hueColor` just did and
+hands `setLightColor` three floats -- 128 * 80/255 is 40.156 -- and what the
+engine does with a fractional channel is not something this mod has measured.
+Passing the intensity as `hueColor`'s own `val` is the same multiply one step
+earlier, and everything that leaves is an integer. Verified against the
+post-scaled version across 20,001 sample points: the two agree to within 0.65 of
+one channel level, which is the rounding itself.
+
+**THE COLOUR MATHS IS A TRIANGLE WAVE SAMPLED AT THREE OFFSETS**, ported from a
+supplied LSL routine rather than written fresh. No sector switch and no min/max
+search: the whole conversion is nine comparisons and no branch on which sixth of
+the wheel it is in. **DIFFED AGAINST THE ORIGINAL ACROSS 20,001 HUES** before
+shipping, agreeing to within the rounding the port adds.
+
+**THAT DIFF CAUGHT THE ONE THING NOBODY WOULD HAVE PREDICTED.** `wave(0)` is 0,
+so at hue 0 the RED channel is the one switched off -- the wheel starts on CYAN
+and runs cyan, green, yellow, red, magenta, blue. The comments and the
+animation's seed colour had both been written claiming red, from expectation
+rather than from the arithmetic. Every hue is still covered; it simply starts
+somewhere nobody guesses, and the animation is seeded to match so that the first
+frame is not a jump.
+
+**NOTHING IS LOGGED PER COLOUR CHANGE, DELIBERATELY.** `arch.module.rgblight`
+logs every change because those are a player moving a control, a handful per
+session. These are continuous -- several hundred lines a minute per lit unit.
+The init line reports the tuning and nothing else does.
+
+**THE ZERO GUARD ON `huePeriod` ALSO REFUSES A NEGATIVE ONE, AND THAT MAY BE
+WRONG NOW.** It was written when a backwards sweep looked like a typo. Reversing
+the direction turned out to be a thing somebody wanted on the first day, and a
+negative period is the obvious way to ask for it -- so the guard should probably
+refuse zero only. Left as it is until somebody decides.
 
 ### A textbox inside a list row, and the click it never receives
 `arch.pane.rowfocus` -- see also `fact.pane.rowdispatch`, `dead.pane.rowzlevel`, `dd.pane.fieldbooks`
@@ -10633,20 +10711,6 @@ Harmless to Lua and invisible in game. It matters because it is the residue of a
 class of edit that CAN do damage, and because a second one is easier to miss
 beside a first. Every edit to that file since has asserted the count stayed at
 three rather than quietly adding to it.
-
-### A hue-cycling lamp module
-`todo.module.huecycle` -- see also `arch.module.rgblight`, `todo.module.designpass`
-
-**FILED 2026-09-03, WANTED, AND CHEAP.** A third lamp whose colour sweeps hue
-rather than being chosen. Deliberately deferred until the configurable one
-worked, and it is now nearly free: the effect script, the animation and the
-`setLightColor` call all exist, and this variant needs NEITHER the pane rows nor
-the wire -- no settings, no petData, no push. One item, one effect, one script
-that ignores the status property and walks hue itself.
-
-**IT IS A THIRD LAMP, NOT A MODE OF THE SECOND.** A mode would need a fourth
-setting row and a rule for what the three colour rows mean while it is on.
-
 
 ## PROCESS
 
