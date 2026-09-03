@@ -1,0 +1,29 @@
+//  PETPORTS -- RGB LAMP MODULE LIGHT
+//
+//  IDENTICAL TO THE PLAIN LAMP'S ANIMATION EXCEPT THAT THE COLOUR HERE IS A
+//  STARTING VALUE RATHER THAN THE ANSWER. The script overwrites it on the first
+//  frame it can read a colour from the status controller.
+//
+//  [140,140,140] IS VANILLA'S LAMP VALUE, and it is the right thing to start on
+//  for the same reason the port defaults to it: a unit whose colour has never
+//  been set is indistinguishable from one wearing the common lamp, so the first
+//  frame is never wrong -- only unconfigured.
+//
+//  POSITION IS [0, 0] BECAUSE THAT IS THE BODY CENTRE, which is what lets the
+//  flip script the vanilla augment needs go away. Every unit chassis in this
+//  mod has its collisionPoly centred on the origin, so a centred light looks
+//  identical mirrored.
+//
+//  THE LIGHT'S NAME IS WHAT THE SCRIPT ADDRESSES. animator.setLightColor takes
+//  it, so it is spelled once here and once in the script and nowhere else.
+
+{
+	"lights" : {
+		"petports_module_rgblamp" : {
+			"active" : true,
+			"position" : [ 0.0, 0.0 ],
+			"color" : [ 140, 140, 140 ],
+			"pointLight" : true
+		}
+	}
+}

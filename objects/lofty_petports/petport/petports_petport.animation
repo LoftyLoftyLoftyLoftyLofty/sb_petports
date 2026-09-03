@@ -1,4 +1,39 @@
 {
+	//  ---- SOUNDS ---------------------------------------------------------
+	//
+	//  THE PANE'S ERROR CLICK, PLAYED BY THE OBJECT, BECAUSE A PANE CANNOT
+	//  PLAY IT ITSELF.
+	//
+	//  MEASURED 2026-09-03. The petport opens through `uiConfig`, which makes
+	//  it a ContainerPane, and a ContainerPane's `pane` table is exactly three
+	//  functions -- containerEntityId, playerEntityId, dismiss. No audio.
+	//  `localAnimator` was the other documented route and it probed nil in a
+	//  pane script. Both closed, so the sound comes from here.
+	//
+	//  THE COST IS ACCEPTED RATHER THAN OVERLOOKED. It arrives a message
+	//  round trip after the click, and it plays positionally rather than in
+	//  the player's ears. Neither matters much for this one sound: the pane
+	//  cannot be opened without standing at the port, so the source is where
+	//  the player already is.
+	//
+	//  A LIST, EVEN FOR ONE ENTRY, because that is the shape playSound reads
+	//  and a pool of one is how a second variant gets added later without
+	//  changing anything that calls it.
+	//
+	//  `swap` EXISTS BECAUSE AN ITEMSLOT MAKES NO SOUND OF ITS OWN. Dropping a
+	//  module onto a slot that already holds the SAME module is a legal swap --
+	//  the old one goes back to the cursor -- and it is completely invisible:
+	//  the slot shows a lamp before and after, and so does the cursor. Without
+	//  a sound the player has no way to know anything happened at all.
+	//
+	//  THAT CASE ALONE. Every other swap changes what the slot or the cursor is
+	//  holding, so the screen already reports it and a second signal would be
+	//  noise. The pane holds that test; this file only holds the asset.
+	"sounds" : {
+		"refuse" : [ "/sfx/interface/clickon_error.ogg" ],
+		"swap" : [ "/sfx/interface/inventory_pickup1.ogg" ]
+	},
+
 	"animatedParts" : 
 	{
 		"stateTypes" : 

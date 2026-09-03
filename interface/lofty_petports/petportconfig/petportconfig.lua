@@ -29,12 +29,17 @@
 --  not resolve leaves the dash showing. See petports_strings.config.
 require "/scripts/lofty_petports/petports_strings.lua"
 
+--  THE MODULE RULES THE PORT ALSO LOADS. The swap is performed here and only
+--  committed there, so any rule this pane applies to a swap has to be the same
+--  object the port applies to the payload -- see the file's own header.
+require "/scripts/lofty_petports/petports_modules.lua"
+
 local DEBUG = true
 
 --  Bump on every change to this file. A pane has no visible version and a stale
 --  copy is indistinguishable from an unfixed one -- which cost a cycle on the
 --  upcycler before the stamp existed.
-local PANE_BUILD_STAMP = "2026-09-01a absent is not always on"
+local PANE_BUILD_STAMP = "2026-09-03p the name field lets go too"
 
 local PANE_STATE_KEY = "petports_paneState"
 
@@ -201,6 +206,39 @@ local GROUP_WIDGET = {
 --  legendary fish exist.
 local FISH_RARITIES = { "common", "uncommon", "rare", "legendary" }
 
+local RGB_MIN = 0
+local RGB_MAX = 255
+
+--  VANILLA'S LAMP VALUE, AND THAT IS THE REASON. petports_module_light.animation
+--  ships [140,140,140], so an RGB module whose settings have never been touched
+--  looks exactly like the common lamp it upgrades from -- which makes "did my
+--  module work" a question the player can answer before adjusting anything.
+local RGB_DEFAULT = 140
+
+--  HOW FAR ONE CLICK OF A SPINNER MOVES A CHANNEL.
+--
+--  ONE, WHICH IS WHAT A SPINNER MEANS, and it is also 255 clicks from end to
+--  end. That is deliberate: the arrows are for nudging a colour that is nearly
+--  right and the field is for entering one that is not.
+local RGB_STEP = 1
+
+--  WHAT A ROW IS, IN ONE VOCABULARY.
+--
+--  There were two kinds and the second was implicit -- `sep = true` or, by
+--  omission, a checkbox. A third kind would have made that omission mean two
+--  things, so every read site asks this instead and none of them looks at
+--  `.sep` any more.
+--
+--  THE LEGACY SPELLING IS STILL ACCEPTED rather than rewritten across a dozen
+--  entries, because normalising here is what removes the ambiguity; restating
+--  it on rows that already read correctly would only widen the diff.
+local function rowKind(row)
+	if row == nil then return nil end
+	if row.kind ~= nil then return row.kind end
+	if row.sep then return "sep" end
+	return "check"
+end
+
 local SETTING_ROWS = {
 	--  `default = false` ON BOTH DISPLAY TOGGLES, matching the port, which reads
 	--  each of them as `== true` so that absent means OFF. Without it the pane
@@ -249,14 +287,39 @@ local SETTING_ROWS = {
 	{ key = "replant", owner = "farming", needs = "farming",
 	  label = "petport.setting.farmreplant", tip = "petport.tip.farmreplant" },
 	{ key = "animals", owner = "farming", needs = "farming",
-	  label = "petport.setting.farmanimals", tip = "petport.tip.farmanimals" }
+	  label = "petport.setting.farmanimals", tip = "petport.tip.farmanimals" },
+
+	--  ---- RGB LIGHT ---------------------------------------------------------
+	--
+	--  GATED ON THE MODULE FLAG, like the medic and farming blocks above. The
+	--  RGB lamp item declares petports_moduleFlags ["rgblight"], the port unions
+	--  the flags and mirrors them, and these rows exist only while the set
+	--  contains it. The port enforces the same thing independently, so a stale
+	--  row cannot colour a lamp that is not socketed.
+	--
+	--  THEY SHOWED UNCONDITIONALLY FOR TWO BUILDS. That was so the textbox could
+	--  be proven to construct inside a list row at all, with no module in the
+	--  world to gate on.
+	{ kind = "sep", needs = "rgblight", label = "petport.setting.rgbblock" },
+
+	{ kind = "rgb", key = "r", owner = "light", needs = "rgblight",
+	  label = "petport.setting.rgbred", tip = "petport.tip.rgbred" },
+	{ kind = "rgb", key = "g", owner = "light", needs = "rgblight",
+	  label = "petport.setting.rgbgreen", tip = "petport.tip.rgbgreen" },
+	{ kind = "rgb", key = "b", owner = "light", needs = "rgblight",
+	  label = "petport.setting.rgbblue", tip = "petport.tip.rgbblue" }
 }
 
 --  Which message carries each owner's set, and where the pane reads it back.
 local SETTING_MESSAGE = {
 	toggles = "petports_setToggles",
 	medic = "petports_setMedic",
-	farming = "petports_setFarming"
+	farming = "petports_setFarming",
+
+	--  NOT SENT BY settingsRowClicked LIKE THE OTHER THREE. Those read a set of
+	--  checkboxes back; a colour row has no checkbox and commits from two other
+	--  paths. commitLight names this directly.
+	light = "petports_setLight"
 }
 
 --  Row art. The 180 family at its native 16, not the stats list's regenerated
@@ -369,6 +432,67 @@ local function tell(name, payload)
 	local id = portId()
 	if id == nil then return end
 	world.sendEntityMessage(id, name, payload)
+end
+
+--  THE PANE'S SOUNDS, PLAYED LOCALLY, WITH THE PORT AS A FALLBACK.
+--
+--  THE ROUTE WENT THROUGH THE PORT AND DID NOT NEED TO. Two candidates were
+--  measured and both failed: a ContainerPane's `pane` table is three functions
+--  and none is audio, and `localAnimator` probed nil in a pane script. So the
+--  object played the sounds instead, at the cost of a message round trip and
+--  positional audio for anyone standing nearby.
+--
+--  widget.playSound WAS THE ONE NOBODY CHECKED. It is documented as a general
+--  callback available for all widgets:
+--
+--      void widget.playSound(String audio, [int loops = 0], [float volume])
+--
+--  NOTE THE ARGUMENT. Every other function in that table takes a widget name
+--  first; this one takes an ASSET PATH and nothing else. Passing a widget name
+--  would look exactly like the rest of this file and be wrong.
+--
+--  THE PATHS MOVE BACK HERE WITH IT. They lived in the port's animation while
+--  the port was playing them, which was right then and is not now.
+--
+--  THE PORT FALLBACK STAYS FOR THIS BUILD, AND ONLY BECAUSE OF WHAT ELSE IS IN
+--  IT. This build also lands the colour wire and the light effect. A sound that
+--  silently vanished would be one more thing to rule out while reading a log
+--  about a light -- so if the local call fails, the message route that already
+--  works takes over and says so once. If the log shows it never fired, the port
+--  handler and its `sounds` block can both go.
+local PANE_SOUNDS = {
+	refuse = "/sfx/interface/clickon_error.ogg",
+	swap = "/sfx/interface/inventory_pickup1.ogg"
+}
+
+--  nil UNTRIED, true LOCAL WORKS, false FALL BACK TO THE PORT.
+local soundIsLocal = nil
+
+local function paneSound(name)
+	local path = PANE_SOUNDS[name]
+
+	--  A NAME WITH NO PATH IS A TYPO HERE, NOT A PLAYER ACTION, so it is loud
+	--  rather than silent -- there is no runtime condition that reaches it.
+	if path == nil then
+		dbg("no sound named %s", tostring(name))
+		return
+	end
+
+	if soundIsLocal ~= false then
+		local ok, err = pcall(widget.playSound, path)
+
+		if ok then
+			soundIsLocal = true
+			return
+		end
+
+		soundIsLocal = false
+		dbg("widget.playSound unavailable, falling back to the port: %s", tostring(err))
+	end
+
+	--  THE NAME IS A KEY, NOT A PATH. The port holds its own closed table of
+	--  what it will play and resolves each key against its own animation.
+	tell("petports_paneSound", { sound = name })
 end
 
 --  ---------------------------------------------------------------------------
@@ -841,11 +965,30 @@ local paneHasUnit = false
 --  a hole converts to a Json OBJECT with string keys, so a slot-indexed array
 --  loses a module the first time the item round-trips. A record list is sparse
 --  and contiguous at once.
-local function moduleRecords()
+--
+--  THE OVERRIDE IS WHAT LETS A SWAP BE TESTED BEFORE IT HAPPENS.
+--
+--  moduleSlotClicked has to refuse a duplicate BEFORE it moves anything, and
+--  the cursor is untouched until setSwapSlotItem runs -- so a refusal at that
+--  point costs nothing. But the question is about the set the move WOULD
+--  produce, and paneModules does not hold it yet.
+--
+--  Building the prospective set here rather than mutating paneModules and
+--  rolling back keeps the failure path free of a half-applied swap, which is
+--  the state dd.module.writetoken exists to keep out of this table.
+--
+--  `overrideSlot` nil MEANS NO OVERRIDE, so the existing no-argument call is
+--  unchanged. An override TO nil is an emptied slot, which is why the two are
+--  separate arguments rather than one descriptor whose absence has to mean two
+--  different things.
+local function moduleRecords(overrideSlot, overrideItem)
 	local out = {}
 	for i = 1, MODULE_SLOTS do
-		if paneModules[i] ~= nil then
-			table.insert(out, { slot = i, item = paneModules[i] })
+		local item = paneModules[i]
+		if overrideSlot == i then item = overrideItem end
+
+		if item ~= nil then
+			table.insert(out, { slot = i, item = item })
 		end
 	end
 	return out
@@ -873,6 +1016,176 @@ local settingsRowPaths = {}
 local settingsRowKeys = {}
 local settingsSignature = nil
 
+--  THE COLOUR THIS PANE IS SHOWING, MIRRORED FROM THE PORT.
+--
+--  IT WAS THE TRUTH FOR TWO BUILDS, while there was no port side. It is now a
+--  copy of petData.light, written by refresh and read by the paint.
+--
+--  IT IS ALSO WRITTEN OPTIMISTICALLY BY commitLight, on the click, rather than
+--  waiting for the echo -- which is what makes a spinner feel immediate. The
+--  echo then arrives holding the same value, lightPainted already matches it,
+--  and the paint stays quiet. That is the mechanism dd.module.writetoken needed
+--  a token for and this does not: a colour cannot be duplicated or destroyed by
+--  a dropped reply, so the worst a lost message costs is a click.
+local paneLight = {}
+
+--  WHAT THIS SCRIPT LAST WROTE INTO EACH FIELD, AND IT IS THE WHOLE MECHANISM.
+--
+--  The poll decides a player has typed by seeing text it did not put there. So
+--  every write to a field has to record itself in the same breath, or the
+--  script's own paint reads back as an edit and commits itself in a loop --
+--  which is the bookkeeping the restock pane's setField exists for, and the
+--  reason its comment says the bookkeeping is the point.
+local lightShown = {}
+
+--  THE VALUE THE BOX IS KNOWN TO BE DISPLAYING, WHICH IS NOT THE SAME QUESTION.
+--
+--  THE BUG THIS EXISTS FOR TURNED 0 INTO 10, AND IT IS IN THE LOG. Backspacing
+--  140 away, one character at a time:
+--
+--      light g -> 14      140, one backspace
+--      light g -> 1       two backspaces
+--      light g -> 10      the "0" the player typed, on the end of a "1"
+--                         they did not
+--
+--  An empty box is someone mid-edit, so nothing commits and paneLight stays at
+--  1. The steady-state paint then compared the STORED VALUE against the TEXT,
+--  found "1" against "", concluded the field was stale and wrote the 1 back --
+--  one poll after the player deleted it and a fraction before they typed.
+--
+--  THE PAINT MUST BE DRIVEN BY A CHANGE IN TRUTH, NOT BY DISAGREEMENT WITH THE
+--  WIDGET. `lightShown` answers "what text is in there", which is what the poll
+--  needs to spot an edit. This answers "what value has been put in there", which
+--  is what the paint needs to spot a change -- and an emptied box has not
+--  changed the value, so the paint leaves it alone.
+--
+--  THIS IS THE `lightSeen` THAT BUILD 2 WAS GOING TO NEED FOR THE MIRROR ECHO,
+--  arriving a build early because it turns out to be the same mechanism. A port
+--  echoing back the value the player just set is a paint whose truth did not
+--  move, exactly like a repaint during a local edit.
+local lightPainted = {}
+
+--  THE LAST VALUE THIS PANE SENT THE PORT, PER CHANNEL, UNTIL THE ECHO AGREES.
+--
+--  THE BUG THIS EXISTS FOR IS IN THE LOG AND IT IS A STALE ECHO WINNING:
+--
+--      light g -> 14      typed 140 down to 14
+--      light g -> 1        and down to 1
+--      light g -> 1        committed twice, with nothing in between
+--
+--  Each edit sends immediately, so two messages are in flight when the first
+--  echo lands. That echo carries 14 -- true when it was written, stale by the
+--  time it arrives -- and the mirror read accepted it, because the only test
+--  was whether it differed from paneLight. It did. So paneLight went back to
+--  14, the paint saw a value lightPainted did not match, and wrote 14 into a
+--  box the player had already cut down to 1. The second echo then put it back.
+--  The double commit is the field being repainted twice under the caret.
+--
+--  THE PANE OWNS A CHANNEL WHILE ITS WRITE IS OUTSTANDING. A mirror value is
+--  accepted only once it AGREES with what was last sent, which is the moment
+--  the port has caught up; anything else is an older answer to a newer question.
+--
+--  A VALUE, NOT A TOKEN, and that is the difference from dd.module.writetoken.
+--  Modules needed a stamp because a dropped reply could destroy an item, so the
+--  pane had to know its own write specifically. A colour cannot be lost or
+--  duplicated -- the port clamps to the same range the pane does, and the pane
+--  sends all three channels every time -- so "the port now says what I said" is
+--  a complete answer and needs nothing on the wire to carry it.
+local lightSent = {}
+
+--  Put a channel in its field and remember, two ways, what is now in there.
+--
+--  BOTH BOOKS OR NEITHER. The poll reads lightShown to tell a keystroke from the
+--  script's own write; the paint reads lightPainted to tell a changed value from
+--  an unchanged one. A write that updated only the first would have the paint
+--  fire again on the very next poll against a box it had just filled.
+local function setLightField(path, channel, value)
+	local text = tostring(value)
+
+	lightShown[channel] = text
+	lightPainted[channel] = value
+	pcall(widget.setText, path .. ".settingField", text)
+end
+
+--  LET GO OF ONE FIELD, IF IT IS THE ONE HOLDING THE CARET.
+--
+--  A FOCUSED TEXTBOX CAPTURES THE KEYBOARD, AND THAT INCLUDES ENTER. Observed
+--  2026-09-03: with a colour field focused, Enter no longer opened chat, and
+--  clicking elsewhere did not let go -- nothing in this pane ever blurred
+--  anything, so a field kept the caret until the pane closed.
+--
+--  ONLY IF FOCUSED. widget.blur is documented as unsetting focus on a FOCUSED
+--  widget; calling it on one that never had focus is asking for whatever it
+--  does in that case, and hasFocus is right there.
+--
+--  GUARDED, BECAUSE THIS RUNS FROM A TAB CHANGE. showTab is reachable before
+--  the settings list has ever been built, when a row path points at nothing.
+local function blurField(name)
+	local ok, focused = pcall(widget.hasFocus, name)
+	if ok and focused then pcall(widget.blur, name) end
+end
+
+--  EVERY TEXT FIELD THIS PANE OWNS, AND THERE ARE TWO KINDS.
+--
+--  THE NAME FIELD HAD THE SAME FAULT AND HAD IT FIRST. tbPetName has shipped
+--  since 2026-09-01 holding the keyboard exactly the same way; the colour rows
+--  only made it noticeable. Both are released by the same rule rather than the
+--  new one getting a fix the old one does not.
+--
+--  THE COLOUR FIELDS ARE FOUND BY WALKING THE ROWS, because they exist only
+--  while an RGB module is socketed and their paths are new after every rebuild.
+local function blurPaneFields()
+	blurField("tbPetName")
+
+	for i, row in ipairs(settingsRowKeys) do
+		local path = settingsRowPaths[i]
+
+		if rowKind(row) == "rgb" and path ~= nil then
+			blurField(path .. ".settingField")
+		end
+	end
+end
+
+--  A CHANNEL VALUE AND WHETHER THE CEILING BIT, OR nil IF THE TEXT IS NOT ONE.
+--
+--  OUT OF RANGE IS CLAMPED, WHICH REVERSES THIS FUNCTION'S FIRST DRAFT, AND THE
+--  REVERSAL IS WHAT THE LOG ARGUED FOR.
+--
+--  It refused an out-of-range entry, on the reasoning that writing 255 back over
+--  a 999 moves the caret out from under someone mid-number. What that actually
+--  produced, observed 2026-09-03:
+--
+--      typing 999 then clicking the up spinner set the value to 100
+--      typing 256 then clicking the up spinner set the value to 26
+--
+--  Both are correct given a refusal, and both look broken. Typing 999 passes
+--  through 9 and 99, each of which commits; 999 itself is refused, so 99 is what
+--  the unit is left holding while the box says 999. The spinner then does its
+--  job on the stored truth and lands on 100. The box and the value had been
+--  allowed to disagree, and a control acting on the value could only ever look
+--  like it had invented a number.
+--
+--  THE CARET COST IS REAL AND IS PAID ONLY WHEN THE CLAMP BITS, which is the
+--  whole reason this returns a flag rather than just a number. A valid entry is
+--  never written back, so "0100" still does not snap to "100" under a moving
+--  caret -- the case the restock pane's rule was actually about. Only a number
+--  that cannot be a colour gets corrected, and being corrected is the point.
+--
+--  THE FLOOR IS UNREACHABLE THROUGH THE FIELD, since a \d regex cannot produce a
+--  negative. It is stated anyway so the function is total and the spinner's own
+--  clamp is not the only thing standing between a caller and a bad value.
+local function rgbValue(text)
+	local value = tonumber(text)
+	if value == nil then return nil end
+
+	value = math.floor(value)
+
+	if value < RGB_MIN then return RGB_MIN, true end
+	if value > RGB_MAX then return RGB_MAX, true end
+
+	return value, false
+end
+
 --  WHICH ROWS APPLY TO THIS UNIT RIGHT NOW.
 --
 --  A row with `needs` survives only while that module flag is present. The port
@@ -888,6 +1201,14 @@ local function applicableSettingRows()
 	end
 
 	return out
+end
+
+--  THE CHANNEL A COLOUR ROW SHOULD SHOW, defaulting for a unit whose colour has
+--  never been set. Build 2 reads this off the mirror instead.
+local function lightValue(channel)
+	local value = paneLight[channel]
+	if type(value) ~= "number" then return RGB_DEFAULT end
+	return value
 end
 
 --  THE VALUE A ROW SHOULD SHOW, and ABSENT IS NOT ONE ANSWER FOR EVERY ROW.
@@ -943,6 +1264,13 @@ local function paintSettings()
 		settingsRowPaths = {}
 		settingsRowKeys = {}
 
+		--  CLEARED WITH THE ROWS. The fields these recorded no longer exist, so
+		--  leaving the record would have the steady state below believe it had
+		--  already painted a value into a widget that was just destroyed --
+		--  and the new field would come up empty and stay empty.
+		lightShown = {}
+		lightPainted = {}
+
 		--  PARITY RESETS AT EACH SEPARATOR so every module's block starts on
 		--  the base shade, exactly as the stats list does.
 		local stripe = false
@@ -954,7 +1282,23 @@ local function paintSettings()
 			settingsRowPaths[i] = rowPath
 			settingsRowKeys[i] = row
 
-			if row.sep then
+			local kind = rowKind(row)
+
+			--  EVERY ROW CARRIES EVERY WIDGET, because a list has one template
+			--  and the kinds differ only in which of them are shown. Hiding is
+			--  therefore stated for all three kinds rather than left to the
+			--  template's defaults -- a row is rebuilt from a pool and may
+			--  arrive wearing the last kind that used it.
+			local isCheck = (kind == "check")
+			local isRgb = (kind == "rgb")
+
+			widget.setVisible(rowPath .. ".settingCheck", isCheck)
+			widget.setVisible(rowPath .. ".colorFieldBacking", isRgb)
+			widget.setVisible(rowPath .. ".settingField", isRgb)
+			widget.setVisible(rowPath .. ".settingDown", isRgb)
+			widget.setVisible(rowPath .. ".settingUp", isRgb)
+
+			if kind == "sep" then
 				stripe = false
 				widget.setImage(rowPath .. ".rowBG", SETTINGS_ROW_CLEAR)
 				widget.setText(rowPath .. ".settingLabel", SETTINGS_SEPARATOR_TEXT)
@@ -963,7 +1307,6 @@ local function paintSettings()
 				--  A DIVIDER IS NOT A CONTROL. Both interactive widgets go away
 				--  rather than being left checked and inert, which would invite
 				--  a click that does nothing.
-				widget.setVisible(rowPath .. ".settingCheck", false)
 				widget.setVisible(rowPath .. ".rowButton", false)
 			else
 				widget.setImage(rowPath .. ".rowBG",
@@ -971,22 +1314,72 @@ local function paintSettings()
 				stripe = not stripe
 
 				widget.setText(rowPath .. ".settingLabel", petports_stringOr(row.label, "--"))
-				widget.setVisible(rowPath .. ".settingCheck", true)
+
+				--  ON EVERY ROW, INCLUDING COLOUR ROWS, AND ON THEM IT IS LOAD
+				--  BEARING RATHER THAN DECORATION.
+				--
+				--  A list row has no hover of its own -- hover only ever comes
+				--  from a button -- so hiding this was what left colour rows flat
+				--  for three builds. It was hidden because it appeared to be
+				--  stealing the field's click, and it was: it takes the left
+				--  press and the field never sees it.
+				--
+				--  IT NOW HANDS THAT PRESS ON. settingsRowClicked focuses the
+				--  field when the row is a colour row, so the button keeps the
+				--  hover AND the field gets its caret, which is the outcome
+				--  neither hiding it nor reordering the template could reach.
 				widget.setVisible(rowPath .. ".rowButton", true)
 
-				--  THE ROW INDEX, ON BOTH INTERACTIVE WIDGETS. A member callback
+				--  THE ROW INDEX, ON EVERY INTERACTIVE WIDGET. A member callback
 				--  gets the leaf name -- identical for every row -- so only the
 				--  widget data can say which row fired.
+				--
+				--  settingField IS NOT IN THIS LIST. Its callback is a no-op and
+				--  the poll identifies rows by walking them, so it needs no data
+				--  -- which also avoids setData on a textbox, unverified here.
 				widget.setData(rowPath .. ".settingCheck", i)
 				widget.setData(rowPath .. ".rowButton", i)
+
+				if isRgb then
+					widget.setData(rowPath .. ".settingDown", i)
+					widget.setData(rowPath .. ".settingUp", i)
+
+					--  SEEDED HERE, so a freshly built field is never blank.
+					--  The steady state below only writes on a CHANGE, and
+					--  against an empty lightShown every value is a change --
+					--  but stating it at build time keeps the two paths from
+					--  having to agree about who paints first.
+					setLightField(rowPath, row.key, lightValue(row.key))
+				end
 			end
 		end
 	end
 
-	--  THE STEADY STATE TOUCHES CHECKED MARKS ONLY.
+	--  THE STEADY STATE TOUCHES A WIDGET ONLY WHEN ITS VALUE MOVED.
+	--
+	--  THIS RUNS ON EVERY POLL WHERE THE PORT'S STATE CHANGED, which on a
+	--  working unit is constantly -- cargo, task, fuel. A field repainted
+	--  unconditionally here would be wiped out from under anyone typing into
+	--  it several times a second, by changes that have nothing to do with the
+	--  colour. The checkboxes do not care, because setChecked over an unchanged
+	--  value is invisible; a textbox has a caret.
 	for i, row in ipairs(rows) do
-		if not row.sep and settingsRowPaths[i] ~= nil then
-			widget.setChecked(settingsRowPaths[i] .. ".settingCheck", settingValue(row))
+		local path = settingsRowPaths[i]
+		local kind = rowKind(row)
+
+		if path ~= nil then
+			if kind == "check" then
+				widget.setChecked(path .. ".settingCheck", settingValue(row))
+			elseif kind == "rgb" then
+				--  ONLY WHEN THE VALUE MOVED. Comparing against the TEXT is what
+				--  restored a deleted digit under the player's caret -- see
+				--  lightPainted. An empty box disagrees with every stored value
+				--  and is not stale; it is unfinished.
+				local value = lightValue(row.key)
+				if value ~= lightPainted[row.key] then
+					setLightField(path, row.key, value)
+				end
+			end
 		end
 	end
 end
@@ -1086,6 +1479,49 @@ local function paintModules(state)
 		medic = state.medic or {},
 		farming = state.farming or {}
 	}
+
+	--  THE COLOUR, MIRRORED PER CHANNEL RATHER THAN BY REPLACING THE TABLE.
+	--
+	--  A WHOLESALE REPLACE WOULD FIGHT AN EDIT IN PROGRESS. paneLight is written
+	--  optimistically on the click and the port's echo carries the same value
+	--  back, so assigning a fresh table here is usually a no-op -- but assigning
+	--  one built from a mirror that has not caught up yet would move a channel
+	--  the player just set, and lightPainted would then see a change and repaint
+	--  the field under their caret.
+	--
+	--  COMPARING AGAINST paneLight WAS NOT ENOUGH, AND THE LOG SAYS SO. A stale
+	--  echo differs from paneLight exactly as a genuine external change does,
+	--  so accepting on difference alone let an older answer overwrite a newer
+	--  edit -- see lightSent, which records the fault in full.
+	--
+	--  A CHANNEL WITH A WRITE OUTSTANDING BELONGS TO THE PANE. Only a mirror
+	--  value that AGREES with what was last sent is accepted, and accepting it
+	--  is what closes the write. Anything else is discarded unread.
+	--
+	--  ALWAYS COMPLETE FROM THE PORT. petportLightColor fills every channel, so
+	--  there is no absent case to interpret here -- unlike the three tables
+	--  above, whose absence means something different for each.
+	local light = state.light or {}
+
+	for _, channel in ipairs({ "r", "g", "b" }) do
+		local value = tonumber(light[channel])
+
+		if value ~= nil then
+			local sent = lightSent[channel]
+
+			if sent == nil then
+				--  NOTHING IN FLIGHT, so the port is the authority. This is the
+				--  ordinary path: the pane opening, a unit being socketed, or
+				--  anything that changed the colour other than this pane.
+				paneLight[channel] = value
+			elseif value == sent then
+				--  THE PORT HAS CAUGHT UP. The write is closed and the next
+				--  mirror is believed again.
+				lightSent[channel] = nil
+				paneLight[channel] = value
+			end
+		end
+	end
 
 	--  state.hasUnit, NOT hasUnit. This block lives in paintModules, which takes
 	--  `state` -- the bare local belongs to refresh and is not in scope here, so
@@ -1333,6 +1769,11 @@ end
 --  ---------------------------------------------------------------------------
 
 local function showTab(which)
+	--  BEFORE activeTab MOVES, so the rows this walks are still the ones on
+	--  screen. A field that keeps the caret after its row is hidden holds the
+	--  keyboard from a tab that has no text entry on it at all.
+	blurPaneFields()
+
 	activeTab = which
 
 	for _, name in ipairs(TAB_WIDGETS) do
@@ -1632,6 +2073,7 @@ function moduleSlotClicked(widgetName)
 	if index > paneModuleSlotCount then
 		dbg("ignoring click on slot %s: unit has %s", tostring(index),
 			tostring(paneModuleSlotCount))
+		paneSound("refuse")
 		return
 	end
 
@@ -1639,6 +2081,7 @@ function moduleSlotClicked(widgetName)
 
 	if cursor ~= nil and (cursor.count or 1) > 1 then
 		dbg("refusing module swap: cursor holds %s", tostring(cursor.count))
+		paneSound("refuse")
 		return
 	end
 
@@ -1646,8 +2089,34 @@ function moduleSlotClicked(widgetName)
 		local ok, isModule = pcall(root.itemHasTag, cursor.name, MODULE_TAG)
 		if not ok or isModule ~= true then
 			dbg("refusing module swap: %s is not a module", tostring(cursor.name))
+			paneSound("refuse")
 			return
 		end
+	end
+
+	--  ADDITION THREE, THE DUPLICATE GATE. One module of a kind per unit -- see
+	--  petports_modules.lua for the rule and why it is not written twice.
+	--
+	--  ASKED OF THE SET THIS WOULD PRODUCE, not of the cursor against the other
+	--  slots. Those are the same question only as long as nothing else can put
+	--  a pair in paneModules, and the port's own check reads the payload, so
+	--  asking about the payload is what keeps the two sides literally identical.
+	--
+	--  BEFORE ANYTHING MOVES. The cursor is still the player's at this point --
+	--  swapSlotItem READ it, setSwapSlotItem below is what takes it -- so a
+	--  refusal here returns with the item exactly where the player left it.
+	--  That is the whole reason this gate belongs in the pane and not only in
+	--  the port, which cannot refuse without stranding a module the pane has
+	--  already lifted.
+	--
+	--  A SWAP THAT EMPTIES A SLOT PASSES TRIVIALLY, since removing an item
+	--  cannot create a pair. No special case is needed for it.
+	local duplicate = petports_moduleSetDuplicate(moduleRecords(index, cursor))
+
+	if duplicate ~= nil then
+		dbg("refusing module swap: %s is already socketed", tostring(duplicate))
+		paneSound("refuse")
+		return
 	end
 
 	--  THE MOVE, IN VANILLA'S ORDER. The old occupant goes to the cursor and the
@@ -1661,6 +2130,32 @@ function moduleSlotClicked(widgetName)
 	dbg("slot %s: %s -> %s", tostring(index),
 		tostring(previous and previous.name or "empty"),
 		tostring(cursor and cursor.name or "empty"))
+
+	--  THE ONE SWAP THAT LEAVES NOTHING TO SEE.
+	--
+	--  Dropping a module onto a slot holding the SAME module is legal -- the old
+	--  one goes back to the cursor -- and nothing on screen moves: the slot shows
+	--  a lamp before and after, and so does the cursor. Observed 2026-09-03 as
+	--  "the sound is failing", which it was not; there was no refusal to sound.
+	--  What was missing was any signal that the swap had happened at all, and an
+	--  itemslot makes no sound of its own.
+	--
+	--  THIS CASE ONLY, AND THAT IS A NARROWING. An earlier draft sounded EVERY
+	--  successful swap, on the reasoning that an item moved is an item moved.
+	--  Every other swap changes what the slot or the cursor is holding, so the
+	--  screen already says so; this is the only one where a sound is the whole
+	--  of the feedback.
+	--
+	--  SAME NAME IS THE SAME TEST THE DUPLICATE RULE USES, and if that ever
+	--  stops being name equality -- two lamps carrying different parameters, the
+	--  upgrade hook petportModuleSlots' own comment anticipates -- this moves
+	--  with petports_modules.lua rather than staying behind as a second opinion.
+	--
+	--  BEFORE THE tell BELOW, so the sound is asked for on the same frame as the
+	--  move rather than behind the module write it does not depend on.
+	if previous ~= nil and cursor ~= nil and previous.name == cursor.name then
+		paneSound("swap")
+	end
 
 	--  REPORTED AS A FINISHED SET, matching mechassemblygui's itemSetChanged.
 	--  The port stores it and recomputes the unit's effects; its next mirror
@@ -2150,6 +2645,16 @@ function renameClicked()
 
 	dbg("rename requested: %s", trimmed == "" and "<clear>" or trimmed)
 	tell("petports_setPetName", { name = trimmed ~= "" and trimmed or nil })
+
+	--  AND LET GO OF THE FIELD. Pressing the commit button is the least
+	--  ambiguous "done with this" in the whole pane -- there is nothing else the
+	--  player could mean -- so the caret should not survive it, and neither
+	--  should the keyboard capture that comes with it.
+	--
+	--  AFTER THE SEND, NOT BEFORE. The name is read from the widget above; a
+	--  blur first would be one more thing between reading it and trusting what
+	--  was read, for no gain.
+	blurField("tbPetName")
 end
 
 --  TWO TOGGLES, AND THE TWO THAT WERE HERE ARE GONE FOR DIFFERENT REASONS.
@@ -2206,7 +2711,58 @@ function settingsRowClicked(from, index)
 
 	local row = settingsRowKeys[i]
 	local path = settingsRowPaths[i]
-	if row == nil or row.sep or path == nil then return end
+	if path == nil then return end
+
+	local kind = rowKind(row)
+
+	--  A COLOUR ROW FOCUSES ITS FIELD, AND THIS IS WHERE THE FOCUS PROBLEM ENDS.
+	--
+	--  THE FIELD NEVER GETS THE LEFT CLICK AND CONFIG CANNOT FIX THAT.
+	--  Widget::sendEvent offers an event to children in REVERSE order and stops
+	--  at the first that consumes it, so a later sibling should win -- but
+	--  settingField was declared after rowButton from the start and lost anyway,
+	--  and declaring it first changed nothing. Whatever order a row's members
+	--  end up in, it is not the order written in the listTemplate.
+	--
+	--  THE RIGHT CLICK WAS THE TELL. It falls through and focuses the field
+	--  perfectly, because a ButtonWidget handles the left button only and
+	--  declines the other. So the field is under the cursor, its bounds are
+	--  right, and it works -- it just never receives the press that matters.
+	--
+	--  SO THE BUTTON HANDS FOCUS OVER RATHER THAN COMPETING FOR IT. rowButton
+	--  already takes the click and already knows the row, and Widget::focus is
+	--  reachable from the widget table by member path. That keeps the hover the
+	--  button exists for, and makes the WHOLE ROW a target for the field rather
+	--  than a 26-pixel strip.
+	--
+	--  GUARDED AND REPORTED ONCE. Every other route to this field has failed for
+	--  a different reason, so a silent no-op here would be indistinguishable
+	--  from the four things already ruled out.
+	if kind == "rgb" then
+		local ok, err = pcall(widget.focus, path .. ".settingField")
+		if not ok then
+			dbg("cannot focus %s.settingField: %s", path, tostring(err))
+		end
+		return
+	end
+
+	--  ANY OTHER ROW LETS GO OF THE CARET. Clicking away from a text field is
+	--  the ordinary way to finish with it, and without this the field kept the
+	--  keyboard -- Enter included -- while the player was plainly done with it.
+	--
+	--  BEFORE THE SEPARATOR RETURN, so a click on a divider releases too. A
+	--  divider does nothing else, which makes it the most obvious place someone
+	--  clicks to mean "not that".
+	--
+	--  THE NAME FIELD GOES WITH THEM. It sits on this same tab, so a click on a
+	--  settings row is just as plainly "done with the name" as it is "done with
+	--  a channel".
+	blurPaneFields()
+
+	--  CHECKBOX ROWS ONLY FROM HERE. A separator has no controls at all, so a
+	--  click reaching this from one is dropped rather than toggling a widget the
+	--  player cannot see.
+	if kind ~= "check" then return end
 
 	if from ~= "settingCheck" then
 		widget.setChecked(path .. ".settingCheck",
@@ -2222,12 +2778,160 @@ function settingsRowClicked(from, index)
 	--  from what it actually stored, so a refused toggle moves the box back.
 	local set = {}
 	for j, other in ipairs(settingsRowKeys) do
-		if not other.sep and other.owner == row.owner and settingsRowPaths[j] ~= nil then
+		if rowKind(other) == "check" and other.owner == row.owner
+		   and settingsRowPaths[j] ~= nil then
 			set[other.key] = widget.getChecked(settingsRowPaths[j] .. ".settingCheck")
 		end
 	end
 
 	tell(SETTING_MESSAGE[row.owner], set)
+end
+
+--  ---------------------------------------------------------------------------
+--  THE COLOUR ROWS
+--  ---------------------------------------------------------------------------
+
+--  COMMIT ONE CHANNEL. Build 1 stops at paneLight; build 2 sends it.
+--
+--  DOES NOT WRITE BACK TO THE FIELD. A rejected entry leaves the box showing
+--  what was typed and the stored value untouched, and an accepted one is already
+--  what the box says -- so there is no case where snapping the text back would
+--  do anything except move the caret out from under someone mid-number.
+local function commitLight(channel, value)
+	if paneLight[channel] == value then return end
+
+	paneLight[channel] = value
+
+	--  THE BOX IS ALREADY SHOWING IT, so record that here rather than leaving
+	--  the paint to notice a change and write the player's own number back over
+	--  their caret. On the typed path the text came FROM the field; on the
+	--  spinner path setLightField is about to write it. Either way this line is
+	--  what keeps the paint quiet for a value nobody needs told about.
+	lightPainted[channel] = value
+
+	dbg("light %s -> %s", channel, tostring(value))
+
+	--  ALL THREE CHANNELS, NOT THE ONE THAT MOVED -- the same reasoning the
+	--  checkbox rows use. Sending the whole colour is self-correcting: a channel
+	--  that somehow drifted from the port is brought back into line by the next
+	--  edit of any of them, and the port's handler needs no notion of a partial
+	--  update to be correct.
+	--
+	--  FIRE AND FORGET. The port rewrites the mirror and the next poll repaints
+	--  from what it actually stored, so a refused value corrects itself.
+	local set = {
+		r = lightValue("r"),
+		g = lightValue("g"),
+		b = lightValue("b")
+	}
+
+	--  RECORDED BEFORE IT IS SENT, ON EVERY CHANNEL, because the payload carries
+	--  all three and the port stores all three -- so all three are outstanding
+	--  even when only one moved. Marking just the edited channel would leave the
+	--  other two open to a stale echo carrying their older values.
+	for channel, value in pairs(set) do
+		lightSent[channel] = value
+	end
+
+	tell(SETTING_MESSAGE.light, set)
+end
+
+--  READ THE FIELDS BACK AND COMMIT ANY THAT MOVED.
+--
+--  A POLL RATHER THAN THE TEXTBOX'S CALLBACK, and the restock pane's note gives
+--  the reason: what a textbox callback actually fires ON is not something this
+--  mod knows. That pane runs both and shares one function to make it harmless;
+--  here the callback cannot identify its row at all, so the poll is the only
+--  path and the callback is a no-op.
+--
+--  AN EMPTY OR OUT-OF-RANGE FIELD IS SOMEONE MID-EDIT, NOT SOMEONE ASKING FOR
+--  NOTHING. The regex permits zero digits, so an empty box is the ordinary
+--  state of a field just cleared to be retyped -- and rgbValue returns nil for
+--  it, which is read here as "not yet", not as zero.
+local function pollLightFields()
+	if activeTab ~= "tabSettings" or not paneHasUnit then return end
+
+	for i, row in ipairs(settingsRowKeys) do
+		local path = settingsRowPaths[i]
+
+		if rowKind(row) == "rgb" and path ~= nil then
+			local ok, text = pcall(widget.getText, path .. ".settingField")
+
+			if ok and type(text) == "string" and text ~= lightShown[row.key] then
+				--  RECORDED BEFORE IT IS JUDGED. What is in the box is now what
+				--  the script knows to be in the box, whether or not it parses.
+				--  Without this a field holding "9" on the way to "99" is a new
+				--  edit on every single poll, and every one of them logs.
+				lightShown[row.key] = text
+
+				local value, clamped = rgbValue(text)
+
+				if value ~= nil then
+					commitLight(row.key, value)
+
+					--  THE ONLY WRITE-BACK ON THE TYPED PATH, AND IT IS
+					--  CONDITIONAL. A valid entry is left exactly as typed --
+					--  caret untouched, "0100" not snapped -- and only a number
+					--  that cannot be a colour is corrected in place.
+					--
+					--  RUNS EVEN WHEN commitLight CHANGED NOTHING. Typing a
+					--  fourth digit onto 255 gives 2555, which clamps to the
+					--  value already stored, so the commit returns early and
+					--  this is the only thing that puts the box back.
+					if clamped then setLightField(path, row.key, value) end
+				end
+			end
+		end
+	end
+end
+
+--  A SPINNER. One handler for both arrows; arg 1 says which.
+--
+--  THE STEP IS CLAMPED, NOT WRAPPED. 255 rolling to 0 on one click is a colour
+--  a player did not ask for and did not see coming, and the field beside it is
+--  there for anyone who wants the far end.
+--
+--  IT WRITES THE FIELD ITSELF, THROUGH setLightField, so the bookkeeping stays
+--  in step. Painting it and forgetting to record it would have the poll read
+--  the script's own write back as an edit on the very next tick.
+function settingsSpinClicked(from, index)
+	local i = tonumber(index)
+	if i == nil then return end
+
+	local row = settingsRowKeys[i]
+	local path = settingsRowPaths[i]
+	if rowKind(row) ~= "rgb" or path == nil then return end
+
+	local step = (from == "settingDown") and -RGB_STEP or RGB_STEP
+	local value = lightValue(row.key) + step
+
+	if value < RGB_MIN then value = RGB_MIN end
+	if value > RGB_MAX then value = RGB_MAX end
+
+	commitLight(row.key, value)
+	setLightField(path, row.key, value)
+end
+
+--  REQUIRED BY THE PARSER, NOT BY THE FEATURE, exactly like petNameEntered.
+--
+--  A textbox whose callback does not resolve throws at CONSTRUCTION, and inside
+--  a list row that means addListItem takes the pane down before a widget is
+--  drawn. Reading is pollLightFields' job; this exists so the row can be built.
+--
+--  IT FIRES PER KEYSTROKE, AND THAT IS MEASURED. 2026-09-03, instrumented for
+--  one session: 105 fires across a handful of short edits, one per character
+--  and never once per Enter.
+--
+--  WHICH KILLS THE OBVIOUS USE FOR IT. Enter is the conventional way to finish
+--  with a text field, and blurring from here would have bought that for one
+--  line -- and would have made the field impossible to type more than a single
+--  character into. The restock pane's warning that what a textbox callback
+--  fires on is not something this mod knows was worth taking literally.
+--
+--  SO BLURRING HAPPENS ON A CLICK ELSEWHERE, in settingsRowClicked and showTab,
+--  and Enter is not a way out of the field. The instrumentation is gone because
+--  it was a dozen log lines per typed number once the answer was in.
+function settingsFieldChanged()
 end
 
 function groupToggled()
@@ -2273,6 +2977,26 @@ function init()
 	widget.registerMemberCallback("settingsScroll.settingsList",
 		"settingsRowClicked", settingsRowClicked)
 
+	--  THE COLOUR ROW'S THREE, AND THE TEXTBOX IS THE ONE THAT MATTERS.
+	--
+	--  A textbox's callback must resolve at CONSTRUCTION -- so if this
+	--  registration is missing, or runs after the first addListItem, the pane
+	--  does not open. The arrows are ordinary buttons and follow the rule the
+	--  upcycler's rows already prove.
+	widget.registerMemberCallback("settingsScroll.settingsList",
+		"settingsSpinClicked", settingsSpinClicked)
+	widget.registerMemberCallback("settingsScroll.settingsList",
+		"settingsFieldChanged", settingsFieldChanged)
+
+	--  IS THERE AN AUDIO BINDING IN A PANE SCRIPT AT ALL?
+	--
+	--  Logged once, here, rather than inferred from a silent refusal. An unbound
+	--  localAnimator and a sound that plays inaudibly look identical from the
+	--  outside, and this is the only line that tells them apart.
+	dbg("localAnimator %s, playAudio %s",
+		type(localAnimator),
+		type(localAnimator) == "table" and type(localAnimator.playAudio) or "n/a")
+
 	showTab("tabDetails")
 	refresh(true)
 end
@@ -2280,6 +3004,11 @@ end
 function update(dt)
 	pollTake()
 	refresh(false)
+
+	--  OUTSIDE THE SIGNATURE GATE, like the two below, and for the same kind of
+	--  reason: a player types without the port's state changing at all, so a
+	--  read gated on refresh would never see the keystroke.
+	pollLightFields()
 
 	--  OUTSIDE THE SIGNATURE GATE, ON PURPOSE. See refresh: the portrait is a
 	--  live view of a live entity and has to redraw whether or not the port's

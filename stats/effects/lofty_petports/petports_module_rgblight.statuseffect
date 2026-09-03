@@ -1,0 +1,33 @@
+//  PETPORTS -- RGB LAMP MODULE EFFECT
+//
+//  THE PLAIN LAMP EFFECT WITH A SCRIPT, AND THE SCRIPT IS THE ONLY DIFFERENCE.
+//  petports_module_light is this file without `scripts`, because its colour is
+//  baked into its animation and never moves.
+//
+//  animationConfig IS WHAT GRANTS THE SCRIPT ITS animator, AND THAT IS NOT
+//  INCIDENTAL. A status effect only gains access to the animator table when
+//  this property is non-nil -- so the light and the script that recolours it
+//  have to arrive together, in this file, or the script has nothing to talk to.
+//
+//  APPLIED PERSISTENTLY AND NEVER BY DURATION. The port calls
+//  status.setPersistentEffects, which holds an effect for as long as it is in
+//  the set and drops it the moment it leaves. `defaultDuration` is unread on
+//  that path; it is stated at vanilla's value so an effect applied some other
+//  way later behaves like the augment this was copied from.
+//
+//  NO effectConfig. A colour cannot be carried here -- setPersistentEffects
+//  takes effect names and no payload -- which is the entire reason the colour
+//  travels as a status property and the script reads it. See the script.
+
+{
+	"name" : "petports_module_rgblight",
+
+	"effectConfig" : {},
+
+	"defaultDuration" : 5,
+
+	"scripts" : [ "/stats/effects/lofty_petports/petports_module_rgblight.lua" ],
+	"scriptDelta" : 5,
+
+	"animationConfig" : "petports_module_rgblight.animation"
+}

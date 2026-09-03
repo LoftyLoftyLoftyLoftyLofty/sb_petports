@@ -1,6 +1,11 @@
 require "/scripts/util.lua"
 require "/scripts/messageutil.lua"
 require "/scripts/lofty_petports/petports_work.lua"
+
+--  THE MODULE RULES THE PANE ALSO LOADS. The pane performs a module swap
+--  and this file only commits it, so a rule applied to one has to be the
+--  same object applied to the other -- see the file's own header.
+require "/scripts/lofty_petports/petports_modules.lua"
 require "/scripts/lofty_petports/petports_filters.lua"
 
 --  SO THE PORT CAN ANSWER "CAN THIS CHASSIS LIVE HERE" WITH NO UNIT TO ASK.
@@ -1290,7 +1295,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-01q fishing stats reach the pane"
+local PETPORT_BUILD_STAMP = "2026-09-03d the colour reaches the unit"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -1501,6 +1506,26 @@ function init()
       return false
     end
 
+    --  ONE MODULE OF A KIND PER UNIT, ASKED ONCE OVER THE WHOLE PAYLOAD.
+    --
+    --  A BACKSTOP, NOT THE DECISION. The pane refuses this swap before it
+    --  lifts the item out of the cursor, which is the only place it can be
+    --  refused without cost. By the time a payload reaches here the pane has
+    --  already moved, so this catches a sender that is not the pane -- a
+    --  message handler is reachable by anything that can send one -- and it
+    --  refuses the way every other violation below does.
+    --
+    --  NOT FOLDED INTO THE LOOP. A `seen` table beside `taken` would be a
+    --  second copy of a rule the pane also applies, which is exactly the
+    --  split petports_modules.lua exists to prevent. One call, one function.
+    local duplicate = petports_moduleSetDuplicate(records)
+
+    if duplicate ~= nil then
+      sb.logError("PETPORT %s refusing module set: %s socketed twice",
+        stationUniqueId(), tostring(duplicate))
+      return refuse()
+    end
+
     local slots = petportModuleSlots()
     local accepted = {}
     local taken = {}
@@ -1548,6 +1573,42 @@ function init()
 
     sb.logInfo("PETPORT %s module set committed: %s of %s slot(s) filled",
       stationUniqueId(), sb.printJson(#accepted), sb.printJson(slots))
+    return true
+  end))
+
+  --  THE PANE'S SOUNDS, PLAYED HERE BECAUSE THE PANE CANNOT PLAY THEM.
+  --
+  --  MEASURED 2026-09-03: a ContainerPane has no audio binding -- `pane` is
+  --  containerEntityId, playerEntityId and dismiss -- and `localAnimator` probed
+  --  nil in a pane script. Both documented routes out are closed, so the object
+  --  the pane is already talking to plays its sounds on its behalf.
+  --
+  --  THIS TOOK A PAYLOAD ON THE SECOND SOUND, AND THE FIRST DRAFT SAID IT
+  --  WOULD. petports_refuseSound took nothing, on the reasoning that a handler
+  --  which cannot be told what to do cannot be told to do something else, and
+  --  its comment said a table would appear here when a second sound was wanted
+  --  and not before. `swap` is that second sound.
+  --
+  --  A CLOSED VOCABULARY, NOT A NAME PASSED THROUGH. A message handler is
+  --  reachable by anything that can send one, so the payload selects from this
+  --  table and cannot reach past it. Nothing on the wire names an asset: these
+  --  keys resolve against the `sounds` block in petports_petport.animation, so
+  --  every path lives in one file.
+  --
+  --  AN UNKNOWN NAME IS REFUSED RATHER THAN HANDED TO animator.playSound, which
+  --  would be a throw inside a message handler for a sound nobody can hear.
+  local PANE_SOUNDS = { refuse = true, swap = true }
+
+  message.setHandler("petports_paneSound", simpleHandler(function(payload)
+    local name = type(payload) == "table" and payload.sound or nil
+
+    if type(name) ~= "string" or not PANE_SOUNDS[name] then
+      sb.logInfo("PETPORT %s refusing pane sound %s", stationUniqueId(),
+        sb.printJson(name))
+      return false
+    end
+
+    animator.playSound(name)
     return true
   end))
 
@@ -1735,6 +1796,53 @@ function init()
     self.workTimer = 0
 
     sb.logInfo("PETPORT %s farming activities: %s", stationUniqueId(), sb.printJson(set))
+    return true
+  end))
+
+  --  THE RGB LAMP'S COLOUR. petData, like medic and farming, and for the same
+  --  reason: it describes the UNIT and has to travel with it to another port.
+  --
+  --  IT SURVIVES THE MODULE COMING OUT, which is the point of storing it here
+  --  rather than on the item. A player who unsockets to rearrange slots and
+  --  puts the lamp back gets their colour, not a reset -- and two RGB modules
+  --  could never disagree about what colour the unit is, because there is only
+  --  ever one colour and it does not belong to either of them.
+  --
+  --  CLAMPED HERE RATHER THAN TRUSTED. The pane clamps too, and this is not a
+  --  duplicate of that check: a message handler is reachable by anything that
+  --  can send an entity message, and a channel outside 0..255 would reach
+  --  animator.setLightColor unchecked.
+  --
+  --  AN ABSENT CHANNEL KEEPS ITS CURRENT VALUE rather than defaulting, so a
+  --  payload naming one channel moves one channel. The pane always sends all
+  --  three; nothing else has to.
+  message.setHandler("petports_setLight", simpleHandler(function(payload)
+    if type(payload) ~= "table" then return false end
+    if self.petData == nil then return false end
+
+    local set = petportLightColor()
+
+    for _, channel in ipairs(RGB_CHANNELS) do
+      local value = tonumber(payload[channel])
+
+      if value ~= nil then
+        value = math.floor(value)
+        if value < RGB_MIN then value = RGB_MIN end
+        if value > RGB_MAX then value = RGB_MAX end
+        set[channel] = value
+      end
+    end
+
+    self.petData.light = set
+    self.dirty = true
+    self.paneSignature = nil
+
+    --  PUSHED ON THE CLICK rather than left to the next tick, exactly as the
+    --  rename does. pushUnitLight is signature-gated, so whichever of the two
+    --  runs first writes it and the other returns immediately.
+    pushUnitLight()
+
+    sb.logInfo("PETPORT %s light colour: %s", stationUniqueId(), sb.printJson(set))
     return true
   end))
 
@@ -3595,6 +3703,21 @@ HYDRATOR_FLAG = "hydrator"
 --  a seed" -- that is part of replanting, not a decision beside it.
 FARMING_FLAG = "farming"
 FARMING_CLASSES = { "harvest", "water", "replant", "animals" }
+
+--  THE COLOUR CHANNELS OF THE RGB LAMP MODULE, AND THE VALUE A UNIT WEARS
+--  BEFORE ANYBODY TOUCHES IT.
+--
+--  140 IS VANILLA'S LAMP COLOUR, which petports_module_light.animation also
+--  ships. An RGB module whose settings have never been opened therefore looks
+--  exactly like the common lamp it upgrades from -- so "did the module work"
+--  is answerable before any slider is moved.
+--
+--  THE MAGNITUDE LIVES HERE, NOT ON THE ITEM, the same split arch.module.
+--  hydrator uses: the item says WHICH capability, the port owns the numbers.
+RGB_CHANNELS = { "r", "g", "b" }
+RGB_MIN = 0
+RGB_MAX = 255
+RGB_DEFAULT = 140
 MEDIC_ITEM = "medicalgoods"
 
 --  FISHING. The flag is the only gate on whether a lure exists at all.
@@ -3853,6 +3976,70 @@ function pushModuleEffects()
 end
 
 --------------------------------------------------------------------------------
+
+--  THE COLOUR THIS UNIT'S LAMP WEARS, ALWAYS A COMPLETE TABLE.
+--
+--  A FRESH TABLE EVERY CALL, not petData.light itself. Handing out the stored
+--  one would let a caller mutate persisted state by editing what looks like a
+--  local copy, and the handler above builds its result from this.
+--
+--  ABSENT MEANS DEFAULT, PER CHANNEL. A petData written before this shipped has
+--  no light table at all, and half of one is just as possible if a payload ever
+--  names one channel.
+function petportLightColor()
+  local stored = (self.petData and self.petData.light) or {}
+  local out = {}
+
+  for _, channel in ipairs(RGB_CHANNELS) do
+    local value = tonumber(stored[channel])
+    out[channel] = value ~= nil and value or RGB_DEFAULT
+  end
+
+  return out
+end
+
+--  THE COLOUR ON A DEPLOYED UNIT.
+--
+--  SIGNATURE-GATED FROM update WITH THE ENTITY ID IN THE SIGNATURE, which is
+--  arch.port.pushsignature and this is its third instance. A respawn is not a
+--  mutation, so nothing that fires only when a player moves a spinner would
+--  reach a unit that died and came back -- it would wear its default until
+--  somebody opened the pane, which is the exact fault observed on nametags.
+--
+--  ITS OWN PUSH RATHER THAN RIDING pushModuleEffects. That signature covers the
+--  module SET; a colour changes when a spinner moves, not when anything is
+--  socketed, so folding it in would re-push effects, liquid permissions and
+--  flags every time a channel ticked by one.
+--
+--  THE UNIT STORES IT AS A STATUS PROPERTY and the effect's own script reads it
+--  from there -- see petports_setLightColor. status.setPersistentEffects carries
+--  effect NAMES and no payload, so the colour cannot travel with the effect that
+--  uses it and needs this wire.
+function pushUnitLight()
+  if self.petId == nil or not world.entityExists(self.petId) then
+    --  Cleared so the next unit -- respawn or replacement -- is pushed to,
+    --  rather than matching a signature left behind by its predecessor.
+    self.pushedUnitLight = nil
+    return
+  end
+
+  local color = petportLightColor()
+
+  local signature = string.format("%s|%s|%s|%s",
+    tostring(self.petId), tostring(color.r), tostring(color.g), tostring(color.b))
+
+  if signature == self.pushedUnitLight then return end
+  self.pushedUnitLight = signature
+
+  sb.logInfo("PETPORT %s pushing light to unit %s: %s", stationUniqueId(),
+    sb.printJson(self.petId), sb.printJson(color))
+
+  --  Defined in petports_contract.lua. callScriptedEntity to a function the
+  --  target does not define returns nil SILENTLY, so the log above fires
+  --  whether or not the far end exists -- the same guard the other pushes use.
+  world.callScriptedEntity(self.petId, "petports_setLightColor",
+    color.r, color.g, color.b)
+end
 
 --  THE NAME OVER A DEPLOYED UNIT.
 --
@@ -4115,6 +4302,13 @@ function mirrorPaneState(dt)
       toggles = (self.petData and self.petData.toggles) or nil,
       medic = (self.petData and self.petData.medic) or nil,
       farming = (self.petData and self.petData.farming) or nil,
+
+      --  ALWAYS COMPLETE, UNLIKE THE THREE ABOVE. Those are absent until a
+      --  player touches them and the pane knows what absent means for each. A
+      --  colour has no such reading -- the pane would have to carry a second
+      --  copy of the default to paint a missing one -- so the accessor fills
+      --  it in here and the pane paints whatever arrives.
+      light = petportLightColor(),
       modules = self.petData.modules,
 
       --  THE ECHO. The pane stamps every module write and refuses to overwrite
@@ -12755,6 +12949,11 @@ end
   --  that for a unit created before those parameters existed. Its own signature
   --  compare is the gate; see pushPetName.
   pushPetName()
+
+  --  AND THE THIRD, SAME GATE AGAIN. A unit that respawned holding an RGB lamp
+  --  has no colour until something tells it one, and the spawn parameters do
+  --  not carry it.
+  pushUnitLight()
 
   workUpdate(dt)
 end

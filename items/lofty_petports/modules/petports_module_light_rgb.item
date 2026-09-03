@@ -1,0 +1,59 @@
+//  PETPORTS -- RGB LAMP MODULE
+//
+//  THE LAMP MODULE, WITH THE COLOUR HANDED TO THE PLAYER. Same light, same
+//  place on the body, same mechanism -- the difference is three settings rows
+//  in the petport pane while it is socketed.
+//
+//  IT DOES NOT REPLACE THE PLAIN LAMP AND MUST NOT. That one is a common drop
+//  and this is a rare one, so the cheap module has to stay worth socketing.
+//  They are separate items with separate effects; a unit carrying both gets two
+//  lights, which is a player wasting a slot rather than anything to guard
+//  against.
+//
+//  petports_moduleFlags CARRIES `rgblight` AND THAT IS WHAT REVEALS THE ROWS.
+//  The pane keys each settings row on the flag that makes it applicable -- see
+//  SETTING_ROWS' `needs` -- so a module that grants UI needs no new mirror
+//  field, only a flag and a row entry. The flag is read port-side and travels
+//  to the unit with the rest, where nothing looks at it.
+//
+//  THE COLOUR ITSELF IS NOT ON THIS ITEM, and that is deliberate. It lives on
+//  petData beside the medic and farming settings, so it survives the module
+//  being pulled out and put back, and so two of these could never disagree
+//  about what colour the unit is. A colour stored on the item would also have
+//  to be merged by moduleFieldUnion, which unions lists of strings and has no
+//  answer for two colours.
+//
+//  MAXSTACK 1 IS A REQUIREMENT, NOT A PREFERENCE -- see the plain lamp module,
+//  which explains why at length. player.swapSlotItem() returns the WHOLE cursor
+//  stack and the pane refuses a stack rather than trusting this field.
+
+{
+	"itemName" : "petports_module_light_rgb",
+	"price" : 1200,
+
+	//  RARE, AGAINST THE PLAIN LAMP'S COMMON. Rarity on a MODULE item is
+	//  decoration -- it is on a PET item that it suggests a default slot count,
+	//  see MODULE_SLOTS_BY_RARITY -- but it is the only place the item itself
+	//  says which of the two lamps is the upgrade.
+	"rarity" : "Rare",
+
+	"category" : "petports_module",
+
+	//  THE ART DOES NOT EXIST YET. Until this file is beside it, the item logs a
+	//  missing asset on load; copy the plain lamp's icon over as a placeholder
+	//  if you want to test before the real one is drawn.
+	"inventoryIcon" : "petports_module_light_rgb.png",
+
+	"description" : "A lamp assembly with a tunable emitter. Socket it into a unit and set the colour from the unit's Settings tab.",
+	"shortdescription" : "RGB Lamp Module",
+
+	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],
+
+	"maxStack" : 1,
+
+	"petports_moduleEffects" : [ "petports_module_rgblight" ],
+
+	//  READ BY THE PANE, THROUGH THE PORT'S FLAG SET, TO SHOW THE THREE COLOUR
+	//  ROWS. Nothing on the unit reads it.
+	"petports_moduleFlags" : [ "rgblight" ]
+}

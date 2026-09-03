@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-09-03b a walker with no bottom under it stops walking downward"
+local CONTRACT_BUILD_STAMP = "2026-09-03c the unit holds a lamp colour"
 
 local contractStamped = false
 
@@ -315,6 +315,55 @@ function petports_setUnitName(name, show)
   end
 
   sb.logInfo("UNIT name set to %s, tag %s", tostring(name), tostring(show == true))
+  return true
+end
+
+--  THE COLOUR OF THE RGB LAMP MODULE'S LIGHT.
+--
+--  A STATUS PROPERTY RATHER THAN A FIELD ON self, AND THAT IS THE WHOLE
+--  MECHANISM. The light is drawn by a status effect's own animator, and a
+--  status effect script runs in ITS OWN context -- it cannot see this file's
+--  self. What it CAN see is the status controller it is attached to, so the
+--  property is the shared surface between the two.
+--
+--  THE COLOUR COULD NOT TRAVEL WITH THE EFFECT. status.setPersistentEffects
+--  takes effect NAMES and carries no payload, so the port cannot hand a colour
+--  to the thing that uses it; it has to arrive separately and be waiting when
+--  the effect looks. See pushUnitLight on the port side.
+--
+--  WRITTEN EVEN WITH NO EFFECT APPLIED, deliberately. The property is set
+--  whether or not an RGB module is socketed, so a module socketed onto a unit
+--  that already has a colour lights correctly on its first frame rather than
+--  waiting for the next push.
+--
+--  CLAMPED A THIRD TIME. The pane clamps, the port clamps, and this clamps --
+--  which is not paranoia about the other two but about the CALLER: this is a
+--  global on a scripted entity and world.callScriptedEntity can reach it from
+--  anywhere.
+function petports_setLightColor(r, g, b)
+  local function channel(value)
+    value = tonumber(value)
+    if value == nil then return 140 end
+
+    value = math.floor(value)
+    if value < 0 then return 0 end
+    if value > 255 then return 255 end
+
+    return value
+  end
+
+  local color = { channel(r), channel(g), channel(b) }
+
+  --  A LIST, NOT A KEYED TABLE, because animator.setLightColor wants a Color
+  --  and the effect script hands this straight to it without reshaping.
+  local ok, err = pcall(status.setStatusProperty, "petports_lightColor", color)
+
+  if not ok then
+    sb.logInfo("UNIT setLightColor FAILED: %s", tostring(err))
+    return false
+  end
+
+  sb.logInfo("UNIT light colour set to %s", sb.printJson(color))
   return true
 end
 

@@ -50,70 +50,78 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-03 (amphibious swim mode, water entry, the dive)
+### What is built, as of 2026-09-03 (the RGB lamp module, end to end)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-ONE PIECE OF WORK, SHIPPED IN TWENTY-SIX BUILDS, AND THE FIRST SESSION WHERE THE
-DIAGNOSTICS MATTERED MORE THAN THE FIXES. Three consecutive builds failed on the
-same visible symptom for three unrelated causes; only log lines that named the
-numbers behind a decision separated them. `proc.tooling.instrument` and
-`proc.tooling.batchedits` are the durable residue.
+ONE MODULE, FIFTEEN PANE BUILDS, AND THE WORK WAS ALMOST ALL IN THE WIDGET
+LAYER. The colour wire and the light effect landed in a single build and worked
+first time. Everything that cost rounds was a textbox in a list row -- an input
+path this mod had never used and the engine does not make easy.
 
 ---
 
-**AN AMPHIBIOUS UNIT CHASES A FISH INTO OPEN WATER AND COMES BACK OUT.**
-`arch.locomotion.swimmode`, `arch.locomotion.dive`. It walks to a diving board,
-hops off, swims the fish down, and climbs out to whatever it does next. Deep
-water with no seabed under the fish is the case it was built for and the one it
-is tested against. **VERIFIED: thirteen dives, thirteen landings, no failures, no
-refusals, no stalls.**
+**THE RGB LAMP MODULE WORKS END TO END.** `arch.module.rgblight`. Socket it and
+three rows appear in the settings list -- Red, Green, Blue, each a spinner pair
+and a typed field. A change reaches the deployed unit's light in three hops in
+under 40ms, measured:
 
-**GRAVITY IS SWITCHED AT RUNTIME, REVERSING dd.locomotion.otter.**
-`dd.locomotion.otterswitch`. The chassis holds one of four modes -- `land`,
-`aquatic`, `exiting`, `diving` -- and `petports_freeMover` reads the MODE, not
-the physics, because a control override is invisible to `baseParameters`
-(`fact.unit.movementparams`). Two vanilla `PathFinder` methods are shadowed on
-the instance so a floating unit can plan at all (`fact.pathing.canpathfind`).
+        PETPORT ... pushing light to unit 128: {"r":25,...}
+        UNIT light colour set to [25,140,140]
+        PETPORTS rgblight: lamp is now [25,140,140]
 
-**THE WATER'S SURFACE IS TRACED, NOT LOOKED UP.** `arch.locomotion.dive`. A flood
-from the fish that prefers up, branching sideways only under a solid ceiling,
-collecting every opening the body fits through. `world.oceanLevel` is the obvious
-shortcut and is wrong -- `dead.locomotion.oceanlevel`. Boards and holes are then
-scored as PAIRS, biased hard toward vertical alignment, because every aligned
-dive in every log has landed and no offset one has been needed.
+The colour lives on `petData`, so it survives the module coming out and going
+back in. It defaults to vanilla's [140,140,140], so an untouched RGB module is
+indistinguishable from the common lamp it upgrades.
+
+**A UNIT MAY NOT HOLD TWO MODULES OF THE SAME ITEM.** `dd.module.oneofakind`.
+Refused in the pane before the cursor is taken, backstopped by the port, one
+predicate in one shared file. This supersedes "two hydrators are one hydrator".
+
+**THE PANE HAS SOUND.** `fact.pane.panesound`. Every refusal on a module slot
+clicks, and the one swap that is invisible -- a module dropped onto a slot
+holding the same module -- gets a pickup sound, because nothing on screen moves.
 
 ---
 
-**ADVERSARIAL TERRAIN IS THE STANDING TEST.** Islets with the port on top and the
-fish directly beneath, fish under lids, lava. Three separate failures came out of
-it and all three are fixed: the trace could not escape a boxed region, a walker
-that fell back in sank instead of swimming, and the lure drifted out of coverage
-on patrol. **VERIFIED: a failed hop out of lava now recovers.**
+**THE WIDGET LAYER IS WHERE THE SESSION WENT**, and the durable residue is three
+entries. A textbox CAN be built inside a list row, and cannot be given the left
+click by any config change -- `fact.pane.rowdispatch`, read from `StarWidget.cpp`
+after two config fixes failed (`dead.pane.rowzlevel`). The row button takes the
+press and hands focus over. A field fed by a polled remote mirror needs three
+separate books to survive being typed into -- `dd.pane.fieldbooks` -- and each
+one is there because leaving it out produced a specific visible fault, all three
+in the log.
+
+**ONE EXISTING FACT WAS CONTRADICTED AND CORRECTED.** `fact.pane.textboxpoll`
+claimed textbox callbacks do not fire per keystroke. Instrumented directly: 105
+fires in one session, one per character. The conclusion it carried -- poll, do
+not build on the callback -- was right for the wrong reason.
 
 ---
 
 **KNOWN IMPERFECT, AND DELIBERATELY LEFT:**
 
-- **The progress watchdog counts motion, not progress**
-  (`todo.unit.progressdirection`). It read a 54-tile sink as healthy. The sink is
-  fixed; the blind spot is not, and it covers anything falling or circling.
-- **A drop-through rises about a tile** when it should rise nothing, because
-  `controlJump` imparts velocity before the platform releases
-  (`todo.locomotion.dropthroughrise`). Cosmetic; the aligned-pair bias means it
-  is rarely chosen.
-- **An abandoned board replans rather than handing straight to string-pull**
-  (`todo.locomotion.stringpullhandoff`). The clear line is already proven at
-  that moment, so the replan is redundant work.
-- **`PETPORTS_DIVE_DEBUG` and `FLY_POINT_DEBUG` are both on.** Together they were
-  twelve thousand log lines in sixty-five seconds. Turn them off before shipping.
+- **No art for the module.** `petports_module_rgblight.png` does not exist; the
+  item logs a missing asset until it does.
+- **The colour field has no Enter.** A focused field releases on a click on any
+  other row or a tab change, and not on Enter -- see `fact.pane.textboxpoll` for
+  why that route is closed.
+- **The port's sound handler is dead weight** now the local route is proven
+  (`todo.pane.portsound`), and the petvent has been playing an empty sound pool
+  since it shipped (`todo.vent.silentsound`).
+- **A spinner steps by one.** The arrow auto-repeats at about 7Hz on hold, so end
+  to end is roughly 36 seconds; the field is the answer for anything far away.
+- **`PETPORTS_DIVE_DEBUG` and `FLY_POINT_DEBUG` are both still on.** Twelve
+  thousand log lines in sixty-five seconds together. Turn them off before
+  shipping.
 
-**NEXT.** The dive is content-complete for the terrain it was built against.
-What is untested is a pool the trace cannot solve at all -- fully sealed, or
-wider than `PETPORTS_DIVE_TRACE_BUDGET` -- where the unit should back off and let
-the port re-dispatch. That path exists and has never been exercised.
+**NEXT.** Art, mostly -- the module icon, and the wider art pass the mod is
+otherwise waiting on. `todo.module.huecycle` is filed and nearly free now that
+the effect and the script exist, since it needs neither the pane rows nor the
+wire.
 
 ## ARCHITECTURE
 
@@ -2429,6 +2437,13 @@ only one place to ask.
 **TWO HYDRATORS ARE ONE HYDRATOR**, free, because `moduleFieldUnion`
 deduplicates. Same honest outcome two lamp modules get.
 
+**SUPERSEDED 2026-09-03 BY `dd.module.oneofakind`.** A second module of the same
+item is now REFUSED at the slot rather than absorbed, so the sentence above
+describes a state a player can no longer reach through the pane. It is left
+standing because the union still deduplicates and still has to: that rule guards
+the socket, this one guards the read, and a petData written before the refusal
+shipped can hold a pair.
+
 **NOTHING IN THE PANE DISPLAYS CAPACITY**, so the item description is the only
 place a player learns the number, and it states it.
 
@@ -3038,6 +3053,11 @@ unit have a custom name" does not work, because EVERY unit item ships a default
 `petName` -- Diver, Wader, Flyer, Unit. A name always exists, so the tag would
 always be on and the only way to silence it would be clearing a name the player
 wanted. `petData.toggles.nametag` is the switch; the field only sets the name.
+
+**THE BUTTON ALSO RELEASES THE FIELD, ADDED 2026-09-03.** A focused textbox
+captures the keyboard including Enter, and nothing in this pane blurred anything
+until the colour rows made that obvious -- so this field had been swallowing the
+chat key since it shipped. See `arch.pane.rowfocus`.
 
 **THE BUTTON IS THE ONLY COMMIT PATH, AND THAT IS A SAFETY DECISION.** A textbox
 callback fires on ENTER, and a half-typed name reaching a server's chat-politeness
@@ -3816,6 +3836,96 @@ shortest path to the board above it, and at that moment the board has nothing
 left to offer. "Am I inside the traced tiles" was the other candidate and is
 weaker: the trace floods contiguously, so two nearly separate pools joined at one
 tile read as one body. A swept BODY answers what a ray only approximates.
+
+### A module that grants a setting, and the colour that could not ride the effect
+`arch.module.rgblight` -- see also `arch.module.effects`, `arch.port.pushsignature`, `dd.pane.fieldbooks`, `fact.unit.effectanimator`
+
+**BUILT 2026-09-03.** The RGB Lamp Module is the plain lamp with the colour
+handed to the player: three rows in the petport pane's settings list, each a
+label, a spinner and a numeric field, while the module is socketed.
+
+**IT IS THE FIRST MODULE THAT GRANTS UI**, and that needed no new mirror field.
+The item declares `petports_moduleFlags ["rgblight"]`, the port unions the flags
+and mirrors them as it already did, and the pane's settings rows key on the flag
+that reveals them -- so a module that adds settings costs a flag and a row entry.
+
+**THE COLOUR LIVES ON petData, NOT ON THE ITEM.** Two reasons and the second is
+the one that decided it. It travels with the pet like the medic and farming
+settings, and it SURVIVES THE MODULE COMING OUT -- a player unsocketing to
+rearrange slots gets their colour back rather than a reset. And a colour on the
+item would have to be merged by `moduleFieldUnion`, which unions lists of strings
+and has no answer for two colours; storing it on the pet means the question never
+arises, because there is only ever one colour and it belongs to neither module.
+
+**THREE CLAMPS, AND THEY ARE NOT REDUNDANT.** The pane clamps for the player.
+The port clamps because a message handler is reachable by anything that can send
+an entity message. `petports_setLightColor` clamps because it is a global on a
+scripted entity and `world.callScriptedEntity` reaches it from anywhere.
+
+**THE COLOUR CANNOT TRAVEL WITH THE EFFECT THAT USES IT.**
+`status.setPersistentEffects` carries effect NAMES and no payload -- the same
+wall `arch.module.liquids` hit and answered with a second field. So the colour
+goes down its own wire and is WAITING on the unit when the effect looks:
+
+    petData.light            the port's copy, persisted with the pet
+    petports_setLightColor   port -> unit, sets a status property
+    petports_lightColor      the status property the effect script reads
+
+**ITS OWN PUSH RATHER THAN RIDING pushModuleEffects.** That signature covers the
+module SET; a colour changes when a spinner moves, not when anything is socketed,
+so folding it in would re-push effects, liquid permissions and flags every time a
+channel ticked by one. `pushUnitLight` is signature-gated from `update` with the
+entity id in the signature -- `arch.port.pushsignature`'s third instance, and for
+the reason that entry already gives: a respawn is not a mutation, so a unit that
+died holding an RGB lamp would wear its default until somebody opened the pane.
+
+**THE PROPERTY IS WRITTEN WHETHER OR NOT THE MODULE IS SOCKETED**, so a module
+socketed onto a unit that already has a colour lights correctly on its first
+frame instead of waiting for the next push to change something.
+
+**IT DOES NOT REPLACE THE PLAIN LAMP.** That is a common drop and this is a rare
+one; two separate items, two separate effects, and a unit carrying both gets two
+lights. Both default to vanilla's [140,140,140], so an untouched RGB module is
+indistinguishable from the lamp it upgrades -- which makes "did the module work"
+answerable before any value is moved.
+
+### A textbox inside a list row, and the click it never receives
+`arch.pane.rowfocus` -- see also `fact.pane.rowdispatch`, `dead.pane.rowzlevel`, `dd.pane.fieldbooks`
+
+**BUILT 2026-09-03, AND IT IS THE FIRST TEXTBOX THIS MOD HAS PUT IN A LIST ROW.**
+It constructs, which was the open question -- two rules collide and the answer
+was only ever inferred. A textbox's callback must resolve at CONSTRUCTION, and a
+row widget's callback resolves only against names registered with
+`widget.registerMemberCallback` before the first `addListItem`. Register first
+and it builds; get it wrong and the pane does not open at all.
+
+**THE CALLBACK IS A NO-OP AND THAT IS DELIBERATE.** A member callback is handed
+the leaf name, identical on every row, so a row textbox cannot identify itself.
+Reading is done by a poll from `update` that walks the rows and already knows
+each one's channel -- which also avoids `widget.setData` on a textbox, unverified
+here.
+
+**THE FIELD NEVER GETS THE LEFT CLICK, AND NO CONFIG CHANGE FIXES THAT** -- see
+`fact.pane.rowdispatch` for what the source says and `dead.pane.rowzlevel` for
+the two attempts that failed. `rowButton` takes the press and hands focus over:
+
+    settingsRowClicked -> widget.focus(path .. ".settingField")
+
+That keeps the hover the button exists for -- a list row has no hover of its own
+-- and makes the WHOLE ROW a target for the field rather than a 26-pixel strip.
+
+**AND NOTHING EVER LET GO.** A focused textbox captures the keyboard, Enter
+included, so with a colour field focused the chat key stopped working. Blurring
+happens on a click on any other row, separators included, and on any tab change
+-- before `activeTab` moves, so the rows it walks are still the ones on screen.
+Enter is NOT a way out; see `fact.pane.textboxpoll` for why that route is closed.
+
+**IT COVERS THE RENAME FIELD TOO, WHICH HAD THE FAULT FIRST.** `tbPetName` has
+shipped since 2026-09-01 holding the keyboard the same way; the colour rows only
+made it noticeable. `blurPaneFields` releases both kinds, and the Rename button
+releases its own field after committing -- pressing a commit button is the least
+ambiguous "done with this" in the pane, so the caret should not survive it.
+
 
 ## DESIGN DECISIONS
 
@@ -5128,6 +5238,113 @@ the medium check had to be exempted, the flop state had to be locked out, two
 hysteresis. A cheap switch with an expensive blast radius is still an expensive
 switch.
 
+### One module of a kind per unit, refused at the slot
+`dd.module.oneofakind` -- see also `arch.module.slots`, `arch.module.hydrator`, `dd.module.writetoken`
+
+**DECIDED AND BUILT 2026-09-03. THIS SUPERSEDES "TWO HYDRATORS ARE ONE
+HYDRATOR"**, which `arch.module.hydrator` records as the honest outcome of
+`moduleFieldUnion` deduplicating. It was honest and it was never good: a player
+who socketed two paid a slot for nothing and the pane told them nothing.
+
+**BLANKET, NOT A PER-ITEM UNIQUENESS FLAG.** A flag would have to be authored on
+every module that wanted the rule, so a module that wanted it and did not say so
+would behave differently for no reason a player could see. A blanket rule needs
+no field, so a module added by anybody gets it free.
+
+**REFUSED IN THE PANE, BEFORE THE CURSOR IS TAKEN.** `moduleSlotClicked` reads
+the cursor with `player.swapSlotItem()` but does not take it until
+`setSwapSlotItem`, so a refusal there is a bare return with the item where the
+player left it. The port refuses too, but the port CANNOT refuse without
+stranding a module the pane has already lifted -- that is the loss window
+`dd.module.writetoken` describes, and it is why the pane holds the decision.
+
+**ONE PREDICATE, TWO REQUIRES.** `arch.module.slots` earns its safety from both
+sides asking `root.itemHasTag` about the same item rather than keeping two
+hand-written rules. "No two modules of the same item" is not a `root.*` query --
+it is a rule this mod invented -- so writing it twice would reintroduce exactly
+the split that property protects. `petports_moduleSetDuplicate` lives in
+`/scripts/lofty_petports/petports_modules.lua` and both sides require it.
+
+**IT TAKES THE WIRE FORMAT.** The pane asks about the set it is ABOUT to send,
+not about a cursor against the other slots, so the two sides ask one question of
+one shape of data. `moduleRecords` grew an override pair for that -- building the
+prospective set rather than mutating `paneModules` and rolling back keeps a
+half-applied swap out of the table `dd.module.writetoken` exists to protect.
+
+**DEDUPLICATION STAYS.** The union still deduplicates, because this rule guards
+the SOCKET and the union guards the READ: a petData written before this shipped,
+or by anything that is not the pane, can still hold a pair.
+
+**SAME NAME IS ALSO WHAT THE SWAP SOUND TESTS**, and the two must move together.
+If "same module" ever stops being name equality -- two lamps carrying different
+parameters, the upgrade hook `moduleFieldOf` anticipates -- then the sound will
+claim a swap was invisible when it was not.
+
+### A field that survives typing needs three books, not one
+`dd.pane.fieldbooks` -- see also `fact.pane.textboxpoll`, `arch.pane.rowfocus`, `dd.module.writetoken`
+
+**THREE SEPARATE BUGS, THREE SESSIONS APART IN CHARACTER, ONE CAUSE EACH.** A
+text field fed by a polled remote mirror needs three pieces of bookkeeping and
+each one exists because leaving it out produced a specific, visible fault.
+
+    lightShown     the TEXT the script last wrote into the box
+    lightPainted   the VALUE the box is known to be displaying
+    lightSent      the value last sent, until the echo agrees
+
+**`lightShown` -- SO THE SCRIPT'S OWN WRITE IS NOT READ BACK AS AN EDIT.** This
+is `restockconfig`'s `shownText` and its comment already says the bookkeeping is
+the point. Without it a render commits itself in a loop.
+
+**`lightPainted` -- SO AN EMPTY BOX IS UNFINISHED, NOT STALE.** Observed
+2026-09-03, backspacing 140 away one character at a time:
+
+        light g -> 14
+        light g -> 1
+        light g -> 10      the "0" typed, on the end of a "1" nobody typed
+
+An empty box commits nothing, correctly, so the stored value stayed at 1 -- and
+the paint, comparing the stored value against the TEXT, found "1" against "",
+called the field stale and wrote the 1 back one poll after it was deleted. THE
+PAINT MUST BE DRIVEN BY A CHANGE IN TRUTH, NOT BY DISAGREEMENT WITH THE WIDGET.
+
+**`lightSent` -- SO A STALE ECHO LOSES TO A NEWER EDIT.** Observed the same day:
+
+        light g -> 14
+        light g -> 1
+        light g -> 1       committed twice, nothing in between
+
+Every edit sends immediately, so two messages are in flight when the first echo
+lands carrying a value that was true when written and stale on arrival. Testing
+only whether it differed from the local value accepted it -- a stale echo and a
+genuine external change look identical that way. THE PANE OWNS A CHANNEL WHILE
+ITS WRITE IS OUTSTANDING; a mirror value is accepted only once it AGREES with
+what was last sent, which is the moment the port has caught up.
+
+**A VALUE, NOT A TOKEN, AND THAT IS THE DIFFERENCE FROM dd.module.writetoken.**
+Modules needed a stamp because a dropped reply could destroy an ITEM, so the pane
+had to recognise its own write specifically. A colour cannot be lost or
+duplicated -- both ends clamp identically and the pane sends all three channels
+every time -- so "the port now says what I said" is a complete answer and needs
+nothing on the wire to carry it.
+
+**ALL THREE CHANNELS ARE MARKED OUTSTANDING, NOT THE ONE THAT MOVED**, because
+the payload carries all three; marking only the edited one leaves the other two
+open to a stale echo carrying their older values.
+
+**OUT OF RANGE IS CLAMPED, AND THAT REVERSED THE FIRST DRAFT.** It was refused,
+to protect the caret. What that produced:
+
+        typing 999 then clicking the up spinner set the value to 100
+        typing 256 then clicking the up spinner set the value to 26
+
+Both correct given a refusal, both indistinguishable from a bug. 999 passes
+through 9 and 99, each of which commits; 999 is refused, so the unit held 99
+while the box said 999, and a spinner acting on the stored truth could only look
+like it had invented a number. THE BOX AND THE VALUE MUST NOT BE ALLOWED TO
+DISAGREE. The caret cost is paid only when the clamp bites, so a valid entry is
+still never written back and "0100" still does not snap to "100".
+
+
 ## DESIGN INTENT -- PLANNED
 
 ### The drone is always running
@@ -6208,12 +6425,41 @@ registration problem rather than a construction one. The rule is narrower than
 "always name both": **a slot naming a REAL callback must name the right-click
 one too.**
 
-### Textbox callbacks do not fire per keystroke — poll instead
-`fact.pane.textboxpoll`
+### Do not trust a textbox callback's timing — poll instead
+`fact.pane.textboxpoll` -- see also `dd.pane.fieldbooks`, `arch.pane.rowfocus`
 
-A `textbox` widget's `callback` does not fire as the player types. Measured: an
-entire editing session produced no callback line at all, while the field visibly
-accepted a backspace and then appeared stuck.
+**THIS ENTRY SAID CALLBACKS DO NOT FIRE PER KEYSTROKE AND THAT IS CONTRADICTED.**
+It read: "an entire editing session produced no callback line at all, while the
+field visibly accepted a backspace and then appeared stuck." Instrumented
+directly on 2026-09-03 -- one log line inside the callback, nothing else --
+a colour field in the petport pane fired it **105 times** across a handful of
+short edits, interleaved one per character between the commits:
+
+        settingsFieldChanged fired
+        settingsFieldChanged fired
+        light r -> 9
+        settingsFieldChanged fired
+        light r -> 99
+
+**THE POST-MORTEM: THE TWO MEASUREMENTS WERE NOT OF THE SAME THING, AND NEITHER
+IS SAFE TO GENERALISE FROM.** The original was inferred from a pane that appeared
+stuck for other reasons, and it logged in the function the callback CALLED rather
+than in the callback. The new one is direct and unambiguous but is one row
+textbox in one ContainerPane. **THE DURABLE RULE IS THE ONE THE CONCLUSION
+ALWAYS WAS: DO NOT BUILD ON WHEN IT FIRES.** Poll, whatever it does.
+
+**IT COST A FEATURE, AND CHEAPLY.** Blurring the field on Enter is the
+conventional way to finish with one, and would have been a single line -- and
+with a per-keystroke callback it makes the field impossible to type more than one
+character into. The instrumentation was added instead of the blur, precisely
+because this entry's claim was the thing being relied on. `arch.pane.rename` also
+cites "a textbox callback fires on ENTER" as part of why the rename button is the
+only commit path; that conclusion survives on its own merits -- a half-typed name
+must not reach a server -- but the reason behind it is now unreliable.
+
+The original observation, kept because it is what the poll was built from: a
+field visibly accepted a backspace and then appeared stuck, with no callback line
+anywhere in the log.
 
 `restockconfig` already ran the right way and it was not copied at first: poll
 `widget.getText` from `update`, and keep a `shownText` of every script-side
@@ -8129,6 +8375,96 @@ enabled means it never reports as a free mover at all, so it already took the
 walker branch. Worth stating because the symptom invites relaxing the habitat
 rules, and the habitat rules were correct.
 
+### Where a pane's sounds come from, and the two routes that do not exist
+`fact.pane.panesound` -- see also `arch.pane.petport`, `fact.pane.notooltips`
+
+**MEASURED 2026-09-03, AFTER TWO WRONG ANSWERS SHIPPED.**
+
+    pane.playSound        DOES NOT EXIST on a ContainerPane
+    localAnimator         nil in a pane script
+    widget.playSound      WORKS, and takes an ASSET PATH
+
+**A ContainerPane's `pane` TABLE IS THREE FUNCTIONS** -- `containerEntityId`,
+`playerEntityId`, `dismiss` -- and none is audio. The petport and the upcycler
+open through `uiConfig` and are ContainerPanes; the beacon panes open with
+interactAction "ScriptPane" and would have it. Same split as
+`fact.pane.notooltips`, and this time the docs said so before it cost a round.
+
+**`localAnimator` IS NOT BOUND IN A PANE SCRIPT.** Probed at init and again on a
+click:
+
+        petportpane: localAnimator nil, playAudio n/a
+        attempt to index a nil value (global 'localAnimator')
+
+The wiki lists that table for client-side animation scripts and names objects and
+active items; a pane is neither.
+
+**`widget.playSound(audio, [loops], [volume])` IS THE ANSWER AND ITS ARGUMENT IS
+THE TRAP.** Every other function in the widget table takes a WIDGET NAME first.
+This one takes an asset path and nothing else, so a call that looks exactly like
+the rest of the file is wrong.
+
+**THE OBJECT CAN PLAY THEM AND IT IS THE WRONG SHAPE.** It was built that way
+first -- a `sounds` block on the port's animation and a message handler -- and it
+works, at the cost of a round trip and positional audio for anyone standing
+nearby. Kept only as a fallback while the local route was unproven.
+
+### A status effect gets an animator only if it declares one
+`fact.unit.effectanimator` -- see also `arch.module.rgblight`, `arch.module.effects`
+
+**THE `animator` TABLE IS ABSENT IN A STATUS EFFECT SCRIPT UNLESS THE
+`.statuseffect` SETS `animationConfig`.** Documented, and load-bearing rather than
+incidental: a light and the script that recolours it must be declared in the same
+effect file, or the script has nothing to talk to.
+
+**THE animator IS THE EFFECT'S OWN, NOT THE WEARER'S.** `animator.setLightColor`
+addresses a light named in the effect's animation, so the name is spelled in the
+animation and in the script and nowhere else.
+
+**A STATUS PROPERTY IS THE ONLY SHARED SURFACE BETWEEN AN EFFECT SCRIPT AND THE
+UNIT SCRIPT.** They run in separate contexts -- the effect cannot see the unit's
+`self` and the unit cannot see the effect's animator -- but both can see the
+status controller. `status.setStatusProperty` on one side and
+`status.statusProperty` on the other is how a value crosses.
+
+**READ DEFENSIVELY. THE NAMESPACE IS FLAT AND SHARED.** Anything may write a
+status property, and a table of the wrong shape reaching `animator.setLightColor`
+is a throw inside an update loop -- which takes the effect down and leaves the
+unit dark with no obvious cause.
+
+### Who gets a click inside a list row, and it is not who the config says
+`fact.pane.rowdispatch` -- see also `arch.pane.rowfocus`, `dead.pane.rowzlevel`, `fact.pane.itemslotbutton`
+
+**READ FROM `StarWidget.cpp`, 2026-09-03**, after two config-level fixes failed:
+
+        bool Widget::sendEvent(InputEvent const& event) {
+          for (auto child : reverseIterate(m_members))
+            if (child->sendEvent(event)) return true;
+          return false;
+        }
+
+**CHILDREN ARE OFFERED THE EVENT IN REVERSE ORDER AND THE FIRST TO CONSUME IT
+WINS**, so a later-declared sibling should take precedence. IT DOES NOT INSIDE A
+LIST ROW. A textbox declared after a full-row button lost the left click anyway,
+and declaring it FIRST changed nothing -- the same answer from both ends.
+Whatever order a row's `m_members` ends up in, it is not the order written in the
+`listTemplate`; a template is a JSON object and nothing promises to preserve it.
+
+**THE RIGHT CLICK IS WHAT DIAGNOSED IT.** A right click falls through the row
+button and focuses the field perfectly, because a ButtonWidget handles the LEFT
+button only and declines the other. So the field is under the cursor, its bounds
+are right, and it works -- it simply never receives the press that matters.
+That also rules out hit area, `maxWidth` and backing art as explanations.
+
+**A BUTTON CAN ACT WITHOUT WINNING FOCUS.** The spinner arrows are buttons in the
+same rows and they fire with the row button present; only the field, which needs
+the press to take FOCUS rather than merely to act, is blocked.
+
+**SO HAND FOCUS OVER RATHER THAN COMPETING FOR IT.** `widget.focus(widgetName)`
+resolves by member path -- `Widget::focus` sets the flag and calls
+`window()->setFocus(this)` -- so the button that took the click can give it away.
+
+
 ## DISPROVEN
 
 ### Sinker jumping underwater was never a liquid problem
@@ -8633,6 +8969,35 @@ trade, just a correctness one.
 at a 400-tile trace budget will reach for `oceanLevel` within a minute, and the
 reason it fails is invisible on the test world where it works.
 
+### zlevel and declaration order do not decide who takes a row's click
+`dead.pane.rowzlevel` -- see also `fact.pane.rowdispatch`, `arch.pane.rowfocus`
+
+**TWO THEORIES, TWO BUILDS, BOTH WRONG, 2026-09-03.** The symptom throughout: a
+textbox in a list row would not take focus while a full-row button was present.
+
+**THEORY ONE -- RAISE THE FIELD'S zlevel.** Shipped at `zlevel 5` against the
+button's -1, together with hiding the button. Focus worked, and because two
+changes landed at once neither was proven. Restoring the button broke focus again
+with the zlevel untouched, which retires the theory: zlevel orders RENDERING and
+does not order who receives the press.
+
+**THEORY TWO -- DECLARE THE FIELD FIRST IN THE listTemplate.** Argued from
+`Widget::sendEvent`'s `reverseIterate`, which does mean a later sibling wins.
+Shipped, and changed nothing. The field had already been declared after the
+button from the start and lost anyway, so both orderings lose -- which is the
+same answer twice and says the config's order never reaches `m_members`.
+
+**A THIRD, KILLED BEFORE IT SHIPPED -- THE FIELD HAS NO BACKING SO ITS HIT AREA
+IS TINY.** Plausible, and the right click disproved it before the build was
+tested: a right click reaches the field and focuses it from the same pixel. The
+backing was kept anyway, as decoration, which is all it ever was.
+
+**WHAT ACTUALLY WORKS IS IN `arch.pane.rowfocus`** -- the button takes the click
+and calls `widget.focus` on the field. THE DURABLE LESSON IS NARROWER THAN THE
+THREE THEORIES: the input a widget RECEIVES and the input it CONSUMES are
+different questions, and only the second is visible from a config file.
+
+
 ## REFERENCE
 
 ### The filter vocabulary is measured, not guessed
@@ -8924,6 +9289,35 @@ monstertype raises the bar and shortens the bore time, but that is TUNING, not a
 fix — the rewrite is the fix.
 
 ---
+
+### The OpenStarbound repo's first commit is unmodified retail source
+`ref.tooling.osbaseline` -- see also `proc.tooling.controlfirst`, `fact.pane.rowdispatch`
+
+**WHICH TURNS "IS THIS VANILLA OR OPENSTARBOUND?" INTO A DIFF.** The oldest
+commit in the repo is the 1.4.4 source as shipped, with no edits. So for any
+engine behaviour this mod relies on:
+
+        git log --oneline --reverse | head -1
+        git diff <first-sha> HEAD -- source/windowing/StarTextBoxWidget.cpp
+
+An addition is OpenStarbound's and may be configurable, may be recent, and is
+not something a player on retail has. An unchanged line is vanilla's and has
+been true since 1.4.4.
+
+**IT IS ALSO THE ANSWER TO A QUESTION THIS DOCUMENT KEEPS ASKING FROM MEMORY.**
+Recalling what vanilla did, and stating it as though it were read, is how three
+widget theories in one session were argued from things nobody had looked at --
+see `dead.pane.rowzlevel`. The baseline removes the excuse: there is no case
+where vanilla's behaviour has to be remembered.
+
+**TWO DIFFS WORTH RUNNING WHEN SOMEBODY IS NEXT IN THERE.**
+`StarTextBoxWidget` -- whether `KeyboardCaptureMode` is an OpenStarbound
+addition, which would suggest a config key selecting whether a focused field
+swallows key BINDINGS as well as text, and that is what decides whether Enter
+can reach chat. And `StarListWidget` -- whether a row's `m_members` order comes
+from the template, which `fact.pane.rowdispatch` concludes it does not, from two
+failed experiments rather than from reading it.
+
 
 ## BACKLOG
 
@@ -10199,6 +10593,61 @@ closing-distance test would fail the units it is meant to protect. That is
 presumably why it counts motion, and it is why this is filed rather than
 changed.
 
+### The petvent's sound pool is empty and always has been
+`todo.vent.silentsound` -- see also `fact.pane.panesound`
+
+**FOUND 2026-09-03 while copying the vent's pattern for the port.**
+`petports_petvent.animation` reads:
+
+        "sounds" : { "vent" : [ ] }
+
+An empty pool. `animator.playSound("vent")` fires at BOTH ends of every teleport
+-- departure and arrival, which is deliberate and commented -- and plays nothing.
+The call shape is proven; a sound coming out of it never was.
+
+Cheap: one path in one file. It has been silent since vents shipped, so nothing
+depends on the silence.
+
+### The port's sound handler is now a fallback nothing uses
+`todo.pane.portsound` -- see also `fact.pane.panesound`
+
+**FILED 2026-09-03, AND IT IS A DELETION.** The pane played its sounds through
+the port while `widget.playSound` was unproven. It is proven -- a full test
+session logged zero fallbacks -- so `petports_paneSound`, its `PANE_SOUNDS` table
+on the port, and the `sounds` block in `petports_petport.animation` are all dead
+weight, along with the fallback branch in the pane's `paneSound`.
+
+Left in for one build deliberately: that build also landed the colour wire and
+the light effect, and a sound that silently vanished would have been one more
+thing to rule out while reading a log about a light.
+
+### Mixed line endings in petports_petport.lua
+`todo.tooling.crlfdrift` -- see also `proc.tooling.halfedit`
+
+**FOUND 2026-09-03.** The file is CRLF and carries THREE bare-LF lines, 9815 to
+9817, inside the medic patient generator -- the `if #patients == 0 then` block.
+That is a `str_replace` writing LF into a CRLF file, which this document already
+warns about, having already landed once unnoticed.
+
+Harmless to Lua and invisible in game. It matters because it is the residue of a
+class of edit that CAN do damage, and because a second one is easier to miss
+beside a first. Every edit to that file since has asserted the count stayed at
+three rather than quietly adding to it.
+
+### A hue-cycling lamp module
+`todo.module.huecycle` -- see also `arch.module.rgblight`, `todo.module.designpass`
+
+**FILED 2026-09-03, WANTED, AND CHEAP.** A third lamp whose colour sweeps hue
+rather than being chosen. Deliberately deferred until the configurable one
+worked, and it is now nearly free: the effect script, the animation and the
+`setLightColor` call all exist, and this variant needs NEITHER the pane rows nor
+the wire -- no settings, no petData, no push. One item, one effect, one script
+that ignores the status property and walks hue itself.
+
+**IT IS A THIRD LAMP, NOT A MODE OF THE SECOND.** A mode would need a fourth
+setting row and a rule for what the three colour rows mean while it is on.
+
+
 ## PROCESS
 
 ### A correction filed against a decision does not correct the decision
@@ -10849,3 +11298,29 @@ edits: the function.
 **AND `#t` ON A POINT IS 2**, so a length check cannot tell a list of openings
 from a single opening. Guards on shape must test `type(t[1])`, not `#t`. That is
 what made the bad value survive one build undetected.
+
+### A new helper goes below every local it calls, and this was hit twice
+`proc.tooling.localorder` -- see also `fact.tooling.nilglobal`, `proc.tooling.paneheck`
+
+**TWICE IN TWO CONSECUTIVE BUILDS, 2026-09-03, BOTH IN THE SAME FILE.** A helper
+added near the top of `petportconfig.lua` called `dbg`, a `local` defined 330
+lines below it. The next build's helper called `tell`, a `local` 44 lines below
+it. Both resolve as GLOBALS at that point, both are nil, and both throw -- not at
+load, but on the one path that calls them, which in both cases was a refused
+click nobody exercises often.
+
+**THE FILE ALREADY WARNS ABOUT THIS IN ITS OWN COMMENTS** -- "a `local` further
+down the file is a nil global to everything before it" -- beside `activeTab`,
+which was moved for exactly this reason. Knowing the rule did not prevent it
+twice, which is what makes it a process entry rather than a fact.
+
+**THE CHECK IS MECHANICAL AND TAKES SECONDS.** For every name a new helper
+touches, compare the line of its definition against the line of its first use.
+Both faults were caught that way, before delivery, after the second one made the
+pattern obvious.
+
+**THE PANE PRE-FLIGHT CANNOT SEE IT.** From the linter's side a forward
+reference to a `local` is indistinguishable from a reference to a legitimate
+global, which is the same blind spot `proc.tooling.paneheck` records for
+callback registration -- and a candidate for it to grow.
+
