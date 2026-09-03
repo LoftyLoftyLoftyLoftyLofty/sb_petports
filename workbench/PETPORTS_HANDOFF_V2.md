@@ -4141,8 +4141,12 @@ nothing errors.
 
 **BUILT 2026-09-03. MANUAL AND AUTOMATIC.** `petports_feedFuel(descriptor,
 sparing)` refuses anything without the `petports_fuel` tag and returns ONE
-TABLE -- `{ amount, flavor }`, or nil. 60 plain, 120 preferred. The
-thrown-on-the-ground source in `dd.fuel.selffeed` is still not built.
+TABLE -- `{ amount, flavor }`, or nil. 60 plain, 120 preferred.
+
+**ALL THREE SOURCES NOW EXIST.** This entry said for one day that the
+thrown-on-the-ground source in `dd.fuel.selffeed` was still unbuilt; it landed
+on 2026-09-03 -- see `arch.fuel.groundfeed`, which is also where the reason
+nothing had looked at the ground since `eatAction.lua` was removed is recorded.
 
 **ONE TABLE BECAUSE `callScriptedEntity` DOES NOT CARRY A SECOND RETURN.** It
 returned `amount, flavor` for one build and the port saw the amount and never
@@ -4207,6 +4211,65 @@ string over the wire for a distinction the player does not act on differently.
 Details tab at `[240, 116]`, and an empty `itemslot` draws no art of its own, so
 it is a 16x16 hitbox on bare background. It needs a backing image -- see
 `todo.art.panes`.
+
+### Feeding from the ground and from its own hands -- BUILT AND VERIFIED
+`arch.fuel.groundfeed` -- see also `arch.fuel.eat`, `dd.fuel.selffeed`, `dd.fuel.autoeat`, `dd.fuel.nibblerestock`, `dead.fuel.eataction`
+
+`dd.fuel.selffeed`'s third source. Built 2026-09-03, verified the same day.
+
+**TWO MECHANISMS, AND THE COMPOSITION IS THE DESIGN.** Neither is a new task
+type; between them there is no new act and no unit-side change at all.
+
+  - **`nibbleFromCargo()`** -- a FEEDER, not a generator. Runs on the work tick
+    before the scans and before `findWork`. Under the mark and holding a treat
+    means it eats where it stands; no dispatch, no walking.
+  - **`fuelGroundWork()`** -- a generator that dispatches an ORDINARY `collect`
+    at a treat drop. The unit takes it as it takes any drop, cargo receives it,
+    the feeder eats it on the next tick, the remainder deposits normally.
+
+**"EAT WHAT YOU PICK UP, DEPOSIT THE REST" IS AN EMERGENT PROPERTY**, not a
+third thing that does both. MEASURED: a unit at zero took a stack of 203 plain
+treats, ate 15 and deposited 188. 15 x 60 is exactly 900, so `sparing` stopped
+it precisely at the cap with nothing wasted and `FUEL_MEAL_LIMIT` was never
+approached.
+
+**BEING A FEEDER RATHER THAN A GENERATOR IS WHY THE UPCYCLER PATH CAME FREE.**
+`nibbleFromCargo` catches a treat arriving in cargo from ANY source. MEASURED:
+the machine-output generator tidied a savory out of an upcycler's slot 3 at
+15:38:31.360 and the unit ate it 69ms later -- `ate petports_petfuel_savory
+(savory) for 120 fuel (prefers savory), now 199.83`. Nothing was written for
+that case and nothing needs to be.
+
+**THE GROUND RUNG SITS ABOVE `fuelFetchWork` AND BOTH SIT ABOVE THE FUEL GATE.**
+Above the crate on perishability -- a treat on the floor is free and on a
+despawn timer where a crate is neither, the same argument that puts collect
+above harvest. Above the gate because that placement is what makes zero
+recoverable, and it is inherited from `fuelFetchWork` rather than restated.
+
+**NO PARTICIPATION GROUP.** Eating is not hauling. A player who unticks Item
+Pickup has said nothing about whether their pet may feed itself.
+
+**NO DEFERRAL TO A CLOSER UNIT, unlike `collectionWork`.** Deferral asks whether
+somebody else would do this better; a hungry unit is asking for itself.
+
+**EMPTY CARGO ONLY on the ground rung**, which is the ordering working rather
+than a limitation: a unit already holding a treat has had it eaten by the
+feeder, and a unit holding anything else deposits first, since deposit is also
+above the gate. What that leaves uncovered is a starving unit holding a rock
+with NO deposit beacon anywhere -- which belongs to the opportunistic unit-side
+grab and is why that mechanism is worth building separately.
+
+**ELIGIBILITY IS THE `petports_fuel` TAG, NOT A NAME LIST.** `isTreat` asks
+exactly what `petports_feedFuel` asks, so the port's idea of a treat and the
+unit's cannot drift, and a third party's treat works with no entry anywhere.
+`fuelTreatOrder` is still right for choosing a CRATE, because that needs names
+to hand to `containerAvailable`.
+
+**KNOWN AND ACCEPTED: the mirror is one tick stale after a bite.** The feeder
+moves the unit's real resource; `petportFuelled()` reads the mirror. Observed
+twice in 12,876 lines -- a unit ate at 15:35:08.760 and the port said "out of
+fuel" 10ms later, correcting on the next work tick. Ruled cosmetic 2026-09-03:
+a starving unit missing one dispatch tick because it is busy eating is fine.
 
 ### Preferred flavor, derived from the seed, resolved in one place
 `arch.fuel.preference` -- see also `arch.fuel.eat`, `dd.fuel.flavor`, `arch.pathing.oneanchor`
@@ -5074,6 +5137,29 @@ The four tiers, in `petports_flavors.config`:
     4   deliberate acquisition -- a monster part, or something cooked
     2   farmed or gathered on purpose -- most produce
     1   incidental -- picked up while doing something else, uncounted
+
+### A hungry unit eats restock stock, and that is the feature
+`dd.fuel.nibblerestock` -- see also `arch.fuel.groundfeed`, `dd.fuel.selffeed`
+
+`nibbleFromCargo` runs before `findWork`, so a unit carrying treats to fill a
+restock request eats them en route. OBSERVED 2026-09-03 against a live beacon
+requesting all eight treat items at 100-1000 each.
+
+**DECIDED KEPT.** A restock box for pet treats is where they would be going to
+eat anyway, so the trip is not wasted so much as short-circuited. It also
+incentivises a player, gently, to keep the fleet topped up.
+
+**THE ARGUMENT AGAINST WAS CONSIDERED AND REJECTED:** that a restock
+destination NOT marked as a pet feeder should be immune, so a player can stage
+treats somewhere units will not raid. Coherent, and it would need the feeder
+flag threaded from the destination beacon into a generator that does not
+currently know which beacon its cargo is for. Not worth that for a case nobody
+has wanted yet.
+
+**THE CONSEQUENCE IS SHARP AND UNDOCUMENTED ANYWHERE A PLAYER LOOKS:** a treat
+restock request can be starved indefinitely by a hungry fleet, and no log line
+says that is why the crate never fills. Reopen as a pane hint rather than as a
+behaviour change if anyone reports it.
 
 ### Module slot count is authored, with rarity as the fallback
 `dd.module.slotsbyrarity` -- see also `arch.module.slots`
@@ -9469,6 +9555,36 @@ correctly and was still wrong: bounded harm is not no harm, and a permanent
 baby was met first. Deleted entirely once the real filter existed. **Note that
 worlds which ran that build carry an orphaned `petports_monsterProbes`
 property; nothing reads it.**
+
+### Putting `eatAction.lua` back
+`dead.fuel.eataction` -- see also `arch.fuel.groundfeed`, `dd.fuel.selffeed`
+
+The obvious fix for "pets no longer eat food thrown at them", and it could
+never have worked.
+
+Vanilla did the job with `eatAction.lua` and `begAction.lua`, and both left all
+five scripts lists when `petports_fuel` replaced hunger. That IS why nothing had
+looked at the ground since -- the diagnosis is right as far as it goes. The
+monstertypes still carry `hungerStarvingLevel` and the `eat` / `beg` /
+`starving` `actionParams`, left in place as vanilla's shape, and they are inert.
+
+**RESTORING THEM WOULD CHANGE NOTHING, because the appetite cannot be PICKED.**
+The monstertypes already record it: with `strictPortTethering` on,
+`petports_leashTask` never returns nil for a tethered unit and queues at
+`LEASH_SCORE` 120, while every appetite caps at 100. `petBehavior.run`'s pick
+loop breaks rather than continues, so a leashed unit never reaches an appetite
+branch at all.
+
+So this had to be a work generator, like everything else here. It is worth
+recording as a dead end rather than as an obvious non-option, because the
+scripts-list line is the first thing anyone will find when asking why pets stop
+eating, and it looks like a complete answer.
+
+**A SECOND ATTRACTION THAT IS ALSO WRONG:** lowering `LEASH_SCORE` or raising
+the appetite cap so hunger CAN interrupt. That reopens the exact behaviour
+`strictPortTethering` exists to suppress, for a mechanism the work ladder
+already expresses better -- and the ladder version can be ordered against
+deposit and collection, which an appetite score cannot.
 
 ### Reading another entity's interactivity
 `dead.farming.trapinteractive` -- see also `fact.farming.harvestable`, `arch.farming.traps`

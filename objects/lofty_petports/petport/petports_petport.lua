@@ -10496,6 +10496,133 @@ end
 --  is here so a bug in the refusal path cannot empty a crate in one tick.
 FUEL_MEAL_LIMIT = 32
 
+--  IS THIS ITEM A TREAT? THE TAG, NOT A NAME LIST.
+--
+--  petports_feedFuel refuses anything without `petports_fuel`, so asking the
+--  same question here is what keeps the port's idea of a treat and the unit's
+--  from drifting -- and it means a third party's treat works with no entry
+--  anywhere in this mod. fuelTreatOrder is still the right tool for choosing
+--  WHICH crate to walk to, because that needs names to ask containerAvailable
+--  with; this is the right tool for looking at something already in hand.
+local function isTreat(name)
+	if type(name) ~= "string" then return false end
+	local ok, tagged = pcall(root.itemHasTag, name, "petports_fuel")
+	return ok and tagged == true
+end
+
+--  EAT WHAT IT IS ALREADY CARRYING.
+--
+--  NO DISPATCH, NO WALKING, NO TASK. A unit that is under the mark and holding
+--  a treat is already standing next to its own dinner; sending it anywhere
+--  would be theatre. This runs on the work tick and the unit does not move.
+--
+--  NOT THE MOST NETWORK-EFFICIENT MEAL, ON PURPOSE. fuelFetchWork crosses the
+--  base for a preferred flavor because it is choosing between crates anyway.
+--  This one is choosing between what is in its hands, and a hungry unit holding
+--  a plain treat should eat the plain treat rather than walk past it to a
+--  savory one it likes better.
+--
+--  PREFERRED FIRST ONLY AS A TIE-BREAK, which is what that distinction means in
+--  practice: order the treats it HOLDS, then eat down the list.
+--
+--  SAFE MID-ERRAND. depositWork reads self.petData.cargo LIVE on arrival rather
+--  than from a snapshot taken at dispatch, so a unit that eats two of the five
+--  treats it is carrying to a crate deposits the remaining three and nothing
+--  desynchronises.
+--
+--  THE UNIT IS THE TERMINATOR, exactly as in feedFromCrate: this feeds one at a
+--  time until petports_feedFuel returns nil, because the port's mirror is stale
+--  after the first bite of a loop. A refusal ends the meal outright rather than
+--  moving to the next stack -- the refusal is about the UNIT being full, so the
+--  next stack would be refused too.
+local function nibbleFromCargo()
+	if self.petId == nil or not world.entityExists(self.petId) then return end
+	if not petportFuelWanted() then return end
+	if self.petData == nil or type(self.petData.cargo) ~= "table" then return end
+	if #self.petData.cargo == 0 then return end
+
+	local preferred = petportUnitFlavor()
+	local preferredItem = preferred ~= nil and petports_flavorItem(preferred) or nil
+
+	--  INDICES, GATHERED BEFORE ANYTHING IS EATEN. Removing a stack shifts
+	--  every index after it, so the loop below re-finds its stack by NAME on
+	--  each bite rather than trusting a position it captured earlier.
+	local held = {}
+
+	for _, stack in ipairs(self.petData.cargo) do
+		if isTreat(stack.name) then
+			table.insert(held, stack.name)
+		end
+	end
+
+	if #held == 0 then return end
+
+	table.sort(held, function(a, b)
+		if a == preferredItem then return b ~= preferredItem end
+		if b == preferredItem then return false end
+		return a < b
+	end)
+
+	local meals = 0
+
+	for _, name in ipairs(held) do
+		local hungry = true
+
+		while hungry and meals < FUEL_MEAL_LIMIT do
+			--  RE-FOUND EVERY BITE. See the note above on shifting indices.
+			local index, stack = nil, nil
+
+			for i, candidate in ipairs(self.petData.cargo) do
+				if candidate.name == name then
+					index, stack = i, candidate
+					break
+				end
+			end
+
+			if stack == nil then break end
+
+			local item = { name = stack.name, count = 1,
+				parameters = stack.parameters }
+
+			--  SPARING, MATCHING feedFromCrate. A treat worth more than the
+			--  remaining headroom is declined whole rather than half-eaten, and
+			--  the leftover stays in cargo where it can be deposited.
+			--
+			--  NOTHING IS DEBITED BEFORE THE UNIT ANSWERS, which is the one way
+			--  this is simpler than the crate path: there is no consume to undo,
+			--  so a refusal costs nothing and needs no put-back.
+			local okFeed, meal = pcall(world.callScriptedEntity, self.petId,
+				"petports_feedFuel", item, true)
+
+			if okFeed and type(meal) == "table"
+			   and (tonumber(meal.amount) or 0) > 0 then
+				countFed(meal.flavor)
+				meals = meals + 1
+
+				local count = (stack.count or 1) - 1
+				if count <= 0 then
+					table.remove(self.petData.cargo, index)
+				else
+					stack.count = count
+				end
+			else
+				hungry = false
+			end
+		end
+
+		if meals >= FUEL_MEAL_LIMIT then break end
+	end
+
+	if meals > 0 then
+		sb.logInfo("PETPORT %s unit ate %s treat(s) out of its own cargo "
+			.. "(%s stack(s) still held)",
+			stationUniqueId(), sb.printJson(meals),
+			sb.printJson(#self.petData.cargo))
+
+		flushCargo()
+	end
+end
+
 function feedFromCrate(containerId, treatName, workId)
   if containerId == nil or treatName == nil then return end
   if not world.entityExists(containerId) then return end
@@ -10649,6 +10776,151 @@ local function fuelFetchWork()
   return nil, string.format(
     "%s feeder crate(s), none holding a treat this unit can use (headroom %s)",
     crates, tostring(math.floor(headroom)))
+end
+
+--  GO AND GET A TREAT OFF THE FLOOR.
+--
+--  dd.fuel.selffeed's third source, which arch.fuel.eat recorded as unbuilt.
+--  Vanilla did this with eatAction.lua, and that came out of all five scripts
+--  lists when fuel replaced hunger -- so nothing had looked at the ground since.
+--
+--  PUTTING eatAction BACK WOULD NOT HAVE WORKED EITHER, and the monstertypes
+--  already say why: with strictPortTethering on, petports_leashTask never
+--  returns nil for a tethered unit and queues at LEASH_SCORE 120, while every
+--  appetite caps at 100. No appetite action can ever be picked. So this had to
+--  be a work generator, like everything else here.
+--
+--  IT DISPATCHES AN ORDINARY "collect", AND THAT IS THE WHOLE DESIGN. There is
+--  no new task type, no new act and no unit-side change: the unit walks to the
+--  drop and takes it exactly as it takes any other drop, cargo receives it, and
+--  nibbleFromCargo eats it on the next work tick. "Eat what you pick up and
+--  deposit the rest" falls out of composing two mechanisms that each do one
+--  thing, rather than out of a third that does both.
+--
+--  ABOVE THE FUEL GATE, beside fuelFetchWork, so a unit at zero can still do
+--  it -- that placement is the whole reason zero is recoverable and it is
+--  inherited here rather than restated.
+--
+--  BELOW fuelFetchWork IS WRONG AND THIS SITS ABOVE IT. A treat on the floor is
+--  free and on a despawn timer; a crate is neither. Same perishability argument
+--  that puts collect above harvest.
+--
+--  NO PARTICIPATION GROUP. Eating is not hauling. A player who unticks Item
+--  Pickup has said nothing about whether their pet may feed itself, and a unit
+--  that starves because collection is off would be a genuinely baffling bug.
+--
+--  EMPTY CARGO ONLY, AND THAT IS NOT A LIMITATION SO MUCH AS THE ORDER WORKING.
+--  A unit already holding a treat does not need this -- nibbleFromCargo has
+--  already eaten it. A unit holding something else is one stack into the
+--  one-stack-per-trip model, and depositWork sits above the fuel gate too, so
+--  it puts the load down first and picks the treat up on a later tick.
+--
+--  What that leaves uncovered is a starving unit holding a rock with NO deposit
+--  beacon anywhere -- it can neither put the rock down nor pick the treat up.
+--  That case belongs to the opportunistic unit-side grab, which does not care
+--  about cargo, and is why that mechanism is worth building separately rather
+--  than being folded in here.
+local function fuelGroundWork()
+  if not petportFuelWanted() then
+    return nil, "unit is above the fuel low-water mark"
+  end
+
+  if self.petData ~= nil and type(self.petData.cargo) == "table"
+     and #self.petData.cargo > 0 then
+    return nil, "hungry, but carrying a load -- putting that down first"
+  end
+
+  local rects = self.networkRects
+  if rects == nil or #rects == 0 then rects = { coverageRect() } end
+
+  local from = entity.position()
+  if self.petId ~= nil and world.entityExists(self.petId) then
+    from = world.entityPosition(self.petId)
+  end
+
+  local best, bestDistance = nil, nil
+  local seen = {}
+  local treats, rejected = 0, { claimed = 0, backedOff = 0, gone = 0, medium = 0 }
+
+  for _, area in ipairs(rects) do
+    local found = world.entityQuery({ area[1], area[2] }, { area[3], area[4] }, {
+      includedTypes = { "itemDrop" }
+    })
+
+    for _, dropId in ipairs(found or {}) do
+      if not seen[dropId] then
+        seen[dropId] = true
+
+        local okItem, descriptor = pcall(world.itemDropItem, dropId)
+
+        if okItem and type(descriptor) == "table" and isTreat(descriptor.name) then
+          treats = treats + 1
+
+          --  THE SAME WORK ID collectionWork USES, DELIBERATELY. A drop is one
+          --  thing and two ports must not both walk to it, whichever reason
+          --  each of them had. Sharing the id is what makes the existing claim
+          --  arbitrate between hunger and hauling for free.
+          local workId = "drop:" .. tostring(dropId)
+          local failure = self.workFailures[workId]
+          local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
+
+          if backedOff then
+            rejected.backedOff = rejected.backedOff + 1
+          elseif not claimFree(workId) then
+            rejected.claimed = rejected.claimed + 1
+          elseif not world.entityExists(dropId) then
+            rejected.gone = rejected.gone + 1
+          else
+            local position = world.entityPosition(dropId)
+
+            --  IN THE LOOP, NOT ON THE WINNER. Same reason harvestWork gives:
+            --  refusing the winner declines the whole rung, so one treat in a
+            --  pond would stop a walker eating the three on dry land.
+            if not targetEligible("treat " .. tostring(dropId), position, dropId) then
+              rejected.medium = rejected.medium + 1
+            else
+              local distance = world.magnitude(from, position)
+
+              if bestDistance == nil or distance < bestDistance then
+                best, bestDistance = dropId, distance
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  --  NO DEFERRAL TO A CLOSER UNIT, unlike collectionWork, and the asymmetry is
+  --  the point. Deferral asks "would somebody else do this better"; a hungry
+  --  unit is asking for itself, and standing aside from your own dinner because
+  --  a colleague is nearer is not politeness, it is starvation.
+  if best == nil then
+    if treats == 0 then
+      return nil, "hungry, and no treat on the ground in network coverage"
+    end
+
+    return nil, string.format(
+      "hungry, %s treat(s) on the ground, none reachable: %s claimed, "
+      .. "%s backed off, %s gone, %s in a medium this chassis cannot work in",
+      treats, rejected.claimed, rejected.backedOff, rejected.gone,
+      rejected.medium)
+  end
+
+  sb.logInfo("PETPORT %s hungry unit going for a treat on the ground at %s, "
+    .. "%s away (%s treat(s) in coverage)",
+    stationUniqueId(), sb.printJson(world.entityPosition(best)),
+    sb.printJson(bestDistance), sb.printJson(treats))
+
+  return {
+    id = "drop:" .. best,
+    --  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
+    mediumVerified = true,
+    type = "collect",
+    port = stationUniqueId(),
+    target = best,
+    position = world.entityPosition(best)
+  }
 end
 
 local function withdrawWork()
@@ -12307,8 +12579,19 @@ local function findWork()
   --  to do. dd.fuel.autoeat expects it to fire at 25% and the gate never to be
   --  reached at all; this placement is what makes zero recoverable when that
   --  expectation is wrong.
+  --  THE FLOOR BEFORE THE CRATE. A treat lying on the ground is free and is on
+  --  a despawn timer; a crate trip is neither, and the crate will still be full
+  --  in a minute. Same perishability rule that puts collect above harvest.
+  local scrap, noScrap = fuelGroundWork()
+  if dispatchable(scrap) ~= nil then return scrap end
+
   local grub, noGrub = fuelFetchWork()
   if dispatchable(grub) ~= nil then return grub end
+
+  if noScrap ~= nil and noScrap ~= self.fuelGroundReason then
+    self.fuelGroundReason = noScrap
+    sb.logInfo("PETPORT %s ground feed idle: %s", stationUniqueId(), tostring(noScrap))
+  end
 
   if noGrub ~= nil and noGrub ~= self.fuelReason then
     self.fuelReason = noGrub
@@ -13411,6 +13694,12 @@ local function workUpdate(dt)
       stationUniqueId())
     publishRegistry()
   end
+
+  --  BEFORE THE SCANS AND BEFORE findWork, WHICH IS THE POINT. A unit holding
+  --  a treat and under the mark should eat it rather than have the ground rung
+  --  below refuse on "carrying a load" and the crate rung send it walking. One
+  --  tick earlier and the whole question stops arising.
+  nibbleFromCargo()
 
   refreshNetwork()
   refreshBeacons(WORK_INTERVAL)
