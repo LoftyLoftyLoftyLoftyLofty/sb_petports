@@ -40,7 +40,7 @@
 		{
 			"hullState" : 
 			{
-				"default" : "closing",
+				"default" : "closed",
 				"states" : 
 				{
 					"closed" : { "frames" : 1 },
@@ -51,7 +51,7 @@
 			},
 			"doorState" : 
 			{
-				"default" : "closing",
+				"default" : "closed",
 				"states" : 
 				{
 					"closed" : { "frames" : 1 },
@@ -62,7 +62,7 @@
 			},
 			"interiorState" : 
 			{
-				"default" : "closing",
+				"default" : "closed",
 				"states" : 
 				{
 					"closed" : { "frames" : 1 },
