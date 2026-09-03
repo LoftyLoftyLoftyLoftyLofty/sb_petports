@@ -62,7 +62,7 @@
 	//  modules in a slot.
 	"inventoryIcon" : "petports_module_poisonblock.png",
 
-	"description" : "A sealed filtration cartridge. Socket it into a unit and poison stops being a reason to stay out of the water.",
+	"description" : "Equip a pet with this module to make it ^cyan;immune to the effects of poison.^reset;",
 	"shortdescription" : "Poison Block Module",
 
 	//  petports_no_upcycling KEEPS IT OUT OF THE CONVERTER, or a unit hauling

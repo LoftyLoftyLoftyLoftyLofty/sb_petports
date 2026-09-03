@@ -52,7 +52,7 @@
 	//  glance, which is the only bar it has to clear until bespoke icons land.
 	"inventoryIcon" : "petports_module_oblivious.png",
 
-	"description" : "A dormancy shunt. Socket it into a unit and it stops taking work, without stopping being a unit.",
+	"description" : "Equip a pet with this module to make the pet decorative- it won't be targeted by enemies or do any work.",
 	"shortdescription" : "Oblivious Module",
 
 	//  petports_no_upcycling KEEPS IT OUT OF THE CONVERTER, or a unit hauling

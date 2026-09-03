@@ -34,7 +34,7 @@
 
 {
 	"itemName" : "petports_module_camouflage",
-	"price" : 2500,
+	"price" : 2000,
 	"rarity" : "Legendary",
 
 	//  Shared with the other modules, so the categories.config.patch label and
@@ -47,8 +47,8 @@
 	//  the charcoal Oblivious diamond at a glance.
 	"inventoryIcon" : "petports_module_camouflage.png",
 
-	"description" : "A refraction sheath. The unit fades from sight and stops registering as a target, and carries on working regardless.",
-	"shortdescription" : "Camouflage Module",
+	"description" : "Equip a pet with this module to make it ^cyan;stealthy^reset; - enemies won't notice it while it works.",
+	"shortdescription" : "Active Camouflage Module",
 
 	//  petports_no_upcycling KEEPS IT OUT OF THE CONVERTER, or a unit hauling
 	//  surplus to an upcycler turns the player's modules into treats.

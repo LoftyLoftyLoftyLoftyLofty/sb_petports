@@ -1,6 +1,6 @@
-<mxfile host="Electron" modified="2026-09-03T02:24:17.220Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.2.5 Chrome/120.0.6099.109 Electron/28.1.0 Safari/537.36" etag="Y_X6X_Z0pPZlYYF2nJK-" version="24.2.5" type="device">
+<mxfile host="Electron" modified="2026-09-03T19:18:07.090Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.2.5 Chrome/120.0.6099.109 Electron/28.1.0 Safari/537.36" etag="OhPeXUqsA3yt6upcpLfu" version="24.2.5" type="device">
   <diagram name="Page-1" id="NveRE99YrSAUUvzC1UxD">
-    <mxGraphModel dx="1434" dy="844" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+    <mxGraphModel dx="1687" dy="993" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -364,13 +364,13 @@
         <mxCell id="u7eyhcFoZ07W-lRjyVvM-26" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#CC00CC;fontColor=#ffffff;strokeColor=#3700CC;" parent="1" vertex="1">
           <mxGeometry x="1040" y="680" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="u7eyhcFoZ07W-lRjyVvM-27" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#1ba1e2;fontColor=#ffffff;strokeColor=#006EAF;" parent="1" vertex="1">
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-27" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#008a00;fontColor=#ffffff;strokeColor=#005700;" parent="1" vertex="1">
           <mxGeometry x="1040" y="520" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="u7eyhcFoZ07W-lRjyVvM-29" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#CC00CC;fontColor=#ffffff;strokeColor=#3700CC;" parent="1" vertex="1">
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-29" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#1ba1e2;fontColor=#ffffff;strokeColor=#006EAF;" parent="1" vertex="1">
           <mxGeometry x="1040" y="760" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="u7eyhcFoZ07W-lRjyVvM-30" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#CC00CC;fontColor=#ffffff;strokeColor=#3700CC;" parent="1" vertex="1">
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-30" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#1ba1e2;fontColor=#ffffff;strokeColor=#006EAF;" parent="1" vertex="1">
           <mxGeometry x="1040" y="840" width="40" height="40" as="geometry" />
         </mxCell>
         <mxCell id="u7eyhcFoZ07W-lRjyVvM-31" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#008a00;fontColor=#ffffff;strokeColor=#005700;" parent="1" vertex="1">
@@ -382,7 +382,7 @@
         <mxCell id="u7eyhcFoZ07W-lRjyVvM-33" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Fuel Efficiency I&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
           <mxGeometry x="40" y="920" width="200" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="u7eyhcFoZ07W-lRjyVvM-34" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-34" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" parent="1" vertex="1">
           <mxGeometry x="280" y="920" width="40" height="40" as="geometry" />
         </mxCell>
         <mxCell id="u7eyhcFoZ07W-lRjyVvM-35" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
@@ -397,7 +397,7 @@
         <mxCell id="u7eyhcFoZ07W-lRjyVvM-39" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Fuel Efficiency II&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
           <mxGeometry x="40" y="960" width="200" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="u7eyhcFoZ07W-lRjyVvM-40" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-40" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" parent="1" vertex="1">
           <mxGeometry x="280" y="960" width="40" height="40" as="geometry" />
         </mxCell>
         <mxCell id="u7eyhcFoZ07W-lRjyVvM-41" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
@@ -412,7 +412,7 @@
         <mxCell id="u7eyhcFoZ07W-lRjyVvM-44" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Fuel Efficiency III&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
           <mxGeometry x="40" y="1000" width="200" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="u7eyhcFoZ07W-lRjyVvM-45" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+        <mxCell id="u7eyhcFoZ07W-lRjyVvM-45" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" parent="1" vertex="1">
           <mxGeometry x="280" y="1000" width="40" height="40" as="geometry" />
         </mxCell>
         <mxCell id="u7eyhcFoZ07W-lRjyVvM-46" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
@@ -526,20 +526,215 @@
         <mxCell id="u7eyhcFoZ07W-lRjyVvM-86" value="Microdungeon with one petport, one Octopus pet with a fishing module, storage container with configured restock beacon." style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
           <mxGeometry x="720" y="3120" width="600" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="H22bvuOQyijqMn4TxsJv-1" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Rainbow light&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+        <mxCell id="H22bvuOQyijqMn4TxsJv-1" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Rainbow light&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
           <mxGeometry x="40" y="320" width="200" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="H22bvuOQyijqMn4TxsJv-2" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" vertex="1" parent="1">
+        <mxCell id="H22bvuOQyijqMn4TxsJv-2" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#60a917;fontColor=#ffffff;strokeColor=#2D7600;" parent="1" vertex="1">
           <mxGeometry x="280" y="320" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="H22bvuOQyijqMn4TxsJv-3" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+        <mxCell id="H22bvuOQyijqMn4TxsJv-3" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
           <mxGeometry x="400" y="320" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="H22bvuOQyijqMn4TxsJv-4" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Hue sweep light&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+        <mxCell id="H22bvuOQyijqMn4TxsJv-4" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Hue sweep light&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
           <mxGeometry x="520" y="320" width="320" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="H22bvuOQyijqMn4TxsJv-5" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#CC00CC;fontColor=#ffffff;strokeColor=#3700CC;" vertex="1" parent="1">
+        <mxCell id="H22bvuOQyijqMn4TxsJv-5" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#CC00CC;fontColor=#ffffff;strokeColor=#3700CC;" parent="1" vertex="1">
           <mxGeometry x="1040" y="320" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-1" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;TOOLTIPS&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#0050ef;fontColor=#ffffff;strokeColor=#001DBC;" vertex="1" parent="1">
+          <mxGeometry x="40" y="3240" width="320" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-2" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Pets&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="3360" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-3" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="280" y="3360" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-4" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Modules&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="3480" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-5" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="280" y="3480" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-6" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Petport&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="3600" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-7" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="280" y="3600" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-8" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Upcycler&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="3720" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-9" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="280" y="3720" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-10" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Beacons&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="3840" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-11" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="280" y="3840" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-12" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Pet treats&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="3960" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-13" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="280" y="3960" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-14" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;ACHIEVEMENTS&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#0050ef;fontColor=#ffffff;strokeColor=#001DBC;" vertex="1" parent="1">
+          <mxGeometry x="400" y="3240" width="560" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-15" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Pet travels at least one million tiles&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="640" y="3360" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-16" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="880" y="3360" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-17" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Marathon&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="400" y="3360" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-18" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Pet catches ten thousand fish.&amp;nbsp;&lt;/font&gt;&lt;div&gt;&lt;font style=&quot;font-size: 20px;&quot;&gt;At least one must be Legendary.&lt;/font&gt;&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="640" y="3480" width="200" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-19" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="880" y="3480" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-20" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Angler&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="400" y="3480" width="200" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-21" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Pet heals one thousand targets&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="640" y="3640" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-22" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="880" y="3640" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-23" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Turn Your Head and Cough&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="400" y="3640" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-24" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Pet removes entropy ten thousand times&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="640" y="3760" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-25" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="880" y="3760" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-26" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Maxwell&#39;s Seal of Approval&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="400" y="3760" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-27" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Pet harvests ten thousand crops and/or animals&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="640" y="3880" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-28" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="880" y="3880" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-29" value="Reap" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="400" y="3880" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-30" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;FEATURES&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#0050ef;fontColor=#ffffff;strokeColor=#001DBC;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="3240" width="640" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-31" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Chat bubbles that display over a pet&#39;s head when it encounters errors, receives headpats, etc.&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="3360" width="520" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-32" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Chat bubbles that display over a pet&#39;s head when it is working and carrying cargo. Can be toggled by the player.&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="3480" width="520" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-33" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Coarse pathfinding quadtree implementation so a pet can attempt to pathfind across large bases. Task timeouts given extra buffer proportional to coarse travel hops.&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="3600" width="520" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-34" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Bring pets to Maxwell to have their achievements evaluated. Reward players for their first time accomplishing a particular achievement.&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="3720" width="520" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-35" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Display achievements a pet has earned on their details tab in the petport - but only after visiting Maxwell.&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="3840" width="520" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-36" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="1560" y="3360" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-37" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="1560" y="3480" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-38" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="1560" y="3600" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-39" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="1560" y="3720" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-40" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="1560" y="3840" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-41" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;UI POLISH AND COMPRESSION&lt;/font&gt;&lt;div&gt;&lt;font style=&quot;font-size: 20px;&quot;&gt;Shine layers etc&lt;/font&gt;&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#0050ef;fontColor=#ffffff;strokeColor=#001DBC;" vertex="1" parent="1">
+          <mxGeometry x="1680" y="3240" width="320" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-44" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Petport&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1680" y="3360" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-45" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="1920" y="3360" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-46" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Upcycler&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1680" y="3480" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-47" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="1920" y="3480" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-48" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="1920" y="3600" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-49" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Beacons&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1680" y="3600" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-50" value="Pet has replanted and/or watered ten thousand tiles" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="640" y="4000" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-51" value="Sow" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="400" y="4000" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-53" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="1920" y="3720" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-54" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Verify all of the petport and upcycler error messages, including weird edge case warnings like ground units with fishing modules and hydrator modules socketed without a complementary farming module&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1680" y="3720" width="200" height="280" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-55" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="880" y="4000" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-56" value="FINAL POLISH AND TUNING" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#0050ef;fontColor=#ffffff;strokeColor=#001DBC;" vertex="1" parent="1">
+          <mxGeometry x="2040" y="3240" width="320" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-57" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Fishing spawn rates&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2040" y="3360" width="320" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-58" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Hide fishing lure&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2040" y="3440" width="320" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-59" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Strip the zillion paragraphs of unnecessary comments in all files&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2040" y="3520" width="320" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-60" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Write a user friendly guide for modders explaining each thing:&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2040" y="3640" width="320" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-61" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Adding your own pets&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2080" y="3720" width="440" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-62" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Adding your own treats&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2080" y="3760" width="440" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-63" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Adding your own modules&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2080" y="3800" width="440" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-64" value="OUTSTANDING KNOWN ISSUES" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#0050ef;fontColor=#ffffff;strokeColor=#001DBC;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="1080" width="640" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-65" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Pet doesn&#39;t eat treats thrown at it when starving&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="1200" width="640" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-66" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Units won&#39;t tidy/compress items across containers&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="1240" width="640" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-67" value="Unable to manually filter for money / essence / other currencies" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="1280" width="640" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-68" value="Filter lists need search/filter bars" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="1320" width="640" height="40" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>

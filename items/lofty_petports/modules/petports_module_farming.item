@@ -41,7 +41,7 @@
 	//  warm diamonds do not read alike in a slot.
 	"inventoryIcon" : "petports_module_farming.png",
 
-	"description" : "A husbandry package. Socket it into a unit and it will work the crops and the livestock around its port.",
+	"description" : "Equip a pet with this module to enable ^green;farming tasks^reset;, such as crop and animal harvesting.",
 	"shortdescription" : "Farming Module",
 
 	//  petports_no_upcycling KEEPS IT OUT OF THE CONVERTER, or a unit hauling

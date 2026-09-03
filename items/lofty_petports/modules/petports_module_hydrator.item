@@ -59,7 +59,7 @@
 	//  beside the others, darkening the body is one number.
 	"inventoryIcon" : "petports_module_hydrator.png",
 
-	"description" : "An expanded reservoir. Socket it into a unit and it carries thirty units of liquid per trip instead of ten.",
+	"description" : "Equip a pet with this module to triple its liquid carrying capacity while farming- good for larger farms. ^red;Requires a separate Farming Module.^reset;",
 	"shortdescription" : "Hydrator Module",
 
 	//  petports_no_upcycling KEEPS IT OUT OF THE CONVERTER, or a unit hauling

@@ -29,7 +29,7 @@
 
 {
 	"itemName" : "petports_module_light_rgb",
-	"price" : 1500,
+	"price" : 1000,
 
 	//  RARE, AGAINST THE PLAIN LAMP'S COMMON. Rarity on a MODULE item is
 	//  decoration -- it is on a PET item that it suggests a default slot count,
@@ -44,7 +44,7 @@
 	//  if you want to test before the real one is drawn.
 	"inventoryIcon" : "petports_module_light_rgb.png",
 
-	"description" : "A lamp assembly with a tunable emitter. Socket it into a unit and set the colour from the unit's Settings tab.",
+	"description" : "Equip a pet with this module to make it emit light. ^green;You can adjust the light's color^reset; from the ^orange;Petport^reset; settings tab.",
 	"shortdescription" : "RGB Lamp Module",
 
 	//  ONE LAMP PER UNIT. The three lamps are alternatives, not a stack: a

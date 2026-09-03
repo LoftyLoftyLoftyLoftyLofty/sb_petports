@@ -24,7 +24,7 @@
 
 {
 	"itemName" : "petports_module_light_rainbow",
-	"price" : 1500,
+	"price" : 1000,
 	"rarity" : "Rare",
 
 	"category" : "petports_module",
@@ -34,7 +34,7 @@
 	//  you want to test before the real one is drawn.
 	"inventoryIcon" : "petports_module_light_rainbow.png",
 
-	"description" : "A lamp assembly with a drifting emitter. Socket it into a unit and it cycles through every colour it has.",
+	"description" : "Equip a pet with this module to make it emit ^red;c^orange;o^yellow;l^green;o^cyan;r^blue;f^magenta;u^#f95c9f;l^reset; light.",
 	"shortdescription" : "Prismatic Lamp Module",
 
 	//  ONE LAMP PER UNIT. The three lamps are alternatives, not a stack: a

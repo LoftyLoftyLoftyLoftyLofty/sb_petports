@@ -28,7 +28,7 @@
 
 {
 	"itemName" : "petports_module_lavablock",
-	"price" : 1500,
+	"price" : 1000,
 	"rarity" : "Rare",
 
 	//  Shared with the other modules, so the categories.config.patch label and
@@ -41,7 +41,7 @@
 	//  until bespoke icons land.
 	"inventoryIcon" : "petports_module_lavablock.png",
 
-	"description" : "A sealed thermal shell. Socket it into a unit and lava stops being a reason to stay on the shore.",
+	"description" : "Equip a pet with this module to make it ^cyan;immune to the effects of hot lava.^reset;",
 	"shortdescription" : "Lava Block Module",
 
 	//  petports_no_upcycling KEEPS IT OUT OF THE CONVERTER, or a unit hauling

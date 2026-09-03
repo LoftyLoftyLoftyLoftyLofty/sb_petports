@@ -49,7 +49,7 @@
 
 	"inventoryIcon" : "petports_module_light.png",
 
-	"description" : "A sealed lamp assembly. Socket it into a unit and it lights the ground wherever the unit goes.",
+	"description" : "Equip a pet with this module to make it emit light.",
 	"shortdescription" : "Lamp Module",
 
 	//  petports_no_upcycling KEEPS IT OUT OF THE CONVERTER. Without it a module

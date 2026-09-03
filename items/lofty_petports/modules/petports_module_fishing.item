@@ -34,7 +34,7 @@
 
 {
 	"itemName" : "petports_module_fishing",
-	"price" : 1500,
+	"price" : 1000,
 	"rarity" : "Rare",
 
 	//  Shared with the other modules, so the categories.config.patch label and
@@ -47,7 +47,7 @@
 	//  Placeholder, and it should be redrawn with the rest of the module art.
 	"inventoryIcon" : "petports_module_fishing.png",
 
-	"description" : "A baited line on a spool. Socket it into a unit that can swim and it will hunt whatever the water turns up.",
+	"description" : "Equip a pet with this module to enable ^cyan;fishing^reset;. Talent not included- ^red;some pets are better at this than others.^reset;",
 	"shortdescription" : "Fishing Module",
 	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],
 	"maxStack" : 1,

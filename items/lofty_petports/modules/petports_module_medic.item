@@ -33,7 +33,7 @@
 
 {
 	"itemName" : "petports_module_medic",
-	"price" : 1500,
+	"price" : 1000,
 	"rarity" : "Rare",
 
 	//  Shared with the other modules, so the categories.config.patch label and
@@ -46,7 +46,7 @@
 	//  module in a slot.
 	"inventoryIcon" : "petports_module_medic.png",
 
-	"description" : "A field triage kit. Socket it into a unit and it will carry medical goods to anyone hurt nearby.",
+	"description" : "Equip a pet with this module and it will use available ^red;Medical Trade Goods^reset; to heal nearby allies.",
 	"shortdescription" : "Medic Module",
 
 	//  petports_no_upcycling KEEPS IT OUT OF THE CONVERTER, or a unit hauling
