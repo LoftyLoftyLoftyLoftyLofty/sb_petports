@@ -554,6 +554,68 @@ HARVEST_INTERVAL = 5.0
 --  of hammering it once a second.
 FARMABLE_STAGE_BASE = 0
 
+--------------------------------------------------------------------------------
+--  HARVESTABLE TRAPS
+--------------------------------------------------------------------------------
+--
+--  A MOTH TRAP IS NOT A CROP, AND THE DIFFERENCE IS STRUCTURAL.
+--
+--  A farmable declares objectType "farmable", runs NO script at all, and is
+--  harvested by tile damage that FarmableObject::damageTiles intercepts. A trap
+--  declares no objectType, runs /objects/scripts/harvestable.lua, and is
+--  harvested by INTERACTION. Nothing about the crop path transfers.
+--
+--  SWINGING AT ONE WOULD DESTROY IT AND WOULD LOOK LIKE SUCCESS. There is no
+--  interception on a plain object, so world.damageTiles is ordinary object
+--  damage -- and harvestable.lua's die() calls dropHarvest, so the trap breaks
+--  into an item AND sheds its produce. Drops appear, the log reads clean, and
+--  the player's trap is gone. That is why this has its own act rather than
+--  reusing the harvest one.
+--
+--  RIPENESS IS A THRESHOLD ON activeAge(), BECAUSE NOTHING ELSE IS READABLE.
+--  setStage() ends by calling object.setInteractive(true) on exactly the
+--  harvest stage, which is a precise ripeness bit -- and retail exposes no
+--  binding for reading another entity's interactivity, so it is out of reach.
+--  What IS in reach is activeAge(): a pure function that mutates nothing and
+--  reads only values init() sets BEFORE the one call in that script able to
+--  throw.
+--
+--  THE THRESHOLD IS THE SUM OF THE DURATION UPPER BOUNDS. setStage walks the
+--  stages subtracting a per-object roll from util.randomInRange(stage.duration),
+--  and those rolls live in the object's own storage where nothing can read them.
+--  Summing the UPPER bounds is therefore the only threshold that can never claim
+--  ripe early. For a moth trap that is 190 against an earliest-possible 170 --
+--  late by at most 20 active-seconds on a cycle spanning a whole night. A ripe
+--  trap stays ripe, so being late costs nothing whatsoever.
+TRAP_INTERVAL = 5.0
+
+--  A DEGENERATE activeTimeRange LOCKS A HARVESTABLE FOREVER, AND IT IS THE
+--  OBJECT'S BUG RATHER THAN OURS.
+--
+--  harvestable.lua defaults the key to {0, 1} and then takes the span as
+--  (range[2] - range[1]) % 1.0, which for {0, 1} is ZERO. activeAge multiplies
+--  by that span and returns 0 forever, so the object sticks on stage one, never
+--  becomes interactive, and shows its INACTIVE animation states. A PLAYER
+--  cannot harvest it either: it is inert in vanilla, not merely invisible to us.
+--
+--  So omitting the key -- which reads as "always active" -- means "never".
+--
+--  WE DETECT AND REPORT RATHER THAN FIX. Fixing means overwriting a vanilla Lua
+--  asset outright, because JSON patches do not apply to .lua, which would
+--  inherit that file across game updates and hard-conflict with any other mod
+--  doing the same. Not a trade to make during a 1.0 polish push. Filed as
+--  todo.farming.trapagelock.
+--
+--  WARNED ONCE PER ENTITY PER SESSION. self is a fresh table on every script
+--  context, so this empties on beam-out and a player hears about a given broken
+--  trap once per visit rather than every five seconds forever.
+--
+--  PER PORT, WHICH IS THE ONE COMPROMISE. Two ports whose coverage overlaps the
+--  same broken trap each say so once. Deduplicating across ports needs shared
+--  state that does NOT persist, and the only shared state available is
+--  world.properties, which does -- a permanent record of a transient complaint
+--  is the worse failure.
+
 --  NOTE the damage amount and harvest level live on the UNIT, in
 --  petportsTaskAction.lua, because the unit is what swings. Every script in a
 --  monstertype shares one environment and an object has its own; a constant
@@ -2313,6 +2375,19 @@ function init()
       metrics.add("livestock", 1)
     end
 
+    --  A completed trap harvest. Same counting rule again: one per execution,
+    --  however many items the pool rolled.
+    --
+    --  NO REPLANT INTENT, WHICH IS THE ONE PLACE THIS DIVERGES FROM THE CROP
+    --  HANDLER ABOVE. dropHarvest resets the trap in place and the object never
+    --  stops existing, so the entityExists test that distinguishes a reset crop
+    --  from a destroyed one has nothing to distinguish -- a trap is always the
+    --  reset case.
+    if report.outcome == "done" and self.task ~= nil
+       and self.task.type == "trap" and self.task.id == report.id then
+      metrics.add("traps", 1)
+    end
+
     --  A CAUGHT FISH, COUNTED TWICE ON PURPOSE.
     --
     --  `fished` is the total and every tier is a separate key beside it, so the
@@ -3931,13 +4006,19 @@ end
 --  at "is this universally available to a pet", and farming stopped being
 --  universal the moment it needed the granularity below. No module, no farming.
 --
---  THE FOUR CLASSES ARE PLAYER-FACING ACTIVITIES, NOT GENERATORS. Six generators
+--  THE CLASSES ARE PLAYER-FACING ACTIVITIES, NOT GENERATORS. Seven generators
 --  are gated by them, because two of the activities own a fetch leg: watering
 --  owns withdrawWaterWork and replanting owns withdrawWork, the same way the
 --  medic task owns its own trip to the crate. Nobody ticks a box for "go and get
 --  a seed" -- that is part of replanting, not a decision beside it.
+--
+--  `traps` IS THE FIFTH AND IT IS NOT A CROP. Moth traps and their modded
+--  cousins are ordinary scripted objects rather than FarmableObjects, so they
+--  share no discovery, no act and no verification with harvesting -- see the
+--  HARVESTABLE TRAPS block. They are farming to a PLAYER, which is the only
+--  thing this list is for.
 FARMING_FLAG = "farming"
-FARMING_CLASSES = { "harvest", "water", "replant", "animals" }
+FARMING_CLASSES = { "harvest", "water", "replant", "animals", "traps" }
 
 --  THE COLOUR CHANNELS OF THE RGB LAMP MODULE, AND THE VALUE A UNIT WEARS
 --  BEFORE ANYBODY TOUCHES IT.
@@ -4396,6 +4477,7 @@ metrics.paneStats = function()
     dosed = math.floor(stats.dosed or 0),
     harvested = math.floor(stats.harvested or 0),
     livestock = math.floor(stats.livestock or 0),
+    traps = math.floor(stats.traps or 0),
 
     --  FISHING. `fished` is the total; `fishedTiers` is a map of tier name to
     --  count, built by walking the stats table rather than naming the four
@@ -8721,12 +8803,217 @@ local function harvestStageOf(stages)
 	return nil
 end
 
+--  IS THIS OBJECT A HARVESTABLE TRAP, AND WHEN WOULD IT BE RIPE?
+--
+--  ENTIRELY STATIC. Two config reads and no call into the object's script,
+--  which is dead.farming.probe applied: a pcall protects the CALLER, and
+--  anything that throws inside a foreign context is that entity's problem and
+--  not something we can catch. Nothing here can run their code.
+--
+--  MEMOISED BY NAME, NOT BY ID, for the same reason the animal probe asks
+--  root.monsterParameters about the TYPE. Every answer is derived from config,
+--  so two moth traps cannot disagree -- and without it this runs against every
+--  crate, lamp and platform in network coverage on every single sweep.
+--
+--  THE TEST IS BEHAVIOURAL, NOT THE SCRIPT PATH. Keying on
+--  "/objects/scripts/harvestable.lua" would catch the one vanilla member and
+--  miss every modded object shipping its own copy at its own path -- and the
+--  modded ones are the actual population. "Has stages, the last of which
+--  carries a harvestPool" describes what we can work with instead.
+--
+--  REAL FARMABLES CANNOT REACH HERE. This is called only from the branch where
+--  world.farmableStage already came back nil, so a crop is excluded before the
+--  first read rather than by a fourth one.
+local function trapProfile(id)
+	local name = world.entityName(id)
+	if name == nil then return nil end
+
+	self.trapProfiles = self.trapProfiles or {}
+
+	local cached = self.trapProfiles[name]
+	if cached ~= nil then
+		if cached == false then return nil end
+		return cached
+	end
+
+	local okStages, stages = pcall(world.getObjectParameter, id, "stages")
+
+	if not okStages or type(stages) ~= "table" or #stages == 0
+	   or type(stages[#stages]) ~= "table"
+	   or stages[#stages].harvestPool == nil then
+		self.trapProfiles[name] = false
+		return nil
+	end
+
+	--  EVERY STAGE BEFORE THE HARVEST STAGE, AT ITS UPPER BOUND. The harvest
+	--  stage carries no duration -- that absence is precisely what stops
+	--  setStage walking past it -- so it contributes nothing and is skipped.
+	--
+	--  A MISSING DURATION ON AN EARLIER STAGE IS THE SECOND STAGE LOCK, and it
+	--  is why this tracks `stalls` rather than just summing. setStage rolls
+	--  util.randomInRange(stage.duration) into storage.durations[i] and then
+	--  breaks on `if not storage.durations[i]`, so a stage with no duration
+	--  halts the walk permanently -- exactly like the age lock, by a different
+	--  route. Summing zero for it would put the threshold BELOW where the
+	--  object can ever reach, and we would dispatch a unit at a trap that can
+	--  never be ready, fail, and climb the backoff ladder forever.
+	--
+	--  dead.farming.probe is the reason this is checked at all: the lesson
+	--  there was that the SECOND member of a category behaves unlike the first,
+	--  and vanilla ships exactly one of these.
+	local ripeAt = 0
+	local stalls = false
+
+	for index, stage in ipairs(stages) do
+		if index < #stages then
+			local duration = type(stage) == "table" and stage.duration or nil
+			local span = nil
+
+			if type(duration) == "table" then
+				span = math.max(tonumber(duration[1]) or 0,
+					tonumber(duration[2]) or 0)
+			elseif type(duration) == "number" then
+				span = duration
+			end
+
+			--  ZERO COUNTS AS MISSING. util.randomInRange({0, 0}) returns 0,
+			--  which is falsy nowhere in Lua -- but a stage of zero length
+			--  cannot be what a config meant, and treating it as a stall is
+			--  the safe reading either way.
+			if span == nil or span <= 0 then
+				stalls = true
+			else
+				ripeAt = ripeAt + span
+			end
+		end
+	end
+
+	--  THE SAME DEFAULT harvestable.lua USES, AND THE SAME ARITHMETIC. Reading
+	--  it any other way would disagree with the object about its own state.
+	local okRange, range = pcall(world.getObjectParameter, id, "activeTimeRange")
+	if not okRange or type(range) ~= "table" then range = { 0, 1 } end
+
+	local span = ((tonumber(range[2]) or 1) - (tonumber(range[1]) or 0)) % 1.0
+
+	--  TWO WAYS TO BE PERMANENTLY UNRIPE, REPORTED SEPARATELY. They have
+	--  different fixes and a player handed "this can never ripen" deserves to
+	--  know which one they are looking at.
+	local lockedBy = nil
+	if span == 0 then
+		lockedBy = "its activeTimeRange spans zero of the day"
+	elseif stalls then
+		lockedBy = "one of its growth stages declares no duration"
+	end
+
+	local profile = {
+		name = name,
+		ripeAt = ripeAt,
+		span = span,
+		--  Both locks are properties of the CONFIG, so they cache with
+		--  everything else and cost one comparison per trap thereafter.
+		locked = (lockedBy ~= nil),
+		lockedBy = lockedBy,
+		stageCount = #stages
+	}
+
+	self.trapProfiles[name] = profile
+	return profile
+end
+
+--  HOW OLD IS THIS TRAP, IN ITS OWN ACTIVE-TIME TERMS?
+--
+--  THE ONE CROSS-CONTEXT CALL IN THE WHOLE TRAP PATH, and it is safe by
+--  inspection rather than by hope. activeAge reads self.timeRange,
+--  storage.created and storage.startDayTime, and init() sets all three
+--  UNCONDITIONALLY before the setStage() call that is the only thing in that
+--  script able to throw. So it answers correctly even on a modded object whose
+--  init died on a malformed stages array -- which is the exact shape of the
+--  failure that killed baby livestock.
+--
+--  It also mutates nothing, which is what makes it safe to ask repeatedly.
+local function trapAge(id)
+	local ok, age = pcall(world.callScriptedEntity, id, "activeAge")
+
+	--  callScriptedEntity returns nil SILENTLY for a function that is not
+	--  there, so nil means "no such object script" rather than "age zero".
+	--  Both are reasons not to dispatch; only one is worth saying out loud.
+	if not ok or type(age) ~= "number" then return nil end
+	return age
+end
+
+--  SAY WHAT THE TRAPS ARE DOING, AND SAY THE BROKEN ONES ONCE.
+--
+--  Two cadences in one function because they answer two questions. The
+--  signature line is CHANGE-GATED like the farmable line beside it -- traps
+--  ripening IS the interesting event and it does not move the count. The
+--  age-lock warning is ONCE PER ENTITY PER SESSION, because a locked trap never
+--  changes and would otherwise repeat that line every five seconds for as long
+--  as the player stands on the planet.
+--
+--  DEFINED ABOVE refreshFarmables, AND THAT PLACEMENT IS LOAD-BEARING. A local
+--  function referenced from a function defined EARLIER in this file is a nil
+--  global at call time; the watering sweep's own note records the crash that
+--  produced on every port's first tick.
+local function reportTraps(traps)
+	self.trapWarned = self.trapWarned or {}
+
+	local ripe = 0
+	local parts = {}
+
+	for _, trap in ipairs(traps) do
+		if trap.ripe then ripe = ripe + 1 end
+
+		table.insert(parts, string.format("%s#%s age %s of %s%s%s",
+			tostring(trap.name), tostring(trap.id),
+			trap.age == nil and "unreadable"
+				or string.format("%.0f", trap.age),
+			string.format("%.0f", trap.ripeAt),
+			trap.locked and " LOCKED" or "",
+			trap.ripe and " RIPE" or ""))
+
+		--  THE AGE LOCK, NAMED WITH ITS CAUSE. A player seeing this owns an
+		--  object that will never produce anything for anybody, us included,
+		--  and the fix is in that object's config rather than in this mod --
+		--  so the line has to be specific enough to hand to whoever ships it.
+		if trap.locked and not self.trapWarned[trap.id] then
+			self.trapWarned[trap.id] = true
+
+			sb.logWarn("PETPORT %s trap %s (%s) at %s CAN NEVER RIPEN: %s, so "
+				.. "harvestable.lua holds it on an early stage forever and "
+				.. "nobody -- player or unit -- can harvest it. Note that "
+				.. "OMITTING activeTimeRange defaults it to [0, 1], which that "
+				.. "script reads as a span of ZERO.",
+				stationUniqueId(), sb.printJson(trap.id), tostring(trap.name),
+				sb.printJson(trap.position),
+				tostring(trap.lockedBy or "its config stalls stage growth"))
+		end
+	end
+
+	table.sort(parts)
+	local signature = table.concat(parts, " | ")
+
+	if signature ~= self.trapSignature then
+		self.trapSignature = signature
+		sb.logInfo("PETPORT %s traps: %s found, %s ripe -- %s",
+			stationUniqueId(), sb.printJson(#traps), sb.printJson(ripe),
+			signature == "" and "none" or signature)
+	end
+end
+
 --  Every farmable in network coverage, with its ripeness already decided.
+--
+--  AND EVERY TRAP, OUT OF THE SAME QUERY. This deliberately does NOT add a
+--  third full object sweep of the network beside this one and scanContainers --
+--  the note on HARVEST_INTERVAL already calls the second one a known unpaid
+--  cost and a third would be worse. The trap branch hangs off the ELSE of the
+--  farmableStage test, so the crop path above it is untouched: a trap cannot
+--  change what this function decides about any crop.
 local function scanFarmables()
 	local rects = self.networkRects
 	if rects == nil or #rects == 0 then rects = { coverageRect() } end
 
 	local found = {}
+	local traps = {}
 	local seen = {}
 	local objects = 0
 
@@ -8761,12 +9048,42 @@ local function scanFarmables()
 							ripe = (stage == harvestAt)
 						})
 					end
+				else
+					--  NOT A FARMABLE, so everything below is the trap path and
+					--  cannot reach a crop.
+					local profile = trapProfile(id)
+
+					if profile ~= nil then
+						--  A LOCKED TRAP IS STILL LISTED, WITH ripe FALSE.
+						--  Dropping it here would make it indistinguishable
+						--  from an object we never recognised at all, and the
+						--  entire point of detecting the age lock is that a
+						--  player chasing a dead trap can find out why.
+						--
+						--  Its age is not asked for: activeAge returns 0 for a
+						--  locked object by construction, so the call would
+						--  cost a foreign-context entry to learn nothing.
+						local age = profile.locked and 0 or trapAge(id)
+
+						table.insert(traps, {
+							id = id,
+							name = profile.name,
+							age = age,
+							ripeAt = profile.ripeAt,
+							locked = profile.locked,
+							lockedBy = profile.lockedBy,
+							stageCount = profile.stageCount,
+							position = world.entityPosition(id),
+							ripe = (not profile.locked) and age ~= nil
+								and age >= profile.ripeAt
+						})
+					end
 				end
 			end
 		end
 	end
 
-	return found, objects
+	return found, objects, traps
 end
 
 --  THIS LOG IS THE INSTRUMENT THAT SETTLES FARMABLE_STAGE_BASE. Every crop
@@ -8781,8 +9098,9 @@ local function refreshFarmables(dt)
 	if self.harvestTimer > 0 then return end
 	self.harvestTimer = HARVEST_INTERVAL
 
-	local found, objects = scanFarmables()
+	local found, objects, traps = scanFarmables()
 	self.farmables = found
+	self.traps = traps
 
 	local ripe = 0
 	local parts = {}
@@ -8804,6 +9122,10 @@ local function refreshFarmables(dt)
 			stationUniqueId(), sb.printJson(#found), sb.printJson(objects),
 			sb.printJson(ripe), signature == "" and "none" or signature)
 	end
+
+	--  ONE SWEEP, TWO REPORTS. The traps came out of the same query above, so
+	--  they are reported on that timer rather than given one of their own.
+	reportTraps(traps)
 end
 
 --------------------------------------------------------------------------------
@@ -9197,6 +9519,118 @@ local function harvestWork()
 		--  no longer answerable -- and the crop's own name IS the seed name,
 		--  which is the whole thing the intent needs to record.
 		targetName = best.name,
+		position = best.position
+	}
+end
+
+--  Pick a ripe trap to send the unit at.
+--
+--  THE SAME SHAPE AS harvestWork WITH ONE DELIBERATE OMISSION: ripeness is NOT
+--  re-read here.
+--
+--  harvestWork re-reads because it creates its own race -- a crop with
+--  resetToStage is ripe when scanned and unripe a second after it is picked, so
+--  a stale cache dispatches a unit to swing at nothing and the swing DAMAGES
+--  the crop. Neither half of that applies to a trap. Nothing but a harvest
+--  makes one unripe, and dropHarvest on an unripe trap is a guaranteed no-op --
+--  it guards on self.stage.harvestPool and returns. So the worst a stale entry
+--  can cost is one wasted walk, where the re-read would cost a
+--  callScriptedEntity into foreign Lua for every candidate on every work tick.
+--
+--  The act re-checks on arrival, which is where the check is worth paying for.
+--
+--  A LOCKED TRAP IS SKIPPED WITHOUT COMMENT HERE. reportTraps already said so
+--  once, in the terms a player can act on; repeating it per work tick is what
+--  the once-per-session set exists to prevent.
+local function trapWork()
+	local traps = self.traps
+
+	if traps == nil or #traps == 0 then
+		return nil, "no harvestable traps in network coverage"
+	end
+
+	local from = entity.position()
+	if self.petId ~= nil and world.entityExists(self.petId) then
+		from = world.entityPosition(self.petId)
+	end
+
+	local best, bestDistance = nil, nil
+	local rejected = { unripe = 0, locked = 0, claimed = 0, backedOff = 0,
+		gone = 0, medium = 0 }
+
+	for _, trap in ipairs(traps) do
+		local workId = "trap:" .. trap.id
+		local claim = petports_claimGet(workId)
+		local failure = self.workFailures[workId]
+		local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
+
+		local free = not backedOff and ((claim == nil)
+			or claim.owner == stationUniqueId()
+			or (claim.expires or 0) <= world.time())
+
+		if trap.locked then
+			rejected.locked = rejected.locked + 1
+		elseif not trap.ripe then
+			rejected.unripe = rejected.unripe + 1
+		elseif backedOff then
+			rejected.backedOff = rejected.backedOff + 1
+		elseif not free then
+			rejected.claimed = rejected.claimed + 1
+		elseif not world.entityExists(trap.id) then
+			rejected.gone = rejected.gone + 1
+
+		--  IN THE LOOP, NOT ON THE WINNER, for the reason harvestWork gives at
+		--  length: refusing the winner declines the whole rung, so one trap in
+		--  a pond would stop a walker working the four on dry land behind it.
+		elseif not targetEligible("trap " .. tostring(trap.id),
+			trap.position, trap.id) then
+			rejected.medium = rejected.medium + 1
+		else
+			local distance = world.magnitude(from, trap.position)
+
+			if bestDistance == nil or distance < bestDistance then
+				best, bestDistance = trap, distance
+			end
+		end
+	end
+
+	if best == nil then
+		local reason = string.format(
+			"%s trap(s) in coverage, none harvestable: %s unripe, %s age "
+			.. "locked, %s claimed, %s backed off, %s gone, %s in a medium "
+			.. "this chassis cannot work in",
+			#traps, rejected.unripe, rejected.locked, rejected.claimed,
+			rejected.backedOff, rejected.gone, rejected.medium)
+
+		if reason ~= self.trapRejectReason then
+			self.trapRejectReason = reason
+			sb.logInfo("PETPORT %s traps: %s", stationUniqueId(), reason)
+		end
+
+		return nil, reason
+	end
+
+	self.trapRejectReason = nil
+
+	sb.logInfo("PETPORT %s trap %s (%s) RIPE at %s, %s away -- dispatching",
+		stationUniqueId(), sb.printJson(best.id), tostring(best.name),
+		sb.printJson(best.position), sb.printJson(bestDistance))
+
+	return {
+		id = "trap:" .. best.id,
+		--  The footprint ladder ran on this target above -- see
+		--  arch.dispatch.vouch.
+		mediumVerified = true,
+		type = "trap",
+		port = stationUniqueId(),
+		target = best.id,
+		--  CARRIED FOR THE LOG ONLY. Unlike a crop, a harvested trap still
+		--  exists afterwards, so nothing here has to survive its disappearance.
+		targetName = best.name,
+		--  THE THRESHOLD TRAVELS WITH THE TASK so the act can re-check ripeness
+		--  without repeating the config walk. It is derived from the object's
+		--  own config and cannot go stale while the object exists.
+		ripeAt = best.ripeAt,
 		position = best.position
 	}
 end
@@ -11850,6 +12284,7 @@ local function findWork()
   local doWater = farming and petportFarmingDoes("water")
   local doReplant = farming and petportFarmingDoes("replant")
   local doAnimals = farming and petportFarmingDoes("animals")
+  local doTraps = farming and petportFarmingDoes("traps")
   local doMachines = not oblivious and petportParticipates("machines")
 
   --  Before anything else: a unit that has strayed cannot reach work anyway.
@@ -12070,6 +12505,17 @@ local function findWork()
   if doAnimals then beast, noBeast = animalWork() end
   if dispatchable(beast) ~= nil then return beast end
 
+  --  TRAPS SIT WITH CROPS AND ANIMALS, AND BELOW BOTH.
+  --
+  --  Same perishability argument that puts harvest under collect: a ripe trap
+  --  stays ripe indefinitely, because nothing in harvestable.lua advances past
+  --  the harvest stage. Below the other two purely on precedence -- it is the
+  --  newest and the least likely to be what a player is watching -- and being
+  --  last among equals costs nothing when none of the three perish.
+  local trap, noTrap
+  if doTraps then trap, noTrap = trapWork() end
+  if dispatchable(trap) ~= nil then return trap end
+
   --  Fetching is the lowest-priority thing a unit can do: it is the only work
   --  that MANUFACTURES cargo rather than clearing something. See withdrawWork.
   local fetch, noFetch
@@ -12202,6 +12648,7 @@ local function findWork()
       .. "; " .. tostring(bothLegs(noPutBack, noFetch, "no replant work"))
       .. "; " .. tostring(bothLegs(noWet, noFetchWater, "no watering work"))
       .. "; " .. tostring(noBeast or "no animal work")
+      .. "; " .. tostring(noTrap or "no trap work")
       .. "; " .. tostring(noFish or "no fishing work")
       .. "; " .. tostring(noStock or "no restock work")
       .. "; " .. tostring(noFuel or "no fuel to collect")

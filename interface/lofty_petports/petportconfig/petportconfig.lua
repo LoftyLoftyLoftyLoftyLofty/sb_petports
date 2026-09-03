@@ -314,6 +314,15 @@ local SETTING_ROWS = {
 	{ key = "animals", owner = "farming", needs = "farming",
 	  label = "petport.setting.farmanimals", tip = "petport.tip.farmanimals" },
 
+	--  LAST IN THE BLOCK, AND NOT A CROP. Moth traps and their modded cousins
+	--  are ordinary scripted objects rather than farmables, so this shares no
+	--  discovery and no act with "Harvest crops" -- but it is farming to a
+	--  player, and the settings list is the player's vocabulary rather than the
+	--  port's. The label says "etc." because vanilla ships exactly one of these
+	--  and the modded population is the reason the box exists.
+	{ key = "traps", owner = "farming", needs = "farming",
+	  label = "petport.setting.farmtraps", tip = "petport.tip.farmtraps" },
+
 	--  ---- RGB LIGHT ---------------------------------------------------------
 	--
 	--  GATED ON THE MODULE FLAG, like the medic and farming blocks above. The
@@ -1679,6 +1688,7 @@ local function paintStats(stats)
 	addLine(petports_format("petport.stats.watered", groupDigits(stats.watered)))
 	addLine(petports_format("petport.stats.harvested", groupDigits(stats.harvested)))
 	addLine(petports_format("petport.stats.livestock", groupDigits(stats.livestock)))
+	addLine(petports_format("petport.stats.traps", groupDigits(stats.traps)))
 
 	--  ONE BLOCK PER ACTIVITY, SEPARATED. Farming above, healing next, fishing
 	--  below -- three things a unit does rather than one undifferentiated column

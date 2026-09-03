@@ -91,6 +91,28 @@
 --  Drops land on the ground at the animal, so collection and deposit take it
 --  from there unchanged, exactly as with crops.
 --
+--  "trap" -- walk to a harvestable trap and empty it. THE ACT IS AN
+--  INTERACTION, NOT A SWING, and that is the whole distinction from "harvest".
+--  A moth trap declares no objectType, so it is a plain Object running
+--  /objects/scripts/harvestable.lua rather than a FarmableObject -- nothing
+--  intercepts world.damageTiles, and that script's die() calls dropHarvest, so
+--  a swing would break the trap into an item AND spill its produce while every
+--  log line we wrote about it read as success.
+--
+--  So the act is world.callScriptedEntity(target, "dropHarvest"), which spawns
+--  the treasure and resets the trap's own age in the same function -- the same
+--  arrangement, and the same reason for trusting it, as dropMonsterHarvest
+--  above.
+--
+--  RIPENESS IS activeAge() AGAINST A THRESHOLD THE PORT COMPUTED. Retail
+--  exposes no way to read another entity's interactivity, which is the exact
+--  bit setStage maintains, so the age is the only signal there is. Verification
+--  is the same call again: dropHarvest resets the age to roughly zero and does
+--  it synchronously, so unlike the crop swing this settles inside one tick.
+--
+--  Drops land at itemDropOffset -- two and a half tiles up, for a moth trap --
+--  and ordinary collection takes them from there.
+--
 --  DIAGNOSTIC TASK
 --
 --  type "diag" is throwaway. Walk to a point inside the rect, stand there,
@@ -785,6 +807,15 @@ local HARVEST_REACH = 4.0
 --  budget is small because a harvest that is going to work works immediately.
 local HARVEST_TIMEOUT = 3.0
 
+--  How close the unit has to be to work a trap.
+--
+--  THE CROP NUMBER, NOT THE ANIMAL ONE. A trap is a placed object: it does not
+--  move, so none of the slack ANIMAL_REACH exists for is needed. Same sanity
+--  bound and the same reason -- world.callScriptedEntity enforces no range at
+--  all, so a unit that believes it has arrived while standing across the room
+--  would harvest anyway and hide whatever upstream fault put it there.
+local TRAP_REACH = 4.0
+
 local MAX_VENT_HOPS = 10
 
 --  How long a single reachability probe may run before its answer is taken as
@@ -1037,7 +1068,8 @@ function petportsTaskAction.enterWith(args)
   --
   --  So: report and clear before refusing.
   if (task.type == "collect" or task.type == "harvest"
-      or task.type == "animal" or task.type == "fish")
+      or task.type == "animal" or task.type == "fish"
+      or task.type == "trap")
      and not world.entityExists(task.target) then
     if task.port then
       world.sendEntityMessage(task.port, "petports_taskReport", {
@@ -5929,6 +5961,11 @@ function petportsTaskAction.update(dt, stateData)
      or task.type == "replant" or task.type == "water"
      or task.type == "animal" or task.type == "medic"
      or task.type == "withdraw" or task.type == "fish"
+     --  A TRAP IS AN OBJECT AND RESOLVES LIKE A CROP: it has a footprint, it
+     --  does not move, and the port vouched for the medium at dispatch. Without
+     --  this entry the resolve happens and its answer is thrown away, which is
+     --  the exact half-fix the note above records.
+     or task.type == "trap"
      --  fuelfetch IS A WITHDRAW IN EVERY RESPECT THE UNIT CAN SEE: walk to a
      --  crate, stand there, report. The port does the containerConsume and the
      --  feeding, so the unit needs no container primitive and no new act.
@@ -6351,6 +6388,104 @@ function petportsTaskAction.update(dt, stateData)
     report(stateData, "failed", string.format(
       "poked %s and it is still ready (%s) -- dropMonsterHarvest did not run",
       sb.printJson(task.target), tostring(after)))
+    return true
+  end
+
+  if task.type == "trap" then
+    if not world.entityExists(task.target) then
+      report(stateData, "failed", "trap was gone on arrival")
+      return true
+    end
+
+    local here = mcontroller.position()
+    local there = world.entityPosition(task.target)
+    local reach = world.magnitude(here, there)
+
+    if reach > TRAP_REACH then
+      report(stateData, "failed", string.format(
+        "arrived but %s tiles from the trap at %s (unit at %s)",
+        sb.printJson(reach), sb.printJson(there), sb.printJson(here)))
+      return true
+    end
+
+    --  NO SWING. THIS IS THE WHOLE REASON A TRAP IS NOT A HARVEST.
+    --
+    --  world.damageTiles on a plain object is ordinary object damage -- there
+    --  is no FarmableObject::damageTiles to intercept it -- and
+    --  harvestable.lua's die() calls dropHarvest. So a swing would break the
+    --  trap into an item AND spill its produce, which reads as a clean success
+    --  in every log line we would write about it. The player's trap is simply
+    --  gone. Harvesting is an INTERACTION, and dropHarvest is what interaction
+    --  calls.
+    --
+    --  STILL RIPE? It was at dispatch, but a player may have emptied it in the
+    --  meantime, or another network's unit may have got there first.
+    --
+    --  ASKED HERE RATHER THAN TRUSTED FROM THE TASK because a task can outlive
+    --  the dispatch that created it -- the same rule the animal poke follows,
+    --  and for a sharper reason than usual: activeAge is the only ripeness
+    --  signal that exists, so if this is not asked on arrival it is not asked.
+    local okBefore, before = pcall(world.callScriptedEntity, task.target,
+      "activeAge")
+
+    if not okBefore or type(before) ~= "number" then
+      report(stateData, "failed", string.format(
+        "trap %s did not answer activeAge (%s) -- not a harvestable, or its "
+        .. "script is dead",
+        sb.printJson(task.target), tostring(before)))
+      return true
+    end
+
+    local ripeAt = tonumber(task.ripeAt) or 0
+
+    if before < ripeAt then
+      report(stateData, "failed", string.format(
+        "trap %s is not ready: active age %s of %s -- emptied by someone else?",
+        sb.printJson(task.target), sb.printJson(before), sb.printJson(ripeAt)))
+      return true
+    end
+
+    --  SAFE TO CALL EVEN IF THE TEST ABOVE IS WRONG. dropHarvest guards on
+    --  self.stage.harvestPool and returns without doing anything when the trap
+    --  is not on its harvest stage, so a false positive here costs a wasted
+    --  visit rather than damage. That is the opposite of the crop swing, whose
+    --  false positive damages the crop, and it is why this act needs no
+    --  equivalent of HARVEST_DAMAGE being sized small.
+    local okDrop, dropped = pcall(world.callScriptedEntity, task.target,
+      "dropHarvest")
+
+    --  VERIFIED BY ASKING AGAIN, NOT BY THE RETURN VALUE -- callScriptedEntity
+    --  returns nil silently for a function that is not there, so nil proves
+    --  nothing. The trap is its own authority: dropHarvest sets
+    --  storage.created to now and calls setStage itself, so a successful
+    --  harvest drives activeAge back to roughly zero.
+    --
+    --  SETTLED IN THIS TICK, unlike the crop. setStage runs synchronously
+    --  inside dropHarvest before it returns, so there is no stateData.swung
+    --  flag and no verify timer here -- the answer is already true by the time
+    --  the next line runs.
+    local okAfter, after = pcall(world.callScriptedEntity, task.target,
+      "activeAge")
+
+    sb.logInfo("UNIT trap harvest %s: dropHarvest ok %s returned %s, "
+      .. "active age %s -> %s (threshold %s)",
+      sb.printJson(task.target), tostring(okDrop), tostring(dropped),
+      sb.printJson(before), tostring(after), sb.printJson(ripeAt))
+
+    if okAfter and type(after) == "number" and after < before then
+      --  NO CARGO. The produce is on the ground -- at itemDropOffset, which
+      --  for a moth trap is two and a half tiles up -- and ordinary collection
+      --  takes it from there, exactly as with crops and livestock.
+      report(stateData, "done",
+        "harvested trap " .. sb.printJson(task.target)
+        .. " at " .. sb.printJson(there))
+      return true
+    end
+
+    report(stateData, "failed", string.format(
+      "called dropHarvest on %s and its active age did not reset (%s -> %s) "
+      .. "-- the trap was not on its harvest stage",
+      sb.printJson(task.target), sb.printJson(before), tostring(after)))
     return true
   end
 

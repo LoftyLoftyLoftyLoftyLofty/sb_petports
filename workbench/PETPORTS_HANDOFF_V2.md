@@ -575,6 +575,80 @@ returns nil silently for a missing function, so nil is indistinguishable from a
 call that ran and returned nothing. A successful poke flips `hasMonsterHarvest`
 to false immediately, and the animal is its own authority.
 
+### Harvestable traps -- BUILT AND VERIFIED
+`arch.farming.traps` -- see also `fact.farming.harvestable`, `dead.farming.trapinteractive`, `todo.farming.trapagelock`, `dead.farming.probe`
+
+Moth traps and their modded cousins. Built 2026-09-03 and confirmed in game the
+same session: `traps: 1 found, 1 ripe -- mothtrap#35 age 4002 of 190 RIPE`,
+followed by a dispatch and a harvest.
+
+**A TRAP IS NOT A CROP AND SHARES NO CODE WITH ONE.** `arch.farming.animals`
+made the same split for livestock and this is the third kind. A farmable is a
+`FarmableObject` running no script; a trap is a plain `Object` running
+`/objects/scripts/harvestable.lua`. Discovery, ripeness, the act and the
+verification are all different, which is why it got its own class rather than
+being folded into harvesting.
+
+**THE FIFTH FARMING CLASS.** `FARMING_CLASSES` gains `traps`, which plumbs the
+`petports_setFarming` handler, the pane row and the opt-out reason list with no
+other edit. Player-facing label "Moth Traps, etc." -- vanilla ships exactly one
+member and the modded population is the reason the box exists.
+
+**DISCOVERY RIDES THE EXISTING FARMABLE SWEEP.** `scanFarmables` already queries
+every object in the network rects, so the trap branch hangs off the ELSE of its
+`world.farmableStage` test. That is deliberate: `HARVEST_INTERVAL` already
+records the second full object sweep as an unpaid cost and a third would be
+worse. It also means the crop path is untouched -- a trap cannot change what
+that function decides about any crop.
+
+**CLASSIFICATION IS BEHAVIOURAL AND STATIC.** "Has `stages`, the last of which
+carries a `harvestPool`" -- two `getObjectParameter` reads and no call into the
+object's script at all. Keying on the SCRIPT PATH would catch the one vanilla
+member and miss every modded object shipping its own copy at its own path.
+Memoised per object NAME, which is `dead.farming.probe`'s rule about asking the
+type rather than the entity, and without it this walks every crate and lamp in
+coverage on every sweep.
+
+**RIPENESS IS A THRESHOLD ON `activeAge()`, AND THAT IS A CONSEQUENCE OF
+`dead.farming.trapinteractive`.** `setStage` maintains an exact ripeness bit via
+`object.setInteractive`, and retail cannot read it. `activeAge` is what is left:
+a pure function that mutates nothing and reads only values `init()` sets before
+the one call in that script able to throw.
+
+**THE THRESHOLD IS THE SUM OF THE DURATION UPPER BOUNDS.** The per-object rolls
+live in the trap's own `storage` and cannot be read, so the upper-bound sum is
+the only threshold that can never claim ripe EARLY. For a moth trap that is 190
+against an earliest-possible 170. The measured age was 4002, which settles that
+the lateness costs nothing: nothing in `harvestable.lua` advances past the
+harvest stage, so a ripe trap stays ripe and the age simply accumulates.
+
+**THE ACT IS AN INTERACTION AND MUST NEVER BE A SWING.** `world.damageTiles` on
+a plain object is ordinary object damage -- there is no
+`FarmableObject::damageTiles` to intercept it -- and `harvestable.lua`'s `die()`
+calls `dropHarvest`. So a swing breaks the trap into an item AND spills its
+produce, which reads as a clean success in every line we would log about it.
+The player's trap is gone and nothing says so. This is the single most important
+sentence in the entry.
+
+`world.callScriptedEntity(id, "dropHarvest")` instead, which is
+`arch.farming.animals` exactly: it spawns the treasure and resets the object's
+own age in the same function, so we never touch the timer and cannot corrupt it.
+It is also SAFE WHEN WRONG -- it guards on `self.stage.harvestPool` and returns
+-- so a false positive costs a wasted visit where the crop swing's false
+positive damages the crop.
+
+**VERIFICATION SETTLES IN ONE TICK, unlike the crop.** `dropHarvest` calls
+`setStage` synchronously before returning, so `activeAge` has already collapsed
+to roughly zero by the next line. No `swung` flag and no verify timer.
+
+**NO REPLANT INTENT, which is the one place the report handler diverges from the
+crop one.** `arch.farming.intents` writes an intent when `world.entityExists`
+comes back false on a harvested crop. A trap resets in place and never stops
+existing, so there is nothing to distinguish -- a trap is always the reset case.
+
+**FINDWORK: below harvest and animals.** All three are non-perishable, so the
+ordering among them is precedence rather than urgency, and traps are newest.
+
 ### Replant intents
 `arch.farming.intents`
 
@@ -6226,6 +6300,74 @@ consequence for the question below: `world.callScriptedEntity` and
 is none, so neither is expected to reach a farmable. Testing one costs a line
 and is worth doing rather than assuming, but do not build on either.
 
+### What `harvestable.lua` exposes, and the arithmetic that locks it
+`fact.farming.harvestable` -- see also `fact.farming.farmabledecl`, `arch.farming.traps`, `todo.farming.trapagelock`
+
+From `/objects/scripts/harvestable.lua` and `mothtrap.object`, read 2026-09-03.
+The script vanilla attaches to stage-growing objects that are NOT farmables.
+Moth trap is its only vanilla user; the modded population is much larger.
+
+**A HARVESTABLE DECLARES NO `objectType`.** It is a plain `Object` with
+`stages`, a `scripts` list and an `itemDropOffset`. `world.farmableStage`
+therefore returns nil for it, which is why anything gating on that call --
+`scanFarmables` did -- cannot see one at all. That is the entire reason a moth
+trap was invisible to the network.
+
+**THE USEFUL GLOBALS, both plain and both callable out of band:**
+
+    world.callScriptedEntity(id, "activeAge")     -- number, pure
+    world.callScriptedEntity(id, "dropHarvest")   -- spawns AND resets
+
+**`activeAge` IS SAFE TO CALL IN ANY STATE, AND THAT IS BY INSPECTION.** It
+reads `self.timeRange`, `storage.created` and `storage.startDayTime`, and
+`init()` sets all three UNCONDITIONALLY before the `setStage()` call that is the
+only thing in the script able to throw. So it answers correctly even on an
+object whose `init` died on a malformed `stages` array -- which is exactly the
+shape that killed baby livestock in `dead.farming.probe`.
+
+**`dropHarvest` GUARDS ON `self.stage.harvestPool` AND IS A NO-OP WHEN UNRIPE.**
+It also does its own reset -- `storage.created = world.time()`, durations
+cleared, `setStage()` -- synchronously before returning. So the harvest is
+verifiable in the same tick by asking `activeAge` again and watching it collapse.
+
+**`die()` ALSO CALLS `dropHarvest`.** Breaking the object drops its produce, so
+a destructive "harvest" looks like a successful one in the log. See
+`arch.farming.traps`.
+
+**RIPENESS IS `object.setInteractive(true)`, AND IT IS UNREADABLE.** `setStage`
+ends by setting interactivity to exactly whether the current stage carries a
+`harvestPool`. Perfect signal, no binding to read it -- see
+`dead.farming.trapinteractive`.
+
+**THE STAGE WALK, which is what makes a threshold computable:** `setStage`
+subtracts `util.randomInRange(stage.duration)` from `activeAge()` per stage and
+breaks when it goes negative. The harvest stage carries no `duration`, and that
+absence is what stops the walk there. The rolls live in the object's own
+`storage` and cannot be read, so the sum of the duration UPPER bounds is the
+only threshold that cannot fire early.
+
+**TWO WAYS A HARVESTABLE LOCKS PERMANENTLY, and both are config, not state:**
+
+  - **A degenerate `activeTimeRange`.** The script defaults the key to `{0, 1}`
+    and then takes the span as `(range[2] - range[1]) % 1.0`, which for `{0, 1}`
+    is **ZERO**. `activeAge` multiplies by that span and returns 0 forever. So
+    OMITTING the key -- the natural way to write "always active" -- means
+    "never". Traced through all three consumers: the object sticks on stage one,
+    never becomes interactive, and shows its INACTIVE animation states. A PLAYER
+    cannot harvest it either. It is inert in vanilla, not merely invisible to us.
+  - **A pre-harvest stage with no `duration`.** `util.randomInRange(nil)` leaves
+    `storage.durations[i]` unset and the `if not storage.durations[i] then
+    break end` line halts the walk there permanently.
+
+Both are detected statically in `trapProfile` and reported by cause. The second
+matters most as a THRESHOLD bug: summing zero for that stage would put the
+threshold below anything the object can reach, and the network would dispatch
+forever at a trap that can never be ready.
+
+**`itemDropOffset` IS REAL AND CAN BE LARGE.** Moth trap's is `[0.5, 2.5]`, so
+produce appears two and a half tiles above the object and falls. Ordinary
+collection handles it, the same way it handles a falling item drop.
+
 ### Three off-by-ones, all in the geometry
 `fact.farming.geometry`
 
@@ -9328,6 +9470,36 @@ baby was met first. Deleted entirely once the real filter existed. **Note that
 worlds which ran that build carry an orphaned `petports_monsterProbes`
 property; nothing reads it.**
 
+### Reading another entity's interactivity
+`dead.farming.trapinteractive` -- see also `fact.farming.harvestable`, `arch.farming.traps`
+
+The first design for trap ripeness, and the better one had it existed.
+
+`harvestable.lua`'s `setStage` ends by calling `object.setInteractive(true)`
+exactly when the current stage carries a `harvestPool`. That is a precise
+ripeness bit, maintained by the object itself every `update()`, costing no call
+into its script and no arithmetic on our side -- the direct equivalent of what
+`world.farmableStage` is for a crop.
+
+**RETAIL EXPOSES NO BINDING TO READ IT.** Confirmed against the docs and the
+source 2026-09-03. There is no `world.isEntityInteractive`, no
+`world.entityInteractive`, and no object-side getter reachable cross-entity.
+Interactivity is set and never asked.
+
+**The fallback is `activeAge` against a computed threshold** -- see
+`arch.farming.traps`. It works and is verified, but it is strictly worse in two
+ways worth recording, because if a binding ever appears both go away: the
+threshold is a reconstruction of arithmetic the object already did, so it is
+late by up to the spread of the duration rolls; and it can be wrong about
+modded configs in ways the object itself never is, which is the whole reason
+`todo.farming.trapagelock` and the stall check exist.
+
+**WORTH NOTING WHAT WAS NOT TRIED: speculative dispatch.** `dropHarvest` is a
+guaranteed no-op when unripe, so ripeness could have been skipped entirely and
+every known trap visited on a slow cadence. Rejected because it spends walks and
+puts working traps on the failure backoff ladder for something that is not a
+fault. One `callScriptedEntity` per candidate is cheaper than mislabelling.
+
 ### `unclassified`, and the two designs that failed first
 `dead.filter.unclassified` -- see also `arch.filter.subgroupor`
 
@@ -9936,6 +10108,44 @@ failed experiments rather than from reading it.
 
 
 ## BACKLOG
+
+### Harvestables with a degenerate `activeTimeRange` are inert, and we only say so
+`todo.farming.trapagelock` -- see also `fact.farming.harvestable`, `arch.farming.traps`
+
+**OPENED 2026-09-03, DELIBERATELY NOT FIXED.**
+
+`harvestable.lua` reads an omitted `activeTimeRange` as a span of ZERO, so an
+object whose author meant "always active" never ripens for anybody -- us or the
+player. `fact.farming.harvestable` has the full trace.
+
+**THE FIX IS TWO LINES AND THE COST IS NOT.** Normalising the degenerate range
+in `init()` covers every consumer at once, ripening and animation state
+together, and fixes every modded harvestable rather than ones we know about:
+
+    if (self.timeRange[2] - self.timeRange[1]) % 1.0 == 0 then
+      self.timeRange = { 0, 0.9999 }
+    end
+
+**BUT JSON PATCHES DO NOT APPLY TO `.lua`.** Shipping that means OVERWRITING a
+vanilla asset outright -- inheriting the file across game updates and
+hard-conflicting with any other mod that does the same. For a mod whose whole
+posture is that vanilla is a fixed constraint, that is a real departure, and not
+one to make during a 1.0 push. `groundPet.lua` was deferred on the same
+reasoning at a larger scale.
+
+**SO WE DETECT AND REPORT.** `trapProfile` classifies both lock kinds from
+config and `reportTraps` says so ONCE PER ENTITY PER SESSION, naming the cause
+in terms a player can hand to whoever ships the object. `self` is a fresh table
+per script context, so the set empties on beam-out.
+
+**PER PORT, WHICH IS THE ONE COMPROMISE.** Two ports with overlapping coverage
+each warn once about the same broken trap. Deduplicating needs shared state that
+does NOT persist, and the only shared state available is `world.properties`,
+which does -- a permanent record of a transient complaint is the worse failure.
+
+**REOPEN IF** a modded harvestable with this bug turns out to be common enough
+that players hit it in practice, or if an upstream fix lands in OpenStarbound
+and the overwrite becomes a patch against something narrower.
 
 ### Animals move, and nothing chases them
 `todo.farming.animalsmove`
