@@ -4609,12 +4609,198 @@ local function burnFuel(dt, task)
   status.modifyResource("petports_fuel", -(rate * dt))
 end
 
+--  RUN AND MUNCH -- THE EMERGENCY FOOD INGRESS.
+--
+--  dd.fuel.selffeed's third source has a port-side half already
+--  (arch.fuel.groundfeed): a hungry unit is DISPATCHED at a treat on the
+--  ground. That half cannot help a unit which is mid-errand, because taking on
+--  a second task is exactly what a unit carrying out a task must not do -- and
+--  it refuses outright while the unit holds cargo.
+--
+--  So this half interrupts NOTHING. It is a radius check on a timer, it never
+--  touches the state machine, never queues an action, never yields, and never
+--  changes where the unit is walking. A treat thrown in front of a working
+--  unit is eaten on the way past.
+--
+--  IT LIVES HERE AND NOT IN petBehavior.run, AND THAT IS NOT A PREFERENCE.
+--  petports_petBehavior.lua says of run() in as many words: CADENCE IS
+--  UNVERIFIED -- DO NOT HANG TIMERS OFF THIS. It may be called on the
+--  querySurroundings cooldown rather than per tick, and a timer built on it
+--  would run at some unknown multiple of what it claims. update()'s dt is
+--  verified, and it always runs: petports_leashTask never returns nil for a
+--  tethered unit, so there is always a task holding this state.
+--
+--  ONE SECOND, NOT PER TICK. An entityQuery per frame per unit across a fleet
+--  is the kind of cost that does not show up until somebody builds twenty
+--  units, and a treat lands and then lies there -- nothing is lost by seeing it
+--  a fraction of a second late.
+local MUNCH_INTERVAL = 1.0
+
+--  ARM'S LENGTH, NOT A VACUUM.
+--
+--  Vanilla's inert eat action declared distance 2. Three tiles is enough that a
+--  treat thrown at a moving unit lands inside it, and small enough that this
+--  stays "food in front of me" rather than a collection mechanic that quietly
+--  outcompetes the dispatched one.
+local MUNCH_RADIUS = 3.0
+
+--  THE SAME MARK THE PORT USES, AND IT HAS TO BE. PETPORTS_FUEL_LOW is a port
+--  global and this is the monster's environment, so the number is written twice
+--  -- see the PANE_FUEL_MAX note for the same hazard. If one moves, move both.
+local MUNCH_LOW = 0.25
+
+--  Only the unit that is IDLE may keep what it could not eat.
+--
+--  CONSERVATIVE ON PURPOSE, AND THE ALTERNATIVE WAS REJECTED. The obvious rule
+--  is "spit it out if the current task will produce cargo", which needs a list
+--  of the task types that acquire -- collect, withdraw, fuel, drain, tidy,
+--  fish. That list would have to be updated by whoever writes the NEXT
+--  generator, and forgetting is silent: the unit fills its one cargo slot and
+--  the acquire it was walking to fails on arrival with nothing in the log
+--  pointing here.
+--
+--  So the test is inverted. An idle unit -- no task, or the leash's hold task,
+--  which carries no port -- may hold the remainder and will deposit it through
+--  the ordinary ladder. Everything else puts it back on the ground, where it is
+--  a normal drop that ordinary collection or fuelGroundWork picks up later.
+--  Being wrong in that direction costs a walk; being wrong the other way blocks
+--  an errand.
+local function munchMayHold(task)
+  return task == nil or task.port == nil or task.hold == true
+end
+
+local function runAndMunch(dt, task)
+  self.munchTimer = (self.munchTimer or 0) - dt
+  if self.munchTimer > 0 then return end
+  self.munchTimer = MUNCH_INTERVAL
+
+  --  THE UNIT'S OWN RESOURCE, NOT THE PORT'S MIRROR. This is the one place in
+  --  the fuel system with a live number and no staleness at all -- the port
+  --  mirrors on the anchor tick and is a bite behind after the first mouthful.
+  local maximum = status.resourceMax("petports_fuel")
+  local current = status.resource("petports_fuel")
+
+  if maximum == nil or current == nil then return end
+  if current >= maximum * MUNCH_LOW then return end
+
+  local here = mcontroller.position()
+
+  local found = world.entityQuery(here, MUNCH_RADIUS, {
+    includedTypes = { "itemDrop" }
+  })
+
+  for _, dropId in ipairs(found or {}) do
+    local okItem, descriptor = pcall(world.itemDropItem, dropId)
+
+    if okItem and type(descriptor) == "table"
+       and type(descriptor.name) == "string" then
+
+      local okTag, tagged = pcall(root.itemHasTag, descriptor.name, "petports_fuel")
+
+      --  A CLAIMED DROP IS LEFT ALONE.
+      --
+      --  petports_work.lua is in this monstertype's scripts list, so the claim
+      --  table is readable from here -- and a drop somebody has been dispatched
+      --  at is one that unit is already walking to. Snatching it works, and
+      --  leaves the other unit arriving at nothing and taking a backoff on a
+      --  drop that no longer exists. Cheap to check and rude not to.
+      --
+      --  OUR OWN CLAIM IS NOT AN OBSTACLE: if this unit's port dispatched it at
+      --  this very treat, eating it here finishes the job early and the task
+      --  fails harmlessly on "target was gone".
+      local claim = petports_claimGet("drop:" .. tostring(dropId))
+      local claimed = claim ~= nil and (claim.expires or 0) > world.time()
+
+      if okTag and tagged == true and not claimed then
+        local okTake, taken = pcall(world.takeItemDrop, dropId, entity.id())
+
+        if okTake and type(taken) == "table" then
+          local held = tonumber(taken.count) or 1
+          local eaten = 0
+
+          --  SPARING, exactly as everywhere else: a treat worth more than the
+          --  remaining headroom is declined whole rather than half-eaten, and
+          --  the refusal ends the meal.
+          while eaten < held do
+            local meal = petports_feedFuel({
+              name = taken.name, count = 1, parameters = taken.parameters
+            }, true)
+
+            if type(meal) ~= "table" or (tonumber(meal.amount) or 0) <= 0 then
+              break
+            end
+
+            eaten = eaten + 1
+          end
+
+          local left = held - eaten
+
+          sb.logInfo("UNIT run-and-munch at %s: took %s %s, ate %s, %s left "
+            .. "(task %s)",
+            sb.printJson(here), sb.printJson(held), tostring(taken.name),
+            sb.printJson(eaten), sb.printJson(left),
+            task ~= nil and tostring(task.id or "hold") or "none")
+
+          if left > 0 then
+            local remainder = {
+              name = taken.name, count = left, parameters = taken.parameters
+            }
+
+            --  self.anchorId IS VANILLA'S OWN FIELD, not one of ours.
+            --  groundPet's setAnchor() stores the port's entity id there and
+            --  updateAnchor() re-verifies it every second, which is the same
+            --  field the headpat send in petports_contract.lua uses. Reading it
+            --  beats introducing a second copy of the same answer.
+            --
+            --  AN ORPHAN WITH NO LIVE PORT PUTS IT BACK instead, which the
+            --  `and` below arranges by falling through: there is nobody to hand
+            --  cargo to, and the floor is strictly better than destroying it.
+            local port = self.anchorId
+
+            if munchMayHold(task) and port ~= nil and world.entityExists(port) then
+              --  THE PORT OWNS CARGO, so the remainder is handed over rather
+              --  than held here. Same loss window the collect report carries
+              --  and documented there: takeItemDrop has already destroyed the
+              --  world drop, so a message that never lands is an item gone.
+              --  receiveCargo logs an error rather than swallowing it.
+              world.sendEntityMessage(port, "petports_cargoHandoff", {
+                item = remainder,
+                unit = entity.uniqueId()
+              })
+            else
+              --  BACK ON THE FLOOR. Not a loss: it is an ordinary drop at the
+              --  unit's feet, and either collection or fuelGroundWork takes it
+              --  on a later tick. Spawned rather than kept so the one cargo
+              --  slot stays free for the errand in progress.
+              local okBack = pcall(world.spawnItem, remainder, here)
+
+              if not okBack then
+                sb.logError("UNIT could not put back %s x%s after a munch "
+                  .. "-- ITEMS LOST", tostring(taken.name), tostring(left))
+              end
+            end
+          end
+
+          --  ONE DROP PER PASS. The unit is very likely full now, and the next
+          --  pass is a second away.
+          return
+        end
+      end
+    end
+  end
+end
+
 function petportsTaskAction.update(dt, stateData)
   local task = stateData.task
 
   --  BEFORE ANY EARLY RETURN BELOW. Every one of them is a tick the unit spent
   --  on this task, so a task that exits through one has still cost fuel.
   burnFuel(dt, task)
+
+  --  BESIDE burnFuel AND FOR THE SAME REASON: it must run on every tick this
+  --  state holds the unit, whichever branch below the tick leaves through.
+  --  Nothing it does can change what that branch decides.
+  runAndMunch(dt, task)
 
   --  HAND THE STATE BACK WHEN REAL WORK ARRIVES.
   --

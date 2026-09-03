@@ -50,80 +50,113 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-03 (fuel, and the handoff catching up with itself)
+### What is built, as of 2026-09-03 (traps, three ways to eat, one wider tab)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-HALF THIS SESSION WENT ON THE DOCUMENT RATHER THAN THE MOD, and that was the
-right call rather than a detour. See the top of the BACKLOG note and
-`proc.tooling.gapcheck`.
+A SESSION SPENT ENTIRELY ON MECHANISM, DELIBERATELY. The stated aim was to nail
+down the remaining FUNCTION work so that polish is not done alongside building,
+and nothing here is polish except the pane geometry.
 
 ---
 
-**FUEL IS REAL AND VERIFIED IN GAME.** `arch.fuel.burn`, `arch.fuel.eat`,
-`arch.fuel.preference`. `petports_fuel` is the mod's own resource -- 900 full,
-0 empty, burned at 1.0/sec by `burnFuel` and ONLY while a unit holds dispatched
-work. Confirmed on 2026-09-03: the bar drains under load, holds flat when parked
-AND while walking home on the leash, and survives a recall at the level it left
-at. `eatAction.lua` and `begAction.lua` are out of all five scripts lists.
+**MOTH TRAPS ARE A FARMING CLASS AND THEY WORK.** `arch.farming.traps`,
+`fact.farming.harvestable`. A trap is a plain `Object` running
+`/objects/scripts/harvestable.lua`, not a `FarmableObject`, so
+`world.farmableStage` returns nil for it and `scanFarmables` could never see
+one. It now discovers them out of the SAME query -- "has `stages`, the last of
+which carries a `harvestPool`" -- ripens them on an `activeAge()` threshold, and
+harvests by calling `dropHarvest` rather than by swinging. Measured:
+`mothtrap#36 age 192 of 190 RIPE`, then a dispatch and a pick.
 
-**A UNIT EATS, AND PREFERS ONE FLAVOR OUT OF SEVEN.** 60 plain, 120 preferred,
-rolled from `monster.seed()` over the chassis's eligible list and latched.
-Measured: `rolled preferred flavor savory from seed 8460483614048173112`, then
-`ate petports_petfuel_savory for 120 fuel`. The feed slot debits exactly one
-treat, on the port's answer rather than on the click, and every refusal sounds.
+**SWINGING AT A TRAP WOULD HAVE DESTROYED IT AND LOOKED LIKE SUCCESS**, because
+`harvestable.lua`'s `die()` also drops the harvest. That is the single most
+important line in `arch.farming.traps`.
 
-**A DRY UNIT TAKES NO NEW WORK AND STILL COMES HOME.** `dd.fuel.fedproductive`.
-One boundary in `findWork`, placed where the chain already split between
-generators that SPEND what a unit holds and generators that ACQUIRE -- so a unit
-that runs dry mid-errand still delivers what it is carrying. Verified.
+`FARMING_CLASSES` is five now. The pane row reads "Moth Traps, etc.", and
+"Traps emptied" sits in the stats block.
 
 ---
 
-**THE HANDOFF LOST A WHOLE SUBSYSTEM AND THE LINTER NOW CATCHES IT.**
-`proc.tooling.gapcheck`. The fishing system was built across seven commits on
-2026-09-01 and never written down, because STATUS is destroyed on rewrite and
-the rewrite that followed recorded diving instead. Checks 10 and 11 in
-`petports_handoff.py` read `git log` for the gap since this file was last
-committed and turn it into a finding at the moment STATUS is rewritten. Tested
-against the actual commit range: it fires, and names the three fishing commits.
+**PETS EAT FOOD OFF THE FLOOR AGAIN, BY THREE MECHANISMS THAT COMPOSE.**
+`arch.fuel.groundfeed`, `arch.fuel.runandmunch`. `dd.fuel.selffeed` named three
+sources and only two existed; all three do now.
 
-**TWELVE BACKLOG ENTRIES WERE AUDITED AGAINST THE TREE.** Three were stale, two
-moved to DESIGN DECISIONS as the decisions they had become, one deleted, three
-closed, four deferred with reopening conditions. `todo.pathing.arrivedstall` and
-`todo.unit.progressdirection` turned out to be two halves of one problem filed
-three days apart and now reference each other.
+  - `nibbleFromCargo` -- a FEEDER, not a generator. Under the mark and holding a
+    treat means it eats where it stands.
+  - `fuelGroundWork` -- dispatches an ORDINARY `collect` at a treat drop. No new
+    task type, no new act.
+  - `runAndMunch` -- a 1s / 3-tile radius check in the unit's own `update`, which
+    interrupts nothing and covers the unit that is mid-errand.
+
+MEASURED, all branches: a unit at zero took 203 plain treats, ate 15 (exactly
+900) and deposited 188; a unit on `upcycle:32` took 188, ate 14 and put 174 back
+on the floor, which was then collected and deposited on the lap back.
+
+**THE UPCYCLER PATH CAME FREE** because `nibbleFromCargo` is a feeder and
+catches a treat arriving in cargo from any source -- machine output included,
+measured at 69ms after the tidy.
+
+**RESTORING `eatAction.lua` WOULD NEVER HAVE WORKED.** `dead.fuel.eataction`.
+With `strictPortTethering` on, no appetite can ever be picked. That is the first
+thing anyone will find and it looks like a complete answer.
+
+**A HUNGRY UNIT EATS RESTOCK STOCK, AND THAT IS THE FEATURE**, decided rather
+than tolerated -- `dd.fuel.nibblerestock`.
+
+---
+
+**THE STATS TAB USES ITS TAB.** `statsScroll` went from 96px to 165 -- eight
+visible rows to exactly fifteen, sized to a whole multiple of the 11px row so
+no row is half-drawn at the bottom edge. The floor is the build stamp; every
+other widget in that column belongs to another tab.
+
+**THE "IDENTICAL RECTS" INVARIANT IS RETIRED, WITH ITS REASON WRITTEN INTO THE
+CONFIG.** The settings tab carries the rename row under its list and the stats
+tab carries nothing, so the floors are set by different things and always will
+be. Only x, width and the TOP still move together.
 
 ---
 
 **KNOWN IMPERFECT, AND DELIBERATELY LEFT:**
 
-- **THE FISHING SYSTEM IS STILL UNDOCUMENTED.** This is the debt the whole
-  session opened with and it is NOT paid. There is no `arch.*` entry for a
-  merged spawner, a lure projectile, a module item and 246 lines of references.
-  `todo.module.fishing` still calls it an investigation.
+- **THE FISHING SYSTEM IS STILL UNDOCUMENTED.** Third session running. There is
+  no `arch.*` entry for a merged spawner, a lure projectile, a module item and
+  246 lines of references. `todo.module.fishing` still calls it an
+  investigation. This is the oldest debt in the file.
+- **STATUS WAS TWO SESSIONS STALE WHEN THIS WAS WRITTEN**, and checks 10 and 11
+  could not catch it because nothing was committed between them. The gap check
+  reads `git log`, so an uncommitted session is invisible to it BY DESIGN --
+  commit the code and the doc together and it stays correctly quiet.
+- **TWO PAIRS OF NUMBERS MUST AGREE AND NOTHING ENFORCES EITHER.**
+  `PANE_FUEL_MAX` against `petports_fuel.maxValue`, and now `MUNCH_LOW` against
+  `PETPORTS_FUEL_LOW` -- a port global and a monster global that cannot see each
+  other. Two instances is a pattern; it wants a linter check rather than a third
+  comment.
+- **`petports_petport.lua` IS AT 159 CHUNK-LEVEL LOCALS AGAINST LUA 5.1'S 200.**
+  41 spare, and the failure when it lands is at load. Unfiled as a fact.
 - **The feed slot is invisible.** An empty `itemslot` draws no art, so it is a
   16x16 hitbox on bare background at `[240, 116]` on the Details tab.
-- **`detailsFlavorValue` still shows `--`.** The readout is wired; the port has
-  never had a flavor to put in pane state, and now does.
-- **`PANE_FUEL_MAX` is written down twice.** It must equal
-  `petports_fuel.maxValue` in every monstertype, and nothing errors if it does
-  not -- see `arch.fuel.burn`.
-- **No Lua syntax check ran on any of this.** There is no `luac` available and
-  `petports_luacheck.py` is not in `workbench/tools`. Load order was the test.
-- **`petports_amphibious.monstertype` has mixed line endings** -- 470 CRLF
-  against 14 bare LF. `todo.tooling.crlfdrift` names only
-  `petports_petport.lua` and undercounts.
-- **`PETPORTS_DIVE_DEBUG` and `FLY_POINT_DEBUG` are both still on**, along with
-  `PETPORTS_DRAW_DEBUG`, `TASK_DEBUG` and `THINK_DEBUG`. Turn them off before
+- **The trap age lock is detected, not fixed.** `todo.farming.trapagelock` -- a
+  modded harvestable omitting `activeTimeRange` is inert in vanilla too, and
+  fixing it means overwriting a vanilla Lua asset outright.
+- **`petports_amphibious.monstertype` has mixed line endings.** More broadly,
+  `todo.tooling.crlfdrift` undercounts: the whole tree is CRLF in the working
+  copy against LF in the repo blobs, which is why `git diff` reads 36k lines
+  against a 19-line change.
+- **`petports_petBehavior.lua` has never had a build stamp.**
+- **`PETPORTS_DIVE_DEBUG`, `FLY_POINT_DEBUG`, `PETPORTS_DRAW_DEBUG`,
+  `TASK_DEBUG` and `THINK_DEBUG` are all still on.** Turn them off before
   shipping.
 
-**NEXT.** The fishing backfill, then the go-and-find-food work generator
-(`dd.fuel.autoeat` is the constraint on it, decided before the code), then the
-three Fuel Efficiency items and the mutual-exclusivity categories the light
-modules need too.
+**NEXT.** The fishing backfill, before it survives a fourth session. Then medic
+dispatch across whole-network coverage (`todo.dispatch` carry-forward, named the
+priority two sessions ago and not yet touched), the flying-unit
+partially-submerged check, and the `coverageRect()` vs `self.networkRects` grep
+across every generator -- which the two new generators in this session should be
+included in.
 
 ## ARCHITECTURE
 
@@ -4257,7 +4290,8 @@ than a limitation: a unit already holding a treat has had it eaten by the
 feeder, and a unit holding anything else deposits first, since deposit is also
 above the gate. What that leaves uncovered is a starving unit holding a rock
 with NO deposit beacon anywhere -- which belongs to the opportunistic unit-side
-grab and is why that mechanism is worth building separately.
+grab and is why that mechanism is worth building separately. That grab is now
+built: `arch.fuel.runandmunch`.
 
 **ELIGIBILITY IS THE `petports_fuel` TAG, NOT A NAME LIST.** `isTreat` asks
 exactly what `petports_feedFuel` asks, so the port's idea of a treat and the
@@ -4270,6 +4304,87 @@ moves the unit's real resource; `petportFuelled()` reads the mirror. Observed
 twice in 12,876 lines -- a unit ate at 15:35:08.760 and the port said "out of
 fuel" 10ms later, correcting on the next work tick. Ruled cosmetic 2026-09-03:
 a starving unit missing one dispatch tick because it is busy eating is fine.
+
+### Run and munch -- BUILT AND VERIFIED
+`arch.fuel.runandmunch` -- see also `arch.fuel.groundfeed`, `dd.fuel.selffeed`, `dead.fuel.eataction`, `arch.fuel.eat`
+
+The emergency food ingress, and the half of `dd.fuel.selffeed` that
+`arch.fuel.groundfeed` cannot cover. Built and verified 2026-09-03.
+
+**IT EXISTS BECAUSE THE DISPATCHED HALF CANNOT HELP A BUSY UNIT.**
+`fuelGroundWork` sends a unit at a treat, which means taking on a task -- and a
+unit already carrying one must not, and the rung refuses outright while the
+unit holds cargo. A treat thrown in front of a working unit was therefore
+invisible to the entire fuel system.
+
+**IT INTERRUPTS NOTHING, AND THAT IS THE WHOLE DESIGN.** A radius check on a
+timer: no state machine, no queued action, no yield, no change to where the unit
+is walking. It sits beside `burnFuel` at the top of `petportsTaskAction.update`
+for the same stated reason -- it must run on every tick the state holds the
+unit, whichever branch that tick leaves through, and nothing it does can change
+what that branch decides.
+
+**IT IS IN update() AND NOT IN petBehavior.run FOR A RECORDED REASON.**
+`petports_petBehavior.lua` says of `run()`: CADENCE IS UNVERIFIED -- DO NOT HANG
+TIMERS OFF THIS. It may be called on the querySurroundings cooldown rather than
+per tick, and a one-second timer built on it would run at some unknown multiple.
+`update()`'s dt is verified, and it always runs, because `petports_leashTask`
+never returns nil for a tethered unit.
+
+`MUNCH_INTERVAL` 1.0, `MUNCH_RADIUS` 3.0 -- vanilla's inert eat action declared
+distance 2; three tiles catches a treat thrown at a moving unit and stays "food
+in front of me" rather than a collection mechanic that outcompetes the
+dispatched one.
+
+**IT READS THE UNIT'S OWN RESOURCE**, which makes it the one place in the fuel
+system with a live number and no staleness -- see the mirror-lag note in
+`arch.fuel.groundfeed`.
+
+**THE REMAINDER RULE IS INVERTED FROM HOW IT WAS ASKED FOR, DELIBERATELY.** The
+brief was "spit it out if we are on our way to acquire an item". Written
+literally that is a list of the acquiring task types -- collect, withdraw, fuel,
+drain, tidy, fish -- which whoever writes the NEXT generator has to remember to
+extend, and forgetting is SILENT: the unit fills its one cargo slot and the
+errand fails on arrival with nothing in the log pointing here. So `munchMayHold`
+tests the opposite and only an IDLE unit keeps the remainder -- no task, no
+port, or the leash's hold task. Everything else puts it on the floor, where it
+is an ordinary drop that collection or `fuelGroundWork` takes later. Wrong that
+way costs a walk; wrong the other way blocks an errand.
+
+**A CLAIMED DROP IS LEFT ALONE.** `petports_work.lua` is in every chassis's
+scripts list and loads before the task action, so `petports_claimGet` is
+readable unit-side. Snatching a drop another unit was dispatched at WORKS, and
+leaves that unit arriving at nothing and taking a backoff on a drop that no
+longer exists.
+
+**CARGO ARRIVES OUTSIDE A TASK REPORT FOR THE FIRST TIME.** Every other route
+into cargo is a task completing, because every other pickup was dispatched.
+`petports_cargoHandoff` on the port is the ingress for a pickup nobody ordered;
+it calls `receiveCargo` rather than writing `petData`, so the stack merge, the
+`flushCargo` persist and the ITEM LOST error all come along unchanged. The unit
+addresses it with `self.anchorId`, which is VANILLA'S field -- `groundPet`'s
+`setAnchor` sets it and `updateAnchor` re-verifies it every second, and the
+headpat send already uses it.
+
+**MEASURED, BOTH BRANCHES:**
+
+    took 188 petports_petfuel, ate 14, 174 left (task upcycle:32)
+
+14 x 60 is 840 and it refused the fifteenth, so `sparing` stopped it one treat
+short of overflowing the 900 cap rather than burning ~780 of a treat for
+partial value. `upcycle:32` is a dispatched task, so the 174 went to the floor
+rather than into the cargo slot that delivery needed. The holding branch is the
+203-treat run recorded in `arch.fuel.groundfeed`.
+
+**THE SPAT STACK MOVES, AND THIS IS NOT A BUG.** The unit takes it where it
+finds it and puts the remainder at its own feet a fraction of a second later, so
+it ends up slightly along the unit's path with a fresh despawn timer. It cannot
+drag repeatedly: the unit is full by the time it puts the remainder down, and
+the 25% gate stops the next pass.
+
+**`MUNCH_LOW` IS 0.25 WRITTEN DOWN A SECOND TIME.** `PETPORTS_FUEL_LOW` is a
+port global and this is the monster's environment. Exactly the `PANE_FUEL_MAX`
+hazard: nothing errors if they disagree. If one moves, move both.
 
 ### Preferred flavor, derived from the seed, resolved in one place
 `arch.fuel.preference` -- see also `arch.fuel.eat`, `dd.fuel.flavor`, `arch.pathing.oneanchor`

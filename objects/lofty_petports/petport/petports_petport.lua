@@ -1488,6 +1488,39 @@ function init()
       sb.printJson((self.petData.stats and self.petData.stats.headpats) or 0))
   end))
 
+  --  CARGO ARRIVING OUTSIDE A TASK REPORT, WHICH IS NEW AND HAS EXACTLY ONE
+  --  CALLER: run-and-munch. See arch.fuel.runandmunch.
+  --
+  --  Every other route into cargo is a task completing, because every other
+  --  pickup was DISPATCHED and the report is how the port learns it landed. A
+  --  unit that grabs a treat off the floor on its own initiative has no task to
+  --  report and may be halfway through an unrelated one, so it needs a way to
+  --  hand over what it could not eat.
+  --
+  --  IT REUSES receiveCargo RATHER THAN WRITING petData ITSELF, which is what
+  --  makes it safe: the merge-into-an-existing-stack rule, the flushCargo that
+  --  persists into the unit item, and the ITEM LOST error when there is no
+  --  petData all come along unchanged. A second hand-rolled cargo write is
+  --  precisely the kind of thing that would drift from the first one.
+  --
+  --  NO VALIDATION OF THE SENDER BEYOND SHAPE. A port's own unit is the only
+  --  thing that knows this message exists, the payload is an item descriptor
+  --  the unit already physically holds, and the failure mode of being wrong is
+  --  a port gaining an item rather than losing one.
+  message.setHandler("petports_cargoHandoff", simpleHandler(function(payload)
+    if type(payload) ~= "table" then return false end
+
+    local item = payload.item
+    if type(item) ~= "table" or type(item.name) ~= "string" then return false end
+
+    sb.logInfo("PETPORT %s unit %s handing over %s %s it could not eat",
+      stationUniqueId(), tostring(payload.unit),
+      sb.printJson(item.count or 1), tostring(item.name))
+
+    receiveCargo(item)
+    return true
+  end))
+
   --  ---- THE PANE'S WRITE PATH ----------------------------------------------
   --
   --  The pane READS through a mirrored parameter and WRITES through these. It
