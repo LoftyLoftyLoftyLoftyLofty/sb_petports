@@ -15,14 +15,18 @@
 --  is already the authority for every placed port and already carries the
 --  rect, the participate flag and the network id -- see arch.network.registry.
 --
---  THREE THINGS ARE DRAWN, AND THEY ANSWER DIFFERENT QUESTIONS:
+--  TWO THINGS ARE DRAWN, AND THEY ANSWER DIFFERENT QUESTIONS:
 --
---    OUTLINE     the boundary of each network. Where does coverage end.
---    HATCH       a crosshatch across the interior. AM I INSIDE ONE AT ALL --
---                on a large network the nearest edge is off screen, and an
---                outline alone means the overlay looks broken from the middle
---                of the base it is describing.
---    TENTATIVE   where the held port would land, tinted by what it would JOIN.
+--    OUTLINE   the boundary of each network. Where does coverage end.
+--    HATCH     a crosshatch across the interior. AM I INSIDE ONE AT ALL -- on a
+--              large network the nearest edge is off screen, and an
+--              outline-only build looks exactly like an overlay that is broken
+--              when read from the middle of the base it is describing.
+--
+--  THERE IS NO TENTATIVE RECT AND THERE IS NOT GOING TO BE ONE. Four routes
+--  were tried and all four are recorded in `dead.port.tentativerect`; the last
+--  one that would have worked was rejected on design rather than on mechanism.
+--  Do not re-derive it from first principles. Read the entry.
 --
 --  DRAWABLES ARE RELATIVE TO THE PLAYER, MEASURED 2026-09-04. See
 --  fact.port.drawablespace. Every world coordinate here is translated by
@@ -31,7 +35,7 @@
 
 require "/scripts/lofty_petports/petports_work.lua"
 
-local PETPORTS_OVERLAY_BUILD_STAMP = "2026-09-04c tentative rect names its refusal"
+local PETPORTS_OVERLAY_BUILD_STAMP = "2026-09-04g outline and crosshatch, no tentative rect"
 
 --------------------------------------------------------------------------------
 --  TUNING
@@ -50,10 +54,6 @@ local OVERLAY_ON_SWAP_SLOT = true
 local OVERLAY_ON_HAND_ITEM = true
 
 local PORT_TAG = "petports_petport"
-
---  The parameter the object authors its reach under. Spelled here and in
---  petports_petport.object and nowhere else.
-local COVERAGE_SIZE_PARAMETER = "petports_coverageSize"
 
 --  ONE COLOUR PER NETWORK, and the whole reason the overlay is worth building.
 --  A subdivided base is unreadable as a pile of identical boxes and obvious as
@@ -95,23 +95,16 @@ local OVERLAY_HATCH_CROSS = true
 --  A truncated hatch is worse than none: it draws a partial fill that reads as
 --  "coverage stops here". If the budget is blown the outline survives intact
 --  and the fill goes away, which is a degradation the player can interpret.
+--
+--  MEASURED against the shipped geometry: one port is 34 segments, six in a row
+--  94, twenty in a long row 262, fifty sprawling 190. The long row is the
+--  expensive shape, not the big base.
 local OVERLAY_SEGMENT_BUDGET = 700
 
 --  Segments shorter than this are dropped. Floating point rect arithmetic
 --  leaves zero-length slivers where two edges are collinear, and a zero-length
 --  line drawable is a wasted drawable at best.
 local OVERLAY_EPSILON = 0.01
-
---  THE TENTATIVE RECT, TINTED BY CONSEQUENCE.
---
---  Neutral when the port would stand alone. The joined network's own colour
---  when it would be absorbed by exactly one -- so the box literally turns the
---  colour of the thing it is about to become part of. And a loud separate
---  colour when it touches TWO OR MORE, because that is a MERGE, it is the one
---  outcome a player can regret, and it is invisible without this.
-local OVERLAY_TENTATIVE_ALONE = { 220, 220, 220, 200 }
-local OVERLAY_TENTATIVE_BRIDGE = { 255, 80, 80, 240 }
-local OVERLAY_TENTATIVE_WIDTH = 2
 
 --------------------------------------------------------------------------------
 --  CHAINING
@@ -144,78 +137,28 @@ local function taggedPetport(name)
 	return ok and tagged == true
 end
 
---  Returns a DESCRIPTOR, not a boolean, because the tentative rect needs to ask
---  the held item how far it reaches and a name alone cannot carry parameters.
-local function heldPetport()
+local function holdingPetport()
 	if OVERLAY_ON_SWAP_SLOT and player.swapSlotItem ~= nil then
 		local cursor = player.swapSlotItem()
-		if cursor ~= nil and taggedPetport(cursor.name) then return cursor end
+		if cursor ~= nil and taggedPetport(cursor.name) then return true end
 	end
 
 	if OVERLAY_ON_HAND_ITEM then
 		--  player.primaryHandItem RETURNS A DESCRIPTOR; world.entityHandItem
-		--  returns a bare NAME. Both are vanilla and the first is strictly
-		--  better here, because the tentative rect wants to ask the item about
-		--  its parameters and a name cannot carry any.
+		--  returns a bare NAME. Either answers the tag question, but the first
+		--  is the documented player-table binding and the second is reached
+		--  through world, so it is only the fallback.
 		if player.primaryHandItem ~= nil then
 			local hand = player.primaryHandItem()
-			if hand ~= nil and taggedPetport(hand.name) then return hand end
+			if hand ~= nil and taggedPetport(hand.name) then return true end
 		elseif world.entityHandItem ~= nil then
-			local name = world.entityHandItem(entity.id(), "primary")
-			if taggedPetport(name) then return { name = name, count = 1 } end
+			if taggedPetport(world.entityHandItem(entity.id(), "primary")) then
+				return true
+			end
 		end
 	end
 
-	return nil
-end
-
---  How far the held port would reach.
---
---  RETURNS nil RATHER THAN A DEFAULT WHEN IT CANNOT TELL, and the caller draws
---  nothing. A tentative rect is a promise about where units will work; drawing
---  a guessed one is worse than drawing none, because the player has no way to
---  know it was a guess.
-local function heldCoverageSize(descriptor)
-	local ok, item = pcall(root.itemConfig, descriptor)
-
-	--  THE SHAPE IS LOGGED ONCE, NOT ASSUMED. root.itemConfig on an OBJECT item
-	--  is the uncertain part of this whole path -- an object's item form is
-	--  generated rather than authored, and whether the .object's own keys
-	--  survive into `config` is not something the docs say. One line in the log
-	--  settles it; a nil return with no line settles nothing.
-	if not self.petportsOverlayConfigLogged then
-		self.petportsOverlayConfigLogged = true
-		if not ok then
-			sb.logInfo("PETPORTS overlay itemConfig(%s) THREW: %s",
-				tostring(descriptor.name), tostring(item))
-		elseif item == nil then
-			sb.logInfo("PETPORTS overlay itemConfig(%s) returned nil",
-				tostring(descriptor.name))
-		else
-			local keys = {}
-			for key, _ in pairs(item) do table.insert(keys, key) end
-			table.sort(keys)
-			sb.logInfo("PETPORTS overlay itemConfig(%s) top-level keys: %s",
-				tostring(descriptor.name), table.concat(keys, " "))
-			sb.logInfo("PETPORTS overlay itemConfig(%s) %s: config %s, parameters %s",
-				tostring(descriptor.name), COVERAGE_SIZE_PARAMETER,
-				sb.printJson(item.config ~= nil
-					and item.config[COVERAGE_SIZE_PARAMETER] or nil),
-				sb.printJson(item.parameters ~= nil
-					and item.parameters[COVERAGE_SIZE_PARAMETER] or nil))
-		end
-	end
-
-	if not ok or item == nil then return nil end
-
-	--  PARAMETERS BEAT CONFIG, matching how every other item parameter in this
-	--  mod resolves.
-	local size = nil
-	if item.parameters ~= nil then size = item.parameters[COVERAGE_SIZE_PARAMETER] end
-	if size == nil and item.config ~= nil then size = item.config[COVERAGE_SIZE_PARAMETER] end
-
-	if type(size) ~= "number" or size <= 0 then return nil end
-	return size
+	return false
 end
 
 --------------------------------------------------------------------------------
@@ -240,10 +183,7 @@ local function sortedPortIds(ports)
 	return ids
 end
 
-local function allNetworks()
-	local ports = petports_registry().ports or {}
-	local ids = sortedPortIds(ports)
-
+local function allNetworks(ports, ids)
 	local claimed = {}
 	local networks = {}
 
@@ -274,16 +214,14 @@ local function allNetworks()
 			table.sort(group)
 
 			local rects = {}
-			local members = {}
 			for _, memberId in ipairs(group) do
 				table.insert(rects, ports[memberId].rect)
-				table.insert(members, ports[memberId])
 			end
 
 			--  THE KEY IS THE FIRST MEMBER, not the network id. Stable while
 			--  membership is, and it CHANGES WHEN TWO NETWORKS MERGE -- which
 			--  is a colour change the player wants to see, not a glitch.
-			table.insert(networks, { key = group[1], rects = rects, members = members })
+			table.insert(networks, { key = group[1], rects = rects })
 		end
 	end
 
@@ -498,11 +436,44 @@ end
 --------------------------------------------------------------------------------
 --  CACHE
 --------------------------------------------------------------------------------
+
+--  THE VERSION COUNTER IS NOT A GEOMETRY VERSION, AND KEYING ON IT ALONE WAS
+--  WRONG. MEASURED 2026-09-04.
 --
---  The geometry depends on the REGISTRY ONLY, and the registry publishes a
---  version counter precisely so a reader can notice a change without diffing
---  the structure. Rebuilt when that moves and not otherwise; the per-frame cost
---  is then a property read, the tentative rect, and a translate.
+--  A registry publish bumps the version, and a port republishes whenever ITS
+--  UNIT MOVES more than four tiles -- see UNIT_POSITION_THRESHOLD. Three
+--  working units drove the version from 85501 to 85539 in sixteen seconds, so
+--  the overlay rebuilt every outline and every hatch line about forty times
+--  over while not one rect had changed. With the signature below the same test
+--  window rebuilt ONCE against thirty-two publishes.
+--
+--  The ports have the same problem and already solve it the same way: re-derive
+--  on the version, then compare what came out and only act on a real change
+--  (petports_rectListsEqual). This is that, over the fields the overlay
+--  actually draws from.
+--
+--  THE VERSION IS STILL THE CHEAP GATE. It is read first and skips even the
+--  signature build on the overwhelming majority of ticks, where nothing at all
+--  has moved.
+local function geometrySignature(ports, ids)
+	local parts = {}
+
+	for _, portId in ipairs(ids) do
+		local entry = ports[portId]
+		local rect = entry.rect
+
+		if rect ~= nil then
+			table.insert(parts, table.concat({
+				portId,
+				rect[1], rect[2], rect[3], rect[4],
+				tostring(entry.participate),
+				tostring(entry.id)
+			}, ":"))
+		end
+	end
+
+	return table.concat(parts, "|")
+end
 
 local function rebuildIfStale()
 	local registry = petports_registry()
@@ -512,20 +483,30 @@ local function rebuildIfStale()
 	   and self.petportsOverlaySegments ~= nil then
 		return
 	end
-
 	self.petportsOverlayVersion = version
-	self.petportsOverlayNetworks = allNetworks()
+
+	local ports = registry.ports or {}
+	local ids = sortedPortIds(ports)
+	local signature = geometrySignature(ports, ids)
+
+	if self.petportsOverlaySignature == signature
+	   and self.petportsOverlaySegments ~= nil then
+		return
+	end
+	self.petportsOverlaySignature = signature
+
+	local networks = allNetworks(ports, ids)
 
 	local outline = {}
 	local hatch = {}
 
-	for _, network in ipairs(self.petportsOverlayNetworks) do
+	for _, network in ipairs(networks) do
 		local edgeColour = colourFor(network.key, OVERLAY_OUTLINE_ALPHA)
 		local fillColour = colourFor(network.key, OVERLAY_HATCH_ALPHA)
 
 		for _, segment in ipairs(outlineSegments(network.rects)) do
 			table.insert(outline,
-				{ a = segment[1], b = segment[2], colour = edgeColour, width = OVERLAY_WIDTH })
+				{ a = segment[1], b = segment[2], colour = edgeColour })
 		end
 
 		local lines = hatchSegments(network.rects, OVERLAY_HATCH_SPACING, false)
@@ -537,7 +518,7 @@ local function rebuildIfStale()
 
 		for _, segment in ipairs(lines) do
 			table.insert(hatch,
-				{ a = segment[1], b = segment[2], colour = fillColour, width = OVERLAY_WIDTH })
+				{ a = segment[1], b = segment[2], colour = fillColour })
 		end
 	end
 
@@ -553,196 +534,12 @@ local function rebuildIfStale()
 		table.insert(self.petportsOverlaySegments, segment)
 	end
 
+	--  ONLY ON A REAL GEOMETRY CHANGE, so this is a placement log and not a
+	--  tick log.
 	sb.logInfo("PETPORTS overlay rebuilt at version %s: %s networks, %s outline, %s hatch %s",
-		sb.printJson(version), sb.printJson(#self.petportsOverlayNetworks),
+		sb.printJson(version), sb.printJson(#networks),
 		sb.printJson(#outline), sb.printJson(#hatch),
 		dropped and "(HATCH DROPPED, over budget)" or "")
-end
-
---------------------------------------------------------------------------------
---  THE TENTATIVE RECT
---------------------------------------------------------------------------------
---
---  Where the held port would land, and -- the part that matters -- WHAT IT
---  WOULD JOIN. Recomputed every frame rather than cached, because it follows
---  the cursor and nothing else does.
---
---  THE CENTRE IS DERIVED FROM THE AIM POSITION AND THAT MAPPING IS UNVERIFIED.
---  arch.port.coverage flagged it and it is still flagged: a placed port centres
---  its rect on entity.position(), which is its occupied tile, and the floor of
---  the aim position is only an assumption about where the placement cursor
---  actually commits. The derived centre is LOGGED on change so it can be read
---  straight off against the rect the port publishes once it goes down.
-
---  EVERY REFUSAL BELOW NAMES ITSELF, AND THE FIRST BUILD OF THIS DID NOT.
---
---  It bailed to nil on three separate conditions -- no binding, no size, no aim
---  -- with no log on any of them, so "the tentative rect is not applying" could
---  not be told from "the aim binding is wrong". That is exactly
---  fact.tooling.mergedrefusal, in a function whose own comment cited it.
---
---  Each cause is logged ONCE, on change, so a permanent failure does not spam
---  and a transient one is still visible.
-local function refuse(cause)
-	if self.petportsOverlayRefusal ~= cause then
-		self.petportsOverlayRefusal = cause
-		sb.logInfo("PETPORTS overlay tentative rect refused: %s", cause)
-	end
-	return nil
-end
-
---  WHERE THE PLAYER IS AIMING, ASKED FOUR WAYS.
---
---  world.entityAimPosition is documented for tool-user entities and a player is
---  one, so it SHOULD be the answer -- but it is reached here through world,
---  aimed at ourselves, from a context that is neither the aiming entity's tool
---  user nor an active item, and it did not produce a rect on the first build.
---
---  Rather than swap one guess for another, every candidate is called once and
---  the whole table is logged. The first that returns a two-element vector wins
---  and is remembered; the log says which, and says what the others did.
---
---  player.aimPosition is not in vanilla's player table. It is here because
---  OpenStarbound and its forks add it and cost nothing to ask.
-local function aimCandidates()
-	return {
-		{
-			name = "player.aimPosition",
-			call = function()
-				if player.aimPosition == nil then return nil, "absent" end
-				return player.aimPosition()
-			end
-		},
-		{
-			name = "world.entityAimPosition",
-			call = function()
-				if world.entityAimPosition == nil then return nil, "absent" end
-				return world.entityAimPosition(entity.id())
-			end
-		},
-		{
-			name = "mcontroller.aimPosition",
-			call = function()
-				if mcontroller == nil then return nil, "no mcontroller" end
-				if mcontroller.aimPosition == nil then return nil, "absent" end
-				return mcontroller.aimPosition()
-			end
-		},
-		{
-			name = "entity.aimPosition",
-			call = function()
-				if entity.aimPosition == nil then return nil, "absent" end
-				return entity.aimPosition()
-			end
-		}
-	}
-end
-
-local function looksLikeVector(value)
-	return type(value) == "table"
-	   and type(value[1]) == "number" and type(value[2]) == "number"
-end
-
-local function resolveAim()
-	--  A source that worked once keeps working; no reason to re-probe.
-	if self.petportsOverlayAimSource ~= nil then
-		local ok, aim = pcall(self.petportsOverlayAimSource.call)
-		if ok and looksLikeVector(aim) then return aim end
-
-		--  It stopped answering. Forget it and fall through to a fresh probe
-		--  rather than silently going dark.
-		sb.logInfo("PETPORTS overlay aim source %s stopped answering, re-probing",
-			self.petportsOverlayAimSource.name)
-		self.petportsOverlayAimSource = nil
-		self.petportsOverlayAimProbed = false
-	end
-
-	local chosen = nil
-	local report = {}
-
-	for _, candidate in ipairs(aimCandidates()) do
-		local ok, aim, why = pcall(candidate.call)
-
-		local verdict
-		if not ok then
-			verdict = "threw: " .. tostring(aim)
-		elseif aim == nil then
-			verdict = why or "nil"
-		elseif not looksLikeVector(aim) then
-			verdict = "not a vector: " .. sb.printJson(aim)
-		else
-			verdict = sb.printJson(aim)
-			if chosen == nil then chosen = { candidate = candidate, aim = aim } end
-		end
-
-		table.insert(report, candidate.name .. " -> " .. verdict)
-	end
-
-	if not self.petportsOverlayAimProbed then
-		self.petportsOverlayAimProbed = true
-		for _, line in ipairs(report) do
-			sb.logInfo("PETPORTS overlay aim probe: %s", line)
-		end
-		sb.logInfo("PETPORTS overlay aim probe: also present -- %s %s %s",
-			mcontroller ~= nil and "mcontroller" or "no-mcontroller",
-			activeItem ~= nil and "activeItem" or "no-activeItem",
-			status ~= nil and "status" or "no-status")
-	end
-
-	if chosen == nil then return nil end
-
-	self.petportsOverlayAimSource = chosen.candidate
-	sb.logInfo("PETPORTS overlay aim source: %s", chosen.candidate.name)
-	return chosen.aim
-end
-
-local function tentativeRect(descriptor)
-	local size = heldCoverageSize(descriptor)
-	if size == nil then
-		return refuse("root.itemConfig gave no " .. COVERAGE_SIZE_PARAMETER
-			.. " for " .. tostring(descriptor.name))
-	end
-
-	local aim = resolveAim()
-	if aim == nil then return refuse("no aim source answered") end
-
-	self.petportsOverlayRefusal = nil
-
-	local centre = { math.floor(aim[1]), math.floor(aim[2]) }
-
-	if self.petportsOverlayLastCentre == nil
-	   or self.petportsOverlayLastCentre[1] ~= centre[1]
-	   or self.petportsOverlayLastCentre[2] ~= centre[2] then
-		self.petportsOverlayLastCentre = centre
-		sb.logInfo("PETPORTS overlay tentative centre %s from aim %s, size %s",
-			sb.printJson(centre), sb.printJson(aim), sb.printJson(size))
-	end
-
-	return petports_coverageRect(centre, size)
-end
-
---  Which existing networks this rect would be absorbed into.
---
---  A HELD PORT IS AN UNCONFIGURED ONE: participate true, id 0, matching the
---  defaults petports_petport.lua reads when the object has no saved settings.
---  Compatibility therefore reduces to "does the neighbour participate", but it
---  is asked through petports_entriesCompatible anyway so that a change to the
---  rule reaches here too.
-local function joinedNetworks(rect)
-	local fresh = { participate = true, id = 0 }
-	local joined = {}
-
-	for _, network in ipairs(self.petportsOverlayNetworks or {}) do
-		for index, member in ipairs(network.members) do
-			if petports_entriesCompatible(fresh, member)
-			   and petports_rectsAdjacent(rect, network.rects[index]) then
-				table.insert(joined, network)
-				break
-			end
-		end
-	end
-
-	return joined
 end
 
 --------------------------------------------------------------------------------
@@ -750,13 +547,13 @@ end
 --------------------------------------------------------------------------------
 
 --  THE ONE PLACE WORLD COORDINATES BECOME DRAWABLE COORDINATES.
-local function addSegment(a, b, colour, width, origin)
+local function addSegment(a, b, colour, origin)
 	local drawable = {
 		line = {
 			{ a[1] - origin[1], a[2] - origin[2] },
 			{ b[1] - origin[1], b[2] - origin[2] }
 		},
-		width = width,
+		width = OVERLAY_WIDTH,
 		color = colour,
 		fullbright = true
 	}
@@ -768,40 +565,13 @@ local function addSegment(a, b, colour, width, origin)
 	end
 end
 
-local function drawTentative(rect, origin)
-	local joined = joinedNetworks(rect)
-
-	local colour
-	if #joined == 0 then
-		colour = OVERLAY_TENTATIVE_ALONE
-	elseif #joined == 1 then
-		colour = colourFor(joined[1].key, OVERLAY_TENTATIVE_ALONE[4])
-	else
-		colour = OVERLAY_TENTATIVE_BRIDGE
-	end
-
-	--  DRAWN WHOLE, NOT UNIONED WITH WHAT IS ALREADY THERE. This box is a
-	--  question about ONE port -- "how far would this reach" -- and clipping it
-	--  against its future neighbours would answer a different one.
-	local corners = {
-		{ { rect[1], rect[2] }, { rect[3], rect[2] } },
-		{ { rect[3], rect[2] }, { rect[3], rect[4] } },
-		{ { rect[3], rect[4] }, { rect[1], rect[4] } },
-		{ { rect[1], rect[4] }, { rect[1], rect[2] } }
-	}
-
-	for _, edge in ipairs(corners) do
-		addSegment(edge[1], edge[2], colour, OVERLAY_TENTATIVE_WIDTH, origin)
-	end
-end
-
 --  ONE-TIME RENDER LAYER PROBE.
 --
 --  fact.art.renderlayerkey: an unknown render layer key is a hard failure, not
 --  a fallback, and the overlay wants to sit above foreground tiles rather than
 --  be buried by them. Asked once with a degenerate transparent drawable; if the
 --  key is refused we fall back to the player's own layer, which is worse
---  looking and still works.
+--  looking and still works. MEASURED 2026-09-04: "Overlay" is accepted.
 local function probeRenderLayer()
 	local ok = pcall(function()
 		localAnimator.addDrawable(
@@ -831,14 +601,9 @@ function init()
 	if petports_overlay_originalInit then petports_overlay_originalInit() end
 
 	self.petportsOverlayVersion = nil
+	self.petportsOverlaySignature = nil
 	self.petportsOverlaySegments = nil
-	self.petportsOverlayNetworks = nil
 	self.petportsOverlayLayer = nil
-	self.petportsOverlayLastCentre = nil
-	self.petportsOverlayRefusal = nil
-	self.petportsOverlayAimSource = nil
-	self.petportsOverlayAimProbed = false
-	self.petportsOverlayConfigLogged = false
 	self.petportsOverlayProbed = false
 	self.petportsOverlayDrawing = false
 
@@ -850,9 +615,7 @@ function update(dt)
 
 	if localAnimator == nil then return end
 
-	local held = heldPetport()
-
-	if held == nil then
+	if not holdingPetport() then
 		--  CLEARED ONCE ON THE FALLING EDGE, NOT EVERY TICK.
 		--
 		--  clearDrawables wipes the WHOLE list on the player's animator, which
@@ -862,7 +625,6 @@ function update(dt)
 		if self.petportsOverlayDrawing then
 			localAnimator.clearDrawables()
 			self.petportsOverlayDrawing = false
-			self.petportsOverlayLastCentre = nil
 		end
 		return
 	end
@@ -881,12 +643,8 @@ function update(dt)
 	local origin = entity.position()
 
 	for _, segment in ipairs(self.petportsOverlaySegments) do
-		addSegment(segment.a, segment.b, segment.colour, segment.width, origin)
+		addSegment(segment.a, segment.b, segment.colour, origin)
 	end
-
-	--  LAST, SO IT SITS ON TOP OF THE HATCH IT OVERLAPS.
-	local tentative = tentativeRect(held)
-	if tentative ~= nil then drawTentative(tentative, origin) end
 
 	self.petportsOverlayDrawing = true
 end

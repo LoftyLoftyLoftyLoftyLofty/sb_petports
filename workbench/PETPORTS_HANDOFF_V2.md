@@ -50,120 +50,100 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-03 (one pond, every lure, and fewer of them)
+### What is built, as of 2026-09-04 (an overlay that draws, and a silver bullet with thin plating)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-ONE FEATURE, THREE RUNS, AND THE SECOND AND THIRD ARE WHERE THE VALUE IS.
+ONE FEATURE SHIPPED, ONE FEATURE KILLED, AND THE KILLED ONE COST MORE.
 
 ---
 
-**A FISH BELONGS TO THE NETWORK NOW, NOT TO THE LURE THAT SPAWNED IT.**
-`arch.fishing.network`. `fishWork` read `self.fishId` and nothing else, so a unit
-could only be sent at a fish its OWN port's lure reported -- two ports on one
-pond ignored each other's catchable fish.
+**THE COVERAGE OVERLAY IS BUILT AND WORKS.** `arch.port.overlay`. A player-side
+script draws the boundary of every network plus a crosshatch across the
+interior, tinted per network, whenever a `petports_petport`-tagged item is in
+the cursor or the hand. `arch.port.coverage` specified this in outline years of
+document ago and the reasoning survived contact intact.
 
-**IT WAS A MISSING VIEW, NOT A MISSING CAPABILITY.** The lure was ALREADY placed
-across `fishingRects()` and already clamped its patrol to the whole network, so
-the fish was network-wide in POSITION and port-local only in OWNERSHIP. The last
-generator that had never had the `arch.dispatch.union` treatment.
+**THE CROSSHATCH WAS NOT IN THE SPEC AND IS THE HALF THAT MAKES IT WORK.** An
+outline-only build, read from the middle of a large base, is indistinguishable
+from a broken overlay -- the nearest edge is off screen. Asked for during the
+session, and correctly.
 
-`petports_fish` is a world property keyed by port. A property and not a message,
-because no port ever messages another; and not in the REGISTRY, because every
-registry write bumps a version that re-derives every network on the planet.
-Withdrawn at `uninit` and NOT at `die()` -- the opposite of the registry entry
-four lines away, because a fish entry names an entity id.
-
----
-
-**RUN 1 FOUND A DISPATCH THE UNIT WAS GUARANTEED TO REFUSE.**
-`todo.fishing.outofcover`. The unit bails a fish task the moment the fish leaves
-network coverage, checked EVERY TICK; the port never checked once. 6 of 24
-dispatches, every one failing at `moved 0` inside 200ms. **Not a regression** --
-both halves shipped together in `fishing ix part 2` and the committed `fishWork`
-had no rect test at all. Fixed; `fishWork` walks `fishingRects()` before ranking.
-
-**RUN 2 CONFIRMED IT AND FOUND THE REAL PROBLEM.**
-
-    dispatches   24 -> 54      catches   14 -> 48
-    success     58% -> 89%     out-of-coverage dispatches   6 -> 0
-
-Zero coverage bails. Cross-port is half of all dispatches. The 4 remaining
-failures are `fact.fishing.despawnwindow` at an unchanged rate, accepted under
-`dd.fishing.catchwindow`.
-
-**RUN 3 IS WHERE THE SESSION EARNED ITS KEEP, AND IT WAS NOT MY CATCH.**
-Upcyclers filled and were never emptied. I diagnosed it twice and was wrong
-twice -- first as a filter fault, from a log message that could not say which of
-two things it meant. **A control test settled it: two more units, and the work
-got done.** See `fact.tooling.mergedrefusal` for the reading failure, which is
-the durable half.
-
-**THE MECHANISM.** `dd.fishing.supply`. Fish ranks high because its target
-EXPIRES; upcycler output ranks low because a treat waits forever. Both correct
-per task. Under saturation the ranking stops being a preference and becomes a
-permanent exclusion. Network-wide fish multiplied the fish visible per port by
-the number of lures on the water and **moved the saturation point without anyone
-deciding to move it.**
-
-**THE LADDER IS NOT THE THING TO CHANGE.** Ranking an expiring target above a
-waiting one is right; the alternative is dropping catches. The supply was wrong,
-not the ordering.
-
-  - `spawnTimeRange` `[4, 12]` -> `[8, 24]`, a quarter of vanilla's.
-  - `FISHING_LURE_LIFETIME` `150` -> `{ 120, 300 }`, drawn per lure. A flat
-    lifetime made every lure in a base die and respawn IN THE SAME SECOND, and
-    the replacement kept the phase, so the alignment never decayed. Its **max**
-    is what the fish entry's TTL reads, and it must be the max.
-  - `drainWork`'s refusal now names WHICH test failed. "No beacon's filter
-    accepts this" and "every crate that accepts it is full" want opposite
-    responses from the player and were one string.
+**COVERAGE SIZE MOVED TO THE `.object`** as `petports_coverageSize`, read once
+in `init`. Everything downstream already took it as a parameter, so nothing else
+changed, and a reskinned port with different reach is now a JSON edit.
 
 ---
 
-**KNOWN IMPERFECT, AND DELIBERATELY LEFT:**
+**THE TENTATIVE RECT IS DEAD, AND THE ENTRY IS WORTH READING BEFORE ANYONE
+PROPOSES IT AGAIN.** `dead.port.tentativerect`. Four routes:
 
-- **THE RETUNE IS UNMEASURED.** The three run-3 changes have not been run. What
-  to watch: whether `drain` and `tidy` get dispatched with a two-unit fleet, and
-  whether lure placements scatter in the log instead of arriving together.
-- **THE MODULE STILL GATES CATCHING**, so network-wide fish bites only when two
-  or more ports carry modules. One line removes it and lets any submersible unit
-  fish off a single module -- a balance change, not a dispatch change.
-- **A RESTOCK REQUEST IS NOT A REASON TO EMPTY A MACHINE.** `drainWork` builds
-  its destinations from `petports_beaconsFor("deposit")` only. A base with two
-  restock beacons asking for all eight treat flavors still refuses to drain
-  treats if no DEPOSIT beacon takes them. Not filed as a todo -- it never
-  triggered, and the observed fault was throughput.
-- **THE CROSSHAIR SYSTEM HAS NO ARCHITECTURE ENTRY.** Found by chasing a
-  reference. Second such gap found that way rather than by any check.
-- **A UNIT CAN STILL BE DISPATCHED INTO MAGMA.** `todo.fishing.medium`.
-  Pre-existing; one `targetSuits` call.
-- **BACKOFF IS PORT-LOCAL**, so a fish that beat one port starts every other at
-  failure 1. `todo.fishing.backoffshared`, out of scope for 1.0.
-- **TWO PAIRS OF NUMBERS MUST AGREE AND NOTHING ENFORCES EITHER.**
-  `PANE_FUEL_MAX` against `petports_fuel.maxValue`, `MUNCH_LOW` against
-  `PETPORTS_FUEL_LOW`. Wants a linter check rather than a third comment.
-- **`petports_petport.lua` IS AT 159 CHUNK-LEVEL LOCALS AGAINST LUA 5.1'S 200.**
-  This session added none: the new shared functions are prefixed globals, the
-  coverage predicate is nested inside `fishWork`, and `FISHING_LURE_LIFETIME` is
-  a global. The failure when it lands is at load.
-- **The feed slot is invisible**, a 16x16 hitbox on bare background at
-  `[240, 116]` on the Details tab.
-- **The trap age lock is detected, not fixed.** `todo.farming.trapagelock`.
-- **`petports_amphibious.monstertype` has mixed line endings**, and
-  `todo.tooling.crlfdrift` still undercounts.
-- **`petports_petBehavior.lua` has never had a build stamp.**
-- **`PETPORTS_DIVE_DEBUG`, `FLY_POINT_DEBUG`, `PETPORTS_DRAW_DEBUG`,
-  `TASK_DEBUG` and `THINK_DEBUG` are all still on.** Turn them off before
-  shipping.
+  - **A player script cannot see the cursor.** Four aim candidates, all absent,
+    no `mcontroller`, no `activeItem` -- `fact.port.noaimbinding`.
+  - **`imageLayers`** works and was rejected on what it costs.
+  - **LUA SMUGGLING WORKED AND WAS STILL NOT ENOUGH.** A tech script can leave a
+    value on the shared string metatable for the player script to read, and the
+    build did that safely -- passing two numbers, never the `tech` table, which
+    is the version that crashes to desktop. It died because smuggling moves the
+    CALL SITE and cannot manufacture the CONTEXT. A tech runs only while
+    equipped, and `TechType` has exactly three values with no free one.
+  - **Centring the box on the player** was the last live option and was rejected
+    ON DESIGN: a coverage box that follows the player asserts that the player
+    provides coverage. Better no rect than a rect that lies.
 
-**NEXT.** Run the retune. Then medic dispatch across whole-network coverage
-(`todo.dispatch` carry-forward, named the priority three sessions running and
-still not touched), the flying-unit partially-submerged check, and the
-`coverageRect()` vs `self.networkRects` grep across every generator -- still not
-done, and this session is the second reminder of it.
+The aim probes and the relay were REMOVED with the feature. Dead code that never
+runs rots; the entry is the record.
+
+---
+
+**TWO THINGS THE SESSION FOUND THAT WERE NOT WHAT IT WAS LOOKING FOR.**
+
+**The registry version is not a geometry version.** The overlay cached on it and
+rebuilt every line about forty times in sixteen seconds, because a port
+republishes when its UNIT MOVES. Now gated on a signature over rect, participate
+and id: thirty-two publishes, one rebuild. The same trap is available to anything
+else that watches that counter.
+
+**A refusal that returns nil with no log is worse than no feature.** The first
+tentative build bailed on three separate conditions silently, so "it is not
+applying" could not be told from "the aim binding is wrong" -- in a function
+whose own comment cited `fact.tooling.mergedrefusal`. The rule keeps having to
+be relearned by the thing that quotes it.
+
+---
+
+**A CORRECTION THAT SHOULD NOT HAVE BEEN NEEDED.** A binding was proposed on the
+grounds that OpenStarbound and its forks add it. **THE TARGET IS RETAIL AND
+ALWAYS HAS BEEN**; the repo is a diff baseline and nothing else.
+`ref.tooling.osbaseline` now leads with that, and the aim probe carried a
+`retail` FIELD that refused a non-retail binding even when it answered -- the
+rule as a gate rather than as a comment. That pattern is worth reusing.
+
+---
+
+**FILED LATE: THE PART ORDER IS THE TOOLTIP ORDER** (`d1bdda5`, 2026-09-03, not
+mine). `imageLayers` and `animationParts` on the petport were reordered
+hull-first to interior-first, and the animation's `zLevel`s swapped to match --
+interior 0/1, door, hull 4/5. **The layer order the ITEM declares is what the
+inventory tooltip composites**, so a stacking that renders correctly in world
+can still produce a wrong-looking tooltip, and the two have to be kept in step
+by hand. Worth knowing before anyone reorders those lists for tidiness.
+
+---
+
+**HOUSEKEEPING, UNRESOLVED.** Twenty files are line-ending flipped against HEAD
+-- LICENSE, several `.frames`, `petportsTaskAction.lua`, `petports_petport.lua`,
+this document -- as whole-file rewrites with identical line counts. A transport
+artifact, not work. Every edit this session preserved CRLF, so nothing was made
+worse, but the diffs stay unreadable until it is settled.
+`workbench/tools/petports_luacheck.py` is also absent from the repo.
+
+**NEXT.** Unchanged and now overdue: medic dispatch across whole-network
+coverage (`todo.dispatch` carry-forward, named the priority four sessions
+running), the flying-unit partially-submerged check, and the `coverageRect()`
+vs `self.networkRects` grep across every generator -- the third reminder.
 
 ## ARCHITECTURE
 
@@ -1921,6 +1901,13 @@ authority for every placed port. Two complications survive from the earlier
 sketch — work ranges would not display inside tile-protected zones, and the
 tentative rect is only as good as the aim-position-to-placement-tile mapping,
 which is worth verifying against an actual placement rather than assumed.
+
+**BUILT 2026-09-04, AND THE TENTATIVE HALF IS DEAD.** The overlay ships as
+`arch.port.overlay` -- outline plus crosshatch, per network, tinted. The
+tentative rect above was specified here and cannot be built: the second
+complication turned out not to be a mapping question at all, because a player
+script cannot read the cursor in the first place. Four routes were tried; see
+`dead.port.tentativerect` before proposing a fifth.
 
 ### Placement validation — occupancy, not interactivity
 `arch.port.placement`
@@ -4761,6 +4748,69 @@ rather than a dispatch one, so it was not made here.
 **ONE THING CAME FREE.** A port holding a drone AND a fishing module places a
 lure whose fish it can never reach itself. Before this, that was simply wasted;
 now a neighbouring aquatic unit catches them.
+
+### The coverage overlay -- BUILT, and it is two drawings not one
+`arch.port.overlay` -- see also `arch.port.coverage`, `arch.network.registry`, `fact.port.drawablespace`, `dead.port.tentativerect`
+
+**RUNS ON THE PLAYER, IN `deploymentConfig/scripts`.** `arch.port.coverage`
+called this years-of-document ago and the reasoning held: every interesting
+question about coverage is a question about NEIGHBOURS, and an object can only
+ever draw its own box. Triggered by holding an item tagged `petports_petport`
+-- BY TAG, so a reskin pops it with no edit -- read from the swap slot and from
+`player.primaryHandItem`, either of which fires.
+
+**NOTHING NEW IS PUBLISHED.** `petports_registry` already carries rect,
+participate and id for every placed port, which is the whole input.
+
+**TWO DRAWINGS, ANSWERING DIFFERENT QUESTIONS.**
+
+  - **OUTLINE.** The boundary of each NETWORK, not a box per port. Eight ports
+    drawn whole is a lattice of interior lines that says nothing. Each rect
+    contributes its four edges minus whatever lies STRICTLY inside a
+    same-network neighbour -- strictly, so a shared boundary draws one
+    coincident line rather than a gap, and two rects a tile apart both draw in
+    full, which is correct because the gap is real coverage the units do not
+    have.
+  - **CROSSHATCH.** Both diagonals across the interior. It exists because on a
+    network big enough to matter the nearest edge is off screen, and an
+    outline-only build read from the middle of the base looks exactly like an
+    overlay that is broken.
+
+**THE HATCH IS ONE LINE FAMILY PER NETWORK, NOT PER RECT, AND THAT IS THE WHOLE
+TRICK.** Hatching each rect separately draws the same diagonal twice wherever
+two rects overlap -- a brighter band exactly where coverage is densest, which is
+backwards -- and scales with the port count. Intersecting each diagonal with
+every rect and merging the spans makes overlap free and scales with the
+network's BOUNDING BOX over the spacing instead. Measured: six ports in a row is
+80 hatch lines rather than 180, and fifty sprawling ports is CHEAPER than twenty
+in a long row.
+
+**ONE COLOUR PER NETWORK, KEYED ON THE DERIVED GROUP AND NOT ON THE NETWORK ID.**
+An id is a per-cluster namespace and is `0` on every port that never touched the
+setting -- `arch.network.membership` -- so two genuinely separate id-0 clusters
+would tint identically, which is the exact misreading the overlay exists to
+prevent. The key is the group's first port id, so a MERGE CHANGES THE COLOUR,
+which is a thing to see rather than a glitch.
+
+**MEMBERSHIP IS DERIVED HERE AND MUST NOT DISAGREE WITH THE PORTS.** The overlay
+asks "what networks are there", which `petports_networkMembers` cannot answer --
+it answers "what network is THIS port in". So it runs its own flood fill, and
+the compatibility rule was EXTRACTED to `petports_entriesCompatible` and shared
+rather than restated. A second hand-written copy of those five lines is the
+`coverageRect()` trap in a new place -- see `arch.dispatch.union`.
+
+**THE REGISTRY VERSION IS NOT A GEOMETRY VERSION, AND KEYING THE CACHE ON IT WAS
+WRONG.** A port republishes whenever its unit moves four tiles, so the version
+moves for reasons the overlay does not draw from. MEASURED 2026-09-04: three
+working units drove it from 85501 to 85539 in sixteen seconds and the overlay
+rebuilt every line about forty times with no rect having changed. Now gated on a
+SIGNATURE over portId, rect, participate and id -- the same shape as
+`petports_rectListsEqual` on the port side. Re-measured: thirty-two publishes,
+ONE rebuild. The version is kept as the cheap first gate.
+
+**THE BUDGET DROPS THE HATCH, NEVER THE OUTLINE.** A truncated hatch draws a
+partial fill that reads as "coverage stops here", which is a worse lie than no
+fill at all.
 
 ## DESIGN DECISIONS
 
@@ -9682,6 +9732,68 @@ tiles before the target blinked out.
 path is shared and names the common case. Cosmetic, and noted only so the next
 reader greping fish failures knows that string is one of them.
 
+### `localAnimator` drawables on a player are ANIMATOR-RELATIVE
+`fact.port.drawablespace` -- see also `arch.port.overlay`, `fact.pane.panesound`, `fact.item.renderlayer`
+
+**MEASURED 2026-09-04 BY A TWO-BOX CONTROL TEST, not reasoned.** Nothing
+available said which space `localAnimator.addDrawable` coordinates are in, and
+guessing wrong produces a box either glued to the player or sitting at the
+bottom-left corner of the world -- both of which read as "the overlay does not
+work" rather than as an off-by-a-player-position.
+
+The test drew both hypotheses at once, as two boxes that cannot both be visible:
+red at `playerPos +/- 3`, correct if drawables are WORLD space, and green at
+`0 +/- 3`, correct if they are RELATIVE. Exactly one can land on the player.
+
+**GREEN. Drawables are relative to the animator's position**, so a world
+coordinate must be translated by `-entity.position()` before it is handed over.
+Do that in ONE place; two places is how it becomes half right.
+
+**`localAnimator` IS PRESENT IN A PLAYER SCRIPT CONTEXT** -- which was the other
+half of the same unknown, and is not obvious given `fact.pane.panesound`,
+which records it as ABSENT in a pane script. Drawables are RETAINED between ticks and
+must be cleared manually, and `clearDrawables` wipes the WHOLE list on the
+player's animator including any co-tenant's, so clear on the falling edge rather
+than every tick.
+
+**The render layer `"Overlay"` is accepted.** Asked once with a degenerate
+transparent drawable, because `fact.item.renderlayer` makes an unknown key a
+hard failure rather than a fallback.
+
+### A player script cannot see the cursor, and there is no fourth tech slot
+`fact.port.noaimbinding` -- see also `dead.port.tentativerect`, `ref.tooling.osbaseline`
+
+**FOUR CANDIDATES, ALL ABSENT. MEASURED 2026-09-04.** From a player script in
+`deploymentConfig/scripts`:
+
+        player.aimPosition        -> absent
+        world.entityAimPosition   -> absent
+        mcontroller.aimPosition   -> no mcontroller
+        entity.aimPosition        -> absent
+
+`world.entityAimPosition` is documented for tool-user entities and a player is
+one, which is why it was the expected answer; the player script gets a REDUCED
+CLIENT WORLD TABLE and it is not in it. There is no `mcontroller` in that
+context either, and no `activeItem`. `status` is present.
+
+**IN RETAIL THE CURSOR REACHES LUA IN TWO PLACES: an active item
+(`activeItem.ownerAimPosition`) and a tech (`tech.aimPosition`).** A placeable
+object item is neither, and a player script is neither.
+
+**`TechType` HAS EXACTLY THREE VALUES: Head, Body, Legs.** Read from
+`source/game/StarTechDatabase.hpp` against the retail baseline, and confirmed
+in-game: `player.equippedTech` returns nil for an empty slot and THROWS for a
+name that is not a slot, so the two are distinguishable.
+
+        head/body/legs   exist
+        suit, implant, augment, back, arm, chest
+                         (MapException) Key 'suit' not found in Map::get()
+
+So there is no unused beta slot to hide a tech in. **Betabound's "suit tech"
+slot is therefore not a `TechType` and not a tech context** -- it cannot host a
+tech script, and would not have helped even as a dependency, which it could not
+have been anyway.
+
 ## DISPROVEN
 
 ### Sinker jumping underwater was never a liquid problem
@@ -10275,6 +10387,61 @@ THREE THEORIES: the input a widget RECEIVES and the input it CONSUMES are
 different questions, and only the second is visible from a config file.
 
 
+### The tentative placement rect -- FOUR ROUTES, AND THE LAST ONE FAILED ON DESIGN
+`dead.port.tentativerect` -- see also `arch.port.overlay`, `fact.port.noaimbinding`, `arch.port.coverage`
+
+`arch.port.coverage` specified a box showing where the HELD port would land,
+tinted by what it would merge with. It is not built, it was not abandoned for
+lack of trying, and the reason it is filed here rather than in BACKLOG is that
+the last surviving route was rejected for a reason that will not change.
+
+**THE SIZE HALF WORKS AND IS SHIPPED ANYWAY.** `root.itemConfig` on an object
+item returns `config directory parameters`, and the object's own keys survive
+into `config` -- `petports_coverageSize: config 64`. That is why the number now
+lives in the `.object`; see `arch.port.overlay`. Only the POSITION was ever
+missing.
+
+**ROUTE 1 -- ask the player script.** Dead. `fact.port.noaimbinding`.
+
+**ROUTE 2 -- `imageLayers` placement preview.** The engine draws it at the
+placement tile for free and it follows the cursor exactly. Rejected by Lofty on
+the grounds that making it work through the orientation preview is not worth
+what it costs, and that a box which cannot relate to its neighbours is most of
+the value gone.
+
+**ROUTE 3 -- LUA SMUGGLING.** Every Lua context shares one string metatable, so
+`getmetatable("")` is a cross-context channel and a tech script can leave
+something on it for the player script to read. This WORKS and was built.
+
+  - **PASS A VALUE, NEVER A BINDING.** The known way this crashes to desktop on
+    retail is smuggling the `tech` TABLE, which holds raw pointers into its own
+    context; calling through it after that context is gone is a use after free,
+    a CTD, and not something the log will name. Two numbers cannot dangle. The
+    relay published `{ position, sequence }` and the reader never named `tech`.
+  - **LIVENESS BY SEQUENCE NUMBER, NOT TIMESTAMP.** Comparing clocks assumes
+    both contexts see the same one and that both have `world.time()`, neither
+    of which was measured. A counter the reader watches for movement needs
+    neither.
+  - **AND IT STILL DIED**, because smuggling moves the CALL SITE out of the
+    privileged context and cannot manufacture the context. A tech script only
+    runs while its tech is equipped, and there is no free slot to put one in --
+    `fact.port.noaimbinding`. Riding whatever tech the player already wears, by
+    patching the relay into every vanilla tech's script list, was the last live
+    variant; it fails for anyone wearing three modded techs, which was true of
+    the test character at the moment it was proposed.
+
+**ROUTE 4 -- CENTRE THE BOX ON THE PLAYER.** Mechanically trivial, no smuggling,
+keeps the merge tint. **REJECTED, AND THIS IS THE ENTRY'S POINT: a coverage box
+that follows the player asserts that the player provides coverage.** They would
+read it as carrying a work zone around with them. An overlay whose whole job is
+to say truthfully where units can work must not draw a zone that is not one.
+Better to have no tentative rect than a rect that lies.
+
+**WHAT WOULD REOPEN THIS.** An aim binding appearing in the player context, or
+any always-running client context with a cursor. Nothing else. The overlay's
+aim probe was REMOVED along with the feature -- dead code that never runs rots,
+and this entry is the record.
+
 ## REFERENCE
 
 ### The filter vocabulary is measured, not guessed
@@ -10569,6 +10736,25 @@ fix — the rewrite is the fix.
 
 ### The OpenStarbound repo's first commit is unmodified retail source
 `ref.tooling.osbaseline` -- see also `proc.tooling.controlfirst`, `fact.pane.rowdispatch`
+
+**THE TESTING ENVIRONMENT IS RETAIL STARBOUND. IT IS NOT OPENSTARBOUND, IT IS
+NOT A FORK, AND IT NEVER HAS BEEN.** This entry is the ONLY reason the name
+appears anywhere in this document, and it has been misread at least once --
+2026-09-04, a player-side binding was proposed on the grounds that
+"OpenStarbound and its forks add it", which is an argument for NOT shipping
+something.
+
+**A FORK-ONLY BINDING THAT WORKS IS WORSE THAN ONE THAT DOES NOT.** It works in
+the client it was written in and is absent for every player, so it fails as a
+bug report from someone else about a feature that was never possible. Anything
+that probes candidate bindings must therefore REFUSE a non-retail one that
+answers rather than take it -- see the retail gate in
+`petports_coverageoverlay.lua`, which is that rule as a field rather than a
+comment.
+
+**THE REPO IS A DIFF TARGET AND NOTHING ELSE.** It is checked out because its
+first commit is retail source, so a question about vanilla behaviour becomes a
+diff instead of a memory. That is its whole function here.
 
 **WHICH TURNS "IS THIS VANILLA OR OPENSTARBOUND?" INTO A DIFF.** The oldest
 commit in the repo is the 1.4.4 source as shipped, with no edits. So for any
