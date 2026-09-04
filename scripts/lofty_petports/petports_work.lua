@@ -319,6 +319,24 @@ function petports_registryClearAt(position, exceptPortId)
   end
 end
 
+--  Can these two registry entries belong to the same network?
+--
+--  EXPORTED, AND THAT IS THE POINT. The player-side coverage overlay groups
+--  the WHOLE registry into networks rather than flood filling out from one
+--  port, so it cannot call networkMemberMap -- but it must reach the identical
+--  verdict, or the overlay draws a merge the ports do not believe in. A second
+--  hand-written copy of these five lines is the `coverageRect()` trap in a new
+--  place. There is one rule and this is it.
+--
+--  NON-PARTICIPATION IS MUTUAL. If A participates and B does not, they are not
+--  connected regardless of what A wants -- otherwise one auto port placed
+--  beside a deliberately separated one defeats the subdivision.
+function petports_entriesCompatible(a, b)
+  if a.participate and b.participate then return true end
+  if not a.participate and not b.participate then return a.id == b.id end
+  return false
+end
+
 --  The network containing this port: contiguous coverage first, ID second.
 --
 --  Two passes, exactly as the design says:
@@ -354,17 +372,8 @@ local function networkMemberMap(portId)
 
     for otherId, other in pairs(ports) do
       if members[otherId] == nil then
-        --  Both must participate, or both must be pinned to the same id.
-        local compatible
-        if current.participate and other.participate then
-          compatible = true
-        elseif not current.participate and not other.participate then
-          compatible = (current.id == other.id)
-        else
-          compatible = false
-        end
-
-        if compatible and petports_rectsAdjacent(current.rect, other.rect) then
+        if petports_entriesCompatible(current, other)
+           and petports_rectsAdjacent(current.rect, other.rect) then
           members[otherId] = other
           table.insert(frontier, otherId)
         end

@@ -30,8 +30,9 @@ function init()
 
   --  The port always passes coverageSize, so this default only applies to a
   --  stagehand spawned without one -- which should not happen. Kept in step
-  --  with COVERAGE_SIZE in petports_petport.lua so a fallback is not silently
-  --  a different size from every other residency.
+  --  with `petports_coverageSize` in petports_petport.object, which is where
+  --  that number is now authored, so a fallback is not silently a different
+  --  size from every other residency.
   self.coverageSize = config.getParameter("coverageSize", 64)
   self.portUniqueId = config.getParameter("portUniqueId")
   self.orphanGrace = config.getParameter("orphanGrace", 15.0)

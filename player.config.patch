@@ -1,0 +1,26 @@
+//  PETPORTS -- ATTACH THE COVERAGE OVERLAY TO THE PLAYER
+//
+//  arch.port.coverage: the overlay runs on the PLAYER because every useful
+//  question about coverage is a question about neighbours, and an object can
+//  only ever draw its own box.
+//
+//  deploymentConfig/scripts AND NOT genericScriptContexts, for now.
+//
+//  genericScriptContexts is the cleaner 1.4+ hook -- a named context of our
+//  own, no chaining, and no clobbering of other mods' player scripts. It is
+//  probably where this ends up. It is not where it starts, because the only
+//  player-script `localAnimator` use anyone can point at in the wild runs in
+//  the shared deployment context, and this hook is now MEASURED to work
+//  (2026-09-04, fact.port.drawablespace). Moving it is a separate change with
+//  its own test, not a tidy-up to fold into a working build.
+//
+//  APPENDED WITH `/-`, so we load last and the init/update/uninit chain in the
+//  script always has an original to call.
+
+[
+	{
+		"op" : "add",
+		"path" : "/deploymentConfig/scripts/-",
+		"value" : "/scripts/lofty_petports/petports_coverageoverlay.lua"
+	}
+]

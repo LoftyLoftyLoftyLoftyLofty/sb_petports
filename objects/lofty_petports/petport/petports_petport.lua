@@ -341,6 +341,18 @@ local DEBUG = true
 --  Passed to the stagehand as `coverageSize` at spawn, so changing it here is
 --  enough -- but only for stagehands spawned AFTER the change. An existing
 --  residency keeps the size it was born with until its port respawns it.
+--  AUTHORED IN THE .object AS `petports_coverageSize`, READ IN init.
+--
+--  THIS LINE IS THE FALLBACK AND NOT THE ANSWER. The value here only ever
+--  applies between chunk load and init, which is a window nothing reads in --
+--  but a nil global here would be a silent arithmetic fault deep in
+--  coverageRect rather than an obvious one, so it holds vanilla's number.
+--
+--  NOT READ AT CHUNK SCOPE. `config` is a binding, and a binding call at file
+--  load runs before the context is finished being built -- see
+--  fact.tooling.chunkscopebindings. init is early enough: every reader is
+--  inside a function, and init assigns before it spawns residency or
+--  publishes.
 COVERAGE_SIZE = 64
 
 --  How long a container that could not take a whole load is passed over for.
@@ -1390,10 +1402,21 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-03r fewer fish, staggered lures, honest drain"
+local PETPORT_BUILD_STAMP = "2026-09-04a coverage size authored in the .object"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
+
+  --  ONE NUMBER, ONE HOME, AND EVERYTHING DOWNSTREAM ALREADY TAKES IT AS A
+  --  PARAMETER. The registry rect comes from coverageRect(), the resident
+  --  region from the coverageSize passed at stagehand spawn, and the work scan
+  --  and vent gather from the rects those produce -- so assigning here is
+  --  enough to move all four.
+  --
+  --  AN EXISTING RESIDENCY KEEPS THE SIZE IT WAS BORN WITH until its port
+  --  respawns it. That was already true of the constant and is unchanged.
+  COVERAGE_SIZE = config.getParameter("petports_coverageSize", COVERAGE_SIZE)
+  sb.logInfo("PETPORT coverage size: %s tiles", sb.printJson(COVERAGE_SIZE))
 
   self.petId = nil
 

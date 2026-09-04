@@ -74,6 +74,27 @@
   //  Where the unit wakes up, relative to the station.
   "petSpawnOffset" : [0, 0],
 
+  //  COVERAGE, IN TILES. THE AUTHORITATIVE HOME OF THIS NUMBER.
+  //
+  //  It used to live only as a Lua global in petports_petport.lua, which was
+  //  fine while the only reader was the port itself. It is not fine now: the
+  //  player-side coverage overlay has to draw a TENTATIVE rect for a port that
+  //  does not exist yet, and the only thing it can ask about a held item is its
+  //  config. A Lua global inside a script that has not run is invisible.
+  //
+  //  Read once at init into COVERAGE_SIZE and pushed onward from there -- to
+  //  the registry rect, the residency stagehand's resident region, the work
+  //  scan and the vent gather. Everything downstream already takes it as a
+  //  parameter, so this is the only place it is written.
+  //
+  //  AND IT MAKES A RESKIN A JSON EDIT. A Steampunk or Floran petport that
+  //  wants a different reach changes this line and nothing else -- same as the
+  //  petports_petport itemTag above, and for the same reason.
+  //
+  //  SEE THE COMMENT ON COVERAGE_SIZE BEFORE RAISING IT. Cost is AREA, so
+  //  doubling this is 4x on residency, the work scan and the vent query.
+  "petports_coverageSize" : 64,
+
   "inventoryIcon" : "petports_petporticon.png",
   "orientations" : [
     {
