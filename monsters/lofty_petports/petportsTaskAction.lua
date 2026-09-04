@@ -139,7 +139,12 @@ local TASK_DEBUG = true
 --  PER-TICK FLIGHT TRACE. See flightTrace. OFF FOR RELEASE -- it is one line per
 --  tick of every flight, which is the densest logging in this mod and is meant
 --  to be switched on for a specific question and switched off again.
-local FLIGHT_TRACE = false
+--
+--  ON 2026-09-04 FOR ONE QUESTION: air control when jumping BACKWARDS out of
+--  water fails consistently on the amphibious chassis, repro'd by dropping
+--  items at a fixed spot near the fluffalo herd at the test base. SWITCH IT
+--  BACK OFF once that is answered.
+local FLIGHT_TRACE = true
 
 --  BUILD STAMP.
 --
@@ -163,7 +168,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-03o the module slows the burn"
+local BUILD_STAMP = "2026-09-04b jump level guard is inclusive"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -2116,10 +2121,36 @@ function petportsJumpMover(pather)
       --  resetting. A unit that paces looks livelier than one that is wedged
       --  and is in fact worse off.
       --
+      --  MEASURED AGAIN 2026-09-04 AT levelGap 1.0, and the numbers are worth
+      --  keeping: 156 ticks, min step 0.150, mean 0.345, and NOT ONE step at or
+      --  below STUCK_MOVE 0.1 -- so airborneEdgeStall was zeroed on every
+      --  single tick and `UNIT stalled on` never printed once. That makes this
+      --  guard the ONLY thing standing between a 0.35s replan and a hard stall:
+      --  once the walk branch below is entered, the detector that would rescue
+      --  it can no longer fire at all.
+      --
       --  Standing still is the correct behaviour here. The grounded-stall check
       --  in update() then fires within 0.35s and replans from where the unit
       --  actually is, which is the only thing that can help.
-      if levelGap > JUMP_LEVEL_TOLERANCE then
+      --  INCLUSIVE, AND THE BOUNDARY IS THE WHOLE BUG. Measured 2026-09-04: a
+      --  unit at [2491.19,1166.8] with its jump source at [2491,1165.8] --
+      --  levelGap EXACTLY 1.0, so `>` let it through, and this walked toward a
+      --  point one floor below its feet for 12.6 seconds across 156 ticks,
+      --  cycling four x-positions until the task failed on no net progress.
+      --
+      --  A FULL TILE IS A DIFFERENT FLOOR, which is what the constant's own
+      --  header already says it means to exclude. The comparison admitted the
+      --  one case the value was chosen to refuse.
+      --
+      --  `>=` RATHER THAN RETUNING TO 0.9, because the constant is not wrong --
+      --  a slope or half-step is under a tile by definition, so nothing
+      --  legitimate lives AT 1.0 and there is no number to invent.
+      --
+      --  THE ASYMMETRY SETTLES IT. Too strict costs one 0.35s replan on an
+      --  exactly-1.0 half-step. Too loose costs 12.6 seconds and a failed task,
+      --  every time, because entering the walk branch below permanently disarms
+      --  the recovery -- see the stall note in the next paragraph.
+      if levelGap >= JUMP_LEVEL_TOLERANCE then
         if not pather.petportsWrongLevel then
           pather.petportsWrongLevel = true
           sb.logInfo("UNIT jump source %s is %s tiles off our level (at %s) -- not walkable, waiting for replan",
