@@ -61,7 +61,7 @@
 --  are unprobeable and time-varying and nobody's fault -- are allowed to
 --  produce optimistic-wrong answers. They fail in the cheap direction.
 
-local COARSENAV_BUILD_STAMP = "2026-09-05a swept cells drawn, probe labels cornered"
+local COARSENAV_BUILD_STAMP = "2026-09-05b solid cells are refused before the anchor scan"
 
 local navStamped = false
 
@@ -364,6 +364,51 @@ end
 --  A REFUSAL SAYS WHY, in a second return. fact.tooling.mergedrefusal: the bare
 --  nil this returned before was indistinguishable from "cell is solid", which
 --  is exactly how a wrong candidate rule survived a full test round.
+--  IS EVERY TILE IN THIS CELL SOLID?
+--
+--  A CHEAP REFUSAL AHEAD OF AN EXPENSIVE ONE. petports_navAnchor should already
+--  return nil for solid rock -- validStandingPosition checks the body FITS, and
+--  a body placed inside stone does not -- but it costs up to four rect tests
+--  against a 1.6-tile body to find that out, per candidate cell, across a
+--  121-cell box. This is four POINT tests and short-circuits on the first gap.
+--
+--  UNDERGROUND THAT IS MOST OF THE BOX, so the saving is not marginal: a
+--  neighbour scan in rock goes from ~480 rect tests to ~480 point tests, and
+--  the point tests stop early.
+--
+--  IT MAY ALSO BE CATCHING SOMETHING THE ANCHOR RULE MISSES. Reported from play
+--  2026-09-05: probes running to exhaustion on cells "full of solid blocks",
+--  which by the reasoning above should never have produced an anchor to probe
+--  toward. If NAV solid refusals appear in the log at all, that premise is
+--  wrong somewhere and the anchor scan is what wants looking at -- so this logs
+--  rather than passing silently.
+--
+--  Platform IS ABSENT deliberately: a platform is a floor, not a wall, and a
+--  cell of platforms is somewhere a unit can stand. Dynamic is present because
+--  fact.pathing.collisionkinds says Dynamic is DOORS, and a cell that is
+--  entirely closed door is entirely impassable while it stays shut.
+local NAV_SOLID_SET = { "Null", "Block", "Dynamic", "Slippery" }
+
+local function navCellSolid(cx, cy)
+	local baseX = cx * PETPORTS_NAV_CELL
+	local baseY = cy * PETPORTS_NAV_CELL
+
+	for dx = 0, PETPORTS_NAV_CELL - 1 do
+		for dy = 0, PETPORTS_NAV_CELL - 1 do
+			local ok, hit = pcall(world.pointTileCollision,
+				{ baseX + dx + 0.5, baseY + dy + 0.5 }, NAV_SOLID_SET)
+
+			--  A READ THAT FAILS IS NOT A SOLID TILE. Unloaded terrain answers
+			--  Null, which IS in the set -- but a pcall that threw answers
+			--  nothing, and treating that as solid would silently delete cells
+			--  whenever the engine was unhappy rather than the world being full.
+			if not ok or hit ~= true then return false end
+		end
+	end
+
+	return true
+end
+
 function petports_navAnchor(cx, cy, freeMover)
 	local baseX = cx * PETPORTS_NAV_CELL
 	local baseY = cy * PETPORTS_NAV_CELL
@@ -449,12 +494,23 @@ function petports_navNeighbours(cx, cy, freeMover)
 	local reach = math.ceil(PETPORTS_NAV_RADIUS / PETPORTS_NAV_CELL)
 
 	local found = {}
+	local solid = 0
 
 	for dx = -reach, reach do
 		for dy = -reach, reach do
 			if dx ~= 0 or dy ~= 0 then
 				local nx, ny = cx + dx, cy + dy
-				local anchor = petports_navAnchor(nx, ny, freeMover)
+
+				--  SOLID FIRST, ANCHOR SECOND. The cheap test gates the dear
+				--  one; see navCellSolid for why that ordering is most of the
+				--  saving in a neighbour scan.
+				local anchor = nil
+
+				if navCellSolid(nx, ny) then
+					solid = solid + 1
+				else
+					anchor = petports_navAnchor(nx, ny, freeMover)
+				end
 
 				if anchor ~= nil then
 					local ax = anchor[1] - origin[1]
@@ -495,6 +551,9 @@ function petports_navNeighbours(cx, cy, freeMover)
 		if a.distance ~= b.distance then return a.distance < b.distance end
 		return a.key < b.key
 	end)
+
+	sb.logInfo("NAV neighbours of %s: %s candidate(s), %s solid cell(s) skipped",
+		petports_navCellKey(cx, cy), sb.printJson(#found), sb.printJson(solid))
 
 	return found, origin
 end
@@ -908,6 +967,17 @@ function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 		--  NO ANCHOR IS NOT UNREACHABLE. A cell of solid rock has nothing to
 		--  path to or from, and recording false would assert something about
 		--  connectivity that was never tested. nil, and nothing is stored.
+		--  A SECOND GATE, AT THE ONLY OTHER DOOR. petports_navNeighbours filters
+		--  solid cells out of a sweep, but a probe can also be driven directly
+		--  -- the self test does it, and a future router might -- and the cost
+		--  of a wasted exhaustion is 78 ticks either way.
+		if navCellSolid(fromCell[1], fromCell[2])
+		   or navCellSolid(toCell[1], toCell[2]) then
+			sb.logInfo("NAV probe %s -> %s SKIPPED: a cell is solid", fromKey, toKey)
+			self.petportsNavProbes[slot] = nil
+			return nil
+		end
+
 		if from == nil or to == nil then
 			sb.logInfo("NAV probe %s -> %s SKIPPED: %s",
 				fromKey, toKey, tostring(from == nil and fromWhy or toWhy))
