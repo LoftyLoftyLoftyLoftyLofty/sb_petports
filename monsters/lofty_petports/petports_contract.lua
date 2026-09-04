@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-09-03o the port hands over a burn rate"
+local CONTRACT_BUILD_STAMP = "2026-09-04c mid-flight swim rebuild is deferred"
 
 local contractStamped = false
 
@@ -809,10 +809,34 @@ end
 --  measured in game. If the search instead returns false immediately, that is
 --  the engine refusing a mid-water source and the answer is the two-leg exit --
 --  swim to the waterline as a free mover, then flip -- not more of this.
-function petportsCanPathfind(finder)
-	if petports_freeMover() then return true end
-	if petports_swimMode() == PETPORTS_SWIM_MODE_EXITING then return true end
+--  THE SAME QUESTION, ASKED ABOUT A MODE THE UNIT IS NOT IN YET.
+--
+--  petports_swimModeTick needs to know whether a rebuild would be able to plan
+--  AFTER the mode it is about to switch to takes effect. It cannot ask
+--  petportsCanPathfind, which reads the mode the unit is still in and would
+--  answer about the wrong one -- during a water exit the current mode is
+--  `exiting`, which returns true unconditionally, while the mode being switched
+--  TO is `land`, which needs ground the unit does not have.
+--
+--  ONE SPELLING, AND THAT IS THE WHOLE REASON THIS IS A SEPARATE FUNCTION
+--  RATHER THAN A SECOND TEST WRITTEN INLINE. arch.pathing.oneanchor records
+--  what the last duplicated predicate cost; petportsCanPathfind now delegates
+--  here so there is exactly one copy of the rule.
+--
+--  THE AQUATIC ARM REPLACES A petports_freeMover CALL AND IS EQUIVALENT.
+--  freeMover is `mode == AQUATIC or not gravityEnabled`; the first half is this
+--  arm and the second half is the fall-through's second clause, so every input
+--  lands on the same answer it did before. The gravity-disabled chassis --
+--  aquatic and flyer, never gravitySwitchable, mode `land` for life -- reach the
+--  fall-through and get exactly what they always got.
+function petports_canPathfindIn(mode)
+	if mode == PETPORTS_SWIM_MODE_AQUATIC then return true end
+	if mode == PETPORTS_SWIM_MODE_EXITING then return true end
 	return mcontroller.onGround() or not mcontroller.baseParameters().gravityEnabled
+end
+
+function petportsCanPathfind(finder)
+	return petports_canPathfindIn(petports_swimMode())
 end
 
 --  VANILLA'S start, LINE FOR LINE, WITH ONE FIELD OVERWRITTEN.
@@ -2878,25 +2902,96 @@ function petports_swimModeTick()
 		local desired = petports_desiredSwimMode(petports_currentTaskDestination())
 
 		if desired ~= petports_swimMode() then
-			local now = world.time()
-			local last = self.petportsSwimModeRebuiltAt or -math.huge
+			--  A REBUILD THAT CANNOT PLAN CAN ONLY DESTROY, SO DEFER IT.
+			--
+			--  MEASURED 2026-09-04, six attempts, five identical to the
+			--  decimal. An amphibious unit swims to a jump point at 1149.8,
+			--  launches [0,45] with a plan to land at [2487,1158.8], and rises.
+			--  At 1159.45 the body clears the water, medium reads `air`, this
+			--  tick sees `exiting` -> `land` and rebuilds. The rebuild lands
+			--  mid-arc:
+			--
+			--      swim mode exiting -> land at [2486,1159.45] (medium air)
+			--      freshPather #77 ... swim mode wants land
+			--      path LOST ... action nil onGround false edge nil of 0
+			--
+			--  and produces nothing, because `land` needs ground the unit does
+			--  not have. It then falls straight back into the water it launched
+			--  from and does the whole thing again, 2.13 seconds a cycle,
+			--  forever.
+			--
+			--  THE LAUNCH IS VERTICAL AND THE HORIZONTAL ARRIVES AT THE APEX,
+			--  WHICH IS WHY THIS ONE NEVER RECOVERS. The plan is [0,45] with
+			--  vx ZERO; petportsArcMover turns the horizontal on when the arc
+			--  turns over. Loss altitude was 1159.45 and the next trace line
+			--  reads 1159.74, so the plan dies ONE TICK before the only thing
+			--  that would have moved it sideways. Compare the two dry losses in
+			--  the same session, at vel [-8,20.18] and [8,20.18]: horizontal
+			--  already applied, so the body coasted, landed, and replanned. A
+			--  mid-arc rebuild costs a replan when vx is live and costs the
+			--  whole manoeuvre when it is not.
+			--
+			--  THE EXIT JUMP IS THE ONE MANOEUVRE THIS IS GUARANTEED TO BREAK.
+			--  Clearing the water IS the mode change, so on a water exit the
+			--  transition always fires mid-arc -- the rule that exists to keep
+			--  plans valid was reliably destroying the only plan that could
+			--  finish the crossing.
+			--
+			--  DEFERRING IS SAFE BECAUSE ONLY THE PATHER WAITS. The physics are
+			--  written per tick by petports_assertSwimMode, independently of
+			--  this, so gravity and buoyancy still flip on the tick the medium
+			--  changes. And a live Arc ends in a Land, which is the plan worth
+			--  keeping. dd.locomotion.otter's objection is about a plan being
+			--  EXECUTED under the wrong mode; an arc in flight is being carried
+			--  by physics and consults nothing.
+			--
+			--  NO STATE, AND NO SCHEDULING. This tick re-asks every tick, so the
+			--  moment the unit is back on ground the same mismatch is still
+			--  here and the rebuild happens then. The throttle timestamp is
+			--  deliberately NOT stamped on a deferral, or landing could be made
+			--  to wait out a second it never spent rebuilding.
+			--  AN if/else RATHER THAN AN EARLY RETURN, AND THAT IS NOT STYLE.
+			--  The dive-plan expiry at the bottom of this function is the only
+			--  code that runs whether a task is held or not, and returning from
+			--  here would stop it on every deferred tick -- a stale dive plan
+			--  outliving its task. proc.tooling.earlyreturn is on its fourth
+			--  instance in this codebase and every one of them was housekeeping
+			--  stranded below a gate.
+			if not petports_canPathfindIn(desired) then
+				if self.petportsSwimModeDeferred ~= desired then
+					self.petportsSwimModeDeferred = desired
+					sb.logInfo("UNIT swim mode rebuild to %s DEFERRED at %s: "
+						.. "cannot plan from here (onGround %s) -- holding the live plan",
+						tostring(desired), sb.printJson(mcontroller.position()),
+						tostring(mcontroller.onGround()))
+				end
+			else
+				--  CLEARED AT THE EVENT THAT MAKES THE DEFERRAL STALE --
+				--  proc.tooling.gatereset. Not at the bottom of the function,
+				--  which would clear it on the same tick it was set and print
+				--  every tick.
+				self.petportsSwimModeDeferred = nil
 
-			if now - last >= PETPORTS_SWIM_MODE_REBUILD_INTERVAL then
-				self.petportsSwimModeRebuiltAt = now
-				self.petportsSwimModeRebuilding = true
+				local now = world.time()
+				local last = self.petportsSwimModeRebuiltAt or -math.huge
 
-				--  pcall so a rebuild fault cannot leave the guard set and
-				--  silently disable mode switching for the rest of this unit's
-				--  life. A raise here would also kill the unit script, which is
-				--  how the last two faults presented.
-				local ok, err = pcall(petports_freshPather,
-					"swim mode wants " .. tostring(desired))
+				if now - last >= PETPORTS_SWIM_MODE_REBUILD_INTERVAL then
+					self.petportsSwimModeRebuiltAt = now
+					self.petportsSwimModeRebuilding = true
 
-				self.petportsSwimModeRebuilding = false
+					--  pcall so a rebuild fault cannot leave the guard set and
+					--  silently disable mode switching for the rest of this unit's
+					--  life. A raise here would also kill the unit script, which is
+					--  how the last two faults presented.
+					local ok, err = pcall(petports_freshPather,
+						"swim mode wants " .. tostring(desired))
 
-				if not ok then
-					sb.logInfo("UNIT swim mode rebuild to %s FAILED: %s",
-						tostring(desired), tostring(err))
+					self.petportsSwimModeRebuilding = false
+
+					if not ok then
+						sb.logInfo("UNIT swim mode rebuild to %s FAILED: %s",
+							tostring(desired), tostring(err))
+					end
 				end
 			end
 		end
