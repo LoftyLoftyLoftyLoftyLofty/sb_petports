@@ -61,7 +61,7 @@
 --  are unprobeable and time-varying and nobody's fault -- are allowed to
 --  produce optimistic-wrong answers. They fail in the cheap direction.
 
-local COARSENAV_BUILD_STAMP = "2026-09-04y four cells, eight probes each"
+local COARSENAV_BUILD_STAMP = "2026-09-05a swept cells drawn, probe labels cornered"
 
 local navStamped = false
 
@@ -1237,6 +1237,134 @@ function petports_navReaches(profile, fromKey, toKey, budget)
 	return false, expanded
 end
 
+--  THE ACTUAL CELL SEQUENCE FROM ONE CELL TO ANOTHER, not just whether one
+--  exists.
+--
+--  THIS IS WHAT THE WHOLE STRUCTURE IS FOR. A verdict answers "should the port
+--  bother dispatching"; a PATH answers "how does a unit on the left of a base
+--  get to the right of it" -- which is the question todo.dispatch.reachbudget
+--  was filed about. A* starves on a long route -- measured at SEARCH_LIMIT 6.0
+--  every time, and 22 seconds at vanilla's explore rate before that -- but it
+--  solves each SHORT leg of the same route in milliseconds. The graph knows the
+--  legs.
+--
+--  BREADTH-FIRST, SO FEWEST CELLS WINS. Not shortest in tiles: an edge is
+--  bounded at NAV_MAX_DISTANCE, so every hop is comparable in length and hop
+--  count is a fair proxy. Weighting by true distance would need edge costs the
+--  probe never measured.
+--
+--  THE COARSE LADDER IS NOT CONSULTED. petports_navReaches uses it to REJECT
+--  cheaply, which is sound because a coarse no proves a fine no -- but a coarse
+--  path is not a fine path, and following one would route a unit through blocks
+--  it cannot cross. Paths come from the fine graph or not at all.
+--
+--  RETURNS nil FOR NO PATH, which is not the same as "unreachable" -- see
+--  petports_navReaches on what a false means here.
+function petports_navPath(profile, fromKey, toKey, budget)
+	if fromKey == toKey then return { fromKey } end
+
+	local adjacency = navGraphFor(profile).fine
+	local cameFrom = { [fromKey] = false }
+	local frontier = { fromKey }
+	local expanded = 0
+
+	budget = budget or PETPORTS_NAV_SEARCH_BUDGET
+
+	while #frontier > 0 do
+		local nextFrontier = {}
+
+		for _, node in ipairs(frontier) do
+			expanded = expanded + 1
+			if expanded > budget then return nil end
+
+			for _, neighbour in ipairs(adjacency[node] or {}) do
+				if cameFrom[neighbour] == nil then
+					cameFrom[neighbour] = node
+
+					if neighbour == toKey then
+						--  WALKED BACKWARD, THEN REVERSED. Storing forward
+						--  links instead would need a second pass to prune the
+						--  branches that went nowhere.
+						local path = { toKey }
+						local at = node
+
+						while at do
+							table.insert(path, 1, at)
+							at = cameFrom[at]
+						end
+
+						return path, expanded
+					end
+
+					table.insert(nextFrontier, neighbour)
+				end
+			end
+		end
+
+		frontier = nextFrontier
+	end
+
+	return nil, expanded
+end
+
+--  ONE LEG OF THAT PATH: how far along it a unit should walk next.
+--
+--  NOT THE NEXT CELL. Cells are two tiles across, so walking them one at a time
+--  would re-plan every stride and spend more time in the pathfinder than
+--  moving. This returns the FARTHEST cell on the path still within `reach`
+--  straight-line of the start, which is the longest leg A* can be trusted to
+--  solve in one go.
+--
+--  STRAIGHT-LINE, NOT PATH LENGTH, and that is deliberately conservative. A leg
+--  that doubles back covers less ground than its tile count suggests, so
+--  measuring the chord under-reaches rather than handing A* a leg it will
+--  starve on -- which is the failure this exists to avoid.
+--
+--  ALWAYS ADVANCES AT LEAST ONE CELL when a path exists, so a caller cannot
+--  loop on a waypoint it is already standing in.
+--
+--  RETURNS a position and the remaining hop count, or nil.
+function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover)
+	local path = petports_navPath(profile, fromKey, toKey)
+	if path == nil or #path < 2 then return nil end
+
+	local origin = petports_navAnchor(
+		tonumber(string.match(path[1], "^(-?%d+),")),
+		tonumber(string.match(path[1], ",(-?%d+)$")), freeMover)
+
+	if origin == nil then return nil end
+
+	local chosen, chosenAt = nil, 2
+
+	for i = 2, #path do
+		local cx = tonumber(string.match(path[i], "^(-?%d+),"))
+		local cy = tonumber(string.match(path[i], ",(-?%d+)$"))
+		local anchor = petports_navAnchor(cx, cy, freeMover)
+
+		if anchor ~= nil then
+			local dx = anchor[1] - origin[1]
+			local dy = anchor[2] - origin[2]
+
+			if math.sqrt(dx * dx + dy * dy) <= (reach or 24) then
+				chosen, chosenAt = anchor, i
+			elseif chosen ~= nil then
+				break
+			else
+				--  THE FIRST HOP IS TAKEN EVEN IF IT IS TOO FAR. An edge can be
+				--  up to NAV_MAX_DISTANCE of PATH long while its endpoints are
+				--  much closer or further apart than that; refusing here would
+				--  return nil for a route that genuinely exists.
+				chosen, chosenAt = anchor, i
+				break
+			end
+		end
+	end
+
+	if chosen == nil then return nil end
+
+	return chosen, #path - chosenAt
+end
+
 --  What is in the store, for a log line. Counted rather than dumped: a full
 --  tree is thousands of edges and a printJson of it would be unreadable and
 --  would dominate the log it was meant to explain.
@@ -1857,6 +1985,66 @@ function petports_navLevelProgress()
 	return levels
 end
 
+--  EVERY SWEPT CELL, AS A GREEN POINT AT ITS CENTRE.
+--
+--  WHAT IT IS FOR is watching coverage SPREAD from the seed after a wipe --
+--  which is the only way to see whether the frontier is expanding evenly or
+--  crawling along a single corridor, and neither number in the level readout
+--  shows that.
+--
+--  MEMOISED ON THE STORE VERSION. The index is a world property, and reading it
+--  once per frame to redraw a few hundred points would cost more than the
+--  survey it is watching. The version bumps on every write this unit makes, so
+--  the picture refreshes exactly when it changes.
+local function navSweptPoints()
+	local version = self.petportsNavVersion or 0
+	local held = self.petportsNavSweptPoints
+
+	if held ~= nil and held.version == version then return held.points end
+
+	local profile = petports_navProfile()
+	local index = navIndexRead()
+	local cells = index[profile]
+	local points = {}
+
+	for cellKey in pairs(type(cells) == "table" and cells or {}) do
+		local cx = tonumber(string.match(cellKey, "^(-?%d+),"))
+		local cy = tonumber(string.match(cellKey, ",(-?%d+)$"))
+
+		if cx ~= nil and cy ~= nil then
+			--  CELL CENTRE, not the anchor. The anchor is where a probe starts
+			--  and sits at body height; the centre is where the CELL is, which
+			--  is what a coverage picture wants.
+			table.insert(points, {
+				cx * PETPORTS_NAV_CELL + PETPORTS_NAV_CELL * 0.5,
+				cy * PETPORTS_NAV_CELL + PETPORTS_NAV_CELL * 0.5
+			})
+		end
+	end
+
+	self.petportsNavSweptPoints = { version = version, points = points }
+
+	return points
+end
+
+--  Where a probe's tick count is written, inside the cell it is checking.
+--
+--  BY SLOT, SO CONCURRENT PROBES DO NOT STACK. Every probe in a sweep shares
+--  one source cell, so labelling the SOURCE put up to eight numbers on top of
+--  each other. The target cell is unique per probe within a sweep, and the
+--  corner spreads the rare case where two sweeps aim at the same cell.
+--
+--  FOUR CORNERS, WRAPPED. There are eight slots per sweep and four corners, so
+--  slots 1 and 5 share one -- acceptable because they are almost never aimed at
+--  the same cell, and a wrapped corner is easier to read than eight positions
+--  crowded around one square.
+local NAV_LABEL_CORNERS = {
+	{ 0.15, 0.75 },   --  top left
+	{ 0.55, 0.75 },   --  top right
+	{ 0.15, 0.25 },   --  bottom left
+	{ 0.55, 0.25 }    --  bottom right
+}
+
 PETPORTS_NAV_DEBUG = true
 
 --  Toggle from a console: /entityeval return petports_navDebugToggle()
@@ -1918,6 +2106,11 @@ function petports_navDebugDraw()
 			{ here[1] + 2, here[2] + 3 }, "green")
 	end
 
+	--  COVERAGE FIRST, so the probe overlay draws on top of it.
+	for _, point in ipairs(navSweptPoints()) do
+		navDrawPoint(point, "green")
+	end
+
 	local probes = self.petportsNavProbes
 	if probes == nil or next(probes) == nil then return end
 
@@ -1946,14 +2139,22 @@ function petports_navDebugDraw()
 		navDrawPoint(probe.fromAnchor, "green")
 		navDrawPoint(probe.toAnchor, "red")
 
-		--  STAGGERED VERTICALLY BY SLOT. Every probe in a sweep shares one
-		--  source anchor, so eight labels would otherwise print on top of each
-		--  other and read as one unreadable smear.
-		navDrawSafely(world.debugText,
-			string.format("%s>%s %s", probe.fromKey, probe.toKey,
-				tostring(probe.ticks)),
-			{ probe.fromAnchor[1], probe.fromAnchor[2] + 1.5 + slot * 0.7 },
-			"yellow")
+		--  THE TICK COUNT ALONE, IN A CORNER OF THE CELL BEING CHECKED.
+		--
+		--  The cell keys were in the label and are now redundant: the magenta
+		--  rect already says which two cells, and reading "489,519>494,518"
+		--  eight times over one anchor was noise rather than information. What
+		--  cannot be seen without a number is how long a probe has been going,
+		--  which is the whole difference between a cheap true and an expensive
+		--  false.
+		local corner = NAV_LABEL_CORNERS[((slot - 1) % 4) + 1]
+
+		navDrawSafely(world.debugText, tostring(probe.ticks), {
+			probe.toCell[1] * PETPORTS_NAV_CELL
+				+ corner[1] * PETPORTS_NAV_CELL,
+			probe.toCell[2] * PETPORTS_NAV_CELL
+				+ corner[2] * PETPORTS_NAV_CELL
+		}, "yellow")
 	end
 end
 

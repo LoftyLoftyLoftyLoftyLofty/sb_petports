@@ -171,7 +171,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-04j idle units survey for coarse nav"
+local BUILD_STAMP = "2026-09-04k long routes walk coarse-nav legs"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -916,6 +916,87 @@ local VENT_USE_DISTANCE = 2.0
 --  freshPather` there would declare a SECOND local that shadows this one, and
 --  line 601 would go straight back to calling nil.
 local freshPather
+
+--  HOW LONG A SINGLE COARSE LEG MAY BE, IN TILES.
+--
+--  THE WHOLE POINT IS THAT A* SOLVES A SHORT ROUTE AND STARVES ON A LONG ONE.
+--  Measured: a chained route across a base took 22.25 seconds at vanilla's
+--  explore rate and the same target from nearby took 0.08s -- and with
+--  SEARCH_LIMIT at 6.0 the long one is never solved, it is abandoned. So a leg
+--  has to be short enough to sit in the easy regime and long enough that the
+--  unit is not re-planning every stride.
+--
+--  24 IS UNDER THE 32-TILE BOUND THE SURVEY PROBES AT, so every leg the graph
+--  offers has already been PROVEN walkable by a probe of greater reach. That is
+--  the property worth having: a leg is not a guess, it is a replay of a search
+--  that succeeded.
+local NAV_LEG_REACH = 24
+
+--  WALK THE NEXT LEG OF A COARSE ROUTE, WHEN THERE IS ONE.
+--
+--  TRIED BEFORE VENTS, AND THAT ORDER MATTERS. A vent hop teleports a unit and
+--  costs a route search of its own; a coarse leg is ordinary walking over
+--  ground already proven walkable. Vents are for reaching places feet cannot,
+--  which is a rarer problem than "the base is wide".
+--
+--  IT RETARGETS RATHER THAN ROUTING. The waypoint is written into stateData and
+--  the ordinary approach picks it up -- no new movement mode, no second mover,
+--  nothing to keep in step with the pather. A leg is just a nearer target.
+--
+--  RE-PLANNED EACH TIME IT IS ASKED, never held as a plan. The graph may have
+--  learned edges since the last leg and the unit may have been moved by
+--  something else; a stale plan is the failure arch.vent.routing already
+--  records. Re-planning is one BFS over a memoised graph.
+local function tryCoarseLeg(stateData, target)
+  if petports_navWaypoint == nil then return false end
+
+  local profile = petports_navProfile()
+  local freeMover = petports_freeMover()
+
+  local fx, fy = petports_navCell(mcontroller.position())
+  local tx, ty = petports_navCell(target)
+
+  local fromKey = petports_navCellKey(fx, fy)
+  local toKey = petports_navCellKey(tx, ty)
+
+  if fromKey == toKey then return false end
+
+  local waypoint, remaining = petports_navWaypoint(profile, fromKey, toKey,
+    NAV_LEG_REACH, freeMover)
+
+  if waypoint == nil then
+    sb.logInfo("UNIT coarse nav has no leg from %s to %s", fromKey, toKey)
+    return false
+  end
+
+  --  ALREADY THERE. The graph offered a waypoint the unit is standing on,
+  --  which means the leg is not what is stopping it -- and retargeting would
+  --  spin. Hand back to whatever comes next.
+  if world.magnitude(waypoint, mcontroller.position()) < ARRIVAL_DISTANCE then
+    sb.logInfo("UNIT coarse leg %s is where we already are -- declining",
+      sb.printJson(waypoint))
+    return false
+  end
+
+  sb.logInfo("UNIT coarse leg from %s to %s: heading for %s, %s hop(s) left",
+    fromKey, toKey, sb.printJson(waypoint), sb.printJson(remaining))
+
+  stateData.navWaypoint = waypoint
+  stateData.navRemaining = remaining
+
+  --  EVERYTHING THE OLD TARGET LEFT BEHIND. The same reset tryVentRoute does
+  --  on a hop and for the same reason: a search timer, an approach timeout and
+  --  a resolved ground target all describe a target being abandoned.
+  stateData.searchingTimer = 0
+  stateData.approachTimer = APPROACH_TIMEOUT
+  stateData.groundTarget = nil
+  stateData.progressStrikes = 0
+  stateData.progressAnchor = nil
+
+  freshPather("coarse leg")
+
+  return true
+end
 
 local function tryVentRoute(stateData, target)
   if petports_planRoute == nil then return "none" end
@@ -5906,6 +5987,14 @@ function petportsTaskAction.update(dt, stateData)
   --  Routing mode: probing exits, or waiting for one to be chosen. Runs every
   --  tick so a probe actually makes progress.
   if stateData.routing and stateData.viaVent == nil then
+    --  SAME ORDER AS THE PROGRESS PATH BELOW. This is the SEARCH_LIMIT
+    --  handover -- A* has given up on the direct route -- which is precisely
+    --  the case coarse legs exist for.
+    if stateData.navWaypoint == nil and tryCoarseLeg(stateData, routeTarget) then
+      stateData.routing = false
+      return false
+    end
+
     local routing = tryVentRoute(stateData, routeTarget)
 
     if routing == "walk" then
@@ -6322,6 +6411,34 @@ function petportsTaskAction.update(dt, stateData)
     stateData.settleTimer = 0
   end
 
+  --  A COARSE LEG STANDS IN FOR THE REAL TARGET UNTIL IT IS REACHED.
+  --
+  --  LAST, AFTER EVERY OTHER RESOLVE, so it overrides whatever approachTo the
+  --  task type produced -- that answer is about the FINAL target and is exactly
+  --  what the unit cannot path to yet.
+  --
+  --  ARRIVING AT A LEG IS NOT ARRIVING AT THE TASK. The leg is cleared and the
+  --  next tick resolves approachTo normally again -- which either succeeds,
+  --  because the unit is now a leg closer, or asks for another leg. That loop
+  --  is the whole mechanism, and it terminates because petports_navWaypoint
+  --  always advances at least one cell.
+  if stateData.navWaypoint ~= nil then
+    if world.magnitude(stateData.navWaypoint, mcontroller.position())
+       < ARRIVAL_DISTANCE then
+      sb.logInfo("UNIT reached coarse leg %s, %s hop(s) were left -- resuming "
+        .. "for the real target",
+        sb.printJson(stateData.navWaypoint),
+        sb.printJson(stateData.navRemaining or 0))
+
+      stateData.navWaypoint = nil
+      stateData.navRemaining = nil
+      stateData.groundTarget = nil
+      freshPather("coarse leg reached")
+    else
+      approachTo = stateData.navWaypoint
+    end
+  end
+
   if not stateData.arrived then
     --  approachPoint OWNS the arrival test, and its return value is the answer.
     --
@@ -6358,6 +6475,15 @@ function petportsTaskAction.update(dt, stateData)
           sb.printJson(stateData.progressStrikes), sb.printJson(PROGRESS_STRIKES))
 
         if stateData.progressStrikes >= PROGRESS_STRIKES then
+          --  A COARSE LEG BEFORE A VENT. See tryCoarseLeg: a leg is ordinary
+          --  walking over ground a probe already proved, a vent hop is a
+          --  teleport plus a route search of its own. Only fall through to
+          --  vents when the graph has nothing to offer.
+          if tryCoarseLeg(stateData, routeTarget) then
+            stateData.progressStrikes = 0
+            return false
+          end
+
           --  Try a vent before giving up: a route the unit cannot jump may be
           --  reachable another way.
           local routing = tryVentRoute(stateData, routeTarget)
@@ -7478,6 +7604,12 @@ function petportsTaskAction.update(dt, stateData)
 end
 
 function petportsTaskAction.leavingState(stateData)
+  --  A LEG BELONGS TO ONE TASK'S APPROACH. Carried into the next task it would
+  --  send the unit toward a waypoint chosen for a target it is no longer going
+  --  to.
+  stateData.navWaypoint = nil
+  stateData.navRemaining = nil
+
   sb.logInfo("UNIT leaving task state for %s at %s, still holding a task: %s",
     stateData.task and tostring(stateData.task.id) or "none",
     sb.printJson(mcontroller.position()), tostring(self.petportsTask ~= nil))
