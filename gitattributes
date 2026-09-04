@@ -1,0 +1,39 @@
+#  LINE ENDINGS, PINNED TO THE REPO RATHER THAN TO EACH MACHINE'S GIT CONFIG.
+#
+#  WHY THIS FILE EXISTS. Twenty files read as wholly rewritten on every handoff
+#  -- LICENSE, five .frames, petportsTaskAction.lua, petports_petport.lua, the
+#  handoff document -- with identical line counts and no content change. The
+#  cause is not the zip and not an editor: it is that line-ending handling was
+#  living in `core.autocrlf`, which is a PER-MACHINE setting. A repo whose
+#  correctness depends on every clone being configured the same way will drift
+#  the first time it is opened somewhere else, and this one did.
+#
+#  `.gitattributes` is the fix because it TRAVELS WITH THE REPO. Every clone,
+#  every checkout, every tool reads the same rule, and a machine with no git
+#  config at all gets it right.
+#
+#  LF, BECAUSE THAT IS WHAT THE HISTORY ALREADY IS. 148 of 149 tracked text
+#  files are committed LF; petports_contract.lua alone is CRLF and is the
+#  straggler, not the standard. Starbound does not care -- Lua, JSON and the
+#  asset loader all read either -- so this is chosen for diff readability and
+#  nothing else.
+#
+#  WHAT THIS KILLS. `todo.tooling.crlfdrift` and the whole class of edit hazard
+#  under it: a str_replace writing LF into a CRLF file leaves bare-LF lines that
+#  are invisible in game and are the residue of an edit that CAN do damage. With
+#  one ending everywhere there is no mixed state to land in, and no per-file
+#  "preserve CRLF here" rule to remember.
+
+#  Everything git considers text: normalised to LF in the repo AND checked out
+#  as LF, so the working tree and the object store agree on every platform.
+*                   text=auto eol=lf
+
+#  Binaries. Marked explicitly so git never tries to translate one -- a single
+#  byte changed inside a .png is silent corruption, not a diff.
+*.png               binary
+*.xcf               binary
+
+#  Windows batch files are the one real exception. cmd.exe can mis-parse a .bat
+#  with LF endings -- labels and goto are the usual casualties -- so these keep
+#  CRLF in the working tree regardless of the rule above.
+*.bat               text eol=crlf
