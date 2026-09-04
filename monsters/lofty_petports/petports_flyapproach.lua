@@ -82,7 +82,7 @@
 --  delegate, and stays one.
 local vanillaSetJumpState = setJumpState
 
-local BUILD_STAMP = "2026-09-02c gravity reads routed through freeMover"
+local BUILD_STAMP = "2026-09-04i free movers get the metabolism scale"
 local stampLogged = false
 
 --  DELETE ME ONCE THE ANSWER IS IN THE LOG.
@@ -577,7 +577,33 @@ local STRING_PULL_TASKS = {
 --  FLY_ARRIVAL check covers the first two; flyPathClear is the third, and
 --  neither caller issues this without having asked it first.
 local function steerDirectly(toTarget, length, running)
-  local speed = mcontroller.baseParameters().flySpeed
+  --  SCALED, because the planner's copy is scaled too -- arch.module.metabolism.
+  --  This is the blind-steer fallback, so there is no plan to disagree with,
+  --  but a unit that moves at one speed under a plan and another without one
+  --  is a difference nobody would think to look for.
+  local speed = petports_scaledSpeed(mcontroller.baseParameters().flySpeed)
+
+  --  THE OVERRIDE IS THE HALF THAT ACTUALLY WORKS, AND THE VECTOR ALONE DID
+  --  NOTHING. controlFly NORMALISES what it is handed to flySpeed -- measured
+  --  on the disproven-theories list, commanded distance varying 0.45 to 1.24
+  --  against a rigid 7.2 -- so building the vector out of a scaled `speed`
+  --  above is thrown away by the engine. MEASURED 2026-09-04 on a flyer wearing
+  --  Metabolism III: positions gave a median 9.23 tiles/s against a chassis
+  --  flySpeed of 9, and the reported velocity sat on 5.40, which is 9 x
+  --  (1 - airFriction/60) to the decimal. No bonus reached the body at all.
+  --
+  --  controlParameters IS THE ONE CHANNEL THAT REACHES AN ActorMovementController
+  --  AT RUNTIME -- fact.unit.movementparams says there is no applyParameters on
+  --  a monster, and this file's neighbours already drive gravityEnabled,
+  --  liquidBuoyancy and the flop frictions through it. It LAPSES EVERY TICK,
+  --  which is why it is set here, immediately before the call that reads it,
+  --  rather than once at socket time.
+  --
+  --  THE VECTOR STAYS SCALED TOO, AND THAT IS NOT BELT-AND-BRACES. If the
+  --  engine ever honours the magnitude instead of normalising, the two agree;
+  --  if it normalises, the override decides. Either way the unit travels at
+  --  `speed`, and no reading of this function can be wrong about which.
+  mcontroller.controlParameters({ flySpeed = speed })
 
   mcontroller.controlFly({
     toTarget[1] / length * speed,
@@ -930,6 +956,15 @@ end
 --  a whole tick AFTER the handover, and what is left is roughly a 0.36 window
 --  sampled every 0.64 tiles. It is a coin flip.
 --
+--
+--  THE NUMBERS ABOVE ARE THE CONDITIONS THE MEASUREMENT WAS TAKEN UNDER, NOT
+--  CURRENT VALUES. The chassis was nerfed 2026-09-04 to walk 6 / run 9 / fly
+--  9 or 11 so that Metabolism III lands back on roughly the old speed --
+--  arch.module.metabolism. The measurement stands as taken; do not rewrite it
+--  to the new numbers, and do not derive a fresh one from it without re-taking
+--  it. Nothing here needed retuning: every constant in these files is an
+--  absolute distance, time or threshold rather than a fraction of a speed.
+--
 --  MEASURED 2026-09-01, four Swim -> Jump handovers at one waterline:
 --
 --      gap at handover   gap when moveJump ran   outcome
@@ -1189,7 +1224,7 @@ function petportsFreeMover(pather)
       --  the takeoff window outright, and the walk mover has braked for it on
       --  land since the same failure was measured there.
       local speed = swimApproachSpeed(pather,
-        mcontroller.baseParameters().walkSpeed)
+        petports_scaledSpeed(mcontroller.baseParameters().walkSpeed))
       local force = mcontroller.baseParameters().liquidJumpProfile.jumpControlForce
 
       mcontroller.controlApproachVelocity(
@@ -1198,6 +1233,15 @@ function petportsFreeMover(pather)
   else
     --  Free movers: controlFly honours flySpeed and is the primitive vanilla's
     --  own fish use while submerged.
+    --
+    --  THE SCALE HAS TO ARRIVE THROUGH controlParameters HERE TOO, and this
+    --  branch could not have carried it any other way: it hands controlFly the
+    --  raw `delta`, whose magnitude is a distance to a waypoint and not a speed
+    --  at all. See steerDirectly for the measurement -- arch.module.metabolism.
+    mcontroller.controlParameters({
+      flySpeed = petports_scaledSpeed(mcontroller.baseParameters().flySpeed)
+    })
+
     mcontroller.controlFly(delta)
   end
 

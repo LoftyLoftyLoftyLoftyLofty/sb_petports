@@ -295,8 +295,8 @@
       //  PathMover:approachTargetPosition and moveX are both unreachable here.
       //  Kept because groundPet.lua's init caches runSpeed, and there is no gain
       //  in finding out the hard way what reads a nil.
-      "walkSpeed" : 8,
-      "runSpeed" : 12,
+      "walkSpeed" : 6,
+      "runSpeed" : 9,
 
       //  Known-good flyer values, not the drone's. The drone's flySpeed 15 and
       //  airForce 50 were never tuned for flight, and its gravityMultiplier 1.5
@@ -337,7 +337,7 @@
       //  airForce restores it, and the script samples post-friction. That is why
       //  mcontroller.velocity() reads a rigid 7.2 while logged POSITIONS advance
       //  a full tile per ~81ms. Trust the positions.
-      "flySpeed" : 12,
+      "flySpeed" : 9,
       "airFriction" : 24.0,
       "airForce" : 9999.0,
 

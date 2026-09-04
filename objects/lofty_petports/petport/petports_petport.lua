@@ -1402,7 +1402,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-04a coverage size authored in the .object"
+local PETPORT_BUILD_STAMP = "2026-09-04f chassis speeds nerfed to 6/9"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -4062,24 +4062,99 @@ FUEL_EFFICIENCY_BONUS = {
   fuelefficiency3 = 600
 }
 
+--  METABOLISM. THE EXACT INVERSE OF FUEL EFFICIENCY, AND DELIBERATELY SO.
+--
+--  AUTHORED IN THE SAME UPTIME-SECONDS VOCABULARY, SIGN FLIPPED, WHICH IS WHAT
+--  MAKES THE PAIRING CANCEL WITHOUT A RULE SAYING IT DOES:
+--
+--      efficiency N   900 / (900 + N)
+--      metabolism N   (900 + N) / 900       product at matching N = exactly 1.0
+--
+--  Tier 1 is 0.88235 x 1.13333, tier 3 is 0.6 x 1.66667. Both are 1.0 to the
+--  limits of a double. So Fuel Efficiency III plus Metabolism III is +30%
+--  movement at the chassis burn rate for two sockets, and NOTHING SPECIAL-CASES
+--  THAT -- it falls out of the arithmetic, which is also why mismatched tiers
+--  compose sensibly instead of hitting a cliff.
+--
+--  THE PENALTY TABLE MIRRORS FUEL_EFFICIENCY_BONUS KEY FOR KEY, and it has to:
+--  the cancellation is a claim about these two tables agreeing. If a tier is
+--  ever added to one, add it to the other in the same edit or the pairing
+--  quietly stops being free.
+METABOLISM_PENALTY = {
+  metabolism1 = 120,
+  metabolism2 = 300,
+  metabolism3 = 600
+}
+
+--  THE SPEED HALF, AS A PLAIN FRACTION ADDED TO 1.0.
+--
+--  SEPARATE FROM THE PENALTY TABLE BECAUSE THE TWO ARE NOT THE SAME DECISION.
+--  The penalties are pinned to the efficiency tiers by the cancellation
+--  argument above and cannot move independently; the speed bonuses are a pure
+--  balance number and can be retuned without touching anything else.
+METABOLISM_SPEED = {
+  metabolism1 = 0.10,
+  metabolism2 = 0.20,
+  metabolism3 = 0.30
+}
+
 --  THE MULTIPLIER APPLIED TO petports_fuelDrain, or 1.0 for a bare unit.
 --
---  MUTUAL EXCLUSIVITY IS ENFORCED AT THE SLOT, not here -- the three tiers
---  share the "fuelEfficiency" category so two can never be socketed. This still
---  takes the BEST rather than summing, because a rule that depends on another
---  rule holding is one refactor away from being wrong, and "two tiers stack
---  into 25 minutes" is a silent balance change rather than an error.
+--  TWO INDEPENDENT FAMILIES, MULTIPLIED. Efficiency slows the burn, metabolism
+--  speeds it, and a unit may wear one of each -- they carry DIFFERENT
+--  mutualExclusivityCategories on purpose, because one of each is the intended
+--  build rather than an exploit.
+--
+--  MUTUAL EXCLUSIVITY WITHIN A FAMILY IS ENFORCED AT THE SLOT, not here -- the
+--  three tiers of each share a category so two can never be socketed. Both
+--  loops still take the BEST rather than summing, because a rule that depends
+--  on another rule holding is one refactor away from being wrong, and "two
+--  tiers stack" is a silent balance change rather than an error.
 function petportFuelScale()
   local bonus = 0
+  local penalty = 0
 
   for _, flag in ipairs(petportModuleFlags()) do
     local tier = FUEL_EFFICIENCY_BONUS[flag]
     if tier ~= nil and tier > bonus then bonus = tier end
+
+    local cost = METABOLISM_PENALTY[flag]
+    if cost ~= nil and cost > penalty then penalty = cost end
   end
 
-  if bonus <= 0 then return 1.0 end
+  local scale = 1.0
 
-  return PANE_FUEL_MAX / (PANE_FUEL_MAX + bonus)
+  if bonus > 0 then
+    scale = scale * (PANE_FUEL_MAX / (PANE_FUEL_MAX + bonus))
+  end
+
+  if penalty > 0 then
+    scale = scale * ((PANE_FUEL_MAX + penalty) / PANE_FUEL_MAX)
+  end
+
+  return scale
+end
+
+--  THE MULTIPLIER APPLIED TO EVERY BASE SPEED, or 1.0 for a bare unit.
+--
+--  IT RIDES THE MODULE PUSH LIKE THE FUEL SCALE DOES, for the same reason: it
+--  is derived entirely from the flags, which are already in the push signature,
+--  so a module swap re-pushes it and nothing else can change it.
+--
+--  THE UNIT APPLIES IT IN TWO PLACES AND BOTH ARE MANDATORY -- see
+--  arch.module.metabolism. The mover alone would make a unit outrun the plan
+--  built for it, and a unit that arrives at a jump source faster than the
+--  planner expected overshoots it, which is the eight-tile-fall class this
+--  codebase has paid for repeatedly.
+function petportSpeedScale()
+  local bonus = 0
+
+  for _, flag in ipairs(petportModuleFlags()) do
+    local tier = METABOLISM_SPEED[flag]
+    if tier ~= nil and tier > bonus then bonus = tier end
+  end
+
+  return 1.0 + bonus
 end
 
 --  FARMING IS A MODULE NOW, NOT A PORT SWITCH.
@@ -4397,8 +4472,10 @@ function pushModuleEffects()
   --  THE FUEL SCALE RIDES ALONG RATHER THAN GETTING ITS OWN PUSH. It is
   --  derived entirely from the flags, which are already in the signature
   --  above, so a module swap re-pushes it and nothing else can change it.
+  --  THE SPEED SCALE RIDES THE SAME WAY AND FOR THE SAME REASON.
   world.callScriptedEntity(self.petId, "petports_setModuleEffects", effects,
-    MODULE_EFFECT_CATEGORY, liquids, flags, baseTeam, petportFuelScale())
+    MODULE_EFFECT_CATEGORY, liquids, flags, baseTeam, petportFuelScale(),
+    petportSpeedScale())
 end
 
 --------------------------------------------------------------------------------

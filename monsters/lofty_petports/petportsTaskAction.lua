@@ -171,7 +171,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-04d jump level guard inclusive, trace off"
+local BUILD_STAMP = "2026-09-04i clearance test removed"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -358,6 +358,15 @@ local JUMP_LEVEL_TOLERANCE = 1.0
 --  Measured: the unit walked off at full speed, the path advanced to the Jump
 --  edge only after it was already airborne and 1.23 tiles from the takeoff
 --  point, and it fell eight tiles.
+--
+--
+--  THE NUMBERS ABOVE ARE THE CONDITIONS THE MEASUREMENT WAS TAKEN UNDER, NOT
+--  CURRENT VALUES. The chassis was nerfed 2026-09-04 to walk 6 / run 9 / fly
+--  9 or 11 so that Metabolism III lands back on roughly the old speed --
+--  arch.module.metabolism. The measurement stands as taken; do not rewrite it
+--  to the new numbers, and do not derive a fresh one from it without re-taking
+--  it. Nothing here needed retuning: every constant in these files is an
+--  absolute distance, time or threshold rather than a fraction of a speed.
 --
 --  3.0 gives about 0.25 tiles per tick, so the window gets three or four
 --  samples instead of one. 2.5 tiles of run-in is enough to shed the speed
@@ -1200,6 +1209,48 @@ end
 function petportsWalkMover(pather)
   local finder = pather.finder
   local ahead = finder ~= nil and finder.lookAhead and finder:lookAhead(1) or nil
+
+  --  THE METABOLISM SCALE, APPLIED EVERY TICK AND BEFORE THE JUMP SLOWDOWN.
+  --
+  --  EVERY TICK because PathMover:move REBUILDS controlParameters from the
+  --  chassis before edgeMove, so anything written last tick is already gone.
+  --  That is the same property the slowdown below relies on.
+  --
+  --  BEFORE THE SLOWDOWN, NOT AFTER, AND THE ORDER IS THE WHOLE POINT.
+  --  JUMP_APPROACH_SPEED is an ABSOLUTE value chosen against moveJump's fixed
+  --  1.0 capture radius -- it is how many samples the takeoff window gets, not
+  --  a fraction of anything. Scaling it would hand the fastest units the
+  --  narrowest window, which is precisely backwards. Assigning it after this
+  --  means it still wins.
+  --
+  --  THE PLANNER SEES THE SAME MULTIPLIER via petportsPathStart, so the plan
+  --  and the body agree about how fast this unit travels -- arch.module.metabolism.
+  --  ASSIGNED ABSOLUTELY FROM baseParameters, NEVER MULTIPLIED IN PLACE.
+  --
+  --  THE FIRST BUILD READ pather.controlParameters.walkSpeed AND MULTIPLIED IT,
+  --  AND THAT FIELD IS NIL. PathMover:move rebuilds the table before edgeMove
+  --  and does NOT carry the chassis speeds into it -- they are absent until
+  --  something writes them, which is why the jump slowdown below has always
+  --  ASSIGNED a literal rather than adjusting one.
+  --
+  --  MEASURED 2026-09-04, and the two halves of the log say it outright. After
+  --  a Metabolism III push, plans carried arc vx 7.8 -- walkSpeed 6 x 1.3, so
+  --  petportsPathStart's scaling landed -- while every grounded sample of the
+  --  BODY stayed at 5.9, which is walkSpeed 6 post-friction, unscaled. The
+  --  planner believed 7.8 and the unit did 6.
+  --
+  --  THE CONTROL THAT NAMED IT: the jump slowdown, in the same log, put the
+  --  unit at a measured 2.95 against its 3.0 target. Writing to this table
+  --  plainly reaches the engine, so the failure had to be in the READ.
+  --
+  --  AND A DEFENSIVE nil GUARD IS WHAT MADE IT SILENT. petports_scaledSpeed
+  --  returned its argument unchanged for a non-number, so this assigned nil to
+  --  nil, changed nothing, and logged nothing -- fact.tooling.mergedrefusal, in
+  --  a helper written to be careful. The guard now says so out loud.
+  pather.controlParameters.walkSpeed =
+    petports_scaledSpeed(mcontroller.baseParameters().walkSpeed)
+  pather.controlParameters.runSpeed =
+    petports_scaledSpeed(mcontroller.baseParameters().runSpeed)
 
   if ahead ~= nil and ahead.action == "Jump"
      and ahead.source ~= nil and ahead.source.position ~= nil then
@@ -5578,24 +5629,48 @@ function petportsTaskAction.update(dt, stateData)
           tostring(edgeNow.action), tostring(arcFinder.currentEdgeIndex))
       end
 
-      --  Clearance is still the backstop: right height and still will not fit
-      --  is a different failure, and only a replan answers it.
-      if not dropped and edgeNow.action == "Walk" then
-        local blocked, walkIndex, walkEdge, sweep = planWalkBlocked(arcFinder)
-
-        if blocked == true then
-          sb.logInfo("UNIT SURFACE blocked: standing at %s, Walk edge %s of %s to %s does not "
-            .. "clear this body at this height (sweep %s, box %s) -- replanning",
-            sb.printJson(mcontroller.position()),
-            tostring(walkIndex), tostring(#arcFinder.edges),
-            sb.printJson(walkEdge.target.position),
-            sb.printJson(sweep), sb.printJson(mcontroller.boundBox()))
-
-          arcFinder:reset()
-          stateData.stuckAnchor = nil
-          stateData.airborneEdgeStall = 0
-        end
-      end
+      --  THE CLEARANCE TEST THAT USED TO SIT HERE WAS REMOVED 2026-09-04.
+      --
+      --  `planWalkBlocked` swept the body along the current Walk edge and reset
+      --  the pather when the sweep hit terrain. It fired 51 times in one
+      --  session with ZERO true positives, and 32 of those were one ramp: a
+      --  unit stepping down a single block was cut off mid-step, the origin
+      --  nudge -- correctly, on a plan that no longer existed -- walked it back
+      --  UP to where it started, and it replanned into the identical edge. 31
+      --  complete cycles at 0.323s until the task failed on no net progress.
+      --
+      --  ITS PREMISE WAS FALSE. The comment read "Starbound has no slopes, so a
+      --  Walk edge's target y IS the surface it was planned on". The engine has
+      --  a `slopeUp` branch in getWalkingNeighborsInDirection gated on a
+      --  diagonal polygon side -- fact.pathing.squarestep quotes it from source
+      --  in this same repo -- so a Walk edge can legitimately change y, and a
+      --  one-tile step down is expressed exactly that way. The check was not
+      --  mistimed; it was wrong about the geometry it was testing.
+      --
+      --  AND IT WAS A SECOND COPY OF A RECOVERY THAT ALREADY EXISTED. Its whole
+      --  action was `reset()`, `stuckAnchor = nil`, `airborneEdgeStall = 0` --
+      --  the same three lines, in the same order, as the grounded-stall check
+      --  below. WALK_EDGE_STALL landed 2026-08-25 in ccb1a16 with its Walk arm
+      --  already present; this landed 2026-08-27 in 0e8e990. So the only thing
+      --  it contributed was firing 1.25 seconds sooner, and firing sooner is
+      --  precisely what broke it -- a legal descent takes two or three ticks
+      --  and it could not wait that long.
+      --
+      --  WHAT COVERS THE CASE IT WAS BUILT FOR. A plan belonging to a storey
+      --  the unit is not on leaves the unit FROZEN -- the header's own
+      --  measurement was `velocity [0,-1.537]`, no x movement, eight ticks. That
+      --  is the grounded-stall predicate exactly, and stuckAnchor cannot reset
+      --  under it because nothing moves. The recovery is the same reset, 1.25s
+      --  later.
+      --
+      --  THE HELPER STAYS, AND ONLY THIS CALL SITE GOES. `planWalkBlocked` has
+      --  a second caller at the ARC touchdown path, which is a DISCRETE EVENT
+      --  rather than a per-tick poll -- it runs once when the unit lands, as a
+      --  tiebreaker after the y-gap test, and it earns its keep in the negative
+      --  direction: "y gap to next edge is 0, but the plan's Walk edge 8 is
+      --  CLEAR for this body at this height -- keeping the plan" is a plan
+      --  SAVED. Running once at a landing cannot fight a descent in progress,
+      --  which is the whole of what was wrong here.
     end
   end
 

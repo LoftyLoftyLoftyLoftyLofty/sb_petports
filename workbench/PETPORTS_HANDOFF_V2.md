@@ -50,114 +50,107 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-04 (two locomotion fixes, and a NEXT list that was already done)
+### What is built, as of 2026-09-04 (four movement fixes, a module set, and a predicate deleted)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-TWO PATHING BUGS FOUND, FIXED AND VERIFIED IN GAME. AND THE PREVIOUS STATUS WAS
-CARRYING A FINISHED FEATURE AS ITS TOP PRIORITY.
+A LONG SESSION, ALL OF IT MOVEMENT, ALL OF IT VERIFIED IN GAME. AND THE THING
+WORTH READING FIRST IS THAT TWO OF THE FOUR BUGS WERE IN THIS SESSION'S OWN
+FIXES.
 
 ---
 
-**THE JUMP LEVEL GUARD WAS OFF BY ONE BOUNDARY.** `arch.pathing.jumpmover`. A
-unit landing on a platform ladder came to rest EXACTLY 1.0 above its jump source,
-and the guard read `> JUMP_LEVEL_TOLERANCE` with the tolerance at 1.0 -- so the
-one case the value exists to refuse was the one case it admitted. It walked at a
-point one floor below its feet for 12.6 seconds across 156 ticks and the task
-failed on no net progress. Now `>=`.
+**FOUR MOVEMENT DEFECTS, FIXED AND MEASURED.**
 
-**THE GUARD IS THE ONLY RECOVERY, WHICH IS WHY A BOUNDARY MATTERED THIS MUCH.**
-Measured: 156 ticks, min step 0.150, mean 0.345, and NOT ONE step at or below
-`STUCK_MOVE` 0.1 -- so `airborneEdgeStall` was zeroed every tick and
-`UNIT stalled on` never printed. Entering the walk branch permanently disarms the
-detector that would rescue it. Verified after the fix: the unit held ONE x
-position for six ticks, the detector fired at 0.327s, and it took off 0.57s after
-touchdown against 12.6s and a failed task before.
+**The jump level guard was off by one boundary.** `arch.pathing.jumpmover`. A
+unit landing on a platform ladder rested EXACTLY 1.0 above its jump source and
+`> JUMP_LEVEL_TOLERANCE` admitted the one case the value exists to refuse. 156
+ticks, 12.6 seconds, task failed. Now `>=`: the unit holds one x position, the
+stall detector fires at 0.327s, takeoff 0.57s after touchdown.
 
----
-
-**A MID-ARC PATHER REBUILD WAS DESTROYING THE WATER EXIT, EVERY TIME.**
+**A mid-arc pather rebuild destroyed every water exit.**
 `arch.locomotion.exitdefer`. Clearing the water IS the swim-mode change, so
-`exiting -> land` always fired mid-flight, and the rebuild it forces cannot plan
-from the air -- so it only destroyed. Six attempts, five identical to the
-decimal, 2.13 seconds a cycle, forever.
+`exiting -> land` always fired mid-flight and the rebuild could not plan from the
+air. Six attempts, five identical to the decimal, 2.13s a cycle. Deferred now
+until the unit can actually plan. Verified: the deferral fires at 1153.46,
+`ARCMOVER steering to plan vx 8` at 1159.45 -- the altitude the plan used to die
+-- and the unit lands.
 
-**THE PRICE OF A MID-ARC REBUILD IS NOT ONE PRICE, AND THAT IS THE FINDING.**
-The exit launch is `[0,45]` with vx ZERO and `petportsArcMover` turns the
-horizontal on at the apex; the plan died ONE TICK before it. Two dry losses in
-the same session at `vel [-8,20.18]` and `[8,20.18]` cost a replan and nothing
-else, because the horizontal was already applied. A rebuild costs a replan when
-vx is live and costs the whole manoeuvre when it is not.
+**The walk clearance test was deleted.** `dead.pathing.clearancetest`. 51 fires,
+zero true positives, a premise this document already disproved from source, and
+the same three-line recovery as a check two days older. `origin NOT PLANNABLE`
+went 32 to 0.
 
-**FIXED BY DEFERRING, AND STATED AS A CAPABILITY RATHER THAN AS A SPECIAL CASE.**
-`petports_canPathfindIn(mode)` asks the pathfindability question about a mode the
-unit is not in yet; `petports_swimModeTick` holds the live plan when the answer
-is no. `petportsCanPathfind` now delegates to it, so there is one spelling --
-`arch.pathing.oneanchor`. Proved behaviour-identical by exhaustion over all 16
-combinations of mode, grounded and gravity. Verified in game: the deferral fires
-at 1153.46, `ARCMOVER steering to plan vx 8` fires at 1159.45 -- the exact
-altitude the plan used to die -- and the unit lands. Three deferrals, three
-transitions, paired 1:1, no latch.
+**Metabolism modules, and both halves were broken separately.**
+`arch.module.metabolism`. Walkers now read 7.67 and 11.51, flyers 11.02 tiles/s
+by position; a bare unit in the same logs reads 5.9 and 5.40.
 
 ---
 
-**THE PREVIOUS NEXT LIST WAS TWO-THIRDS ALREADY DONE, AND THAT IS THE MORE
-IMPORTANT FINDING.**
+**TWO OF THE FOUR FAILURES WERE MINE, IN THIS SESSION, AND BOTH ARE ENTRIES THIS
+FILE ALREADY CARRIED.**
 
-**MEDIC NETWORK COVERAGE SHIPPED IN `7a6a319`, 2026-09-02 01:11**, and every
-STATUS since has named it the top priority. `medicPatients` walks
-`self.networkRects` with the union fallback and dedupes by id.
-`arch.dispatch.medicpatients` now records it.
+**A defensive nil guard hid a dead feature.** The walk mover multiplied
+`pather.controlParameters.walkSpeed`, which is nil -- PathMover rebuilds that
+table without the chassis speeds, which is why the jump slowdown has always
+ASSIGNED a literal. `petports_scaledSpeed` returned its argument unchanged for a
+non-number, so it assigned nil to nil and logged nothing.
+`fact.tooling.mergedrefusal`, written into a helper built to be careful, one
+message after the rule was quoted aloud. **THE RULE KEEPS BEING RELEARNED BY THE
+THING THAT QUOTES IT**, which is now the second time that sentence has been
+written here.
 
-**IT IS THE SECOND CASUALTY OF THE GAP `proc.tooling.gapcheck` WAS WRITTEN FOR.**
-That commit sits in the same unwritten window as the fishing module -- last
-handoff write 2026-09-01 16:05, next 2026-09-02 16:32. Fishing was found by
-accident; this was found by reading the tree. Check 10 would have caught it on
-2026-09-02 had it existed. **A CARRY-FORWARD IS A CLAIM ABOUT THE TREE AND MUST
-BE CHECKED AGAINST THE TREE.**
-
-**THE `coverageRect()` GREP IS DONE AND COMES BACK CLEAN.** Every world-scanning
-generator reaches a union source: `collectionWork`, `medicPatients`,
-`scanFarmables`, `scanAnimals`, `scanContainers`, `fuelGroundWork`,
-`inNetworkCoverage` and `crosshairDrops` walk `self.networkRects`;
-`submergedSpot`, `fishingCheck` and `fishWork` walk `fishingRects()`. Harvest,
-trap, replant and water inherit from `scanFarmables`; the hauling and machine
-generators from `scanContainers`. Five `coverageRect()` sites survive and all
-five are deliberately port-local: `publishRegistry`, `dispatchable` (diag only),
-`diagnosticWork`, `returnWork`, `homePosition`.
-
-**ONE COSMETIC RESIDUE, FILED NOT FIXED.** `collectionWork` scans the union then
-takes `coverageRect()` purely for its empty-scan message, so a port with no drops
-reports `no drops in rect <own rect>` and widens the "just outside" probe around
-its own box. Misleading in exactly the situation that message exists to help.
+**An engine claim was repeated from a code comment without checking it.**
+"Starbound has no slopes" was taken as fact and used in reasoning.
+`fact.pathing.squarestep` disproves it FROM SOURCE, in this repository, and had
+done for a week. `proc.pathing.readsource` exists for exactly this. The standing
+rule from here: an engine claim in a comment cites a source, a probe or a
+measurement, or it does not get written.
 
 ---
 
-**LINE ENDINGS ARE SETTLED, AND THE CAUSE WAS NOT THE ZIP.** `.gitattributes`
-now pins LF for the repo, binary for `.png`/`.xcf`, CRLF for `.bat`. The 20-file
-phantom diff was line-ending handling living in `core.autocrlf`, which is
-PER-MACHINE -- invisible on a configured clone and a whole-file rewrite on an
-unconfigured one. Dry-run of `git add --renormalize .` reduces the staged diff to
-the three files with real content changes. `todo.tooling.crlfdrift` is closed by
-this rather than fixed.
+**THE CHASSIS WERE NERFED AND NOTHING NEEDED RETUNING FOR IT.** All five to 75%
+rounded -- walk 8 -> 6, run 12 -> 9, fly to 9 -- so Metabolism III buys back
+roughly the old speed and the previous figures become the top of an investment
+curve. Every numeric constant in the four movement files was pulled with comments
+stripped, about ninety, and NOT ONE is a fraction of a speed. The claim that they
+were was asserted first and measured second, which is the wrong order.
+
+**WHAT DOES CHANGE IS NOT A NUMBER OF OURS.** Arc vx comes from
+`{0, +-walkSpeed, +-runSpeed}` in engine code, so every jump now crosses three
+quarters the horizontal distance. A gap that stops being routable produces NO
+EDGE -- the symptom is a detour or "no route", never a unit falling short. Not
+yet seen on the test base.
+
+---
+
+**LINE ENDINGS ARE SETTLED AND THE ZIP WAS INNOCENT.** `.gitattributes` pins the
+rule to the repo -- LF for text, binary for `.png`/`.xcf`, CRLF for `.bat`. The
+twenty-file phantom diff was `core.autocrlf`, a PER-MACHINE setting: invisible on
+a configured clone, a whole-file rewrite on an unconfigured one. `git add
+--renormalize .` reduces the staged diff to the files with real content changes.
+`todo.tooling.crlfdrift` is closed by this.
 
 **SMALL AND DONE:** four missing `TASK_LABELS` -- `trap`, `medic`, `fuelfetch`,
-`fish` -- found by diffing the table against every dispatched task type. The
-overload comment above it was corrected in the same pass: `withdraw` covers four
-things now, not three, because `medicWork` returns one under a `medicfetch:` id.
+`fish` -- found by diffing the table against every dispatched type.
 
 ---
 
-**STILL OPEN, AND ALL OF IT IS NOW ACTUALLY OPEN.** The flying-unit
-partially-submerged check (`fact.locomotion.buoyancy`, the `/entityeval`
-comparison at 0 vs 0.25 has never been run). The landing overshoot behind the
-ladder stall -- `fact.pathing.platformladder`. `petports_luacheck.py` is still
-absent from the repo. And the kill list Lofty now tracks in `plan.drawio`:
+**STILL OPEN.** The flying-unit partially-submerged check
+(`fact.locomotion.buoyancy`, the `/entityeval` at 0 vs 0.25 has never been run).
+`PLAN DROP`'s second refusal, decided mid-fall from a position the unit is about
+to leave -- 4 harmless fires in the verifying run, and the same measurement-trap
+shape as the check just deleted. Eleven tags cited in `.lua` comments with no
+entry anywhere, which nothing checks; a grep over `*.lua` against the tag set
+would be check 12. `petports_luacheck.py` is still absent from the repo.
+
+**THE KILL LIST LIVES IN `plan.drawio` NOW, NOT HERE**, and that is deliberate:
 cross-container consolidation, currency in restock beacons, filter search bars,
-sinker platform sliding, sinker fishing, death cargo, and the run-animation
-blink.
+sinker platform sliding, sinker fishing, death cargo, the run-animation blink.
+Amphibious swims at walkSpeed as a walker and flySpeed only in aquatic mode --
+noticed in play, by design, and narrowed but not removed by fly = run.
 
 ## ARCHITECTURE
 
@@ -1445,6 +1438,10 @@ branch ran instead. 156 ticks cycling four x-positions -- 2490.66, 2490.82,
 already said it meant to exclude, so the value was never wrong and there was no
 number to invent. `>=` rather than retuning to 0.9 for that reason: a slope or a
 half-step is under a tile by definition, so nothing legitimate lives AT 1.0.
+Slopes are real -- `fact.pathing.squarestep` has the `slopeUp` branch from source
+-- and a genuine sloped block still rises less than a full tile per step, so this
+wording is about the SIZE of a step and not about whether slopes exist. See
+`dead.pathing.clearancetest` for what assuming they do not cost.
 
 **THE ASYMMETRY IS WHAT SETTLES A BOUNDARY ARGUMENT.** Too strict costs one 0.35s
 replan on an exactly-1.0 half-step. Too loose costs 12.6 seconds and a failed
@@ -2560,6 +2557,146 @@ because `canSwim` false already refuses all liquid, and subtracting from an empt
 set subtracts nothing. The IMMUNITY half of poison block matters for all four,
 because toxic rain arrives through the weather path. Lava block's does not --
 lava is only ever a liquid.
+
+### Metabolism -- speed bought with fuel, and the planner has to be told
+`arch.module.metabolism` -- see also `arch.fuel.burn`, `arch.module.effects`, `fact.unit.movementparams`, `arch.pathing.oneanchor`, `arch.pathing.solvelaunch`
+
+**BUILT 2026-09-04.** Three tiers, the counterpart to Fuel Efficiency: +10%,
++20% and +30% movement against a faster burn. Flags `metabolism1..3`, category
+`metabolism` -- a DIFFERENT `mutualExclusivityCategories` from `fuelEfficiency`
+on purpose, because one of each is the intended build rather than an exploit.
+
+**THE CANCELLATION IS ARITHMETIC AND NOTHING SPECIAL-CASES IT.** Both families
+are authored in the same uptime-seconds vocabulary with the sign flipped, so
+`petportFuelScale` multiplying the two bests lands on exactly 1.0 at matching
+tiers:
+
+    efficiency N   900 / (900 + N)
+    metabolism N   (900 + N) / 900
+
+    tier 1   0.88235 x 1.13333 = 1.000000000000000
+    tier 2   0.75000 x 1.33333 = 1.000000000000000
+    tier 3   0.60000 x 1.66667 = 1.000000000000000
+
+Exact to the limits of a double, computed rather than asserted. Efficiency III
+plus Metabolism III is +30% movement at the chassis burn rate for two sockets.
+Mismatched tiers compose sensibly instead of hitting a cliff -- eff3 with met1 is
+0.68, still a net saving.
+
+**`METABOLISM_PENALTY` MIRRORS `FUEL_EFFICIENCY_BONUS` KEY FOR KEY AND MUST.**
+The cancellation is a claim about two tables agreeing. Add a tier to one without
+the other and the pairing quietly stops being free -- a silent balance change,
+which is the failure mode this document keeps recording. `METABOLISM_SPEED` is
+deliberately a SEPARATE table: the penalties are pinned by the argument above and
+cannot move, the speed bonuses are a pure balance number and can.
+
+**THE SPEED GOES TO THE PLANNER AS WELL AS TO THE MOVER, AND THAT IS THE PART
+THAT IS NOT OBVIOUS.** `mcontroller.controlParameters` is invisible to
+`baseParameters()` -- `fact.unit.movementparams` -- so scaling only the mover
+leaves A* drawing arcs from `{0, +-walkSpeed, +-runSpeed}` at the CHASSIS speed
+while the body travels faster. `petportsArcMover` steers to the plan's vx and a
+Jump edge's source is an exact point, so the unit reaches its own jump point
+early and overshoots it. That is the eight-tile-fall class `JUMP_APPROACH_SLOWDOWN`
+exists to prevent, and it would have been a metabolism module reintroducing it.
+
+**FIVE SITES, ONE SPELLING.** `petports_scaledSpeed` is the only place the
+multiplier is ever applied -- `arch.pathing.oneanchor`:
+
+    petportsPathStart        walkSpeed, runSpeed, flySpeed on the planner copy
+    petportsWalkMover        pather.controlParameters, every tick
+    steerDirectly            flySpeed, the blind-steer fallback
+    the swim mover           walkSpeed through controlApproachVelocity
+
+`petportsPathStart` was the natural seam because it already overwrites
+`gravityEnabled` on that per-call copy; its header said "ONE FIELD OVERWRITTEN"
+and now says two, corrected in the same pass per `proc.pathing.supersede`.
+
+**THE SCALE IS APPLIED BEFORE THE JUMP SLOWDOWN, NEVER AFTER.**
+`JUMP_APPROACH_SPEED` is an ABSOLUTE value sized against `moveJump`'s fixed 1.0
+capture radius -- it is how many samples the takeoff window gets, not a fraction
+of anything. Scaling it would hand the fastest units the narrowest window, which
+is backwards. The slowdown assigns after and still wins.
+
+**A MISSING SCALE IS 1.0 AND THE FAILURE WOULD BE LOUDER THAN THE FUEL ONE.**
+Nil read as zero is a unit that cannot move at all, which looks exactly like
+every pathing bug in this document.
+
+**THE CHASSIS WAS NERFED IN THE SAME SESSION SO THE MODULE HAS SOMETHING TO BUY
+BACK.** 2026-09-04, all five monstertypes to 75% rounded: walk 8 -> 6, run
+12 -> 9, fly 12 -> 9 and 15 -> 11. Metabolism III returns them to roughly the old
+figures -- 7.8, 11.7 and 14.3 -- so the previous speed is now the TOP of an
+investment curve rather than the floor. The units read as zippy little hellions
+out of the box and that left nothing to want.
+
+**NOTHING NEEDED RETUNING FOR IT, AND THE CHECK IS WORTH RECORDING BECAUSE THE
+OPPOSITE WAS ASSERTED FIRST.** Every numeric constant in the four movement files
+was pulled with comments stripped -- roughly ninety -- and NOT ONE is a fraction
+or multiple of a base speed. They are absolute distances, times, tile counts and
+thresholds, all of which stay correct at any chassis speed. The single speed
+constant outside the monstertypes is `JUMP_APPROACH_SPEED` 3.0, and it is
+deliberately absolute: its job is to put ~0.25 tiles per tick through moveJump's
+fixed 1.0 capture radius, which is the same target whatever the chassis walks at.
+`PETPORTS_DIVE_HOP` 12.0 looks like a counterexample and is a vertical launch
+velocity with no horizontal component. **A CLAIM THAT A CHANGE HAS WIDE BLAST
+RADIUS IS STILL A CLAIM AND STILL HAS TO BE MEASURED.**
+
+**WHAT DOES CHANGE IS NOT A NUMBER OF OURS.** `forEachArcVelocity` draws arc vx
+from `{0, +-walkSpeed, +-runSpeed}` out of `baseParameters`, in engine code, so
+every jump arc now crosses THREE QUARTERS the horizontal distance it did -- the
+launch vy and the airtime are unchanged. Gaps that were routable can stop being
+routable, and A* does not emit a short edge, it emits nothing: the symptom is
+"no route" or a long detour, never a unit falling short. If it bites, the levers
+are `jumpSpeed` on the chassis for more airtime, or narrower gaps. This is the
+thing to watch on the test base.
+
+**THE STALE COMMENTS WERE ANNOTATED, NOT REWRITTEN.** Eight sites cite
+`walkSpeed 8` or `flySpeed 12` as the conditions a measurement was taken under.
+Rewriting those to 6 and 9 would falsify the record -- the measurements really
+were taken at 8. The two that a reader is most likely to derive from now carry a
+note saying so.
+
+**VERIFIED IN GAME 2026-09-04, AND IT TOOK THREE BUILDS BECAUSE THE MODULE HAS
+TWO HALVES AND EACH FAILED SEPARATELY.**
+
+    walker, Metabolism III   |vx| 7.67 n=117   6 x 1.3 x 0.983
+                             |vx| 11.51 n=28   9 x 1.3 x 0.983
+    flyer,  Metabolism III   positions median 11.02 tiles/s, reported 7.02 n=32
+    bare unit, same logs     5.9 grounded and 5.40 airborne -- chassis speed
+
+Both readings present in one log is the confirmation: the scale reaches exactly
+the units carrying the flag and no others. `2.95` also survives, which is the
+jump slowdown at `3.0 x 0.983` -- the absolute assignment still overrides the
+scaled speed, which is the ordering the entry argues for above.
+
+**FIRST FAILURE: THE MOVER MULTIPLIED A FIELD THAT IS NIL.** The build read
+`pather.controlParameters.walkSpeed` and scaled it. `PathMover:move` rebuilds
+that table WITHOUT the chassis speeds in it, which is why the jump slowdown has
+always ASSIGNED a literal rather than adjusting one. Measured: plans carried arc
+vx 7.8 -- `petportsPathStart` landing correctly -- while every grounded sample of
+the body stayed at 5.9. The planner believed 7.8 and the unit did 6.
+
+**AND A DEFENSIVE nil GUARD MADE THAT SILENT.** `petports_scaledSpeed` returned
+its argument unchanged for a non-number, so the assignment was nil to nil, and
+nothing logged. `fact.tooling.mergedrefusal`, committed inside a helper written
+to be careful, in the same session that quoted the rule. The guard now complains
+once, change-gated. The control that named the bug was the jump slowdown in the
+same log putting the unit at a measured 2.95 against its 3.0 target -- writing to
+that table plainly reached the engine, so the fault had to be in the READ.
+
+**SECOND FAILURE: FREE MOVERS GOT NOTHING, AND THE VECTOR COULD NOT CARRY IT.**
+`controlFly` normalises what it is handed to `flySpeed`, so `steerDirectly`
+building its vector out of a scaled speed was discarded by the engine, and the
+swim mover's free-mover branch passes `delta` raw -- a distance to a waypoint,
+not a speed. Measured before the fix: flyer positions median 9.23 tiles/s against
+a chassis flySpeed of 9, reported velocity sitting on 5.40. Fixed through
+`mcontroller.controlParameters` -- see `fact.locomotion.controlparams`, which
+this run established.
+
+**THE ORDER THE TWO HALVES FAILED IN IS THE LESSON.** The planner half worked
+from the first build and the mover half never did, so the module looked dead
+while quietly making the plan and the body disagree. A feature with two
+independent application points needs each one measured on its own; "it does
+nothing" was true of the body and false of the plan.
 
 ### A module that changes a number, and the accessor that keeps two legs honest
 `arch.module.hydrator` -- see also `arch.module.effects`, `arch.farming.sweep`, `arch.dispatch.twolegs`, `todo.module.hydratordeadline`
@@ -7440,6 +7577,34 @@ This is the same shape as the dead `ore`/`ingot`/`bar`/`gem` tags that were
 already found and removed, arrived at from the other direction: those were tags
 that did not exist, this is a whole vocabulary that does not exist.
 
+### `controlParameters` REACHES `controlFly`, AND IT IS THE ONLY RUNTIME CHANNEL
+`fact.locomotion.controlparams` -- see also `fact.locomotion.controlfly`, `fact.unit.movementparams`, `arch.module.metabolism`
+
+**MEASURED 2026-09-04, AND IT WAS AN OPEN QUESTION WHEN THE FIX THAT NEEDED IT
+WAS WRITTEN.** `mcontroller.controlParameters({ flySpeed = n })`, set on the same
+tick as the `controlFly` call that reads it, changes the speed the engine
+normalises to.
+
+    before   positions median 9.23 tiles/s, reported 5.40   chassis flySpeed 9
+    after    positions median 11.02,        reported 7.02   9 x 1.3 = 11.7
+
+7.02 is `11.7 x (1 - airFriction/60)` at `airFriction` 24, so it is the same
+`proc.pathing.velocityartifact` sampling as the 5.40 it replaced, moved by
+exactly the module's multiplier. Both values appear in the one log, from a unit
+with the module and a unit without.
+
+**IT MATTERS BEYOND SPEED BECAUSE THERE IS NO OTHER ROUTE.**
+`fact.unit.movementparams` records that `mcontroller.applyParameters` does not
+exist on a monster and that an ActorMovementController override is invisible to
+`baseParameters()`. So `controlParameters` is the whole runtime vocabulary for
+changing a movement number on a live unit, and this establishes it is not
+limited to the fields already in use -- `petports_assertSwimMode` drives
+`gravityEnabled` and `liquidBuoyancy` through it, `petportsFlopState` drives the
+frictions, and `flySpeed` now joins them.
+
+**IT LAPSES EVERY TICK.** Set it immediately before the call that reads it, never
+once at socket time.
+
 ### `controlFly` DOES NOTHING FOR A GRAVITY-ENABLED CHASSIS
 `fact.locomotion.controlfly`
 
@@ -10125,6 +10290,56 @@ the stale pane exactly: a unit with cargo takes the deposit path outright and
 cannot be dispatched to a pickup, so the port's own view of cargo was empty.
 
 `CARGO_TRACE` is left ON to catch a recurrence. Do not treat this as closed.
+
+### THE WALK CLEARANCE TEST, REMOVED FOR A FALSE PREMISE AND A DUPLICATE RECOVERY
+`dead.pathing.clearancetest` -- see also `fact.pathing.squarestep`, `arch.pathing.jumpmover`, `arch.pathing.originnudge`, `proc.pathing.readsource`
+
+**REMOVED 2026-09-04. IT RAN PER TICK FOR EIGHT DAYS AND PRODUCED NO TRUE
+POSITIVE ANYONE CAN POINT AT.** `planWalkBlocked` swept the body along the
+current Walk edge and reset the pather when the sweep met terrain.
+
+**MEASURED: 51 FIRES IN ONE SESSION, ZERO OF THEM RIGHT.** Thirty-two were one
+ramp. A unit stepping down a single block was cut mid-step; the plan died; the
+origin nudge -- behaving correctly, on a plan that no longer existed -- walked it
+back UP to where it started; it replanned into the identical edge. Thirty-one
+complete cycles at 0.323s until the task failed on no net progress. `origin NOT
+PLANNABLE` fired 32 times in that window and 0 times in the verifying run after
+removal, which is the cleanest evidence that the nudge was never the fault.
+
+**ITS PREMISE WAS FALSE AND THIS DOCUMENT ALREADY DISPROVED IT.** The comment
+read *"Starbound has no slopes, so a Walk edge's target y IS the surface it was
+planned on"*. `fact.pathing.squarestep` quotes `getWalkingNeighborsInDirection`
+FROM SOURCE showing a `slopeUp` branch gated on a diagonal polygon side. Slopes
+exist, the engine has a code path for them, and a one-tile step down is expressed
+as a Walk edge that changes y. The check was not mistimed; it was wrong about the
+geometry it tested.
+
+**THE CORRECTION AND THE CLAIM SAT IN THE SAME REPOSITORY FOR EIGHT DAYS**, in a
+comment and an entry that never met -- `proc.pathing.supersede`, third instance.
+Both were introduced in `0e8e990` on 2026-08-27.
+
+**AND IT WAS A SECOND COPY OF A RECOVERY THAT ALREADY EXISTED.** Its whole action
+was `reset()`, `stuckAnchor = nil`, `airborneEdgeStall = 0` -- the same three
+lines, same order, as the grounded-stall check. `WALK_EDGE_STALL` landed in
+`ccb1a16` on 2026-08-25 with its Walk arm already present, two days BEFORE this.
+So the only thing it contributed was firing 1.25 seconds sooner, and sooner is
+what broke it: a legal descent needs two or three ticks and the check could not
+wait.
+
+**THE CASE IT WAS BUILT FOR IS STILL COVERED.** A plan for a storey the unit is
+not on leaves the unit FROZEN -- its own header measured `velocity [0,-1.537]`,
+no x movement, eight ticks. Nothing moves, so `stuckAnchor` cannot reset and the
+grounded-stall check fires at 1.25s with the identical recovery. Verified after
+removal: `stalled on Walk` 0, so nothing even took the slower route.
+
+**THE HELPER SURVIVES, AND CHECKING THAT MATTERED.** `planWalkBlocked` has a
+SECOND caller at the ARC touchdown path, missed on the first read of the removal.
+That one runs once at a landing rather than every tick and earns its keep in the
+negative direction -- *"y gap to next edge is 0, but the plan's Walk edge 8 is
+CLEAR for this body at this height -- keeping the plan"* is a plan SAVED, and it
+fired 10 times, all CLEAR, in the verifying run. A discrete event cannot fight a
+descent in progress, which was the entire fault. Deleting the function would have
+cost something real.
 
 ### Ranking by distance under scarcity starves the far machines
 `dead.dispatch.nearestfirst` -- see also `dd.dispatch.emptiestfirst`

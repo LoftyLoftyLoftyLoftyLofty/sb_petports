@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-09-04c mid-flight swim rebuild is deferred"
+local CONTRACT_BUILD_STAMP = "2026-09-04i free movers get the scale"
 
 local contractStamped = false
 
@@ -368,7 +368,7 @@ function petports_setLightColor(r, g, b)
 end
 
 function petports_setModuleEffects(effects, category, liquids, flags, baseTeam,
-                                   fuelScale)
+                                   fuelScale, speedScale)
   category = category or "petports_modules"
   effects = effects or {}
 
@@ -383,6 +383,15 @@ function petports_setModuleEffects(effects, category, liquids, flags, baseTeam,
   --  argument, must leave the unit burning at its chassis rate; a nil treated
   --  as zero would make every such unit run forever on one tank.
   self.petportsFuelScale = tonumber(fuelScale) or 1.0
+
+  --  THE SAME SPLIT FOR MOVEMENT SPEED -- arch.module.metabolism. The chassis
+  --  owns walkSpeed, runSpeed and flySpeed; the port owns the multiplier, and
+  --  petports_scaledSpeed is the one place it is ever applied.
+  --
+  --  A MISSING SCALE IS 1.0 FOR THE SAME REASON, and the failure here would be
+  --  louder than a fuel one: nil read as zero is a unit that cannot move at
+  --  all, which looks exactly like every pathing bug in this document.
+  self.petportsSpeedScale = tonumber(speedScale) or 1.0
 
   --  petportsAvoidLiquids is the SET this unit refuses.
   --  petportsLiquidVerdict is the memo of per-id answers derived from it, and it
@@ -839,7 +848,12 @@ function petportsCanPathfind(finder)
 	return petports_canPathfindIn(petports_swimMode())
 end
 
---  VANILLA'S start, LINE FOR LINE, WITH ONE FIELD OVERWRITTEN.
+--  VANILLA'S start, LINE FOR LINE, WITH TWO OVERWRITES.
+--
+--  IT SAID "ONE FIELD" UNTIL 2026-09-04, when the metabolism module added the
+--  speed scaling below. Corrected here rather than left to read as agreement --
+--  proc.pathing.supersede exists because a bold claim five sections from its
+--  correction is the one the next reader believes.
 --
 --  THE SEAM IS THAT VANILLA ALREADY TREATS THIS TABLE AS A SCRATCH COPY:
 --
@@ -864,6 +878,45 @@ end
 --  status.stat is a real call with real cost and vanilla's ordering is not ours
 --  to trim; keeping it means this function stays a diff-able copy of vanilla's
 --  when Starbound changes pathing.lua.
+--  EVERY MOVEMENT SPEED THIS UNIT USES, SCALED BY ITS METABOLISM MODULE.
+--
+--  ONE SPELLING, AND THAT IS THE ONLY REASON THIS IS A FUNCTION RATHER THAN A
+--  MULTIPLY AT EACH SITE. arch.pathing.oneanchor records what the last
+--  duplicated predicate cost; there are FOUR places a base speed is read and a
+--  fifth that scales the planner's copy, and they must not be able to disagree.
+--
+--  1.0 UNTIL THE PORT HAS PUSHED ONCE. A unit spawned and walking before its
+--  first module push moves at its chassis speed, which is the only safe default
+--  -- see petports_setModuleEffects for why nil must never read as zero here.
+--
+--  DEFINED ABOVE ITS FIRST CALLER DELIBERATELY. proc.tooling.localorder was hit
+--  twice in two consecutive builds by a helper placed above the local it calls;
+--  this is a global, so the hazard is the reverse -- but the ordering is free
+--  and costs nothing to keep honest.
+function petports_scaledSpeed(base)
+	local value = tonumber(base)
+
+	--  LOUD, NOT SILENT, AND THIS COST A TEST CYCLE. The first build returned
+	--  `base` unchanged here and a caller handed it a nil field, so the whole
+	--  metabolism module was a no-op on the mover with nothing in the log to say
+	--  so -- fact.tooling.mergedrefusal, committed by a guard written to be
+	--  careful. Change-gated because a per-tick line would bury the log.
+	if value == nil then
+		if self.petportsSpeedScaleComplaint ~= true then
+			self.petportsSpeedScaleComplaint = true
+			sb.logInfo("UNIT petports_scaledSpeed got a non-number (%s) -- "
+				.. "the caller is reading a field that does not exist, and this "
+				.. "scaling is doing nothing", tostring(base))
+		end
+
+		return base
+	end
+
+	self.petportsSpeedScaleComplaint = nil
+
+	return value * (tonumber(self.petportsSpeedScale) or 1.0)
+end
+
 function petportsPathStart(finder, sourcePosition, targetPosition)
 	finder.target = targetPosition
 
@@ -872,7 +925,25 @@ function petportsPathStart(finder, sourcePosition, targetPosition)
 	jumpSpeed = jumpSpeed + (jumpSpeed * status.stat("jumpModifier"))
 	baseParameters.airJumpProfile.jumpSpeed = jumpSpeed
 
-	--  THE ONE DEVIATION.
+	--  THE SECOND DEVIATION, AND THE ONE THAT MAKES THE METABOLISM MODULE SAFE.
+	--
+	--  THE PLANNER MUST BE TOLD THE SPEED THE UNIT WILL ACTUALLY TRAVEL AT.
+	--  mcontroller.controlParameters is invisible to baseParameters()
+	--  (fact.unit.movementparams), so scaling only the MOVER would leave A*
+	--  drawing arcs from {0, +-walkSpeed, +-runSpeed} at the CHASSIS speed while
+	--  the body moved faster. petportsArcMover steers to the plan's vx and a
+	--  Jump edge's source is an exact point, so the unit would arrive at its own
+	--  jump point early and overshoot it -- which is exactly what
+	--  JUMP_APPROACH_SLOWDOWN exists to prevent and what an eight-tile fall was
+	--  once measured as.
+	--
+	--  SAME SEAM AS THE GRAVITY OVERRIDE BELOW, and safe for the same reason
+	--  vanilla's own airJumpProfile write is: this table is a per-call copy.
+	baseParameters.walkSpeed = petports_scaledSpeed(baseParameters.walkSpeed)
+	baseParameters.runSpeed  = petports_scaledSpeed(baseParameters.runSpeed)
+	baseParameters.flySpeed  = petports_scaledSpeed(baseParameters.flySpeed)
+
+	--  THE GRAVITY DEVIATION.
 	if petports_freeMover() then
 		baseParameters.gravityEnabled = false
 	end

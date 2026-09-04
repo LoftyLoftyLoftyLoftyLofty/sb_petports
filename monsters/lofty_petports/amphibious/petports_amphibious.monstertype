@@ -374,9 +374,9 @@
       "collisionPoly" :  [ [-0.8, -0.6], [-0.6, -0.8], [0.6, -0.8], [0.8, -0.6],
                     [0.8, 0.6], [0.6, 0.8], [-0.6, 0.8], [-0.8, 0.6] ],
       "mass" : 1.0,
-      "walkSpeed" : 8,
-      "runSpeed" : 12,
-      "flySpeed" : 15,
+      "walkSpeed" : 6,
+      "runSpeed" : 9,
+      "flySpeed" : 9,
       "airForce" : 50.0,
 
 	  //  THE AQUATIC CHASSIS'S CALIBRATED LIQUID SET, MIRRORED VERBATIM.

@@ -1,0 +1,66 @@
+//  PETPORTS -- METABOLISM MODULE II
+//
+//  THE COUNTERPART TO FUEL EFFICIENCY, AND ITS EXACT INVERSE. Efficiency buys
+//  uptime at no speed cost; this buys speed at an uptime cost. Neither is
+//  strictly better and the interesting build is BOTH.
+//
+//  THE CANCELLATION IS ARITHMETIC, NOT A RULE. petportFuelScale multiplies the
+//  best efficiency scale by the best metabolism scale, and the two tables are
+//  authored in the SAME uptime-seconds vocabulary with the sign flipped:
+//
+//      efficiency N   900 / (900 + N)
+//      metabolism N   (900 + N) / 900        product at matching N = 1.0
+//
+//  So Fuel Efficiency II plus Metabolism II is +20% movement with the burn rate
+//  back at the chassis value, for the price of two sockets. Nothing anywhere
+//  special-cases that pairing; it falls out of the numbers, which is why
+//  mismatched tiers also compose sensibly rather than hitting a cliff.
+//
+//  THE NUMBERS ARE NOT WRITTEN HERE. METABOLISM_PENALTY and METABOLISM_SPEED in
+//  petports_petport.lua own them, the same split arch.module.hydrator uses and
+//  the same one the efficiency items use: the item says WHICH capability, the
+//  port owns the values. Retuning is one table in one file and no item edits.
+//
+//  SPEED IS PUSHED TO THE PLANNER AS WELL AS TO THE MOVER, and that is the part
+//  that is not obvious -- see arch.module.metabolism. A unit moving faster than
+//  the plan that was built for it overshoots its own jump points.
+//
+//  ONE TIER PER UNIT. All three share the "metabolism" category, so the slot
+//  refuses a second the way the efficiency tiers refuse each other.
+//  petportSpeedScale still takes the BEST rather than summing, for the reason
+//  petportFuelScale gives: a rule that leans on another rule holding is one
+//  refactor from being wrong.
+//
+//  THE ART DOES NOT EXIST YET and this points at the matching efficiency icon so
+//  the item loads and can be tested. Replace the inventoryIcon when it is drawn.
+//
+//  MAXSTACK 1 -- see the plain lamp module. player.swapSlotItem() returns the
+//  WHOLE cursor stack and the pane refuses a stack rather than trusting this.
+
+{
+	"itemName" : "petports_module_metabolism2",
+	"price" : 500,
+
+	"rarity" : "Uncommon",
+
+	"category" : "petports_module",
+
+	"inventoryIcon" : "petports_module_metabolism2.png",
+
+	"description" : "Equip a pet with this module to ^green;increase movement speed^reset; and ^red;food/fuel consumption^reset; by ^cyan;20%.^reset;",
+	"shortdescription" : "Metabolism II",
+
+	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],
+
+	"maxStack" : 1,
+
+	//  ONE TIER PER UNIT -- see the header. A SEPARATE CATEGORY FROM
+	//  "fuelEfficiency" ON PURPOSE: one of each is the intended build, so they
+	//  must not exclude one another.
+	"mutualExclusivityCategories" : [ "metabolism" ],
+
+	//  NO petports_moduleEffects. This grants no status effect: the whole of its
+	//  behaviour is the port reading the flag below, scaling the burn and scaling
+	//  the speed.
+	"petports_moduleFlags" : [ "metabolism2" ]
+}

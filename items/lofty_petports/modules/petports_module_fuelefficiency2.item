@@ -35,7 +35,7 @@
 
 	"inventoryIcon" : "petports_module_fuelefficiency2.png",
 
-	"description" : "A reclaiming regulator. Waste heat is fed back into the reserve, stretching each treat considerably.",
+	"description" : "Equip a pet with this module to ^green;increase food/fuel efficiency^reset; by ^cyan;20%^reset;.",
 	"shortdescription" : "Fuel Efficiency II",
 
 	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],

@@ -1,4 +1,4 @@
-<mxfile host="Electron" modified="2026-09-04T08:03:52.619Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.2.5 Chrome/120.0.6099.109 Electron/28.1.0 Safari/537.36" etag="YEGDeUx6RcgMKDy57mPG" version="24.2.5" type="device">
+<mxfile host="Electron" modified="2026-09-04T10:02:50.128Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.2.5 Chrome/120.0.6099.109 Electron/28.1.0 Safari/537.36" etag="HANYoxGzhwx3jKmF4TtS" version="24.2.5" type="device">
   <diagram name="Page-1" id="NveRE99YrSAUUvzC1UxD">
     <mxGraphModel dx="1687" dy="993" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
       <root>
@@ -772,8 +772,8 @@
         <mxCell id="3ISfEoBmj6Lgr9TAVEry-86" value="Upcycler needs a manual burn button" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
           <mxGeometry x="1400" y="1440" width="640" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="3ISfEoBmj6Lgr9TAVEry-87" value="Diagonal slopes make the unit&#39;s walking pathfinding sad" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
-          <mxGeometry x="1400" y="1480" width="640" height="40" as="geometry" />
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-88" value="Amphi&#39;s swim pathing and fish chasing speeds are not the same VERIFY this might not be an issue after adjusting the monstertype" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="1480" width="640" height="80" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>

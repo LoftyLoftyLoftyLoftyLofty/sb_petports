@@ -35,7 +35,7 @@
 
 	"inventoryIcon" : "petports_module_fuelefficiency1.png",
 
-	"description" : "A tuned regulator. A unit burns its reserve more slowly, so every treat goes further.",
+	"description" : "Equip a pet with this module to ^green;increase food/fuel efficiency^reset; by ^cyan;10%^reset;.",
 	"shortdescription" : "Fuel Efficiency I",
 
 	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],

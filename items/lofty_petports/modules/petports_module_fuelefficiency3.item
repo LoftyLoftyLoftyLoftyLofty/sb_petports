@@ -35,7 +35,7 @@
 
 	"inventoryIcon" : "petports_module_fuelefficiency3.png",
 
-	"description" : "A sealed regulator of unclear provenance. Units fitted with one run for a very long time on very little.",
+	"description" : "Equip a pet with this module to ^green;increase food/fuel efficiency^reset; by ^cyan;30%^reset;.",
 	"shortdescription" : "Fuel Efficiency III",
 
 	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],
