@@ -8,7 +8,7 @@
   //  is live; the animation is what actually drives the icon. See
   //  petports_beacon.animation.
   "inventoryIcon" : "petports_beacon_deposit.png:on",
-  "description" : "Drop this in a container and units will deposit what they collect there.",
+  "description" : "Put this in a container and pets will deposit items there. Hold and click to customize item filters.",
   "shortdescription" : "Deposit Beacon",
   "itemTags" : [ "petports", "petports_beacon", "petports_no_upcycling" ],
 
