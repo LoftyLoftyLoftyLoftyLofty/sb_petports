@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-09-04i free movers get the scale"
+local CONTRACT_BUILD_STAMP = "2026-09-04l a death report carries the entity id"
 
 local contractStamped = false
 
@@ -90,13 +90,61 @@ end
 --  the funeral suppressed -- the vanilla idiom for capture-pod recall. dropPools
 --  is already empty on the monstertype, so nothing is left behind.
 --
+--  THAT LAST SENTENCE STOPPED BEING THE WHOLE TRUTH WHEN die() LEARNED TO
+--  SPILL CARGO. dropPools is still empty and still leaves nothing behind, but
+--  a recall now arrives at die() by exactly the route a lava death does --
+--  health reaching zero -- and die() cannot tell them apart on its own. So
+--  this sets the latch that says which one it is. Without it every unsocket
+--  would dump the unit's load on the floor, and so would every world unload,
+--  because the port calls saveAndDespawn from its own uninit as well.
+--
+--  SET BEFORE ANY EARLY RETURN, so that no later edit to the idempotency
+--  guard below can strand it. It is unconditional; it does not want to be
+--  anywhere a branch can skip.
+--
+--  AND SETTING IT IS NOT ENOUGH ON ITS OWN, WHICH COST A TEST ROUND. The
+--  latch lives on `self`, and `self` dies with the script context -- but the
+--  FADE OUTLIVES THE CONTEXT. Measured 2026-09-04: the port called this from
+--  its uninit 68ms before the world was torn down, the effect needs about a
+--  second to reach zero health, and the still-living unit was serialised into
+--  the world save MID-DEATH. On reload it came back as a fresh entity with the
+--  kill still queued and the latch gone, and spilled its load on the floor.
+--  `instant` below is what closes that window; see it for the rest.
+--
 --  VERIFY: setDeathParticleBurst / setDeathSound accepting nil to clear. If the
 --  unit poofs audibly on recall, that is these two not taking effect, and the
 --  fix is passing "" rather than nil.
-function petports_despawn()
-  stampOnce()
+--
+--  `instant` -- CULL NOW, NO FADE. Passed by the port when it is putting the
+--  unit away for a WORLD UNLOAD, and by nothing else.
+--
+--  arch.unit.exitpaths already said this and the code was not doing it: a
+--  world unload is "not an event at all. No animation, no cargo drop." The
+--  fade was copied from the unsocket path, where a player IS watching, to one
+--  where the world is being torn down and nobody can see it. It bought
+--  nothing and cost the window above.
+--
+--  NOTHING IS LOST BY SKIPPING IT. saveAndDespawn has already taken the
+--  unit's state and written cargo into the item by the time this is called,
+--  so a unit culled here resumes from the item on the next load exactly as
+--  one that faded would.
+function petports_despawn(instant)
+  stampOnce()
+  self.petportsNoDrop = true
   monster.setDeathParticleBurst(nil)
   monster.setDeathSound(nil)
+
+  if instant then
+    --  NO IDEMPOTENCY GUARD, DELIBERATELY. The fade below needs one because
+    --  re-applying an ephemeral effect restarts its ramp and visibly
+    --  re-brightens a unit mid-dissolve. Setting a resource that is already
+    --  zero does nothing at all, so a second call is free.
+    sb.logInfo("UNIT %s culled at %s -- world unloading, no fade",
+      tostring(entity.id()), sb.printJson(mcontroller.position()))
+
+    status.setResource("health", 0)
+    return true
+  end
 
   --  THE EFFECT KILLS, NOT THIS FUNCTION. petports_unitfadeout ends its ramp
   --  with status.setResource("health", 0), so the unit lives about a second
@@ -119,6 +167,91 @@ function petports_despawn()
 
   status.addEphemeralEffect("petports_unitfadeout")
   return true
+end
+
+--  DEATH -- THE UNIT'S ONE CHANCE TO SAY WHERE IT FELL.
+--
+--  A FRESH DEFINITION, NOT A REPLACEMENT, AND THAT IS THE OPPOSITE OF
+--  interact() BELOW. groundPet.lua defines no die(), no shouldDie() and no
+--  uninit() -- read from the vanilla source, 2026-09-04, not inferred from the
+--  absence of a symptom. interact() had to reproduce vanilla's body verbatim or
+--  pats went visually dead; there is no body here to lose.
+--
+--  NOT MODELLED ON /scripts/monster.lua EITHER, which is the other place a
+--  die() would normally be read from. Its body is three statements and all
+--  three are absent from a pet's script context:
+--
+--      capturable.die()    /scripts/companions/capturable.lua is in no
+--                          chassis scripts list, so `capturable` is a nil
+--                          global and the call would RAISE rather than no-op.
+--                          Moot regardless -- every monstertype here sets
+--                          capturable false.
+--      self.deathBehavior  a BEHAVIOR TREE, built by behavior.lua from a
+--                          "deathBehavior" config key. These units run
+--                          stateMachine.lua and never load behavior.lua, so
+--                          the tree is never built and the branch is dead.
+--      spawnDrops()        from /scripts/drops.lua, also unlisted, and
+--                          dropPools is empty on every chassis anyway.
+--
+--  WHICH MEANS AN ON-DEATH BEHAVIOUR -- gibs, an explosion, a noise -- CANNOT
+--  BE AUTHORED AS A deathBehavior KEY and has to be spawned from right here.
+--  Nothing does that yet. This function is the hook when something does.
+--
+--  THE UNIT SENDS A POSITION AND NOTHING ELSE, because it is carrying nothing
+--  to send. Every pickup is handed over on the tick it happens, and a withdraw
+--  never touches an item at all -- the port does the containerConsume when the
+--  arrival is reported. The load lives on petData and only the port can see
+--  it, which is the division interact()'s header below already anticipated.
+--
+--  THREE DEATHS MUST NOT SPILL AND ONLY ONE OF THEM NEEDS THE LATCH:
+--
+--      recall        petports_despawn kills through petports_unitfadeout, so
+--                    it reaches here looking exactly like a real death.
+--                    self.petportsNoDrop is the entire difference.
+--      world unload  the same path, because the port calls saveAndDespawn
+--                    from uninit -- so the same latch covers it.
+--      lost anchor   groundPet's findAnchor sets health to 0 when it cannot
+--                    re-find its port, and it only runs once self.anchorId is
+--                    already dead. The entityExists guard below refuses the
+--                    send on its own, so no latch is wanted. Nothing is lost
+--                    either way: flushCargo writes cargo into the unit ITEM on
+--                    every receive, and that item dropped when the port broke.
+--
+--  UNVERIFIED, AND THE FIRST TEST IS WHAT ANSWERS IT: whether a
+--  world.sendEntityMessage issued from inside die() is still delivered once
+--  the sender is destroyed. The message is queued on the world rather than
+--  held by the sender, so it SHOULD survive -- but that is reasoning, not a
+--  measurement. The port logs on receipt; if that line never appears, this
+--  has to move to a poll on the port side instead.
+function die()
+  if self.petportsNoDrop then
+    sb.logInfo("UNIT %s died on a recall at %s -- cargo stays with the port",
+      tostring(entity.id()), sb.printJson(mcontroller.position()))
+    return
+  end
+
+  if self.anchorId == nil or not world.entityExists(self.anchorId) then
+    sb.logInfo("UNIT %s died at %s with no live port to tell",
+      tostring(entity.id()), sb.printJson(mcontroller.position()))
+    return
+  end
+
+  sb.logInfo("UNIT %s died at %s -- asking port %s to spill the load",
+    tostring(entity.id()), sb.printJson(mcontroller.position()),
+    tostring(self.anchorId))
+
+  --  THE ENTITY ID IS WHAT THE PORT CHECKS, and the uniqueId is only for the
+  --  log line. An entity id is unambiguous WITHIN THIS WORLD AT THIS INSTANT,
+  --  which is exactly the question being asked at the far end -- "are you the
+  --  unit I currently own" -- and it is the same number the port holds in
+  --  self.petId. A uniqueId would need the port to have recorded one, and a
+  --  leftover restored from a world save carries a perfectly valid uniqueId
+  --  that no live port has ever heard of, which is the case this exists for.
+  world.sendEntityMessage(self.anchorId, "petports_unitDied", {
+    position = mcontroller.position(),
+    id = entity.id(),
+    unit = entity.uniqueId()
+  })
 end
 
 --  MATERIALISE, APPLIED FROM THE MONSTER'S OWN init.

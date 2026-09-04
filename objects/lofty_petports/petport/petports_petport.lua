@@ -1402,7 +1402,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-04h drain serves rules by trip value, not authored order"
+local PETPORT_BUILD_STAMP = "2026-09-04m only a unit this port SPAWNED may spill"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -1561,6 +1561,157 @@ function init()
       sb.printJson(item.count or 1), tostring(item.name))
 
     receiveCargo(item)
+    return true
+  end))
+
+  --  A UNIT DIED IN THE FIELD, AND ITS LOAD IS NOW ON THE GROUND.
+  --
+  --  dd.unit.destructible has always said these units are destructible on
+  --  purpose -- a unit that strolls through lava unharmed is not doing
+  --  logistics, it is cheating at them. What that decision never did was COST
+  --  anything. Cargo lives here rather than on the unit, so the unit dropped
+  --  nothing, and a replacement arrived after RESPAWN_GRACE as though nothing
+  --  had happened. Death was free, and a free death makes the camouflage
+  --  module a formality.
+  --
+  --  IT SPILLS RATHER THAN DELETING. A player who is watching loses a walk; a
+  --  player who is not loses the items to the drop timer. That asymmetry is
+  --  the whole feature -- it prices defending a network without ever telling
+  --  anyone off for failing to.
+  --
+  --  THE UNIT'S POSITION, NOT THE PORT'S. Items land where the unit fell,
+  --  which is the only place that reads as an accident rather than a refund,
+  --  and it is somewhere the network can recover from on its own: a drop
+  --  inside coverage is ordinary work, so the next unit collects it and the
+  --  interrupted job resumes with no special case anywhere.
+  --
+  --  THE WHOLE OF cargo, WITH NO SLICE, because it is one trip's worth by
+  --  construction. drainWork and fuelWork both refuse to generate anything
+  --  while cargo is non-empty -- ONLY WITH EMPTY HANDS -- and depositWork
+  --  routes an existing load ahead of any other assignment. At most this is a
+  --  fish's treasure and a medicalgoods. dd.cargo.portowns still says there is
+  --  no capacity limit; that sentence is about the absence of a HARD cap and
+  --  reads as though nothing bounds this, which those three generators do.
+  --
+  --  AND IT IS VALIDATED BEYOND SHAPE, WHICH THE HANDOFF ABOVE IS NOT. That
+  --  one can only ever ADD an item; this one spends the port's whole load and
+  --  empties petData, so being wrong about the sender costs the player.
+  --
+  --  THE INVARIANT IS OWNERSHIP: cargo belongs to the unit this port CURRENTLY
+  --  OWNS, and nothing else may spend it. Measured 2026-09-04, twice, and both
+  --  were units the port had never adopted:
+  --
+  --      a unit restored from the world save mid-recall, which comes back as a
+  --      fresh entity with the kill still queued and self.petportsNoDrop gone
+  --      -- see petports_despawn, whose `instant` path stops it being written
+  --      into the save in the first place
+  --
+  --      a leftover alive at teardown while self.petId was still nil, so
+  --      saveAndDespawn skipped it, no latch was ever set, and it reported a
+  --      death 107ms after the world stop packet. Logged "tick: unit null" and
+  --      "no dispatch: no unit" in the same second it was honoured.
+  --
+  --  AND IT IS self.spawnedPetId, NOT self.petId, WHICH COST A TEST ROUND.
+  --  self.petId was measured passing this check for a leftover, because the
+  --  leftover had RE-HOMED: groundPet's findAnchor found the port, called
+  --  setAnchor, and setPet accepted it -- correctly -- because the port had
+  --  not spawned anything yet and self.petId was nil. Adoption took under a
+  --  second and the unit died a moment later, owned and undocumented.
+  --  "A unit that claimed me" was never the question being asked here.
+  --
+  --  IT CANNOT REFUSE A REAL ONE. A unit this port spawned keeps its entity
+  --  id for as long as it exists, and the field is only overwritten by the
+  --  next spawn -- which cannot happen without saveAndDespawn latching the
+  --  outgoing unit against spilling first.
+  --
+  --  REFUSED OUT LOUD. fact.tooling.mergedrefusal: a silent nil here would
+  --  read exactly like the message never arriving, which is the OTHER failure
+  --  this path was built to be able to tell apart.
+  message.setHandler("petports_unitDied", simpleHandler(function(payload)
+    if type(payload) ~= "table" then return false end
+
+    local position = payload.position
+    if type(position) ~= "table" then return false end
+
+    if self.spawnedPetId == nil or payload.id ~= self.spawnedPetId then
+      sb.logInfo("PETPORT %s IGNORING a death report from unit %s at %s -- "
+        .. "this port spawned %s (owns %s), so that load is not ours to spill",
+        stationUniqueId(), sb.printJson(payload.id), sb.printJson(position),
+        sb.printJson(self.spawnedPetId), sb.printJson(self.petId))
+      return false
+    end
+
+    --  THE TASK IS RELEASED FIRST, AND IT IS RELEASED EVEN WITH NO CARGO.
+    --
+    --  A death is the first signal this port has ever had that its unit is
+    --  not coming back. Without this the replacement spawns after
+    --  RESPAWN_GRACE and then stands still until TASK_DEADLINE expires on
+    --  work nobody is doing -- and dd.unit.destructible predicted exactly
+    --  that ("leaves its claim behind, and the TTL is what collects it").
+    --  The TTL is still the backstop for a death that never reports.
+    abandonTask("unit died at " .. sb.printJson(position))
+
+    --  SPELLED OUT RATHER THAN AS `petData and petData.cargo or nil`, which
+    --  is correct here and is still the shape fact.tooling.andnil is about.
+    --  The guard below is the one every other cargo reader in this file
+    --  uses; a second spelling of the same test is how they drift apart.
+    if self.petData == nil or type(self.petData.cargo) ~= "table"
+       or #self.petData.cargo == 0 then
+      sb.logInfo("PETPORT %s unit %s died at %s carrying nothing",
+        stationUniqueId(), tostring(payload.unit), sb.printJson(position))
+      return true
+    end
+
+    local cargo = self.petData.cargo
+    local spilled, lost = 0, 0
+
+    for _, stack in ipairs(cargo) do
+      --  A FRESH DESCRIPTOR RATHER THAN THE HELD TABLE. What is in cargo is
+      --  this port's own record and is about to be discarded, but handing the
+      --  engine a table that petData still references is the shape that goes
+      --  wrong quietly if the discard below is ever made conditional.
+      local ok = pcall(world.spawnItem, {
+        name = stack.name,
+        count = stack.count or 1,
+        parameters = stack.parameters
+      }, position)
+
+      if ok then
+        spilled = spilled + 1
+      else
+        lost = lost + 1
+        sb.logError("PETPORT %s could not spill %s x%s at %s -- ITEMS LOST",
+          stationUniqueId(), tostring(stack.name),
+          sb.printJson(stack.count or 1), sb.printJson(position))
+      end
+    end
+
+    --  EMPTIED WHATEVER HAPPENED ABOVE. A stack that could not be spawned is
+    --  already gone as far as the world is concerned, and keeping it would
+    --  hand the replacement unit a phantom load -- which is worse than the
+    --  loss, because every generator that tests for empty hands would then
+    --  refuse forever and the port would go quietly idle.
+    self.petData.cargo = {}
+    self.paneSignature = nil
+
+    --  WRITTEN THROUGH ON THE SPOT, for flushCargo's reason and one more.
+    --  The items now exist in the world; if the write were deferred and did
+    --  not land, they would exist in the item as well. That is duplication
+    --  rather than loss, which is the worse of the two failures.
+    --
+    --  flushCargo ITSELF IS UNREACHABLE FROM HERE -- it is a local declared
+    --  below init, so naming it in a handler registered inside init resolves
+    --  a nil global. writeBackToItem is a global and is the part that
+    --  matters; the workTimer zeroing flushCargo also does is not wanted,
+    --  because there is no unit left to dispatch.
+    self.dirty = true
+    writeBackToItem()
+    self.writeTimer = WRITE_INTERVAL
+
+    sb.logInfo("PETPORT %s unit %s died at %s -- spilled %s stack(s), %s lost",
+      stationUniqueId(), tostring(payload.unit), sb.printJson(position),
+      sb.printJson(spilled), sb.printJson(lost))
+
     return true
   end))
 
@@ -2519,6 +2670,17 @@ end
 --  DESTRUCTION ONLY. uninit fires on world unload as well, so anything that
 --  should survive a reload must not be torn down there.
 function die()
+  --  AND uninit CANNOT TELL THE TWO APART BY ITSELF, so this is where the
+  --  difference gets recorded. die() runs on destruction and never on unload,
+  --  and it runs BEFORE uninit, so a flag set here is readable from there.
+  --  That is the whole reason this line is not simply inside uninit.
+  --
+  --  WHAT READS IT is the despawn below: a destroyed port fades its unit out
+  --  in front of the player who just mined it, an unloading world culls its
+  --  unit on the spot. arch.unit.exitpaths calls those two different events
+  --  and until now they took the same path.
+  self.destroyed = true
+
   stopResidency()
 
   --  DESTRUCTION ONLY. From uninit this would wipe the network on every world
@@ -2548,7 +2710,14 @@ function uninit()
   --  Petport unloading or being broken: put the unit back in its item so
   --  nothing is lost. This is why a unit does not survive the player beaming
   --  away -- the item carries the state, not the monster.
-  saveAndDespawn()
+  --
+  --  INSTANT WHEN THE PORT IS MERELY UNLOADING, which is this path minus the
+  --  one case die() marks. A fade during a world teardown is an animation with
+  --  no audience that leaves a dying unit alive long enough to be written into
+  --  the world save -- see petports_despawn, where the cost of that is
+  --  recorded. A destroyed port keeps the fade, because someone is standing
+  --  there watching it happen.
+  saveAndDespawn(false, not self.destroyed)
 end
 
 --------------------------------------------------------------------------------
@@ -2770,6 +2939,22 @@ function spawnPet()
     self.spawning = true
     self.statusTimer = STATUS_INTERVAL
 
+    --  THE ONLY PLACE THIS IS EVER WRITTEN, AND THAT IS THE ENTIRE POINT.
+    --
+    --  self.petId ANSWERS A DIFFERENT QUESTION and cannot be used for this.
+    --  It means "a unit that has claimed me", because setPet accepts any
+    --  entity id while it is nil -- that is vanilla's anchor contract, the
+    --  same one techstation.lua implements, and it is how a pet re-homes
+    --  after a reload. This field means "a unit I CREATED, this session",
+    --  which nothing else can satisfy.
+    --
+    --  NOT PERSISTED, DELIBERATELY. It lives on `self` and dies with the
+    --  script context, so after any reload the port has spawned nothing and
+    --  every unit that predates the load fails the test. That is the correct
+    --  answer rather than a side effect: the port despawns on unload, so a
+    --  unit that comes back from the world save is a leftover by definition.
+    self.spawnedPetId = self.petId
+
     --  Hand the pet its anchor, exactly as techstation.lua does. groundPet.lua
     --  calls back into setPet from here.
     world.callScriptedEntity(self.petId, "setAnchor", entity.id())
@@ -2783,7 +2968,9 @@ end
 --  onto the incoming item -- the exact corruption the swap check exists to
 --  prevent. The outgoing item is already in the player's inventory and out of
 --  reach either way.
-function saveAndDespawn(skipWrite)
+--  `instant` is forwarded to the unit and means "cull now, no fade". Only the
+--  unload path sets it; see petports_despawn on the monster side.
+function saveAndDespawn(skipWrite, instant)
   if self.petId and world.entityExists(self.petId) then
     --  Ask for final state before removing it. Best effort: if the pet is
     --  already gone the item simply keeps the last state we heard about.
@@ -2803,7 +2990,7 @@ function saveAndDespawn(skipWrite)
     --  bare callScriptedEntity to an UNDEFINED function returns nil silently --
     --  it does not raise -- which is how the socket-cycle unit leak went
     --  unnoticed before that script existed.
-    world.callScriptedEntity(self.petId, "petports_despawn")
+    world.callScriptedEntity(self.petId, "petports_despawn", instant)
 
     --  HELD PAST self.petId. The unit is no longer ours to command -- it is
     --  stunned, suppressed and dying on its own clock -- but it is still in the
