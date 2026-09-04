@@ -61,7 +61,7 @@
 --  are unprobeable and time-varying and nobody's fault -- are allowed to
 --  produce optimistic-wrong answers. They fail in the cheap direction.
 
-local COARSENAV_BUILD_STAMP = "2026-09-04k one lifetime -- the sweep, not the edge"
+local COARSENAV_BUILD_STAMP = "2026-09-04y four cells, eight probes each"
 
 local navStamped = false
 
@@ -79,7 +79,38 @@ end
 --  planet are separate worlds with separate property stores, so a ship's tree
 --  can never be consulted for a planet -- the same structural separation that
 --  keeps the registry, claims and replant intents apart.
-local NAV_KEY = "petports_nav"
+--  SHARDED BY SOURCE CELL, NOT ONE BLOB.
+--
+--  IT WAS A SINGLE PROPERTY AND THE COST WAS THE PROBLEM, not correctness.
+--  There was never a race -- a read-modify-write is one uninterrupted Lua call,
+--  entity scripts do not interleave, and world properties are synchronous -- so
+--  eight units could not clobber each other. What they could do is SERIALISE
+--  THE WHOLE TREE EIGHT TIMES PER FLUSH CYCLE, with the cost growing as the
+--  tree fills. That is the ceiling, and it is the one thing that gets worse the
+--  better the survey does.
+--
+--  THE SHARD IS THE SOURCE CELL BECAUSE THAT IS WHAT A SWEEP PRODUCES. Sweeping
+--  cell X yields exactly one thing: X's outgoing edges. So a sweep is one small
+--  property write, and two units on different cells touch different properties
+--  entirely.
+--
+--  THE TRADE IS THAT A FULL GRAPH BUILD IS N READS RATHER THAN ONE, which would
+--  be a straight loss without the per-cell memo below. With it, our own write
+--  invalidates one cell instead of everything.
+--
+--  THE INDEX IS SEPARATE AND CHANGES RARELY. There is no way to enumerate world
+--  properties, so something has to list the cells -- but it only grows when a
+--  cell is FIRST swept, not on every edge, so it is nothing like as hot as the
+--  blob it replaces. It also carries sweptAt, which used to live in the edge
+--  table as a `swept:` key and never belonged there.
+local NAV_INDEX = "petports_navindex"
+local NAV_EDGES = "petports_navedges:"
+
+--  How long a cached cell may be held before it is re-read, so ANOTHER unit's
+--  discoveries eventually arrive. Our own writes invalidate precisely; nothing
+--  can tell us about somebody else's, and polling every read would undo the
+--  whole point of the memo.
+local NAV_CACHE_TTL = 30.0
 
 --  THE ONLY CELL SIZE IN v1.
 --
@@ -116,12 +147,85 @@ PETPORTS_NAV_CELL = 2
 --  actual endpoints the probe will path between. A cell centre is a convenient
 --  fiction and the two disagree by up to a cell.
 --
---  16, AGAINST A 32-TILE PATH CAP, deliberately. The cap says how far a route
---  may WANDER; this says how far apart two things may be to be worth asking
---  about. Leaving room between them means an edge can be true via a modest
+--  AGAINST A 32-TILE PATH CAP, deliberately leaving room between them. The cap
+--  says how far a route may WANDER; this says how far apart two things may be
+--  to be worth asking about. The gap means an edge can be true via a modest
 --  detour -- around a pillar, up a stair -- rather than only in a straight
 --  line, which is exactly the case grid adjacency could not express.
-PETPORTS_NAV_RADIUS = 16
+--
+--  LOWERED 16 -> 10, 2026-09-04, ON MEASURED THROUGHPUT. Twenty cells cost 899
+--  probes -- about 45 pairs each, up from 38, because a denser graph means more
+--  of the surrounding cells are anchored and therefore candidates. The survey
+--  was simply taking too long.
+--
+--  PAIR COUNT GOES WITH THE AREA, NOT THE RADIUS, which is why a modest-looking
+--  cut is a large one: the candidate box shrinks from 17x17 cells to 11x11, so
+--  roughly 40% of the pairs remain. Expect something near 15 per cell.
+--
+--  WHAT IT COSTS is reach per cell -- a floor-to-floor link more than 10 tiles
+--  apart now needs an intermediate cell to carry it. That is the right trade
+--  while cells are cheap and plentiful, and it is the first number to raise if
+--  the graph turns out to fragment across a large vertical gap.
+PETPORTS_NAV_RADIUS = 10
+
+--  HOW FAR PAST NETWORK COVERAGE A SWEEP MAY BE STARTED, IN TILES.
+--
+--  THE SURVEY WAS UNBOUNDED AND THAT WAS AN OMISSION, not a decision. Nothing
+--  consulted coverage anywhere: the frontier expanded from wherever the unit
+--  stood, through any anchored cell it found, indefinitely. Given long enough
+--  on one planet it would have surveyed the entire connected walkable surface
+--  and filled the world properties with it.
+--
+--  WHAT THE SURVEY IS FOR is getting a unit from one side of a large base to
+--  the other, so the ground worth knowing is the ground the network owns --
+--  self.petportsNetwork, which is the UNION OF EVERY PORT'S RECT and is
+--  already pushed to the unit for the leash.
+--
+--  INFLATED RATHER THAN CLAMPED, for the reason gatherVents is. A unit on task
+--  leaves the network freely, and the ground just outside the boundary is
+--  exactly what it walks onto during a real errand -- so refusing to survey it
+--  would blind the structure precisely where it is most needed. The margin is
+--  a sweep's own reach, so a cell started at the edge can still probe outward
+--  and the boundary does not carve anchored ground in half.
+--
+--  IT GATES STARTING A SWEEP, NOT PROBING. Probes inside a sweep run to
+--  PETPORTS_NAV_RADIUS as always, so the outermost surveyed cells still learn
+--  their edges outward. Bounding the probe instead would leave a ragged frontier
+--  of half-known cells at the rim.
+--
+--  DERIVED, NOT A SECOND LITERAL. The margin IS a sweep's own reach -- that is
+--  the whole justification above -- so writing 16 in both places meant the two
+--  could drift apart silently the first time either was tuned, which happened
+--  the same day the margin was written.
+local NAV_COVERAGE_MARGIN = PETPORTS_NAV_RADIUS
+
+--  Is this cell close enough to the network to be worth surveying?
+--
+--  TRUE WHEN THERE IS NO NETWORK, matching petports_inNetwork: a unit that has
+--  not been told its bounds is not thereby forbidden from working.
+local function navInCoverage(cx, cy)
+	local rects = self.petportsNetwork
+
+	if type(rects) ~= "table" or #rects == 0 then return true end
+
+	--  THE WHOLE CELL, not its centre. A cell straddling the boundary is inside
+	--  it, which is the same direction the margin errs in.
+	local x0 = cx * PETPORTS_NAV_CELL
+	local y0 = cy * PETPORTS_NAV_CELL
+	local x1 = x0 + PETPORTS_NAV_CELL
+	local y1 = y0 + PETPORTS_NAV_CELL
+
+	for _, rect in ipairs(rects) do
+		if x1 >= rect[1] - NAV_COVERAGE_MARGIN
+		   and x0 <= rect[3] + NAV_COVERAGE_MARGIN
+		   and y1 >= rect[2] - NAV_COVERAGE_MARGIN
+		   and y0 <= rect[4] + NAV_COVERAGE_MARGIN then
+			return true
+		end
+	end
+
+	return false
+end
 
 --  EDGES DO NOT EXPIRE ON A TIMER. THE SWEEP IS THE ONLY LIFETIME.
 --
@@ -454,15 +558,71 @@ local function navEdgeKey(fromKey, toKey)
 	return fromKey .. ">" .. toKey
 end
 
-local function navRead()
-	local ok, store = pcall(world.getProperty, NAV_KEY)
-	if not ok or type(store) ~= "table" then return {} end
-	return store
+local function navIndexRead()
+	local ok, index = pcall(world.getProperty, NAV_INDEX)
+	if not ok or type(index) ~= "table" then return {} end
+	return index
 end
 
-local function navWrite(store)
-	pcall(world.setProperty, NAV_KEY, store)
+local function navIndexWrite(index)
+	pcall(world.setProperty, NAV_INDEX, index)
 end
+
+local function navCellProperty(profile, cellKey)
+	return NAV_EDGES .. profile .. ":" .. cellKey
+end
+
+--  ONE CELL'S OUTGOING EDGES, memoised on the unit.
+--
+--  THE MEMO IS WHAT MAKES SHARDING PAY. Without it, rebuilding the graph would
+--  be one property read per cell where it used to be one read total. With it, a
+--  rebuild after our own write re-reads exactly the cell we wrote.
+local function navCellRead(profile, cellKey)
+	self.petportsNavCellCache = self.petportsNavCellCache or {}
+	self.petportsNavCacheAt = self.petportsNavCacheAt or world.time()
+
+	if (world.time() - self.petportsNavCacheAt) > NAV_CACHE_TTL then
+		self.petportsNavCellCache = {}
+		self.petportsNavCacheAt = world.time()
+		self.petportsNavGraph = nil
+	end
+
+	local key = navCellProperty(profile, cellKey)
+	local held = self.petportsNavCellCache[key]
+
+	if held ~= nil then return held end
+
+	local ok, edges = pcall(world.getProperty, key)
+	if not ok or type(edges) ~= "table" then edges = {} end
+
+	self.petportsNavCellCache[key] = edges
+
+	return edges
+end
+
+local function navCellWrite(profile, cellKey, edges)
+	local key = navCellProperty(profile, cellKey)
+
+	pcall(world.setProperty, key, edges)
+
+	self.petportsNavCellCache = self.petportsNavCellCache or {}
+	self.petportsNavCellCache[key] = edges
+
+	self.petportsNavVersion = (self.petportsNavVersion or 0) + 1
+	self.petportsNavGraph = nil
+end
+
+--  self.petportsNavVersion IS BUMPED BY navCellWrite AND IS WHAT MAKES THE
+--  DERIVED GRAPHS SAFE TO MEMOISE. Deriving the coarse levels costs a pass over
+--  the edge set, so doing it per query would cost more than the fine BFS it
+--  replaces.
+--
+--  ON `self`, NOT IN THE STORE. It counts writes THIS unit has seen, so another
+--  unit's write does not invalidate our memo -- a real staleness window, and an
+--  accepted one: the derived graph is used to REJECT targets, an edge we have
+--  not seen can only make something MORE reachable, and missing one costs a
+--  probe rather than a wrong answer. NAV_CACHE_TTL is the backstop that lets
+--  another unit's work arrive eventually.
 
 --  ------------------------------------------------------------- THE BATCH
 --
@@ -507,25 +667,46 @@ function petports_navFlush()
 		return 0
 	end
 
-	local store = navRead()
-	local written = 0
+	local written, shards = 0, 0
 
+	--  GROUPED BY SOURCE CELL, so a flush spanning three cells is three small
+	--  writes rather than one whole-tree rewrite. A sweep almost always
+	--  produces exactly one group, since every edge it learns leaves the cell
+	--  being swept.
 	for profile, edges in pairs(pending) do
-		store[profile] = store[profile] or {}
+		local byCell = {}
 
 		for key, entry in pairs(edges) do
-			store[profile][key] = entry
-			written = written + 1
+			local from, to = string.match(key, "^(.-)>(.*)$")
+
+			if from ~= nil then
+				byCell[from] = byCell[from] or {}
+				byCell[from][to] = entry
+				written = written + 1
+			end
+		end
+
+		for cellKey, learned in pairs(byCell) do
+			local stored = navCellRead(profile, cellKey)
+
+			--  A COPY, because navCellRead hands back the memoised table and
+			--  mutating it in place would leave the cache correct only by luck
+			--  if the write below failed.
+			local merged = {}
+			for to, entry in pairs(stored) do merged[to] = entry end
+			for to, entry in pairs(learned) do merged[to] = entry end
+
+			navCellWrite(profile, cellKey, merged)
+			shards = shards + 1
 		end
 	end
-
-	navWrite(store)
 
 	self.petportsNavPending = {}
 	self.petportsNavPendingCount = 0
 	self.petportsNavFlushAt = world.time() + NAV_FLUSH_INTERVAL
 
-	sb.logInfo("NAV flushed %s edge(s) to the store", sb.printJson(written))
+	sb.logInfo("NAV flushed %s edge(s) across %s cell(s)",
+		sb.printJson(written), sb.printJson(shards))
 
 	return written
 end
@@ -548,10 +729,7 @@ function petports_navKnown(profile, fromKey, toKey)
 	local entry = pending ~= nil and pending[key] or nil
 
 	if type(entry) ~= "table" then
-		local store = navRead()
-		local edges = store[profile]
-		if type(edges) ~= "table" then return nil end
-		entry = edges[key]
+		entry = navCellRead(profile, fromKey)[toKey]
 	end
 
 	if type(entry) ~= "table" then return nil end
@@ -598,24 +776,39 @@ function petports_navForget(profile, cellKey)
 	--  EAGER ON THE STORE, unlike a learn. This is a correctness action rather
 	--  than an accumulation, it is rare, and deferring it would leave the tree
 	--  asserting a route through a sealed cell for up to a flush interval.
-	local store = navRead()
-	local edges = store[profile]
-	if type(edges) ~= "table" then return 0 end
-
+	--
+	--  OUTGOING EDGES ONLY, AND INBOUND ONES ARE LEFT STALE ON PURPOSE. Sharding
+	--  by source cell means edges POINTING AT this one are scattered across
+	--  every other cell's property, and finding them would mean reading the
+	--  whole index -- turning the cheapest correctness action into the most
+	--  expensive read in the file.
+	--
+	--  IT IS SAFE TO LEAVE THEM because a stale inbound edge is a wrong TRUE,
+	--  the cheap direction, and it is barely even that: the cell has no anchor,
+	--  so nothing can be dispatched to it and any probe or traversal aimed there
+	--  fails immediately. It also self-corrects, since the next sweep of the
+	--  source cell re-probes and finds no anchor.
 	local dropped = 0
 
-	for key in pairs(edges) do
-		local from, to = string.match(key, "^(.-)>(.*)$")
-		if from == cellKey or to == cellKey then
-			edges[key] = nil
-			dropped = dropped + 1
-		end
+	for _ in pairs(navCellRead(profile, cellKey)) do
+		dropped = dropped + 1
 	end
 
-	if dropped > 0 then
-		sb.logInfo("NAV cell %s SEALED for %s -- dropped %s edge(s)",
+	local index = navIndexRead()
+
+	if type(index[profile]) == "table" and index[profile][cellKey] ~= nil then
+		index[profile][cellKey] = nil
+		navIndexWrite(index)
+	end
+
+	if dropped > 0 or index[profile] ~= nil then
+		sb.logInfo("NAV cell %s SEALED for %s -- dropped %s outgoing edge(s)",
 			tostring(cellKey), tostring(profile), sb.printJson(dropped))
-		navWrite(store)
+
+		--  navCellWrite bumps the version, which drops the derived graphs. A
+		--  sealed cell that stayed in a memoised coarse level would keep
+		--  answering for edges that no longer exist.
+		navCellWrite(profile, cellKey, {})
 	end
 
 	return dropped
@@ -632,8 +825,7 @@ function petports_navLearn(profile, fromKey, toKey, reachable)
 	local previous = self.petportsNavPending[profile][key]
 
 	if type(previous) ~= "table" then
-		local store = navRead()
-		previous = type(store[profile]) == "table" and store[profile][key] or nil
+		previous = navCellRead(profile, fromKey)[toKey]
 	end
 
 	--  CONTRADICTIONS ARE LOGGED, NEVER SWALLOWED. A verdict that flips is
@@ -686,15 +878,28 @@ end
 --  RETURNS true, false, or "searching". Incremental across ticks, one explore
 --  budget per call, exactly like the vent prober -- a unit stays responsive
 --  while this runs.
-function petports_navProbeStep(fromCell, toCell, exploreRate)
+--  `slot` LETS ONE UNIT RUN SEVERAL PROBES AT ONCE.
+--
+--  IT WAS A SINGLE FIELD ON `self` AND THAT WAS THE WHOLE BLOCKER. This
+--  function restarts its search whenever the from/to pair changes, so two
+--  concurrent probes sharing one slot would each discard the other's progress
+--  every tick and neither would ever finish -- silently, since a restart is a
+--  normal event and only logs at Info.
+--
+--  DEFAULTS TO 1, so the self test and any single-probe caller are unchanged.
+function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 	stampOnce()
+
+	slot = slot or 1
 
 	local freeMover = petports_freeMover()
 
 	local fromKey = petports_navCellKey(fromCell[1], fromCell[2])
 	local toKey = petports_navCellKey(toCell[1], toCell[2])
 
-	local probe = self.petportsNavProbe
+	self.petportsNavProbes = self.petportsNavProbes or {}
+
+	local probe = self.petportsNavProbes[slot]
 
 	if probe == nil or probe.fromKey ~= fromKey or probe.toKey ~= toKey then
 		local from, fromWhy = petports_navAnchor(fromCell[1], fromCell[2], freeMover)
@@ -714,7 +919,7 @@ function petports_navProbeStep(fromCell, toCell, exploreRate)
 			if from == nil then petports_navForget(profile, fromKey) end
 			if to == nil then petports_navForget(profile, toKey) end
 
-			self.petportsNavProbe = nil
+			self.petportsNavProbes[slot] = nil
 			return nil
 		end
 
@@ -727,15 +932,23 @@ function petports_navProbeStep(fromCell, toCell, exploreRate)
 			tostring(petports_navProfile()), sb.printJson(exploreRate or 300),
 			sb.printJson(NAV_MAX_DISTANCE))
 
-		self.petportsNavProbe = {
+		self.petportsNavProbes[slot] = {
 			finder = finder,
 			fromKey = fromKey,
 			toKey = toKey,
+			--  KEPT FOR THE DEBUG DRAW, which runs on a later tick than this
+			--  and cannot re-derive them cheaply -- an anchor is up to four
+			--  validStandingPosition calls and re-running it per frame would
+			--  make the overlay cost more than the survey.
+			fromCell = { fromCell[1], fromCell[2] },
+			toCell = { toCell[1], toCell[2] },
+			fromAnchor = from,
+			toAnchor = to,
 			ticks = 0,
 			started = world.time()
 		}
 
-		probe = self.petportsNavProbe
+		probe = self.petportsNavProbes[slot]
 	end
 
 	probe.ticks = probe.ticks + 1
@@ -760,7 +973,7 @@ function petports_navProbeStep(fromCell, toCell, exploreRate)
 
 		petports_navLearn(petports_navProfile(), fromKey, toKey, result)
 
-		self.petportsNavProbe = nil
+		self.petportsNavProbes[slot] = nil
 		return result
 	end
 
@@ -781,28 +994,29 @@ end
 --  inside reachability queries that may be called many times a tick, and a
 --  store write per read would be the ceiling all over again.
 local function navAdjacency(profile)
-	local store = navRead()
+	local index = navIndexRead()
+	local cells = index[profile]
 	local out = {}
 
-	--  STORE THEN BATCH, so an unflushed edge is traversable the moment it is
-	--  learned. Same reason navKnown reads the batch first: a sweep has to be
-	--  able to see its own work, or nearest-first ordering buys nothing.
+	--  THE INDEX NAMES THE CELLS, then one shard read per cell -- each memoised,
+	--  so a rebuild after our own write re-reads exactly the one cell we wrote.
+	--  The other reads come back from the cache until NAV_CACHE_TTL lapses.
 	local edges = {}
 
-	for key, entry in pairs(type(store[profile]) == "table" and store[profile] or {}) do
-		edges[key] = entry
+	for cellKey in pairs(type(cells) == "table" and cells or {}) do
+		for to, entry in pairs(navCellRead(profile, cellKey)) do
+			edges[cellKey .. ">" .. to] = entry
+		end
 	end
 
+	--  THE BATCH LAST, so an unflushed edge is traversable the moment it is
+	--  learned. A sweep has to be able to see its own work, or nearest-first
+	--  ordering buys nothing.
 	for key, entry in pairs(navPendingFor(profile) or {}) do
 		edges[key] = entry
 	end
 
 	for key, entry in pairs(edges) do
-		--  `entry.r == true` ALSO EXCLUDES THE swept: MARKERS, which share this
-		--  table and carry a timestamp with no verdict. Deliberate rather than
-		--  incidental: they are per-cell bookkeeping, not edges, and a key
-		--  without a ">" would produce a nil `from` below anyway.
-		--
 		--  NO AGE TEST. A router asks what the graph knows; deciding that a
 		--  known edge is too old to walk is the sweep's job, not a reader's.
 		if type(entry) == "table" and entry.r == true then
@@ -816,6 +1030,126 @@ local function navAdjacency(profile)
 	end
 
 	return out
+end
+
+--  THE COARSE LEVELS, IN TILES, ABOVE THE 2-TILE BASE.
+--
+--  DERIVED FROM THE FINE EDGES, NEVER PROBED. Levels probed independently can
+--  contradict each other -- 32 says connected, 2 says no -- and there is no
+--  principled way to resolve that. One kind of probe, and the rest is
+--  arithmetic over what it produced.
+--
+--  A COARSE EDGE EXISTS IF ANY FINE EDGE CROSSES BETWEEN THE TWO BLOCKS. That
+--  makes coarse connectivity OPTIMISTIC: two blocks can be joined while the
+--  particular cells a caller cares about are not.
+--
+--  WHICH IS EXACTLY THE DIRECTION THAT MAKES IT USEFUL, and the soundness
+--  argument is worth stating because everything below depends on it:
+--
+--      if a fine path exists, every edge on it induces a coarse edge, so a
+--      coarse path exists. Contrapositive: NO COARSE PATH MEANS NO FINE PATH.
+--
+--  So a coarse "no" is a PROOF and can be acted on, while a coarse "yes" is a
+--  hint that has to be confirmed at the fine level. Rejection is the cheap,
+--  sound direction -- and ruling targets out cheaply is the entire job.
+local NAV_LEVELS = { 4, 8, 16, 32 }
+
+--  A cell key to the key of the block containing it at a given tile size.
+local function navBlockKey(cellKey, tiles)
+	local cx, cy = string.match(cellKey, "^(-?%d+),(-?%d+)$")
+	if cx == nil then return nil end
+
+	local divisor = tiles / PETPORTS_NAV_CELL
+
+	return tostring(math.floor(tonumber(cx) / divisor))
+		.. "," .. tostring(math.floor(tonumber(cy) / divisor))
+end
+
+--  THE FINE GRAPH AND EVERY LEVEL ABOVE IT, BUILT ONCE PER STORE VERSION.
+--
+--  ONE PASS OVER THE EDGES BUILDS ALL FIVE. Walking the edge set once per level
+--  would be five passes to answer one question, which is how a hierarchy ends
+--  up slower than the flat structure it was meant to accelerate.
+--
+--  SELF-LOOPS ARE DROPPED at every coarse level: a fine edge inside one block
+--  says nothing about leaving it, and keeping it would let a BFS "move" without
+--  going anywhere.
+local function navGraphFor(profile)
+	local cached = self.petportsNavGraph
+
+	if cached ~= nil and cached.profile == profile
+	   and cached.version == (self.petportsNavVersion or 0) then
+		return cached
+	end
+
+	local fine = navAdjacency(profile)
+	local coarse = {}
+
+	for _, tiles in ipairs(NAV_LEVELS) do coarse[tiles] = {} end
+
+	for from, tos in pairs(fine) do
+		for _, to in ipairs(tos) do
+			for _, tiles in ipairs(NAV_LEVELS) do
+				local a = navBlockKey(from, tiles)
+				local b = navBlockKey(to, tiles)
+
+				if a ~= nil and b ~= nil and a ~= b then
+					local bucket = coarse[tiles]
+					bucket[a] = bucket[a] or {}
+
+					--  A SET, NOT A LIST. Hundreds of fine edges collapse onto
+					--  one coarse edge, and appending would make the coarse
+					--  graph LARGER than the fine one it summarises.
+					bucket[a][b] = true
+				end
+			end
+		end
+	end
+
+	self.petportsNavGraph = {
+		profile = profile,
+		version = self.petportsNavVersion or 0,
+		fine = fine,
+		coarse = coarse
+	}
+
+	return self.petportsNavGraph
+end
+
+--  BFS over one coarse level. Set-valued adjacency, so pairs() not ipairs().
+local function navCoarseReaches(graph, tiles, fromKey, toKey, budget)
+	local a = navBlockKey(fromKey, tiles)
+	local b = navBlockKey(toKey, tiles)
+
+	if a == nil or b == nil then return nil end
+	if a == b then return true end
+
+	local adjacency = graph.coarse[tiles]
+	local visited = { [a] = true }
+	local frontier = { a }
+	local expanded = 0
+
+	while #frontier > 0 do
+		local nextFrontier = {}
+
+		for _, node in ipairs(frontier) do
+			expanded = expanded + 1
+			if expanded > budget then return nil end
+
+			for neighbour in pairs(adjacency[node] or {}) do
+				if neighbour == b then return true end
+
+				if not visited[neighbour] then
+					visited[neighbour] = true
+					table.insert(nextFrontier, neighbour)
+				end
+			end
+		end
+
+		frontier = nextFrontier
+	end
+
+	return false
 end
 
 --  CAN A UNIT OF THIS PROFILE GET FROM ONE CELL TO ANOTHER, THROUGH THE GRAPH?
@@ -852,12 +1186,27 @@ PETPORTS_NAV_SEARCH_BUDGET = 2000
 function petports_navReaches(profile, fromKey, toKey, budget)
 	if fromKey == toKey then return true, 0 end
 
-	local adjacency = navAdjacency(profile)
+	budget = budget or PETPORTS_NAV_SEARCH_BUDGET
+
+	local graph = navGraphFor(profile)
+
+	--  COARSEST FIRST, AND ONLY A "NO" IS ACTED ON. Each level is a smaller
+	--  graph than the one below it, so the cheapest possible rejection is tried
+	--  first and the fine walk is only reached by a target nothing could rule
+	--  out. A level that answers true or nil says nothing and costs one small
+	--  BFS to find that out.
+	for i = #NAV_LEVELS, 1, -1 do
+		local tiles = NAV_LEVELS[i]
+
+		if navCoarseReaches(graph, tiles, fromKey, toKey, budget) == false then
+			return false, 0
+		end
+	end
+
+	local adjacency = graph.fine
 	local visited = { [fromKey] = true }
 	local frontier = { fromKey }
 	local expanded = 0
-
-	budget = budget or PETPORTS_NAV_SEARCH_BUDGET
 
 	while #frontier > 0 do
 		local nextFrontier = {}
@@ -892,22 +1241,18 @@ end
 --  tree is thousands of edges and a printJson of it would be unreadable and
 --  would dominate the log it was meant to explain.
 function petports_navStats()
-	local store = navRead()
+	local index = navIndexRead()
 	local profiles, edges, reachable = 0, 0, 0
 	local pending = self.petportsNavPendingCount or 0
+	local swept = 0
 
-	local markers = 0
-
-	for _, byProfile in pairs(store) do
+	for profile, cells in pairs(index) do
 		profiles = profiles + 1
 
-		for key, entry in pairs(byProfile) do
-			--  SWEPT MARKERS SHARE THE TABLE AND ARE NOT EDGES. Counting them
-			--  made a 38-edge cell report 39, which is small and is exactly the
-			--  kind of off-by-one that gets chased for an hour later.
-			if string.find(key, ">", 1, true) == nil then
-				markers = markers + 1
-			else
+		for cellKey in pairs(type(cells) == "table" and cells or {}) do
+			swept = swept + 1
+
+			for _, entry in pairs(navCellRead(profile, cellKey)) do
 				edges = edges + 1
 				if type(entry) == "table" and entry.r == true then
 					reachable = reachable + 1
@@ -916,7 +1261,7 @@ function petports_navStats()
 		end
 	end
 
-	return profiles, edges, reachable, pending, markers
+	return profiles, edges, reachable, pending, swept
 end
 
 --  ---------------------------------------------------------------- SWEEP
@@ -947,21 +1292,62 @@ local NAV_SWEEP_TTL = 900.0
 --  cost of a lapsed one is two units duplicating 1059 ticks of work.
 local NAV_CLAIM_TTL = 120.0
 
-local function navSweptKey(cellKey)
-	return "swept:" .. cellKey
+--  THE INDEX ANSWERS THIS NOW. It used to be a `swept:<cell>` key sitting in
+--  the edge table, which meant per-cell bookkeeping lived in a structure keyed
+--  by edge -- and cost an off-by-one in navStats, which counted the markers as
+--  edges. Sharding gave it a proper home.
+--
+--  READ FRESH, NOT MEMOISED. The index is one small property and it is the one
+--  thing several units genuinely contend over: two units must not both decide a
+--  cell is unswept because they are each holding a stale copy.
+function petports_navSwept(profile, cellKey)
+	local index = navIndexRead()
+	local cells = index[profile]
+	if type(cells) ~= "table" then return nil end
+
+	local at = cells[cellKey]
+	if type(at) ~= "number" then return nil end
+
+	if (world.time() - at) > NAV_SWEEP_TTL then return nil end
+
+	return at
 end
 
-function petports_navSwept(profile, cellKey)
-	local store = navRead()
-	local edges = store[profile]
-	if type(edges) ~= "table" then return nil end
+--  HOW MANY CELLS ONE UNIT SWEEPS AT ONCE, AND HOW MANY PROBES EACH GETS.
+--
+--  THE TOTAL IS THE COST: every slot is one PathFinder explore call per resume,
+--  so four sweeps of eight slots is 32 x 300 = 9600 node expansions per unit
+--  update. That is four times what a single eight-slot sweep cost and it is
+--  DELIBERATE -- the survey was measured taking too long, and cutting the
+--  radius alone did not close the gap.
+--
+--  THE TWO NUMBERS ARE INDEPENDENT ON PURPOSE. PETPORTS_NAV_SWEEPS widens the
+--  frontier, PETPORTS_NAV_WORKERS deepens each cell, and they trade against
+--  frame time TOGETHER. If a fleet ever makes this hurt, drop WORKERS first:
+--  fewer probes per cell slows each sweep, while fewer sweeps also narrows the
+--  frontier and makes the skip test less effective.
+--
+--  WHY FOUR CELLS RATHER THAN ONE. A claim covers a 2x2 tile square, which is
+--  a very small unit of reservation for a sweep that probes ten tiles in every
+--  direction -- so a unit finishing a cell every few seconds spends much of its
+--  time between sweeps, taking and releasing claims, rather than probing. Four
+--  in flight keeps the slots busy across the gaps.
+--
+--  IT ALSO SPREADS THE FRONTIER. Four cells are chosen from the ranked
+--  candidate list at once, so a unit advances on several fronts instead of
+--  finishing one cell before starting its neighbour -- which matters because a
+--  cell's edges only help the skip test once that cell is DONE.
+--
+--  SLOT IDS MUST NOT COLLIDE ACROSS SWEEPS. petports_navProbeStep keys its
+--  search state by slot on `self`, so two sweeps both using slot 1 would each
+--  restart the other's probe every tick and neither would finish -- the exact
+--  bug that made probes slotted in the first place. Each sweep gets a base
+--  offset; see navSlotBase.
+PETPORTS_NAV_SWEEPS = 4
+PETPORTS_NAV_WORKERS = 8
 
-	local entry = edges[navSweptKey(cellKey)]
-	if type(entry) ~= "table" then return nil end
-
-	if (world.time() - (entry.t or 0)) > NAV_SWEEP_TTL then return nil end
-
-	return entry.t
+local function navSlotBase(index)
+	return (index - 1) * PETPORTS_NAV_WORKERS
 end
 
 --  A SWEEP OF ONE CELL, AS A COROUTINE.
@@ -985,7 +1371,7 @@ end
 --
 --  ONE PAIR PER RESUME AT MOST, so the cost per tick is one explore call --
 --  invisible -- and a cell takes as many ticks as it takes.
-function petports_navSweepStart(cx, cy, ownerId)
+function petports_navSweepStart(cx, cy, ownerId, index)
 	local profile = petports_navProfile()
 	local cellKey = petports_navCellKey(cx, cy)
 
@@ -1002,8 +1388,12 @@ function petports_navSweepStart(cx, cy, ownerId)
 
 	local freeMover = petports_freeMover()
 
-	self.petportsNavSweep = {
+	index = index or 1
+
+	self.petportsNavSweeps = self.petportsNavSweeps or {}
+	self.petportsNavSweeps[index] = {
 		workId = workId,
+		index = index,
 		ownerId = ownerId,
 		cellKey = cellKey,
 		profile = profile,
@@ -1011,45 +1401,71 @@ function petports_navSweepStart(cx, cy, ownerId)
 		job = coroutine.create(function()
 			local neighbours = petports_navNeighbours(cx, cy, freeMover)
 
-			for _, cell in ipairs(neighbours) do
-				--  TWO SKIPS, AND LEAVING OUT THE SECOND COST THE WHOLE SAVING.
-				--
-				--  petports_navReaches answers "does the GRAPH already join
-				--  these", which is true only for reachable pairs -- a false
-				--  edge is ABSENCE to a graph search, not a wall. So consulting
-				--  it alone skips every cheap pair and re-probes every dear
-				--  one. Measured 2026-09-04: a re-sweep of a fully surveyed
-				--  cell skipped all 26 reachable pairs instantly and then paid
-				--  78 ticks each for the same 12 unreachable ones it had
-				--  already cached, which is 77% of the cost of a cold sweep.
-				--
-				--  petports_navKnown answers the other question -- "do we have
-				--  a fresh DIRECT verdict for this pair" -- and that is what
-				--  the false cache was written for. This file already said
-				--  falses are memoised so the prober does not ask twice; the
-				--  prober simply never asked.
-				--
-				--  ORDER IS DELIBERATE. navKnown is a store read, navReaches is
-				--  a graph walk, so the cheaper question goes first.
-				--  FRESH MEANS "NEWER THAN A SWEEP INTERVAL", which is the one
-				--  place freshness is decided. A verdict older than that is
-				--  exactly what this re-sweep exists to refresh.
-				local known, age = petports_navKnown(profile, cellKey, cell.key)
-				local fresh = known ~= nil and (age or 0) < NAV_SWEEP_TTL
+			--  N PAIRS IN FLIGHT AT ONCE, ON ONE UNIT.
+			--
+			--  WITHIN A CELL RATHER THAN ACROSS CELLS, and that is the choice
+			--  worth explaining. Running eight CELL sweeps at once would leave
+			--  eight half-surveyed cells, none of which contributes to the skip
+			--  test until it finishes -- and the skip test is what makes a warm
+			--  sweep 40 ticks instead of 1059. Finishing cells FASTER puts
+			--  their edges into the graph sooner, which is what the frontier
+			--  feeds on.
+			--
+			--  A SLOT ARRAY RATHER THAN N COROUTINES. The state a worker needs
+			--  is "which pair" and petports_navProbeStep already keeps the rest
+			--  in its own slot, so eight coroutines would be eight stacks to
+			--  hold one integer each.
+			--
+			--  THE SKIP TEST RUNS WHEN A PAIR IS PULLED, not when the list is
+			--  built. Seven other workers are learning edges while this one
+			--  waits, and a pair that was worth probing at plan time may be
+			--  answered by the time its slot frees up.
+			local nextPair = 1
+			local active = {}
+			local base = navSlotBase(index)
 
-				local joined = (not fresh)
-					and petports_navReaches(profile, cellKey, cell.key) or nil
+			while true do
+				for slot = 1, PETPORTS_NAV_WORKERS do
+					if active[slot] == nil then
+						while nextPair <= #neighbours do
+							local candidate = neighbours[nextPair]
+							nextPair = nextPair + 1
 
-				if not fresh and joined ~= true then
-					local verdict = "searching"
+							local known, age =
+								petports_navKnown(profile, cellKey, candidate.key)
+							local fresh = known ~= nil
+								and (age or 0) < NAV_SWEEP_TTL
 
-					while verdict == "searching" do
-						verdict = petports_navProbeStep({ cx, cy },
-							{ cell.cx, cell.cy }, 300)
+							local joined = (not fresh) and petports_navReaches(
+								profile, cellKey, candidate.key) or nil
 
-						if verdict == "searching" then coroutine.yield() end
+							if not fresh and joined ~= true then
+								active[slot] = candidate
+								break
+							end
+						end
 					end
 				end
+
+				local working = false
+
+				for slot = 1, PETPORTS_NAV_WORKERS do
+					local candidate = active[slot]
+
+					if candidate ~= nil then
+						working = true
+
+						local verdict = petports_navProbeStep({ cx, cy },
+							{ candidate.cx, candidate.cy }, 300, base + slot)
+
+						if verdict ~= "searching" then active[slot] = nil end
+					end
+				end
+
+				--  DONE WHEN NOTHING IS IN FLIGHT AND NOTHING IS LEFT TO START.
+				--  Testing only the pair index would end the sweep with seven
+				--  searches still running and abandon their work.
+				if not working and nextPair > #neighbours then return end
 
 				coroutine.yield()
 			end
@@ -1065,48 +1481,828 @@ end
 --  false and a message on error rather than raising, so an unchecked resume
 --  turns a broken sweep into a unit that quietly does nothing forever --
 --  fact.tooling.mergedrefusal, in the one place it would be hardest to notice.
+--  EVERY RUNNING SWEEP, ONE RESUME EACH. Returns "running" while any is alive,
+--  "done" on the tick the last one finishes, nil when none are.
 function petports_navSweepStep()
-	local sweep = self.petportsNavSweep
-	if sweep == nil then return nil end
+	local sweeps = self.petportsNavSweeps
+	if sweeps == nil or next(sweeps) == nil then return nil end
 
-	if coroutine.status(sweep.job) == "dead" then
-		petports_navFinishSweep(true)
-		return "done"
+	local alive = 0
+
+	--  COLLECTED FIRST, because finishing a sweep mutates the table and pairs()
+	--  over a table being modified is undefined in Lua.
+	local indices = {}
+	for index in pairs(sweeps) do table.insert(indices, index) end
+	table.sort(indices)
+
+	for _, index in ipairs(indices) do
+		local sweep = sweeps[index]
+
+		if sweep ~= nil then
+			if coroutine.status(sweep.job) == "dead" then
+				petports_navFinishSweep(index, true)
+			else
+				local ok, err = coroutine.resume(sweep.job)
+
+				if not ok then
+					sb.logError("NAV sweep of %s FAILED: %s",
+						tostring(sweep.cellKey), tostring(err))
+					petports_navFinishSweep(index, false)
+				else
+					alive = alive + 1
+				end
+			end
+		end
 	end
 
-	local ok, err = coroutine.resume(sweep.job)
+	if alive > 0 then return "running" end
 
-	if not ok then
-		sb.logError("NAV sweep of %s FAILED: %s", tostring(sweep.cellKey),
-			tostring(err))
-		petports_navFinishSweep(false)
-		return "done"
-	end
+	return "done"
+end
 
-	return "running"
+--  How many sweeps this unit currently has in flight.
+function petports_navSweepCount()
+	local count = 0
+	for _ in pairs(self.petportsNavSweeps or {}) do count = count + 1 end
+	return count
 end
 
 --  MARKED SWEPT ONLY ON A CLEAN FINISH. An abandoned or failed sweep leaves the
 --  cell unmarked so somebody tries again; marking it regardless would bake a
 --  half-surveyed cell into the tree for the whole sweep TTL.
-function petports_navFinishSweep(completed)
-	local sweep = self.petportsNavSweep
+function petports_navFinishSweep(index, completed)
+	local sweeps = self.petportsNavSweeps or {}
+	local sweep = sweeps[index]
 	if sweep == nil then return end
 
-	if completed then
-		local store = navRead()
-		store[sweep.profile] = store[sweep.profile] or {}
-		store[sweep.profile][navSweptKey(sweep.cellKey)] = { t = world.time() }
-		navWrite(store)
-	end
-
+	--  FLUSH FIRST, THEN MARK. A cell marked swept whose edges never landed is
+	--  a cell nothing will revisit for NAV_SWEEP_TTL and that has nothing in it
+	--  -- the one ordering that can lose a whole sweep silently.
 	petports_navFlush()
+
+	if completed then
+		local index = navIndexRead()
+		index[sweep.profile] = index[sweep.profile] or {}
+		index[sweep.profile][sweep.cellKey] = world.time()
+		navIndexWrite(index)
+	end
 	petports_claimRelease(sweep.workId, sweep.ownerId)
+
+	--  ITS OWN SLOTS, NOT ALL OF THEM. Three other sweeps may be mid-probe.
+	local base = navSlotBase(index)
+	for slot = 1, PETPORTS_NAV_WORKERS do
+		if self.petportsNavProbes ~= nil then
+			self.petportsNavProbes[base + slot] = nil
+		end
+	end
 
 	sb.logInfo("NAV sweep of %s %s", tostring(sweep.cellKey),
 		completed and "COMPLETE" or "ABANDONED")
 
-	self.petportsNavSweep = nil
+	sweeps[index] = nil
+end
+
+--  WHAT THE HIERARCHY LOOKS LIKE, AND WHETHER IT IS SOUND.
+--
+--  TWO THINGS, AND THE SECOND IS THE ONE THAT MATTERS.
+--
+--  The counts show whether the levels SUMMARISE. A coarse level with as many
+--  nodes as the fine graph is a level that costs a pass to build and rejects
+--  nothing -- which is the failure mode of a hierarchy over a sparse set, and
+--  our anchored set IS sparse. If level 32 has one node, everything collapses
+--  into one block and the ladder is pure overhead on this base.
+--
+--  THE INVARIANT CHECK IS THE POINT: a coarse NO must never contradict a fine
+--  YES. petports_navReaches acts on a coarse false as PROOF, so a single
+--  violation there means dispatch would silently delete reachable targets --
+--  the expensive error this whole structure is priced around. Checked
+--  exhaustively over every known cell pair rather than argued.
+--
+--  A VIOLATION IS A BUG IN navBlockKey OR IN THE DERIVATION, never in the data.
+--  The soundness argument holds for any edge set, so if this ever reports one,
+--  do not tune anything -- read those two functions.
+function petports_navLevelReport()
+	local profile = petports_navProfile()
+	local graph = navGraphFor(profile)
+
+	--  Every cell that appears as an endpoint anywhere.
+	local cells, order = {}, {}
+
+	for from, tos in pairs(graph.fine) do
+		if not cells[from] then cells[from] = true; table.insert(order, from) end
+		for _, to in ipairs(tos) do
+			if not cells[to] then cells[to] = true; table.insert(order, to) end
+		end
+	end
+
+	table.sort(order)
+
+	local levels = {}
+
+	for _, tiles in ipairs(NAV_LEVELS) do
+		--  DISTINCT BLOCKS, SOURCES AND TARGETS ALIKE.
+		--
+		--  An earlier version counted the keys of the adjacency map, which is
+		--  blocks WITH OUTGOING EDGES, and reported `nodes: 1` at every level
+		--  on a star-shaped graph -- true, useless, and read as a derivation
+		--  bug for a minute. A hierarchy's whole claim is that it has fewer
+		--  nodes than the level below, so the count has to be of nodes.
+		local blocks, edges = {}, 0
+		local nodes = 0
+
+		for from, tos in pairs(graph.coarse[tiles]) do
+			blocks[from] = true
+			for to in pairs(tos) do
+				blocks[to] = true
+				edges = edges + 1
+			end
+		end
+
+		for _ in pairs(blocks) do nodes = nodes + 1 end
+
+		levels[tostring(tiles)] = { nodes = nodes, edges = edges }
+	end
+
+	--  EXHAUSTIVE, BOTH DIRECTIONS, because the edges are directional and a
+	--  derivation bug could easily be right one way and wrong the other.
+	local checked, violations, examples = 0, 0, {}
+
+	for _, a in ipairs(order) do
+		for _, b in ipairs(order) do
+			if a ~= b then
+				checked = checked + 1
+
+				local coarseSaysNo = false
+
+				for _, tiles in ipairs(NAV_LEVELS) do
+					if navCoarseReaches(graph, tiles, a, b,
+						PETPORTS_NAV_SEARCH_BUDGET) == false then
+						coarseSaysNo = true
+						break
+					end
+				end
+
+				if coarseSaysNo then
+					--  The fine walk, WITHOUT the coarse ladder in front of it,
+					--  or this would be asking the answer to check itself.
+					local visited = { [a] = true }
+					local frontier = { a }
+					local fineSaysYes = false
+
+					while #frontier > 0 and not fineSaysYes do
+						local nextFrontier = {}
+
+						for _, node in ipairs(frontier) do
+							for _, neighbour in ipairs(graph.fine[node] or {}) do
+								if neighbour == b then fineSaysYes = true break end
+								if not visited[neighbour] then
+									visited[neighbour] = true
+									table.insert(nextFrontier, neighbour)
+								end
+							end
+
+							if fineSaysYes then break end
+						end
+
+						frontier = nextFrontier
+					end
+
+					if fineSaysYes then
+						violations = violations + 1
+						if #examples < 5 then
+							table.insert(examples, a .. ">" .. b)
+						end
+					end
+				end
+			end
+		end
+	end
+
+	return {
+		profile = profile,
+		fineCells = #order,
+		levels = levels,
+		invariant = {
+			pairsChecked = checked,
+			violations = violations,
+			examples = examples
+		}
+	}
+end
+
+--  ---------------------------------------------------------- DEBUG DRAW
+
+--  SEE WHAT THE SURVEY IS DOING, IN THE WORLD, WHILE IT DOES IT.
+--
+--  THE POINT IS GEOMETRY, NOT PROGRESS. Every invariant this file checks is
+--  about graph structure -- petports_navLevelReport proved soundness over 702
+--  pairs without ever noticing whether a cell rectangle is drawn one tile off,
+--  because a consistent off-by-one is invisible to a consistency check. Only
+--  looking at it catches that.
+--
+--  WHAT IS DRAWN:
+--
+--      magenta rect    the two cells, at their exact tile boundaries. If an
+--                      anchor point sits outside its own rect, navBlockKey or
+--                      petports_navAnchor disagree about what a cell is.
+--      green point     the source anchor -- where the probe searches FROM
+--      red point       the target anchor -- where it searches TO
+--      yellow line     the pair being asked about
+--
+--  DRAWN EVERY TICK OR NOT AT ALL. Starbound's debug primitives last one frame,
+--  so this has to be called from the pump rather than from the probe -- a probe
+--  that resolves in one tick would otherwise flicker for a single frame and a
+--  probe that takes 79 would draw once and vanish.
+--
+--  EVERY CALL IS WRAPPED. The colour argument is the one thing here not read
+--  from source, and a rejected colour name would raise inside the survey pump
+--  -- turning a debug aid into a crash in the thing it was meant to observe.
+--  It reports once and disables itself instead.
+local navDebugBroken = false
+
+local function navDrawSafely(fn, ...)
+	if navDebugBroken then return end
+
+	local ok, err = pcall(fn, ...)
+
+	if not ok then
+		navDebugBroken = true
+		sb.logError("NAV debug draw disabled -- %s", tostring(err))
+	end
+end
+
+local function navDrawCell(cx, cy, colour)
+	local x0 = cx * PETPORTS_NAV_CELL
+	local y0 = cy * PETPORTS_NAV_CELL
+	local x1 = x0 + PETPORTS_NAV_CELL
+	local y1 = y0 + PETPORTS_NAV_CELL
+
+	navDrawSafely(world.debugLine, { x0, y0 }, { x1, y0 }, colour)
+	navDrawSafely(world.debugLine, { x1, y0 }, { x1, y1 }, colour)
+	navDrawSafely(world.debugLine, { x1, y1 }, { x0, y1 }, colour)
+	navDrawSafely(world.debugLine, { x0, y1 }, { x0, y0 }, colour)
+end
+
+--  A point, as a small cross. world.debugPoint exists but is a single pixel at
+--  most zoom levels and is unfindable next to a line.
+local function navDrawPoint(position, colour)
+	if type(position) ~= "table" then return end
+
+	local size = 0.25
+
+	navDrawSafely(world.debugLine,
+		{ position[1] - size, position[2] }, { position[1] + size, position[2] },
+		colour)
+	navDrawSafely(world.debugLine,
+		{ position[1], position[2] - size }, { position[1], position[2] + size },
+		colour)
+end
+
+--  ON BY DEFAULT WHILE THIS SYSTEM IS BEING BUILT, and that is a deliberate
+--  reversal. It shipped opt-in, which was wrong twice over: the whole point was
+--  to WATCH IT RUN, so requiring a command first means the first run is always
+--  invisible -- and the flag is a script-context global, so it was lost on
+--  every unit respawn and every reload anyway. An overlay you have to re-enable
+--  after each rebuild is an overlay nobody sees.
+--
+--  IT COSTS ALMOST NOTHING WHEN UNSEEN. Nothing is drawn unless a probe is in
+--  flight, and Starbound renders none of it unless the client has debug
+--  rendering on. Turn it off here before release, not before testing.
+--
+--  RESETS TO ON AFTER A RELOAD, on purpose, for the same reason.
+--  HOW COMPLETE EACH LEVEL IS.
+--
+--  A BLOCK IS COMPLETE WHEN EVERY KNOWN CELL INSIDE IT HAS BEEN SWEPT, and
+--  "known" is the important word: a block is not measured against how many
+--  cells it COULD hold, because most of those are open air with no anchor and
+--  would never be swept. It is measured against the cells the survey has
+--  actually discovered inside it. So a level reaches 100% when nothing
+--  currently known is outstanding -- and can drop BELOW 100% again when a sweep
+--  discovers new cells, which is honest rather than a glitch.
+--
+--  LEVEL 2 IS THE FINE CELLS THEMSELVES, included because it is the number
+--  that actually answers "how far along is this".
+--
+--  MEMOISED ON THE GRAPH VERSION, because it walks every known cell once per
+--  level and the overlay would otherwise pay that every frame.
+function petports_navLevelProgress()
+	local profile = petports_navProfile()
+	local version = self.petportsNavVersion or 0
+
+	local held = self.petportsNavLevelStats
+
+	if held ~= nil and held.profile == profile and held.version == version then
+		return held.levels
+	end
+
+	local index = navIndexRead()
+	local swept = type(index[profile]) == "table" and index[profile] or {}
+
+	--  EVERY CELL THE SURVEY HAS HEARD OF: swept ones from the index, plus
+	--  endpoints seen in the graph that have not been reached yet.
+	local known = {}
+
+	for cellKey in pairs(swept) do known[cellKey] = true end
+
+	local graph = navGraphFor(profile)
+
+	for from, tos in pairs(graph.fine) do
+		known[from] = true
+		for _, to in ipairs(tos) do known[to] = true end
+	end
+
+	local levels = {}
+
+	for _, tiles in ipairs({ PETPORTS_NAV_CELL, 4, 8, 16, 32 }) do
+		local blocks = {}
+
+		for cellKey in pairs(known) do
+			local blockKey = tiles == PETPORTS_NAV_CELL
+				and cellKey or navBlockKey(cellKey, tiles)
+
+			if blockKey ~= nil then
+				local block = blocks[blockKey]
+
+				if block == nil then
+					block = { total = 0, done = 0 }
+					blocks[blockKey] = block
+				end
+
+				block.total = block.total + 1
+				if swept[cellKey] ~= nil then block.done = block.done + 1 end
+			end
+		end
+
+		local total, complete = 0, 0
+
+		for _, block in pairs(blocks) do
+			total = total + 1
+			if block.done == block.total then complete = complete + 1 end
+		end
+
+		table.insert(levels, {
+			tiles = tiles,
+			blocks = total,
+			complete = complete,
+			percent = total > 0 and (complete / total * 100) or 100
+		})
+	end
+
+	self.petportsNavLevelStats = {
+		profile = profile,
+		version = version,
+		levels = levels
+	}
+
+	return levels
+end
+
+PETPORTS_NAV_DEBUG = true
+
+--  Toggle from a console: /entityeval return petports_navDebugToggle()
+function petports_navDebugToggle()
+	PETPORTS_NAV_DEBUG = not PETPORTS_NAV_DEBUG
+	navDebugBroken = false
+
+	sb.logInfo("NAV debug draw %s", PETPORTS_NAV_DEBUG and "ON" or "OFF")
+
+	return PETPORTS_NAV_DEBUG
+end
+
+function petports_navDebugDraw()
+	if not PETPORTS_NAV_DEBUG then return end
+
+	--  THE LEVEL READOUT DRAWS WHETHER OR NOT A PROBE IS RUNNING, because the
+	--  gap between sweeps is exactly when someone wants to know how far along
+	--  it is. Anchored to the unit rather than to a cell so it follows the eye.
+	--
+	--  INCOMPLETE LEVELS ONLY. A finished level is a line that says nothing and
+	--  pushes the ones that do say something off the top.
+	local levels = petports_navLevelProgress()
+	local here = mcontroller.position()
+	local line = 0
+
+	for _, level in ipairs(levels) do
+		if level.percent < 100 then
+			--  NO PERCENT SIGN IN THE OUTPUT, AND THIS IS NOT A STYLE CHOICE.
+			--
+			--  world.debugText TREATS ITS FIRST ARGUMENT AS A FORMAT STRING,
+			--  same as sb.logInfo. A string built with `%%` here renders a
+			--  literal `%`, which the engine then reads as a specifier and
+			--  throws on: "Improper lua log format specifier %". Lua's
+			--  string.format is perfectly happy with it, so this passes every
+			--  test that is not run in game.
+			--
+			--  MEASURED 2026-09-04, and it disabled the ENTIRE overlay on its
+			--  first frame -- navDrawSafely caught it, which is the only reason
+			--  it was a blank screen and not a crash inside the survey pump.
+			--
+			--  THE RULE IS BROADER THAN THIS LINE: nothing that reaches
+			--  sb.log*, world.debugText or any other formatLua call may contain
+			--  a percent sign at all, whoever put it there. petports_luacheck
+			--  now refuses one mechanically, because this file already carried
+			--  the rule in prose and it did not help.
+			navDrawSafely(world.debugText,
+				string.format("nav L%s  %s pct  %s/%s",
+					tostring(level.tiles),
+					tostring(math.floor(level.percent + 0.5)),
+					tostring(level.complete), tostring(level.blocks)),
+				{ here[1] + 2, here[2] + 3 - line * 0.7 }, "cyan")
+
+			line = line + 1
+		end
+	end
+
+	if line == 0 then
+		navDrawSafely(world.debugText, "nav COMPLETE",
+			{ here[1] + 2, here[2] + 3 }, "green")
+	end
+
+	local probes = self.petportsNavProbes
+	if probes == nil or next(probes) == nil then return end
+
+	--  SAID ONCE, SO "I SEE NOTHING" IS DIAGNOSABLE. Three things have to line
+	--  up for the overlay to appear -- the flag, a probe in flight, and the
+	--  client's debug rendering -- and the first two are the only ones this
+	--  script can report on. Without this line, a flag left off and a client
+	--  with debug rendering off look identical from the log.
+	if not self.petportsNavDrewOnce then
+		self.petportsNavDrewOnce = true
+		sb.logInfo("NAV debug draw ACTIVE -- if nothing appears in game, "
+			.. "the client needs debug rendering enabled (/debug)")
+	end
+
+	--  EVERY SLOT, so eight concurrent probes are eight lines rather than
+	--  whichever one happened to be looked at last.
+	for slot, probe in pairs(probes) do
+		navDrawCell(probe.fromCell[1], probe.fromCell[2], "magenta")
+		navDrawCell(probe.toCell[1], probe.toCell[2], "magenta")
+
+		if probe.fromAnchor ~= nil and probe.toAnchor ~= nil then
+			navDrawSafely(world.debugLine, probe.fromAnchor, probe.toAnchor,
+				"yellow")
+		end
+
+		navDrawPoint(probe.fromAnchor, "green")
+		navDrawPoint(probe.toAnchor, "red")
+
+		--  STAGGERED VERTICALLY BY SLOT. Every probe in a sweep shares one
+		--  source anchor, so eight labels would otherwise print on top of each
+		--  other and read as one unreadable smear.
+		navDrawSafely(world.debugText,
+			string.format("%s>%s %s", probe.fromKey, probe.toKey,
+				tostring(probe.ticks)),
+			{ probe.fromAnchor[1], probe.fromAnchor[2] + 1.5 + slot * 0.7 },
+			"yellow")
+	end
+end
+
+--  ------------------------------------------------------------ SCHEDULER
+
+--  WHICH CELL TO SWEEP NEXT.
+--
+--  THE FRONTIER IS THE NEIGHBOUR LISTS OF ALREADY-SWEPT CELLS, which is what
+--  makes the skip test worth anything. Measured 2026-09-04: a cold sweep is
+--  1059 probe ticks, a warm one is 40 -- a 26-fold difference that exists ONLY
+--  when a cell's neighbours already carry verdicts. Sweeping cells in scan
+--  order or at random leaves the graph a collection of disconnected stars, each
+--  one paying full cold price, and nothing ever gets cheap.
+--
+--  SO CANDIDATES COME FROM THE GRAPH, NOT FROM GEOMETRY. Every cell that
+--  appears in the fine adjacency was reached from somewhere, so it is anchored
+--  by construction -- no anchor scan needed to find it. A geometric walk would
+--  spend most of its time on the 87% of cells that hold nothing but air.
+--
+--  NEAREST TO THE UNIT WINS, so expansion follows the unit around the base
+--  rather than radiating from wherever it happened to start.
+--
+--  THE SEED IS THE UNIT'S OWN CELL. With an empty graph there is no frontier,
+--  and the cell a unit is standing in is the one place its connectivity is
+--  certainly worth knowing.
+function petports_navCandidates(limit)
+	local here = mcontroller.position()
+	local cx, cy = petports_navCell(here)
+	local profile = petports_navProfile()
+	local mine = petports_navCellKey(cx, cy)
+
+	local found = {}
+
+	if petports_navSwept(profile, mine) == nil and navInCoverage(cx, cy) then
+		table.insert(found, { cx = cx, cy = cy, key = mine, distance = 0 })
+	end
+
+	local graph = navGraphFor(profile)
+	local seen = { [mine] = true }
+
+	--  CELLS THIS UNIT IS ALREADY SWEEPING. The claim would refuse them anyway,
+	--  but a refusal costs a claim read and burns one of NAV_CLAIM_ATTEMPTS --
+	--  and with four sweeps running, the four nearest candidates are exactly
+	--  the ones already in flight, so every top-up would spend its whole budget
+	--  refusing its own work.
+	for _, sweep in pairs(self.petportsNavSweeps or {}) do
+		seen[sweep.cellKey] = true
+	end
+
+	local function consider(cellKey)
+		if seen[cellKey] then return end
+		seen[cellKey] = true
+
+		if petports_navSwept(profile, cellKey) ~= nil then return end
+
+		local bx, by = string.match(cellKey, "^(-?%d+),(-?%d+)$")
+		if bx == nil then return end
+
+		--  OUT OF COVERAGE IS NOT A CANDIDATE. It stays in the graph if some
+		--  earlier sweep found it -- an edge is an edge -- but nothing goes and
+		--  surveys it, so the frontier cannot walk off across the planet.
+		if not navInCoverage(tonumber(bx), tonumber(by)) then return end
+
+		--  CELL CENTRES, not anchors. An anchor costs a scan to derive and this
+		--  is only ranking candidates -- the sweep will compute the real one.
+		local dx = (tonumber(bx) + 0.5) * PETPORTS_NAV_CELL - here[1]
+		local dy = (tonumber(by) + 0.5) * PETPORTS_NAV_CELL - here[2]
+
+		table.insert(found, {
+			cx = tonumber(bx), cy = tonumber(by),
+			key = cellKey,
+			distance = dx * dx + dy * dy
+		})
+	end
+
+	for from, tos in pairs(graph.fine) do
+		consider(from)
+		for _, to in ipairs(tos) do consider(to) end
+	end
+
+	--  NEAREST FIRST, tie-broken on the key because table.sort is not stable.
+	table.sort(found, function(a, b)
+		if a.distance ~= b.distance then return a.distance < b.distance end
+		return a.key < b.key
+	end)
+
+	if limit ~= nil then
+		while #found > limit do table.remove(found) end
+	end
+
+	return found
+end
+
+--  The single best candidate, kept for evals and for reading.
+function petports_navNextCell(freeMover)
+	local candidates = petports_navCandidates(1)
+	if #candidates == 0 then return nil, nil, "no unswept cell in the graph" end
+	return candidates[1].cx, candidates[1].cy, candidates[1].key
+end
+
+--  How many candidates a unit will try before giving up for this interval.
+--
+--  A LIST RATHER THAN ONE PICK, BECAUSE ONE PICK DOES NOT PARALLELISE. Every
+--  unit ranks by distance from ITSELF, and units cluster -- the leash keeps
+--  them near their port by design. So eight units in one room all choose the
+--  same nearest cell, one wins the claim, and the other seven idle for a whole
+--  interval and then choose it again. They convoy instead of splitting the
+--  work, and adding units makes the survey no faster.
+--
+--  Walking down the ranked list on refusal fixes it with no coordination: the
+--  second unit takes the second-nearest cell, and so on. The claim is still the
+--  thing that decides; this only stops a refusal from wasting the tick.
+--
+--  CAPPED, because each attempt is a claim read and a swept lookup, and a unit
+--  that cannot find work in four tries can afford to wait two seconds.
+local NAV_CLAIM_ATTEMPTS = 4
+
+--  HOW MANY STALE OUT-OF-COVERAGE CELLS ARE DROPPED PER PASS.
+--
+--  A CELL THAT LEAVES COVERAGE IS DEAD DATA FOREVER OTHERWISE. Coverage moves
+--  -- a port is mined, a network splits -- and the cells it used to own can
+--  never be re-swept, so their sweptAt simply ages past NAV_SWEEP_TTL and sits
+--  in the world properties for the life of the world.
+--
+--  THE TWO CONDITIONS TOGETHER, NEVER EITHER ALONE. Out of coverage but FRESH
+--  is a cell the network just released and may reclaim, and dropping it would
+--  throw away a survey that is still true. Stale but IN coverage is simply a
+--  cell due for re-survey -- that is what the TTL is for, and purging it would
+--  make the tree rebuild from nothing on a timer.
+--
+--  A FEW PER PASS, NOT ALL. This walks the index, which is the one structure
+--  every unit reads fresh; doing the whole thing at once on a large base would
+--  be a spike on a two-second timer for work that has no deadline at all.
+local NAV_PURGE_PER_PASS = 4
+
+local function navPurgeDeadzones(profile)
+	local index = navIndexRead()
+	local cells = index[profile]
+
+	if type(cells) ~= "table" then return 0 end
+
+	local now = world.time()
+	local dropped = 0
+
+	for cellKey, sweptAt in pairs(cells) do
+		if dropped >= NAV_PURGE_PER_PASS then break end
+
+		local bx, by = string.match(cellKey, "^(-?%d+),(-?%d+)$")
+
+		if bx ~= nil and type(sweptAt) == "number"
+		   and (now - sweptAt) > NAV_SWEEP_TTL
+		   and not navInCoverage(tonumber(bx), tonumber(by)) then
+
+			pcall(world.setProperty, navCellProperty(profile, cellKey), nil)
+			cells[cellKey] = nil
+
+			self.petportsNavCellCache = self.petportsNavCellCache or {}
+			self.petportsNavCellCache[navCellProperty(profile, cellKey)] = nil
+
+			dropped = dropped + 1
+		end
+	end
+
+	if dropped > 0 then
+		navIndexWrite(index)
+		self.petportsNavGraph = nil
+
+		sb.logInfo("NAV purged %s stale out-of-coverage cell(s) for %s",
+			sb.printJson(dropped), tostring(profile))
+	end
+
+	return dropped
+end
+
+--  How often an idle unit looks for something to survey. Not every tick: the
+--  lookup walks the whole edge set, and there is no hurry -- a cell that goes
+--  unswept for a few seconds costs nothing.
+local NAV_TICK_INTERVAL = 2.0
+
+--  ONE STEP OF BACKGROUND SURVEYING, CALLED FROM AN IDLE UNIT.
+--
+--  A RUNNING SWEEP IS STEPPED EVERY TICK; a new one is only LOOKED FOR on the
+--  interval. Those are different costs -- a step is one explore call, a search
+--  is a pass over the edge set -- and pacing them together would either make
+--  the survey crawl or make the search constant.
+--
+--  IT DOES NOT CHECK IDLENESS ITSELF. The caller does, because the caller is
+--  the thing that knows what the unit is doing, and a predicate here would be a
+--  second answer to a question petportsTaskAction already answers.
+function petports_navTick(dt, ownerId)
+	--  BEFORE THE STEP, so the pair currently in flight is drawn even on the
+	--  tick it resolves and clears itself.
+	petports_navDebugDraw()
+
+	--  STEP EVERY RUNNING SWEEP, EVERY TICK. Only the SEARCH for new cells is
+	--  on the interval below; stepping is one explore call per slot and must not
+	--  wait two seconds between resumes.
+	petports_navSweepStep()
+
+	--  AND KEEP STEPPING WITHOUT LOOKING FOR MORE while the roster is full.
+	--  Topping up is a walk over the edge set, and there is nothing to top up.
+	if petports_navSweepCount() >= PETPORTS_NAV_SWEEPS then return true end
+
+	self.petportsNavTimer = (self.petportsNavTimer or 0) - (dt or 0)
+	if self.petportsNavTimer > 0 then return false end
+	self.petportsNavTimer = NAV_TICK_INTERVAL
+
+	--  ON THE SAME TIMER AS THE SEARCH, and before it: a purge can only make
+	--  the candidate list shorter or leave it alone, never longer, so doing it
+	--  first costs nothing and keeps the graph the search walks smaller.
+	navPurgeDeadzones(petports_navProfile())
+
+	local candidates = petports_navCandidates(NAV_CLAIM_ATTEMPTS)
+
+	if #candidates == 0 then
+		--  SAID ONCE, THEN NEVER AGAIN UNTIL SOMETHING CHANGES.
+		--
+		--  THE SURVEY DOES TERMINATE, and until now nothing announced it. New
+		--  cells only enter the frontier as endpoints of edges from swept
+		--  cells, so once every known cell is swept nothing new can arrive --
+		--  the graph has closed over the walkable region reachable in
+		--  PETPORTS_NAV_RADIUS hops from the seed. That is genuinely done, not
+		--  stalled, and the two look identical from outside.
+		--
+		--  CLEARED ON ANY START BELOW, so walking the unit into new ground and
+		--  re-opening the frontier announces itself again rather than
+		--  completing in silence.
+		if not self.petportsNavComplete then
+			self.petportsNavComplete = true
+
+			local _, edges, reachable = petports_navStats()
+
+			sb.logInfo("NAV survey COMPLETE for %s -- every known cell swept, "
+				.. "%s edge(s), %s reachable",
+				tostring(petports_navProfile()), sb.printJson(edges),
+				sb.printJson(reachable))
+		end
+
+		return false
+	end
+
+	--  FILL EVERY FREE SLOT IN THE ROSTER, not just one.
+	--
+	--  DOWN THE LIST ON REFUSAL. See NAV_CLAIM_ATTEMPTS: a refusal means the
+	--  cell is already swept or another unit got there first, and either is a
+	--  reason to take the NEXT cell rather than to stop.
+	--
+	--  THE FREE INDEX IS FOUND, NOT COUNTED. Sweeps finish out of order, so the
+	--  roster is sparse -- and an index is what decides a sweep's probe slots,
+	--  so reusing a live one would have two sweeps sharing search state.
+	local started = false
+
+	for _, cell in ipairs(candidates) do
+		if petports_navSweepCount() >= PETPORTS_NAV_SWEEPS then break end
+
+		local index = nil
+		for i = 1, PETPORTS_NAV_SWEEPS do
+			if (self.petportsNavSweeps or {})[i] == nil then index = i break end
+		end
+
+		if index == nil then break end
+
+		if petports_navSweepStart(cell.cx, cell.cy, ownerId, index) then
+			self.petportsNavComplete = false
+			started = true
+
+			sb.logInfo("NAV surveying %s (sweep %s of %s)", cell.key,
+				sb.printJson(index), sb.printJson(PETPORTS_NAV_SWEEPS))
+		end
+	end
+
+	if started then return true end
+
+	--  ALL REFUSED, AND THAT IS NOT LOGGED. "already swept" and "claimed by
+	--  another unit" are the normal outcome of several units sharing a base,
+	--  and a line per refusal per unit per interval would bury everything else.
+	return false
+end
+
+--  Where the survey has got to. For a log line or an eval, not for logic.
+function petports_navProgress()
+	local profile = petports_navProfile()
+	local graph = navGraphFor(profile)
+
+	local cells, swept = 0, 0
+	local seen = {}
+
+	local function count(cellKey)
+		if seen[cellKey] then return end
+		seen[cellKey] = true
+
+		cells = cells + 1
+		if petports_navSwept(profile, cellKey) ~= nil then swept = swept + 1 end
+	end
+
+	for from, tos in pairs(graph.fine) do
+		count(from)
+		for _, to in ipairs(tos) do count(to) end
+	end
+
+	local _, edges, reachable = petports_navStats()
+
+	local sweeping = {}
+	for _, sweep in pairs(self.petportsNavSweeps or {}) do
+		table.insert(sweeping, sweep.cellKey)
+	end
+	table.sort(sweeping)
+
+	return {
+		profile = profile,
+		cells = cells,
+		swept = swept,
+		frontier = cells - swept,
+		edges = edges,
+		reachable = reachable,
+		sweeping = sweeping
+	}
+end
+
+--  CLEAR EVERYTHING, FOR A COLD TEST.
+--
+--  THE INDEX IS WHAT MAKES THIS POSSIBLE. Sharding means there is no single key
+--  to delete, and world properties cannot be enumerated -- so without the index
+--  a wipe would leave orphaned shards that nothing could ever find or clear,
+--  and the next survey would silently inherit them.
+function petports_navWipe()
+	local index = navIndexRead()
+	local cleared = 0
+
+	for profile, cells in pairs(index) do
+		for cellKey in pairs(type(cells) == "table" and cells or {}) do
+			pcall(world.setProperty, navCellProperty(profile, cellKey), nil)
+			cleared = cleared + 1
+		end
+	end
+
+	pcall(world.setProperty, NAV_INDEX, nil)
+
+	self.petportsNavPending = {}
+	self.petportsNavPendingCount = 0
+	self.petportsNavFlushAt = nil
+	self.petportsNavCellCache = {}
+	self.petportsNavGraph = nil
+	self.petportsNavComplete = false
+	self.petportsNavVersion = (self.petportsNavVersion or 0) + 1
+
+	sb.logInfo("NAV wiped %s cell shard(s) and the index", sb.printJson(cleared))
+
+	return cleared
 end
 
 --  ------------------------------------------------------------- SELF TEST
@@ -1142,12 +2338,7 @@ end
 function petports_navSelfTest(wipe)
 	stampOnce()
 
-	if wipe ~= false then
-		pcall(world.setProperty, NAV_KEY, nil)
-		self.petportsNavPending = {}
-		self.petportsNavPendingCount = 0
-		self.petportsNavFlushAt = nil
-	end
+	if wipe ~= false then petports_navWipe() end
 
 	local here = mcontroller.position()
 	local cx, cy = petports_navCell(here)

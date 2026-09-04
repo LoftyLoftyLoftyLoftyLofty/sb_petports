@@ -171,7 +171,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-04i clearance test removed"
+local BUILD_STAMP = "2026-09-04j idle units survey for coarse nav"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -4886,6 +4886,33 @@ function petportsTaskAction.update(dt, stateData)
   --  state holds the unit, whichever branch below the tick leaves through.
   --  Nothing it does can change what that branch decides.
   runAndMunch(dt, task)
+
+  --  BACKGROUND SURVEYING FOR COARSE NAV, AND ONLY WHILE IDLE.
+  --
+  --  THE SAME PREDICATE runAndMunch USES, and deliberately not a list of task
+  --  types: an idle unit is one with no task, or one carrying the leash's hold
+  --  task, and testing that directly is what stops this breaking silently the
+  --  next time a work generator is added.
+  --
+  --  PUMPED FROM HERE FOR THE REASON petports_think IS. This runs on every tick
+  --  the action state holds the unit, which includes station-keeping -- and an
+  --  idle unit standing on its port is precisely the one with cycles to spare.
+  --  petBehavior.run() would have been wrong for the same reason it was wrong
+  --  for the spinner: its cadence is the querySurroundings cooldown, not a tick.
+  --
+  --  THE CLAIM OWNER IS THE UNIT ITSELF, not its port. A survey is not port
+  --  work -- it is not dispatched, nothing reports it, and the unit may be
+  --  surveying ground outside its own network. entity.uniqueId() is stable for
+  --  the unit's life and releases naturally through the claim TTL if it dies
+  --  mid-sweep.
+  --
+  --  IT CANNOT DELAY A DISPATCH. A sweep step is one A* explore call and the
+  --  branch below is untouched by it; a unit handed real work simply stops
+  --  being idle, and the half-finished sweep is abandoned by the next
+  --  navSweepStart rather than held open.
+  if petports_navTick ~= nil and munchMayHold(task) then
+    petports_navTick(dt, entity.uniqueId())
+  end
 
   --  HAND THE STATE BACK WHEN REAL WORK ARRIVES.
   --
