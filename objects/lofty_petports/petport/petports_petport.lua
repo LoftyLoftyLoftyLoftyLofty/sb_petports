@@ -1390,7 +1390,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-03o efficiency in minutes, not multipliers"
+local PETPORT_BUILD_STAMP = "2026-09-03r fewer fish, staggered lures, honest drain"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -1436,6 +1436,21 @@ function init()
     --  up. Nothing in dispatch reads it.
     self.fishRarity = rarity
 
+    --  AND PUBLISH IT TO THE NETWORK. Every member's port reads this table, so
+    --  a fish is dispatchable by whichever unit is nearest rather than only by
+    --  ours -- see fishWork. self.fishId stays because the port still owns the
+    --  LURE, and the lure's own messages are addressed to us.
+    petports_fishPublish(stationUniqueId(), {
+      id = fishId,
+      type = fishType,
+      rarity = rarity,
+      --  [2] IS THE MAX, DELIBERATELY -- see FISHING_LURE_LIFETIME. This is a
+      --  backstop against a port that died without withdrawing, not a
+      --  prediction of when this fish dies, so it has to bound the longest lure
+      --  that could have spawned it.
+      expires = world.time() + FISHING_LURE_LIFETIME[2]
+    })
+
     sb.logInfo("PETPORT %s has a fish: %s (%s, %s)",
       stationUniqueId(), sb.printJson(fishId), tostring(fishType),
       tostring(rarity or "unknown rarity"))
@@ -1449,6 +1464,11 @@ function init()
       self.fishId = nil
       self.fishType = nil
       self.fishRarity = nil
+
+      --  AND WITHDRAW IT FROM THE NETWORK AT ONCE. Another member may be about
+      --  to dispatch at this id; the expiry is a backstop for a port that
+      --  crashed, not the ordinary path.
+      petports_fishClearOwner(stationUniqueId())
 
       sb.logInfo("PETPORT %s fish %s is gone", stationUniqueId(),
         sb.printJson(fishId))
@@ -2488,6 +2508,13 @@ function uninit()
   --  either way: on unload it would be orphaned anyway, and this port clears
   --  its own claims on the next init regardless.
   abandonTask("petport unloading")
+
+  --  THE FISH ENTRY GOES HERE, NOT IN die(), AND THAT IS THE OPPOSITE OF THE
+  --  REGISTRY ENTRY ABOVE. A registry entry must survive a world unload or the
+  --  network would rebuild itself from nothing on every reload. A fish entry
+  --  must NOT: the lure and its fish die with the chunk, so anything left
+  --  behind is a dead entity id that another member would dispatch at.
+  petports_fishClearOwner(stationUniqueId())
 
   --  A marker outliving the port that owns it would sit over a drop nothing is
   --  coming for -- worse than no marker, because it asserts something false.
@@ -4088,7 +4115,31 @@ FISHING_LURE = "petports_fishinglure"
 --  which nils its fish's lureId, which lets the fish despawn itself. Nothing --
 --  not this port, not a saved table -- has to remember either of them exists,
 --  and an orphan left by a crash or a chunk unload resolves itself.
-FISHING_LURE_LIFETIME = 150
+--
+--  A RANGE, NOT A NUMBER, AND THE SPREAD IS THE WHOLE POINT.
+--
+--  It was a flat 150. Every port on a network places its first lure within a
+--  tick or two of the others -- they all publish at their first update -- so a
+--  flat lifetime meant every lure in the base EXPIRED IN THE SAME SECOND and
+--  then replaced itself in the same second. Fishing arrived in a pulse rather
+--  than a stream.
+--
+--  THE REPLACEMENT KEEPS THE PHASE, WHICH IS WHY IT NEVER SETTLED ON ITS OWN. A
+--  lure that dies at t is replaced at t and dies again at t plus its lifetime.
+--  Nothing in the loop introduces jitter, so an alignment established in the
+--  first second of a world survives for as long as the base stands.
+--
+--  TWO TO FIVE MINUTES. Wide enough that two lures drift apart within their
+--  first couple of lives, and the floor is still comfortably longer than the
+--  spawn-plus-catch-plus-deposit cycle it has to contain.
+--
+--  ITS MAX IS THE TTL ON THE NETWORK'S FISH ENTRY, AND IT MUST BE THE MAX
+--  RATHER THAN THE DRAW. A fish cannot outlive its lure, so an entry older than
+--  the LONGEST a lure can live is describing something that cannot exist --
+--  which keeps that bound a consequence of this line rather than a second thing
+--  to tune. Reading a fresh draw there would expire entries out from under fish
+--  belonging to a lure that happened to roll long. See petports_fishPublish.
+FISHING_LURE_LIFETIME = { 120, 300 }
 
 --  HOW LONG A UNIT KEEPS REACHING FOR A FISH ONCE IT HAS ARRIVED. Ten seconds
 --  against the 3-second default every other task takes, because a fish is the
@@ -6112,6 +6163,12 @@ local function fishingCheck()
     self.fishId = nil
     self.fishType = nil
     self.fishRarity = nil
+
+    --  AND OUT OF THE NETWORK'S TABLE WITH IT, for exactly the reason above:
+    --  a dismissed lure will not be alive to send petports_fishGone, and until
+    --  the entry goes every other member still reads this port as holding a
+    --  fish.
+    petports_fishClearOwner(stationUniqueId())
     return
   end
 
@@ -6140,8 +6197,14 @@ local function fishingCheck()
   --  the registry has not answered yet.
   local rects = fishingRects()
 
+  --  ONE DRAW PER LURE, TAKEN HERE SO THE LOG CAN NAME IT. Rolling inside the
+  --  table constructor would place a lure whose lifetime nothing ever printed,
+  --  and "why did that one last twice as long" is the first question a spread
+  --  like this invites.
+  local lifetime = util.randomInRange(FISHING_LURE_LIFETIME)
+
   local parameters = {
-    timeToLive = FISHING_LURE_LIFETIME,
+    timeToLive = lifetime,
     petports_coverage = rects,
     petports_fishParameters = FISHING_FISH_PARAMETERS
   }
@@ -6161,7 +6224,7 @@ local function fishingCheck()
     sb.logInfo("PETPORT %s fishing lure %s placed at %s for %ss -- %s, across "
       .. "%s network rect(s)",
       stationUniqueId(), sb.printJson(result), sb.printJson(spot),
-      sb.printJson(FISHING_LURE_LIFETIME), tostring(tier),
+      sb.printJson(lifetime), tostring(tier),
       sb.printJson(#rects))
   else
     sb.logInfo("PETPORT %s failed to place a fishing lure at %s: %s",
@@ -6230,29 +6293,40 @@ end
 --  its lure and despawns -- so a dispatch that is merely slow is a dispatch that
 --  produces nothing. That is why it sits above harvest in the ladder.
 --
---  ONE FISH, AND THE PORT DOES NOT CHOOSE IT. The lure spawns at most one and
---  reports it; this generator has nothing to search and nothing to rank. That is
---  also why there is no reject-reason tally like animalWork's -- there is only
---  ever one candidate and one reason.
+--  EVERY MEMBER'S LURE, NOT JUST OURS.
 --
---  NO CLAIM YET, DELIBERATELY. Two ports sharing water each run their own lure
---  and their own fish, so there is no contention to arbitrate: a fish belongs to
---  the lure that spawned it and the port that owns that lure. A claim becomes
---  necessary the day a fish is visible to a port that did not spawn it, which is
---  also when it wants a target marker -- see the backlog entry for both.
+--  This read `self.fishId` and nothing else, so a unit could only ever be sent
+--  at a fish its OWN port's lure had reported. Two ports on one pond therefore
+--  fished past each other: each ignored a catchable fish four tiles away and
+--  waited on its own lure to produce another.
+--
+--  IT WAS ALWAYS THE ODD ONE OUT. `arch.dispatch.union` says every port scans
+--  the whole network's coverage and a union is a VIEW assembled at dispatch
+--  time; every other generator already walks `self.networkRects`, and even the
+--  LURE is placed anywhere in the network. Only the report was port-local, so
+--  the fish was already network-wide in position and port-local in ownership.
+--
+--  THE CLAIM ARBITRATES, AND IT IS ENOUGH.
+--
+--  Checked INSIDE the walk, not after it, which is what makes two ports spread
+--  across two fish rather than race for one: a fish another member holds is
+--  skipped and the ranking moves on to the next. A rung that tested the claim
+--  after picking a winner would refuse the whole tick instead, which is the
+--  starvation `dispatchable()` exists to prevent.
+--
+--  NO DISTANCE VETO, AND THAT IS A DEPARTURE FROM `anotherUnitIsCloser`.
+--
+--  Drops can afford one because DEFER_GRACE lets a deferred drop be taken
+--  anyway after twelve seconds -- the work waits. A fish does not wait. Standing
+--  aside for a unit that turns out to be walled off does not cost this rung a
+--  delay, it costs the catch outright, and a caged unit permanently nearest the
+--  water would mean the network never fishes again. Ranking by distance and
+--  letting the claim decide the tie is the same arbitration with no way to
+--  deadlock: the loser skips to the next fish, and a bad pick times out and
+--  backs off on its own.
 local function fishWork()
   local canFish, why = petportCanFish()
   if not canFish then return nil, why end
-
-  if self.fishId == nil then
-    return nil, "no fish in the water yet"
-  end
-
-  if not world.entityExists(self.fishId) then
-    --  Timed out or despawned between the lure's report and this tick. The
-    --  lure will notice on its own update and send petports_fishGone.
-    return nil, "the fish is gone"
-  end
 
   --  A UNIT ALREADY CARRYING SOMETHING DOES NOT GO FISHING.
   --
@@ -6260,6 +6334,10 @@ local function fishWork()
   --  returns at most one, so the honest rule is "start empty" rather than
   --  "leave room" -- there is no way to know in advance how much room a treasure
   --  pool will need, and depositing first is cheap.
+  --
+  --  ASKED ONCE, ABOVE THE WALK. It is a fact about the unit rather than about
+  --  any one fish, so a loaded unit declines the rung instead of every candidate
+  --  in it.
   local cargo = self.petData and self.petData.cargo
   if cargo ~= nil and #cargo > 0 then
     return nil, string.format(
@@ -6267,30 +6345,150 @@ local function fishWork()
       sb.printJson(#cargo))
   end
 
-  local workId = "fish:" .. self.fishId
-  local failure = self.workFailures[workId]
-  if failure ~= nil and (failure["until"] or 0) > world.time() then
-    return nil, "backed off from this fish after a failure"
+  local published = petports_fishAll()
+  local now = world.time()
+
+  --  Distance is measured from the UNIT, not the port -- it is the unit that
+  --  swims. Same rule as the drop generator, and the port is the fallback for
+  --  the tick where the unit is between spawns.
+  local from = entity.position()
+  if self.petId ~= nil and world.entityExists(self.petId) then
+    from = world.entityPosition(self.petId) or from
   end
 
-  local position = world.entityPosition(self.fishId)
-  if position == nil then return nil, "the fish has no position" end
+  --  IS THE FISH STILL SOMEWHERE THE UNIT IS ALLOWED TO GO?
+  --
+  --  THE PORT NEVER ASKED THIS AND THE UNIT ASKS IT EVERY TICK, WHICH IS THE
+  --  WHOLE BUG. `petportsTaskAction.update` bails a fish task the moment
+  --  `petports_inNetwork(fishAt)` is false -- checked per tick, deliberately,
+  --  because a fish covers ground fast. Nothing on this side tested it at all:
+  --  `RECT_CHECKED_TYPES` holds only `diag`, so `dispatchable()` waves fish
+  --  through, and this generator returned a position without looking at it.
+  --
+  --  So the port could hand out a task the unit was GUARANTEED to refuse on its
+  --  first tick. Measured 2026-09-03: 6 of 24 dispatches, every one failing at
+  --  `moved 0` inside 200ms.
+  --
+  --  IT IS NOT A REGRESSION FROM NETWORK-WIDE FISH, though that is what made it
+  --  visible. Both halves shipped together in `fishing ix part 2` and the
+  --  committed `fishWork` has no rect test of any kind. The first dispatch in
+  --  the log that found it was a port at its OWN lure's fish, one offered --
+  --  the pre-change path exactly.
+  --
+  --  NESTED, NOT CHUNK-LEVEL. This file is at 159 of Lua 5.1's 200 chunk-level
+  --  locals and the failure when it lands is at LOAD. A five-line predicate with
+  --  one caller does not get one of the 41 that are left.
+  --
+  --  `fishingRects()`, WHICH IS THE NETWORK'S RECTS AND NOT `coverageRect()`.
+  --  Union dispatch means a unit may work anywhere in the network, so testing
+  --  our own rect would refuse a fish sitting perfectly reachable in a member's
+  --  water. Same list the lure is clamped to and the same list the unit was
+  --  handed, so all three agree by construction.
+  local function reachableWater(position)
+    for _, area in ipairs(fishingRects()) do
+      if petports_rectContains(area, position) then return true end
+    end
+    return false
+  end
 
-  sb.logInfo("PETPORT %s FISH dispatch: %s#%s (%s) at %s",
-    stationUniqueId(), tostring(self.fishType), sb.printJson(self.fishId),
-    tostring(self.fishRarity or "unknown rarity"), sb.printJson(position))
+  local best, bestDistance = nil, nil
+  local offered = 0
+  local rejected = { expired = 0, gone = 0, claimed = 0, backedOff = 0,
+    outside = 0 }
+
+  --  MEMBER IDS, NOT MEMBER ENTRIES. An entry's `id` is the NETWORK id, not the
+  --  port's -- see petports_networkMemberIds, which exists because that mistake
+  --  returns a plausible number rather than nil.
+  for _, memberId in ipairs(petports_networkMemberIds(stationUniqueId())) do
+    local entry = published[memberId]
+
+    if entry ~= nil and entry.id ~= nil then
+      offered = offered + 1
+
+      local workId = "fish:" .. entry.id
+      local claim = petports_claimGet(workId)
+      local failure = self.workFailures[workId]
+
+      --  Our own live claim is fine to re-take; another owner's is not.
+      local free = (claim == nil)
+        or claim.owner == stationUniqueId()
+        or (claim.expires or 0) <= now
+
+      if (entry.expires or 0) <= now then
+        --  A port that never withdrew its entry. The sweep will drop it; this
+        --  rung must not dispatch at it in the meantime.
+        rejected.expired = rejected.expired + 1
+      elseif not world.entityExists(entry.id) then
+        --  Timed out or despawned between its port's report and this tick. That
+        --  port's lure will notice on its own update and withdraw it.
+        rejected.gone = rejected.gone + 1
+      elseif failure ~= nil and (failure["until"] or 0) > now then
+        rejected.backedOff = rejected.backedOff + 1
+      elseif not free then
+        rejected.claimed = rejected.claimed + 1
+      else
+        local position = world.entityPosition(entry.id)
+
+        if position == nil then
+          rejected.gone = rejected.gone + 1
+
+        --  AFTER THE POSITION READ AND BEFORE THE DISTANCE, which is the only
+        --  place it can go: it needs the position, and ranking a fish nobody
+        --  may swim to could win the rung and end the tick.
+        elseif not reachableWater(position) then
+          rejected.outside = rejected.outside + 1
+        else
+          local distance = world.magnitude(from, position)
+
+          if bestDistance == nil or distance < bestDistance then
+            best = { entry = entry, port = memberId, position = position }
+            bestDistance = distance
+          end
+        end
+      end
+    end
+  end
+
+  if best == nil then
+    if offered == 0 then
+      return nil, "no fish in the water anywhere in the network"
+    end
+
+    return nil, string.format(
+      "%s fish in the network, none takeable: %s held by another port, "
+      .. "%s backed off after a failure, %s outside network coverage, %s gone, "
+      .. "%s from a port that stopped reporting",
+      sb.printJson(offered), sb.printJson(rejected.claimed),
+      sb.printJson(rejected.backedOff), sb.printJson(rejected.outside),
+      sb.printJson(rejected.gone), sb.printJson(rejected.expired))
+  end
+
+  --  THE OWNING PORT IS NAMED, and it is the whole point of this log line.
+  --  "which lure" is the first question anyone asks of a cross-port dispatch,
+  --  and without it a unit swimming out of its own rect looks like a leash bug.
+  sb.logInfo("PETPORT %s FISH dispatch: %s#%s (%s) at %s, %s away, from %s's "
+    .. "lure (%s offered)",
+    stationUniqueId(), tostring(best.entry.type), sb.printJson(best.entry.id),
+    tostring(best.entry.rarity or "unknown rarity"),
+    sb.printJson(best.position), sb.printJson(bestDistance),
+    tostring(best.port), sb.printJson(offered))
 
   return {
-    id = workId,
+    id = "fish:" .. best.entry.id,
     type = "fish",
     port = stationUniqueId(),
-    target = self.fishId,
-    position = position,
+    target = best.entry.id,
+    position = best.position,
 
     --  CARRIED FOR THE UNIT AND FOR THE STATISTICS. fishType is what the unit
     --  reads landedTreasurePool from; fishRarity is only ever counted.
-    fishType = self.fishType,
-    fishRarity = self.fishRarity,
+    --
+    --  READ OFF THE ENTRY, NOT OFF `self`. Those two agree only while the fish
+    --  came from our own lure, and the whole change above is that it no longer
+    --  has to -- a cross-port dispatch reading self.fishType would roll the
+    --  wrong treasure pool and bank the catch under the wrong tier.
+    fishType = best.entry.type,
+    fishRarity = best.entry.rarity,
 
     --  THE ARRIVAL RETRY BUDGET. Without this the unit gets the 3-second
     --  default, which is short for a target that is itself chasing something
@@ -12263,7 +12461,29 @@ local function fuelWork()
   --  What was in the output slots nobody would take, for the message at the
   --  bottom. Deduplicated because two machines making spicy treats is one
   --  filter problem, not two.
-  local refusedNames = {}
+  --
+  --  TWO LISTS, BECAUSE THE TWO REFUSALS WANT OPPOSITE RESPONSES.
+  --
+  --  "no beacon's filter accepts this" is a CONFIGURATION fault: nothing in the
+  --  network is willing to store the item, and it will still be true in an hour
+  --  with ten more units. The player has to tick a box.
+  --
+  --  "every crate that accepts it is full" is a THROUGHPUT signal: the filters
+  --  are right and the crates are simply full, which clears itself the moment
+  --  the fleet has capacity to service them. The player adds a unit, or waits.
+  --
+  --  THEY WERE ONE STRING AND IT COST A WRONG DIAGNOSIS. `accepts %s or has
+  --  room` was not hedging -- the list was built ABOVE the destination loop, so
+  --  it could not know which test failed. Thirty-eight identical refusals in one
+  --  log were read as a filter fault and were in fact a saturated fleet: two
+  --  units on a two-lure pond, where fish outranks upcycler output because a
+  --  fish expires and a treat does not. Two more units cleared it, and nothing
+  --  in the message could have pointed there.
+  --
+  --  Same lesson as `targetSuits`' second return, one step worse: that message
+  --  named the wrong cause, this one named both and distinguished neither.
+  local unfilteredNames = {}
+  local unroomyNames = {}
   local refusedSeen = {}
 
   for _, machine in ipairs(self.machines or {}) do
@@ -12374,12 +12594,13 @@ local function fuelWork()
         local worthTaking = not isFuel
           or (held.count or 0) >= batch or full or idle or stalled
 
-        if worthTaking and not refusedSeen[held.name] then
-          refusedSeen[held.name] = true
-          table.insert(refusedNames, held.name)
-        end
-
         if not worthTaking then trickling = trickling + 1 end
+
+        --  ANSWERED BY THE LOOP BELOW, AND CLASSIFIED AFTER IT. Any destination
+        --  whose filter takes this item sets this, whatever room it has -- so
+        --  "nothing accepts it" means exactly that, and cannot be confused with
+        --  a network full of the right crates.
+        local anyFilterAccepts = false
 
         for _, destination in ipairs(worthTaking and destinations or {}) do
           if world.entityExists(destination.id)
@@ -12388,6 +12609,8 @@ local function fuelWork()
              --  testing the plain name would send a unit to a crate that will
              --  not take what it is carrying.
              and petports_filterAccepts(destination.filter, held.name) then
+
+            anyFilterAccepts = true
 
             --  nil means the engine will not answer, treated as NO. Same
             --  reasoning as tidyWork: this is optional, and guessing wrong
@@ -12458,6 +12681,18 @@ local function fuelWork()
             end
           end
         end
+
+        --  DEDUPLICATED ACROSS MACHINES, because two upcyclers making savory
+        --  treats nobody will store is one problem and not two.
+        if worthTaking and not refusedSeen[held.name] then
+          refusedSeen[held.name] = true
+
+          if anyFilterAccepts then
+            table.insert(unroomyNames, held.name)
+          else
+            table.insert(unfilteredNames, held.name)
+          end
+        end
       end
     end
   end
@@ -12475,9 +12710,36 @@ local function fuelWork()
   --  Names what was actually refused rather than the plain treat. With flavors
   --  the two differ, and "no crate accepts petports_petfuel" while the machine
   --  holds spicy ones sends a reader looking at the wrong filter.
-  return nil, string.format(
-    "%s machine(s) with output, but no deposit crate accepts %s or has room",
-    waiting, table.concat(refusedNames, ", "))
+  --
+  --  AND NAMES WHICH REFUSAL IT WAS. See the two lists at the top of this
+  --  function: one of these is a box the player has to tick and the other is a
+  --  unit they have to add, and nobody can act on a message that means either.
+  --
+  --  BOTH CAN BE TRUE AT ONCE with two machines holding different items, which
+  --  is why this joins rather than picks.
+  local parts = {}
+
+  if #unfilteredNames > 0 then
+    table.insert(parts, string.format(
+      "no deposit beacon's filter accepts %s",
+      table.concat(unfilteredNames, ", ")))
+  end
+
+  if #unroomyNames > 0 then
+    table.insert(parts, string.format(
+      "every crate that accepts %s is full",
+      table.concat(unroomyNames, ", ")))
+  end
+
+  --  A FALLBACK THAT SHOULD NEVER PRINT. waiting > 0 with both lists empty
+  --  would mean an item was worth taking, was refused, and was classified as
+  --  neither -- which is a bug in the loop above, not a state of the base.
+  if #parts == 0 then
+    table.insert(parts, "nothing was classified, which is a bug in drainWork")
+  end
+
+  return nil, string.format("%s machine(s) with output, but %s",
+    waiting, table.concat(parts, "; and "))
 end
 
 --  MERGE SPLIT STACKS IN A CRATE NOTHING ELSE IS VISITING.
@@ -13705,6 +13967,10 @@ local function workUpdate(dt)
 
   petports_claimsSweep()
 
+  --  Same sweep, same reason: a port killed mid-session leaves an entry naming
+  --  a fish that is already gone, and nothing else will ever withdraw it.
+  petports_fishSweep()
+
   --  RE-PUBLISH IF OUR OWN ENTRY HAS GONE.
   --
   --  publishRegistry otherwise runs only on the first update, so a port that
@@ -13812,6 +14078,12 @@ function update(dt)
     --  world.setUniqueId, which is why the id is established on the first
     --  update rather than at init in the first place.
     petports_claimsClearOwner(stationUniqueId())
+
+    --  And the fish entry with them, for the same reason and one more: it
+    --  names an ENTITY ID, and ids are reassigned on load. A survivor from the
+    --  last session would send a member's unit at whatever now holds that
+    --  number.
+    petports_fishClearOwner(stationUniqueId())
     ensureResidency()
     publishRegistry()
   end

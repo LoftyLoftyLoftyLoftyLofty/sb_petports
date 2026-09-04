@@ -50,113 +50,120 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-03 (traps, three ways to eat, one wider tab)
+### What is built, as of 2026-09-03 (one pond, every lure, and fewer of them)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-A SESSION SPENT ENTIRELY ON MECHANISM, DELIBERATELY. The stated aim was to nail
-down the remaining FUNCTION work so that polish is not done alongside building,
-and nothing here is polish except the pane geometry.
+ONE FEATURE, THREE RUNS, AND THE SECOND AND THIRD ARE WHERE THE VALUE IS.
 
 ---
 
-**MOTH TRAPS ARE A FARMING CLASS AND THEY WORK.** `arch.farming.traps`,
-`fact.farming.harvestable`. A trap is a plain `Object` running
-`/objects/scripts/harvestable.lua`, not a `FarmableObject`, so
-`world.farmableStage` returns nil for it and `scanFarmables` could never see
-one. It now discovers them out of the SAME query -- "has `stages`, the last of
-which carries a `harvestPool`" -- ripens them on an `activeAge()` threshold, and
-harvests by calling `dropHarvest` rather than by swinging. Measured:
-`mothtrap#36 age 192 of 190 RIPE`, then a dispatch and a pick.
+**A FISH BELONGS TO THE NETWORK NOW, NOT TO THE LURE THAT SPAWNED IT.**
+`arch.fishing.network`. `fishWork` read `self.fishId` and nothing else, so a unit
+could only be sent at a fish its OWN port's lure reported -- two ports on one
+pond ignored each other's catchable fish.
 
-**SWINGING AT A TRAP WOULD HAVE DESTROYED IT AND LOOKED LIKE SUCCESS**, because
-`harvestable.lua`'s `die()` also drops the harvest. That is the single most
-important line in `arch.farming.traps`.
+**IT WAS A MISSING VIEW, NOT A MISSING CAPABILITY.** The lure was ALREADY placed
+across `fishingRects()` and already clamped its patrol to the whole network, so
+the fish was network-wide in POSITION and port-local only in OWNERSHIP. The last
+generator that had never had the `arch.dispatch.union` treatment.
 
-`FARMING_CLASSES` is five now. The pane row reads "Moth Traps, etc.", and
-"Traps emptied" sits in the stats block.
-
----
-
-**PETS EAT FOOD OFF THE FLOOR AGAIN, BY THREE MECHANISMS THAT COMPOSE.**
-`arch.fuel.groundfeed`, `arch.fuel.runandmunch`. `dd.fuel.selffeed` named three
-sources and only two existed; all three do now.
-
-  - `nibbleFromCargo` -- a FEEDER, not a generator. Under the mark and holding a
-    treat means it eats where it stands.
-  - `fuelGroundWork` -- dispatches an ORDINARY `collect` at a treat drop. No new
-    task type, no new act.
-  - `runAndMunch` -- a 1s / 3-tile radius check in the unit's own `update`, which
-    interrupts nothing and covers the unit that is mid-errand.
-
-MEASURED, all branches: a unit at zero took 203 plain treats, ate 15 (exactly
-900) and deposited 188; a unit on `upcycle:32` took 188, ate 14 and put 174 back
-on the floor, which was then collected and deposited on the lap back.
-
-**THE UPCYCLER PATH CAME FREE** because `nibbleFromCargo` is a feeder and
-catches a treat arriving in cargo from any source -- machine output included,
-measured at 69ms after the tidy.
-
-**RESTORING `eatAction.lua` WOULD NEVER HAVE WORKED.** `dead.fuel.eataction`.
-With `strictPortTethering` on, no appetite can ever be picked. That is the first
-thing anyone will find and it looks like a complete answer.
-
-**A HUNGRY UNIT EATS RESTOCK STOCK, AND THAT IS THE FEATURE**, decided rather
-than tolerated -- `dd.fuel.nibblerestock`.
+`petports_fish` is a world property keyed by port. A property and not a message,
+because no port ever messages another; and not in the REGISTRY, because every
+registry write bumps a version that re-derives every network on the planet.
+Withdrawn at `uninit` and NOT at `die()` -- the opposite of the registry entry
+four lines away, because a fish entry names an entity id.
 
 ---
 
-**THE STATS TAB USES ITS TAB.** `statsScroll` went from 96px to 165 -- eight
-visible rows to exactly fifteen, sized to a whole multiple of the 11px row so
-no row is half-drawn at the bottom edge. The floor is the build stamp; every
-other widget in that column belongs to another tab.
+**RUN 1 FOUND A DISPATCH THE UNIT WAS GUARANTEED TO REFUSE.**
+`todo.fishing.outofcover`. The unit bails a fish task the moment the fish leaves
+network coverage, checked EVERY TICK; the port never checked once. 6 of 24
+dispatches, every one failing at `moved 0` inside 200ms. **Not a regression** --
+both halves shipped together in `fishing ix part 2` and the committed `fishWork`
+had no rect test at all. Fixed; `fishWork` walks `fishingRects()` before ranking.
 
-**THE "IDENTICAL RECTS" INVARIANT IS RETIRED, WITH ITS REASON WRITTEN INTO THE
-CONFIG.** The settings tab carries the rename row under its list and the stats
-tab carries nothing, so the floors are set by different things and always will
-be. Only x, width and the TOP still move together.
+**RUN 2 CONFIRMED IT AND FOUND THE REAL PROBLEM.**
+
+    dispatches   24 -> 54      catches   14 -> 48
+    success     58% -> 89%     out-of-coverage dispatches   6 -> 0
+
+Zero coverage bails. Cross-port is half of all dispatches. The 4 remaining
+failures are `fact.fishing.despawnwindow` at an unchanged rate, accepted under
+`dd.fishing.catchwindow`.
+
+**RUN 3 IS WHERE THE SESSION EARNED ITS KEEP, AND IT WAS NOT MY CATCH.**
+Upcyclers filled and were never emptied. I diagnosed it twice and was wrong
+twice -- first as a filter fault, from a log message that could not say which of
+two things it meant. **A control test settled it: two more units, and the work
+got done.** See `fact.tooling.mergedrefusal` for the reading failure, which is
+the durable half.
+
+**THE MECHANISM.** `dd.fishing.supply`. Fish ranks high because its target
+EXPIRES; upcycler output ranks low because a treat waits forever. Both correct
+per task. Under saturation the ranking stops being a preference and becomes a
+permanent exclusion. Network-wide fish multiplied the fish visible per port by
+the number of lures on the water and **moved the saturation point without anyone
+deciding to move it.**
+
+**THE LADDER IS NOT THE THING TO CHANGE.** Ranking an expiring target above a
+waiting one is right; the alternative is dropping catches. The supply was wrong,
+not the ordering.
+
+  - `spawnTimeRange` `[4, 12]` -> `[8, 24]`, a quarter of vanilla's.
+  - `FISHING_LURE_LIFETIME` `150` -> `{ 120, 300 }`, drawn per lure. A flat
+    lifetime made every lure in a base die and respawn IN THE SAME SECOND, and
+    the replacement kept the phase, so the alignment never decayed. Its **max**
+    is what the fish entry's TTL reads, and it must be the max.
+  - `drainWork`'s refusal now names WHICH test failed. "No beacon's filter
+    accepts this" and "every crate that accepts it is full" want opposite
+    responses from the player and were one string.
 
 ---
 
 **KNOWN IMPERFECT, AND DELIBERATELY LEFT:**
 
-- **THE FISHING SYSTEM IS STILL UNDOCUMENTED.** Third session running. There is
-  no `arch.*` entry for a merged spawner, a lure projectile, a module item and
-  246 lines of references. `todo.module.fishing` still calls it an
-  investigation. This is the oldest debt in the file.
-- **STATUS WAS TWO SESSIONS STALE WHEN THIS WAS WRITTEN**, and checks 10 and 11
-  could not catch it because nothing was committed between them. The gap check
-  reads `git log`, so an uncommitted session is invisible to it BY DESIGN --
-  commit the code and the doc together and it stays correctly quiet.
+- **THE RETUNE IS UNMEASURED.** The three run-3 changes have not been run. What
+  to watch: whether `drain` and `tidy` get dispatched with a two-unit fleet, and
+  whether lure placements scatter in the log instead of arriving together.
+- **THE MODULE STILL GATES CATCHING**, so network-wide fish bites only when two
+  or more ports carry modules. One line removes it and lets any submersible unit
+  fish off a single module -- a balance change, not a dispatch change.
+- **A RESTOCK REQUEST IS NOT A REASON TO EMPTY A MACHINE.** `drainWork` builds
+  its destinations from `petports_beaconsFor("deposit")` only. A base with two
+  restock beacons asking for all eight treat flavors still refuses to drain
+  treats if no DEPOSIT beacon takes them. Not filed as a todo -- it never
+  triggered, and the observed fault was throughput.
+- **THE CROSSHAIR SYSTEM HAS NO ARCHITECTURE ENTRY.** Found by chasing a
+  reference. Second such gap found that way rather than by any check.
+- **A UNIT CAN STILL BE DISPATCHED INTO MAGMA.** `todo.fishing.medium`.
+  Pre-existing; one `targetSuits` call.
+- **BACKOFF IS PORT-LOCAL**, so a fish that beat one port starts every other at
+  failure 1. `todo.fishing.backoffshared`, out of scope for 1.0.
 - **TWO PAIRS OF NUMBERS MUST AGREE AND NOTHING ENFORCES EITHER.**
-  `PANE_FUEL_MAX` against `petports_fuel.maxValue`, and now `MUNCH_LOW` against
-  `PETPORTS_FUEL_LOW` -- a port global and a monster global that cannot see each
-  other. Two instances is a pattern; it wants a linter check rather than a third
-  comment.
+  `PANE_FUEL_MAX` against `petports_fuel.maxValue`, `MUNCH_LOW` against
+  `PETPORTS_FUEL_LOW`. Wants a linter check rather than a third comment.
 - **`petports_petport.lua` IS AT 159 CHUNK-LEVEL LOCALS AGAINST LUA 5.1'S 200.**
-  41 spare, and the failure when it lands is at load. Unfiled as a fact.
-- **The feed slot is invisible.** An empty `itemslot` draws no art, so it is a
-  16x16 hitbox on bare background at `[240, 116]` on the Details tab.
-- **The trap age lock is detected, not fixed.** `todo.farming.trapagelock` -- a
-  modded harvestable omitting `activeTimeRange` is inert in vanilla too, and
-  fixing it means overwriting a vanilla Lua asset outright.
-- **`petports_amphibious.monstertype` has mixed line endings.** More broadly,
-  `todo.tooling.crlfdrift` undercounts: the whole tree is CRLF in the working
-  copy against LF in the repo blobs, which is why `git diff` reads 36k lines
-  against a 19-line change.
+  This session added none: the new shared functions are prefixed globals, the
+  coverage predicate is nested inside `fishWork`, and `FISHING_LURE_LIFETIME` is
+  a global. The failure when it lands is at load.
+- **The feed slot is invisible**, a 16x16 hitbox on bare background at
+  `[240, 116]` on the Details tab.
+- **The trap age lock is detected, not fixed.** `todo.farming.trapagelock`.
+- **`petports_amphibious.monstertype` has mixed line endings**, and
+  `todo.tooling.crlfdrift` still undercounts.
 - **`petports_petBehavior.lua` has never had a build stamp.**
 - **`PETPORTS_DIVE_DEBUG`, `FLY_POINT_DEBUG`, `PETPORTS_DRAW_DEBUG`,
   `TASK_DEBUG` and `THINK_DEBUG` are all still on.** Turn them off before
   shipping.
 
-**NEXT.** The fishing backfill, before it survives a fourth session. Then medic
-dispatch across whole-network coverage (`todo.dispatch` carry-forward, named the
-priority two sessions ago and not yet touched), the flying-unit
-partially-submerged check, and the `coverageRect()` vs `self.networkRects` grep
-across every generator -- which the two new generators in this session should be
-included in.
+**NEXT.** Run the retune. Then medic dispatch across whole-network coverage
+(`todo.dispatch` carry-forward, named the priority three sessions running and
+still not touched), the flying-unit partially-submerged check, and the
+`coverageRect()` vs `self.networkRects` grep across every generator -- still not
+done, and this session is the second reminder of it.
 
 ## ARCHITECTURE
 
@@ -1272,6 +1279,18 @@ handles mined-and-replaced.
 partitioned by id, with non-participation mutual. Members come back SORTED --
 `pairs()` order is nondeterministic and an unsorted list compares unequal to
 itself, which would re-push to the unit every tick.
+
+**AN ENTRY'S `id` IS THE NETWORK ID, NOT THE PORT'S, AND THAT MISTAKE RETURNS A
+NUMBER RATHER THAN A nil.** It is the pinned value two non-participating ports
+must share to be connected, and it is `0` on every port that never touched the
+setting -- so a lookup keyed on it in a table keyed by port silently finds
+nothing on every port at once, which reads as "the feature does not work" rather
+than as a wrong key. `petports_networkMembers` returns ENTRIES and drops the ids
+it sorted by; `petports_networkMemberIds` was added beside it for callers that
+need the key, and the flood fill was extracted into a shared local so the pair
+cannot diverge. It takes the map it already has rather than calling its sibling,
+because `anotherUnitIsCloser` calls it once per candidate and a second fill per
+call would be paid in the innermost loop in dispatch.
 
 ### The petport pane is a view over one mirrored parameter
 `arch.pane.petport` -- see also `fact.pane.threegrids`, `fact.pane.titlestamp`
@@ -4533,7 +4552,7 @@ Adding a third would break rod fishing for anyone running both.
 spawn. The roll is `math.random() + spawnBias` against 0.001 / 0.04 / 0.2 / 100,
 so at bias 0.2 legendary, rare and uncommon are not improbable -- they are
 UNREACHABLE. Fine for a rod, wrong for a port: a player burns the bias off in two
-catches, while a petport lure lives 150 seconds, holds one fish, and is replaced
+catches, while a petport lure lives two to five minutes, holds one fish, and is replaced
 by a fresh lure with a fresh spawner -- resetting the bias faster than it could
 decay. The lure passes 0. `nil` means "use the config's", so an indifferent
 caller gets upstream behaviour.
@@ -4599,7 +4618,7 @@ unloading a port kills the lure, which nils its fish's `lureId`, which lets the
 fish despawn itself. Nothing holds a reference to anything.
 
 ### One lure per port, and the port never chooses the fish
-`arch.fishing.dispatch` -- see also `arch.fishing.lure`, `arch.dispatch.eligibility`
+`arch.fishing.dispatch` -- see also `arch.fishing.lure`, `arch.fishing.network`, `arch.dispatch.eligibility`
 
 **BUILT 2026-09-01.** `lureWork` keeps exactly one lure alive while the socketed
 unit can fish; `fishWork` dispatches at whatever the lure reports.
@@ -4622,21 +4641,126 @@ indefinitely. A fish times out on its approach window, swims out of coverage, or
 loses sight of its lure and despawns -- so a dispatch that is merely slow is a
 dispatch that produces nothing.
 
-**NO CLAIM, DELIBERATELY.** Two ports sharing water each run their own lure, and
-there is only ever one candidate and one reason -- which is also why there is no
-reject-reason tally like `animalWork`'s.
+**~~NO CLAIM, DELIBERATELY.~~ SUPERSEDED 2026-09-03 by `arch.fishing.network`.**
+It read: two ports sharing water each run their own lure, and there is only ever
+one candidate and one reason -- which is also why there is no reject-reason tally
+like `animalWork`'s.
 
-**SPAWN RATE WAS HALVED FROM VANILLA'S.** `spawnTimeRange` is `[4, 12]` against
+That was true of the REPORT and was never true of the WATER. The lure was
+already placed anywhere in the network, so two ports on one pond were already
+spawning fish into each other's coverage; only the report was port-local, and
+what looked like an absence of contention was an absence of VISIBILITY. There is
+now a claim, a rank and a reject tally, and this entry's own condition for
+needing one -- "the day a fish is visible to a port that did not spawn it" --
+turned out to have been met on the day it was written.
+
+**SPAWN RATE IS A QUARTER OF VANILLA'S, AND THE LURE'S LIFE IS NOW A RANGE.**
+Retuned 2026-09-03 -- see `dd.fishing.supply` for why, which is the more useful
+entry. `spawnTimeRange` is `[8, 24]` and `FISHING_LURE_LIFETIME` is
+`{ 120, 300 }`, drawn once per lure. The original reasoning, written when it was
+`[4, 12]` against
 vanilla's `{2, 6}`: a rod assumes a player casting, reeling and walking away,
-while a petport lure sits for 150 seconds and a unit catches in one to four. At
+while a petport lure sits for minutes and a unit catches in one to four. At
 vanilla's rate the loop filled crates in minutes. It was never the only limiter
--- the lure holds one fish and the port refuses a carrying unit -- so doubling it
-lengthens the first term only and halves throughput rather than quartering it.
+-- the lure holds one fish and the port refuses a carrying unit -- so lengthening
+it stretches the first term only and does not scale throughput one for one.
 
 **STATS ARE PER RARITY, ALWAYS SHOWN INCLUDING AT ZERO.** `fished` plus
 `fishedTiers`, walked out of the stats table. `FISH_RARITIES` is hardcoded in the
 pane because the tiers are NOT ours -- a zone declares its own -- which is the
 one way the treat rows in `arch.fuel.eat` improve on this.
+
+### A fish belongs to the network, not to the lure that spawned it
+`arch.fishing.network` -- see also `arch.fishing.dispatch`, `arch.dispatch.union`, `arch.network.registry`, `todo.fishing.outofcover`, `dd.fishing.catchwindow`, `todo.fishing.medium`
+
+**BUILT AND VERIFIED IN GAME 2026-09-03.** Two ports, one pond, one 3-minute
+log: 24 dispatches, 14 catches, cross-port in BOTH directions, no double-catch,
+backoff escalating correctly, no expired entries and no errors. The three things
+it found are `todo.fishing.outofcover` (fixed), `fact.fishing.despawnwindow`
+with `dd.fishing.catchwindow` (accepted), and `todo.fishing.backoffshared`
+(deferred past 1.0).
+
+`fishWork` walked `self.fishId` and
+nothing else, so a unit could only ever be sent at a fish its OWN port's lure had
+reported. Two ports on one pond fished past each other: each ignored a catchable
+fish four tiles away and waited on its own lure to produce another.
+
+**IT WAS THE LAST GENERATOR THAT HAD NEVER HAD THE UNION TREATMENT.**
+`arch.dispatch.union` says every port scans the whole network's coverage and that
+a union is a VIEW assembled at dispatch time. Every other generator walks
+`self.networkRects`; the LURE is placed across `fishingRects()` and clamps its
+patrol to the same list. So the fish was ALREADY network-wide in position and
+port-local only in ownership -- which is why this reads as a missing view rather
+than a missing capability.
+
+**A WORLD PROPERTY, KEYED BY PORT.** `petports_fish[portUniqueId] =
+{ id, type, rarity, expires }`. One entry per port because one lure holds one
+fish, and the lure enforces that budget itself -- this is the publication of a
+rule kept elsewhere, not a second copy of it.
+
+**A PROPERTY AND NOT A MESSAGE**, for the reason `arch.network.registry` already
+gives: no port ever messages another port, because membership derived from shared
+state has no ordering problem and nothing to keep in sync. A fish is the same
+shape of fact as a coverage rect -- one port knows it, every member needs it.
+
+**AND NOT IN THE REGISTRY, WHICH IS THAT SAME ARGUMENT FROM THE OTHER END.** The
+registry is written on change and NEVER on a tick, and every write bumps a
+version that makes every port re-derive its network and re-gather its vents. A
+lure produces a fish every few seconds. Putting one inside the other would turn a
+change notification into a heartbeat, and that is a MEASURED failure in this file
+already -- one empty port drove the version 788 times in sixty-five seconds.
+
+**IT HOLDS AN ENTITY ID, WHICH IS WHY IT EXPIRES.** Ids are reassigned on load,
+so a survivor from the last session names whatever now holds that number. Three
+defences, and they are the ones claims already use: the owner withdraws its own
+at `uninit`, again on its first update, and `petports_fishSweep` drops whatever
+is left on the same slow timer as `petports_claimsSweep`.
+
+**`uninit`, NOT `die()` -- THE OPPOSITE OF THE REGISTRY ENTRY, ON PURPOSE.** A
+registry entry MUST survive a world unload or the network rebuilds itself from
+nothing every reload. A fish entry must NOT: the lure and its fish die with the
+chunk, so anything that survives is a dead id another member would dispatch at.
+The two sit four lines apart in the same file and want opposite hooks.
+
+**THE TTL IS THE LURE'S LIFETIME, AND THAT IS A CONSEQUENCE RATHER THAN A
+TUNING.** A fish cannot outlive its lure -- the lure dying nils the fish's
+`lureId`, which lets the fish despawn itself -- so an entry older than one lure
+describes something that cannot exist. No refresh write, and one number instead
+of two.
+
+**THE CLAIM ARBITRATES, AND IT IS CHECKED INSIDE THE WALK.** That is what makes
+two ports spread across two fish rather than race for one: a fish another member
+holds is skipped and the ranking moves on. Testing it AFTER picking a winner
+would refuse the whole tick instead, which is the starvation `dispatchable()`
+exists to prevent.
+
+**NO DISTANCE VETO, AND THAT IS A DELIBERATE DEPARTURE FROM
+`anotherUnitIsCloser`.** Drops can afford one because `DEFER_GRACE` lets a
+deferred drop be taken anyway after twelve seconds -- the work WAITS. A fish does
+not. Standing aside for a unit that turns out to be walled off does not cost this
+rung a delay, it costs the catch outright, and a caged unit permanently nearest
+the water would mean the network never fishes again. Ranking by distance from the
+UNIT and letting the claim settle the tie is the same arbitration with no way to
+deadlock: the loser skips to the next fish, and a bad pick times out and backs
+off on its own.
+
+**THE TASK READS `fishType` AND `fishRarity` OFF THE ENTRY, NOT OFF `self`.**
+Those two agree only while the fish came from our own lure, which is exactly what
+stopped being true. A cross-port dispatch reading `self.fishType` would roll the
+wrong `landedTreasurePool` and bank the catch under the wrong tier -- the bug
+this change was most likely to ship with, and invisible in play because both
+still produce loot.
+
+**THE MODULE STILL GATES CATCHING, AND THAT IS A BALANCE DECISION LEFT ALONE.**
+`petportCanFish` still asks `petportFishing()` first, so this bites when two or
+more ports carry modules. Dropping that one line would let any submersible unit
+in the network fish off a single module, which devalues the item and breaks
+`arch.fishing.dispatch`'s "the module is the only switch" -- a balance change
+rather than a dispatch one, so it was not made here.
+
+**ONE THING CAME FREE.** A port holding a drone AND a fishing module places a
+lure whose fish it can never reach itself. Before this, that was simply wasted;
+now a neighbouring aquatic unit catches them.
 
 ## DESIGN DECISIONS
 
@@ -6196,6 +6320,80 @@ own answer: `edges[1].source.position` on any acquired plan IS
 `roundToNode(position)`. Log `petports_nodePosition` beside it and shout on
 mismatch. No probing, no re-derivation, data already flowing through the log.
 
+
+### Fish supply is tuned against the ladder, not against how fast a unit catches
+`dd.fishing.supply` -- see also `arch.fishing.network`, `arch.dispatch.union`, `fact.tooling.mergedrefusal`
+
+**RETUNED 2026-09-03 AFTER A MEASURED SATURATION, AND THE DIAGNOSIS TOOK TWO
+WRONG TURNS BEFORE IT LANDED.**
+
+Observed: upcyclers filling and never being emptied, with `drainWork` refusing
+every time it was asked. Read first as fish starving the low rungs of the ladder,
+then -- wrongly, from a log message that could not say -- as a beacon filter
+fault. **Settled by a control test: two more units, and the work got done.**
+
+**THE MECHANISM IS THE LADDER MEETING A SUPPLY THAT NEVER RUNS DRY.** Fish sits
+high because its target EXPIRES; upcycler output sits low because a treat waits
+indefinitely. Both are correct per task. Under saturation the ranking stops being
+a preference and becomes a permanent exclusion: a rung that is always outranked
+by something always available is never reached.
+
+**NETWORK-WIDE FISH MOVED THE SATURATION POINT WITHOUT ANYONE DECIDING TO.**
+`arch.fishing.network` let every port see every member's fish, which multiplied
+the fish visible per port by the number of lures on the water. Nothing about the
+per-lure rate changed; the demand on each unit did. Two units on a two-lure pond
+turned out to be below the new line.
+
+**THE LADDER IS NOT THE THING TO CHANGE, AND THAT IS THE DECISION.** Ranking an
+expiring target above a waiting one is right, and the alternative is dropping
+catches. Priority ageing, a starvation floor or a round-robin would all buy the
+upcycler its trip by making the fleet worse at the one task that has a deadline.
+**The supply was wrong, not the ordering.** `spawnTimeRange` is now `[8, 24]`,
+a quarter of vanilla's.
+
+**AND THE LURES NO LONGER EXPIRE IN LOCKSTEP.** `FISHING_LURE_LIFETIME` was a
+flat 150, and every port on a network places its first lure within a tick or two
+of the others, so every lure in a base died and respawned in the same second --
+and the replacement kept the phase, so the alignment survived indefinitely.
+Fishing arrived in a pulse. It is now `{ 120, 300 }`, drawn per lure.
+
+**ITS MAX IS LOAD-BEARING ELSEWHERE.** The fish entry's TTL reads
+`FISHING_LURE_LIFETIME[2]` and must read the max rather than a fresh draw, or an
+entry would expire out from under a fish whose lure rolled long. See
+`arch.fishing.network`.
+
+**"MORE THROUGHPUT MEANS MORE UNITS" SURVIVES THIS INTACT.** The fleet being
+under-provisioned for its work is the design working. What was wrong was that
+nothing SAID so -- see `fact.tooling.mergedrefusal`, which is the durable half of
+this whole episode.
+
+### A fish caught twice is a risk we take rather than fork vanilla for
+`dd.fishing.catchwindow` -- see also `fact.fishing.despawnwindow`, `arch.fishing.network`
+
+**DECIDED 2026-09-03, WITH THE HAZARD MEASURED AND UNDERSTOOD.**
+`fact.fishing.despawnwindow` means a caught fish stays dispatchable for over a
+second. Nothing sits between a second unit arriving inside that window and
+`root.createTreasure` rolling the same fish's pool again.
+
+**THE OLD DESIGN WAS ACCIDENTALLY IMMUNE AND NOBODY KNEW.** Only the owning port
+could dispatch at its own fish, and after a catch that port's unit is CARRYING,
+which `fishWork`'s start-empty rule refuses. Network-wide fish removed a guard
+that was never written down as one -- which is the interesting part of this entry
+and the reason it exists.
+
+**NOT FIXED, AND THE REASON IS THE COST OF THE FIX.** Closing it properly means
+patching vanilla's fish so the entity goes away when it is caught, and this mod
+does not fork vanilla assets to close a hole this size. The alternatives
+considered inside our own code -- re-keying `petports_fish` by fish id so any
+port can withdraw a caught fish, or a short tombstone -- all buy a narrower
+window rather than none, because the fish is alive either way.
+
+**THE ODDS ARE WHAT MAKE IT ACCEPTABLE, NOT THE SEVERITY.** A second unit must
+be dispatched at that exact fish inside the window AND be close enough to arrive
+before it dies. Twice observed, zero double-catches: both second units lost the
+target first, one of them after 10.5 tiles of travel. If a duplicate is ever seen
+in play, this entry is where to start and `fact.fishing.despawnwindow` has the
+timings.
 
 ## DESIGN INTENT -- PLANNED
 
@@ -9424,6 +9622,66 @@ The type test has to come BEFORE the array walk.
 **`default` IS THE RIGHT KEY FOR US.** A unit does not kill a fish -- it rolls the
 pool and despawns it -- so there is no damage kind to key on.
 
+### A refusal that names two causes is worse than one that names the wrong cause
+`fact.tooling.mergedrefusal` -- see also `dd.fishing.supply`, `proc.tooling.instrument`, `proc.tooling.session`
+
+**COST 2026-09-03: ONE CONFIDENT WRONG DIAGNOSIS, CORRECTED ONLY BY A CONTROL
+TEST.** `drainWork` refused with
+
+    N machine(s) with output, but no deposit crate accepts X or has room
+
+thirty-eight times in one log. Those are two different faults wearing one
+sentence. **"No crate accepts X" is a CONFIGURATION error** -- nothing in the
+network will ever store the item, and it is still true in an hour with ten more
+units; the player ticks a box. **"No crate has room" is a THROUGHPUT signal** --
+the filters are right and the fleet is behind; the player adds a unit, or waits.
+Opposite responses, one string.
+
+**IT WAS NOT HEDGING -- IT COULD NOT KNOW.** `refusedNames` was built ABOVE the
+destination loop, so the message was assembled before either test it described
+had run. The word "or" was structural, not cautious.
+
+**THE READING FAILURE IS THE PART TO CARRY.** The ambiguity WAS noticed and then
+reasoned past: "the log can't distinguish those two" was written down, and a
+conclusion that only holds on the first branch was built anyway. Noticing an
+ambiguity and not letting it stop you is worse than missing it, because it
+launders a guess as an analysis.
+
+**AND A REPEATED REFUSAL IS NOT A STANDING ONE.** Thirty-eight identical lines
+over seven minutes read as a permanent condition. They were thirty-eight samples
+of a transient state that never got the capacity to clear. Frequency is evidence
+of sampling rate, not of permanence.
+
+**FIXED BY SPLITTING THE TALLY**, decided inside the loop and classified after
+it, with a fallback string that fires only if an item is refused and classified
+as neither -- which would be a bug in the function rather than a state of the
+base.
+
+**GREP FOR THE SHAPE, NOT THE FUNCTION.** Any refusal joining two causes with
+"or" is a candidate for the same failure.
+
+### A despawned fish keeps existing, and keeps swimming, for over a second
+`fact.fishing.despawnwindow` -- see also `arch.fishing.dispatch`, `dd.fishing.catchwindow`, `arch.fishing.network`
+
+**MEASURED 2026-09-03, TWICE IN ONE 24-DISPATCH LOG.** `despawn` is a plain
+global in vanilla's `fishingMonster.lua` and it is a STATE TRANSITION, not a
+delete: it routes the fish into `disappearState`, which clears the death sound
+and particle burst before killing. The entity therefore survives the call.
+
+**HOW LONG, AND IT IS NOT A FRAME.** `fish 1280` was caught at `19:59:46.079`
+and its port did not report it gone until `19:59:47.732` -- **1.65 seconds**.
+Throughout that window `world.entityExists` returned true, `world.entityPosition`
+returned a position, and the fish MOVED: 11 tiles west of where it was caught.
+
+**SO A CAUGHT FISH IS STILL A VALID TARGET TO ANYTHING THAT ASKS THE OBVIOUS
+QUESTIONS.** Both existence tests in `fishWork` pass on a fish that has already
+been rolled. Measured on `fish:570` as well, where a second unit travelled 10.5
+tiles before the target blinked out.
+
+**THE FAILURE IT PRODUCES IS LABELLED `drop is gone`**, because the target-gone
+path is shared and names the common case. Cosmetic, and noted only so the next
+reader greping fish failures knows that string is one of them.
+
 ## DISPROVEN
 
 ### Sinker jumping underwater was never a liquid problem
@@ -11694,6 +11952,116 @@ class of edit that CAN do damage, and because a second one is easier to miss
 beside a first. Every edit to that file since has asserted the count stayed at
 three rather than quietly adding to it.
 
+### A unit can be dispatched into magma at a fish it is not equipped for
+`todo.fishing.medium` -- see also `arch.fishing.network`, `arch.dispatch.eligibility`, `arch.fishing.lure`
+
+**FOUND 2026-09-03 while building `arch.fishing.network`, AND IT PREDATES IT.**
+Not caused by network-wide fish; made likelier by them, because a network now
+spans more bodies of water than one port's rect did.
+
+`petportCanFish` asks a CHASSIS question -- may this body be submerged -- and
+nothing asks the TILE question. `fishingSpot`'s tier one accepts any biome with a
+pool in vanilla's config, and that list includes **magma**. A magma world
+therefore places a lure in lava, spawns fish in it, and dispatches a plain
+aquatic unit at one with no liquid-specific test anywhere in the path.
+
+**THE FIX IS ONE CALL AND IT IS THE MEDIUM HALF ONLY.** `targetSuits(position,
+nil)` is the medium ladder without the standing search, and it already takes a
+nil entity id -- the soil path passes one. **DO NOT REACH FOR `targetEligible`
+HERE.** It is the pair, and the standing half is wrong for a moving target:
+`GROUND_SEARCH_DOWN` is -6, the seabed under an open-water fish is deeper than
+that, so `standableNear` returns nil and a walker dispatched at a fish deadlocks
+on arrival. `animalWork` already takes the reach test alone for the same reason.
+
+**NOT DONE IN THE SESSION THAT FOUND IT**, deliberately: it is an unrelated fix
+and stacking it would have cost the one clean log the fishing change gets. See
+`proc.tooling.onechange`.
+
+### A cross-port fish has no target marker, and now it needs one
+`todo.fishing.marker` -- see also `arch.fishing.network`, `arch.dispatch.claims`, `dd.pane.bandsplit`
+
+**FILED 2026-09-03. THE CODE POINTED AT A BACKLOG ENTRY THAT DID NOT EXIST.**
+`fishWork`'s header said a claim and a marker both become necessary "the day a
+fish is visible to a port that did not spawn it -- see the backlog entry for
+both". There was no such entry. The claim half is built; this is the other half,
+filed properly this time.
+
+**IT MATTERS MORE THAN IT DID.** A unit swimming out of its own rect at a fish
+another port's lure spawned is INDISTINGUISHABLE ON SCREEN from the leash
+failing. That is the exact reading that costs a session -- the observer measures
+the wrong thing, because the correct behaviour and the known bug look the same.
+The dispatch log names the owning port for this reason, but a log is not what a
+player is looking at.
+
+**A FISH IS NOT A DROP AND THE EXISTING MARKER MAY NOT SUIT.** Drops sit still;
+a fish moves at swimSpeed 3 and darts at 30, so a marker pinned at dispatch
+position is wrong within a second. Whether it should track, blink at a fixed
+point, or not exist has not been decided -- settle that before writing any of it.
+
+**AND THE CROSSHAIR SYSTEM ITSELF HAS NO ARCHITECTURE ENTRY.** Found while
+filing this: `crosshairRefresh`, `crosshairClaimId`, `CROSSHAIR_CLAIM_TTL`, a
+projectile and a player-facing toggle, and the document mentions markers only in
+passing inside `dd.pane.bandsplit`. That is the SAME SHAPE as the fishing gap
+`proc.tooling.gapcheck` was written for -- a built subsystem with no entry -- and
+it is the second one found by walking references rather than by any check.
+
+### The port never asked whether a fish was still in coverage
+`todo.fishing.outofcover` -- see also `arch.fishing.network`, `arch.fishing.dispatch`, `arch.dispatch.union`
+
+**FILED AND FIXED 2026-09-03, AND KEPT BECAUSE THE OBVIOUS DIAGNOSIS WAS WRONG
+AGAIN.** Read at first as a regression from network-wide fish. It is not: both
+halves of the asymmetry shipped together in `fishing ix part 2`, and the
+committed `fishWork` has no rect test of any kind.
+
+**THE ASYMMETRY.** `petportsTaskAction.update` bails a fish task the moment
+`petports_inNetwork(fishAt)` is false, checked EVERY TICK because a fish covers
+ground fast. The port checked it NEVER: `RECT_CHECKED_TYPES` holds only `diag`,
+so `dispatchable()` waves fish through, and the generator returned a position
+without looking at it. So the port could hand out a task the unit was guaranteed
+to refuse on its first tick.
+
+**MEASURED: 6 OF 24 DISPATCHES, EVERY ONE FAILING AT `moved 0` INSIDE 200ms.**
+Replayed against the four published rects, the fix refuses exactly those six and
+none of the eighteen that produced the log's fourteen catches. Two of the refused
+fish were caught anyway on a LATER dispatch once they drifted back in, so
+refusing costs nothing -- the fish returns and the backoff has expired.
+
+**WHAT MADE IT VISIBLE WAS VOLUME, NOT CROSS-PORT DISPATCH.** The first fish
+dispatch in the log that found it is the pre-change path exactly: a port at its
+OWN lure's fish, one offered, outside coverage.
+
+**THE PREDICATE WALKS `fishingRects()`, NOT `coverageRect()`.** Union dispatch
+means a unit may work anywhere in the network, so testing our own rect would
+refuse a fish sitting perfectly reachable in a member's water. Same list the lure
+is clamped to and the same list the unit was handed, so all three now agree by
+construction. Nested inside `fishWork` rather than made a chunk-level local --
+that file is at 159 of Lua 5.1's 200 and the failure when it lands is at load.
+
+### A fish that beat one port gets a fresh retry budget from every other
+`todo.fishing.backoffshared` -- see also `arch.fishing.network`, `arch.dispatch.claims`, `todo.dispatch.sourcebackoff`
+
+**FILED 2026-09-03. OUT OF SCOPE FOR 1.0, DECIDED RATHER THAN DEFERRED.**
+
+`self.workFailures` is PORT-LOCAL, which was correct while the work was. It no
+longer is. Measured on one fish:
+
+    19:59:45.570  b94de  backing off fish:1343 for 1 seconds (failure 1)
+    19:59:47.823  b94de  backing off fish:1343 for 2 seconds (failure 2)
+    19:59:53.636  4f9b   backing off fish:1343 for 1 seconds (failure 1)
+
+The escalation works perfectly and then resets, because the second port has never
+heard of this fish. With four ports that is four ladders on one doomed target.
+
+**IT IS BOUNDED, WHICH IS WHY IT CAN WAIT.** A fish dies inside 150 seconds
+whatever anyone does, so the waste is capped and self-clearing -- unlike a drop,
+which waits forever and is the case `todo.dispatch.sourcebackoff` covers.
+
+**THE FIX IS NOT SMALL.** Failures would have to move into shared state beside
+claims, which means an expiry policy, a sweep, and a decision about whether a
+failure recorded by one port should bind a port whose unit is somewhere else
+entirely -- the same reachability argument that killed the distance veto in
+`arch.fishing.network`. Not a 1.0 change.
+
 ## PROCESS
 
 ### A correction filed against a decision does not correct the decision
@@ -12423,4 +12791,34 @@ was cited in a `.lua` comment before the entry existed -- `arch.fuel.burn` and
 friends, written into the build and only filed afterwards. Check 9 catches that
 inside the document and nothing catches it outside. WRITE THE ENTRY OR DO NOT
 CITE THE TAG.
+
+### One change, one log
+`proc.tooling.onechange` -- see also `proc.tooling.instrument`, `proc.tooling.controlfirst`, `proc.tooling.batchedits`
+
+**FILED 2026-09-03, AND IT IS OLDER THAN ITS TAG.** The rule has been operated
+by for weeks and cited in at least two entries -- `fact.pathing.movedrop` leaves
+a bug unfixed because "the process note is emphatic about not stacking an
+unverified change onto one" -- while having no entry to be emphatic in. A rule
+that everything defers to and nothing states is one bad session from being
+forgotten.
+
+**DO NOT STACK CHANGES WITHOUT A CLEAN TEST BETWEEN THEM.** Two changes and one
+log means the log cannot attribute the outcome to either. The failure mode is not
+ambiguity, it is CONFIDENCE: a session that improved is read as both changes
+being right, and a session that regressed is read as both being wrong. Measured
+cost -- a session went from "almost working" to "the whole thing broken" and
+neither change could be individually reverted, because nothing knew which one had
+done what.
+
+**IT APPLIES TO CORRECT FIXES TOO, AND THAT IS THE PART THAT GETS ARGUED WITH.**
+The temptation is always a fix that is OBVIOUSLY right and costs one line -- an
+adjacent bug noticed while building something else. It still spends the log. On
+2026-09-03 a magma-fish medium check was left out of the network-fishing session
+for exactly this reason and filed as `todo.fishing.medium` instead; the fix is
+one call and it was still not worth the measurement.
+
+**THE TEST BETWEEN THEM IS THE POINT, NOT THE COUNTING.** Two changes to
+unrelated subsystems that produce independent log lines are one change each. Two
+changes on the same code path are one change even if they are one line apart.
+Ask what a single log could and could not attribute.
 

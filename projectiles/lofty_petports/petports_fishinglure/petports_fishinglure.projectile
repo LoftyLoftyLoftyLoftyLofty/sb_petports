@@ -83,7 +83,7 @@
   //  the outer branch of its own state, where it clears its lookTimer and swims
   //  in calmly at `swimSpeed` 3. The dart is never reached.
   //  HOW OFTEN THE LURE TRIES TO SPAWN A FISH. Vanilla's is {2, 6}; this is
-  //  double, which halves the rate.
+  //  FOUR TIMES that, which quarters the rate.
   //
   //  A ROD IS NOT AN AUTOMATED FLEET. Vanilla's interval assumes a player
   //  standing there casting, reeling and walking away -- a petport lure sits in
@@ -93,10 +93,22 @@
   //
   //  IT IS NOT THE ONLY LIMITER AND WAS NEVER MEANT TO BE. The lure holds one
   //  fish at a time and the port refuses to dispatch a unit that is already
-  //  carrying, so the real cycle is spawn plus catch plus deposit. Doubling this
-  //  lengthens the first term only, which is why it halves throughput rather
-  //  than quartering it.
-  "spawnTimeRange" : [4, 12],
+  //  carrying, so the real cycle is spawn plus catch plus deposit. Lengthening
+  //  this stretches the first term only, which is why it does not scale
+  //  throughput one for one.
+  //
+  //  HALVED AGAIN 2026-09-03, AFTER MEASURING A SATURATED FLEET. Network-wide
+  //  fish raised how many fish each port can see without anyone deciding to
+  //  raise it. Two lures on one pond kept two units permanently busy, and
+  //  because a fish EXPIRES while a treat sitting in an upcycler does not, the
+  //  low rungs of the dispatch ladder stopped being reached at all -- machines
+  //  stayed full and nothing said why. Fish were not too slow to catch; they
+  //  were too plentiful to leave time for anything else.
+  //
+  //  THE LADDER IS NOT THE THING TO CHANGE. Ranking an expiring target above a
+  //  waiting one is correct per task, and the alternative is dropping catches.
+  //  What was wrong was the supply feeding it.
+  "spawnTimeRange" : [8, 24],
 
   "petports_teleportRange" : 4.0,
 
@@ -147,6 +159,10 @@
   //  petport lure lives 150s, holds one fish at a time, and hands a fresh
   //  spawner to its replacement, so it would reset the bias faster than it could
   //  ever decay it.
+  //
+  //  "a petport lure lives 150s" ABOVE IS NOW A RANGE, 120 to 300, drawn per
+  //  lure so a network's lures stop expiring in lockstep. The argument is
+  //  unchanged and only gets stronger at the short end.
   "petports_spawnBias" : 0,
 
   //  WHAT A FISHING ZONE SHOULD CALL US. Irisil-style zones match this against

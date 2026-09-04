@@ -333,7 +333,11 @@ end
 --  connected, regardless of what A wants.
 --
 --  Returns a list of member entries, always including this port.
-function petports_networkMembers(portId)
+--
+--  THE FLOOD FILL IS EXTRACTED because two callers need it and they want
+--  different halves of the answer -- see petports_networkMemberIds below for
+--  why reading a port id out of an entry is a silent wrong answer.
+local function networkMemberMap(portId)
   local registry = petports_registry()
   local ports = registry.ports or {}
   local self_ = ports[portId]
@@ -368,14 +372,37 @@ function petports_networkMembers(portId)
     end
   end
 
-  --  SORTED. pairs() order is nondeterministic, and an unsorted list would
-  --  compare unequal to itself and re-push to the unit every tick.
+  return members
+end
+
+--  SORTED. pairs() order is nondeterministic, and an unsorted list would
+--  compare unequal to itself and re-push to the unit every tick.
+local function sortedMemberIds(members)
   local ids = {}
   for memberId, _ in pairs(members) do table.insert(ids, memberId) end
   table.sort(ids)
+  return ids
+end
+
+--  The member PORT IDS, sorted.
+--
+--  READING `entry.id` FOR THIS IS WRONG AND DOES NOT LOOK WRONG. An entry's
+--  `id` is the NETWORK id -- the pinned number two non-participating ports must
+--  share to be connected -- and it is 0 on every port that never touched the
+--  setting. Anything looking a member up in a table keyed by port needs this
+--  instead, and getting it confused returns a plausible number rather than nil.
+function petports_networkMemberIds(portId)
+  return sortedMemberIds(networkMemberMap(portId))
+end
+
+--  TAKES THE MAP IT ALREADY HAS. Calling petports_networkMemberIds here would
+--  run the flood fill a second time on every call, and this one is hot --
+--  anotherUnitIsCloser calls it per candidate.
+function petports_networkMembers(portId)
+  local members = networkMemberMap(portId)
 
   local list = {}
-  for _, memberId in ipairs(ids) do
+  for _, memberId in ipairs(sortedMemberIds(members)) do
     table.insert(list, members[memberId])
   end
   return list
@@ -402,6 +429,100 @@ function petports_rectListsEqual(a, b)
     end
   end
   return true
+end
+
+--------------------------------------------------------------------------------
+--  FISH IN THE WATER
+--------------------------------------------------------------------------------
+--
+--  "My lure has a fish, here is what it is, and here is when to stop believing
+--  me."
+--
+--      world property "petports_fish" = {
+--        [portUniqueId] = {
+--          id      = <entity id>   -- the fish
+--          type    = <string>      -- monster type, for the treasure pool
+--          rarity  = <string>      -- tier, counted and nothing else
+--          expires = <world.time() + lure lifetime>
+--        }
+--      }
+--
+--  ONE ENTRY PER PORT, because a lure holds one fish at a time and enforces
+--  that itself. This is only the publication of a budget kept elsewhere.
+--
+--  WHY A PROPERTY AND NOT A MESSAGE. No port ever messages another port -- see
+--  the registry above -- because membership derived from shared state has no
+--  ordering problem and nothing to keep in sync. A fish is the same shape of
+--  fact as a coverage rect: one port knows it, every member needs it.
+--
+--  AND NOT THE REGISTRY, WHICH IS THE SAME ARGUMENT FROM THE OTHER END. The
+--  registry is written on placement, removal or an edit and NEVER on a tick,
+--  and every write bumps a version that makes every port re-derive its network
+--  and re-gather its vents. A lure produces a fish every few seconds. Putting
+--  one in the other would turn a change notification into a heartbeat -- which
+--  is a measured failure in this file already, not a hypothetical one.
+--
+--  IT HOLDS AN ENTITY ID, WHICH IS WHY IT EXPIRES.
+--
+--  Ids do not survive a reload, and a stale entry naming a reused id would send
+--  a unit at whatever now holds that number. Three defences, and they are the
+--  ones claims already use: the owner withdraws its own at uninit, again on its
+--  first update, and anything left over ages out.
+--
+--  THE TTL IS THE LURE'S LIFETIME, so it needs no refresh and is not a tuned
+--  number. A fish cannot outlive the lure that spawned it -- the lure dying
+--  nils the fish's lureId, which lets the fish despawn itself -- so an entry
+--  older than one lure is describing something that cannot exist.
+
+local FISH_KEY = "petports_fish"
+
+function petports_fishAll()
+	return world.getProperty(FISH_KEY) or {}
+end
+
+function petports_fishPublish(portId, entry)
+	if portId == nil then return end
+
+	local fish = petports_fishAll()
+	fish[portId] = entry
+	world.setProperty(FISH_KEY, fish)
+end
+
+--  Withdraw this port's entry. Called when the fish goes, when the lure is
+--  dismissed, at uninit and on the first update after a load.
+function petports_fishClearOwner(portId)
+	if portId == nil then return end
+
+	local fish = petports_fishAll()
+	if fish[portId] == nil then return end
+
+	sb.logInfo("PETPORTS fish entry from %s withdrawn (was %s)",
+		tostring(portId), sb.printJson(fish[portId].id))
+
+	fish[portId] = nil
+	world.setProperty(FISH_KEY, fish)
+end
+
+--  Drop anything past its expiry, whoever owns it. Rides the same slow timer as
+--  petports_claimsSweep, and for the same reason: the owner is the one that
+--  should have tidied up, so anything reaching here is a signal rather than
+--  routine housekeeping. Not logged per entry at claim volume, though -- a port
+--  killed mid-session leaves exactly one.
+function petports_fishSweep()
+	local fish = petports_fishAll()
+	local now = world.time()
+	local changed = false
+
+	for portId, entry in pairs(fish) do
+		if (entry.expires or 0) <= now then
+			sb.logInfo("PETPORTS fish entry from %s EXPIRED (fish %s) -- its port "
+				.. "never withdrew it", tostring(portId), sb.printJson(entry.id))
+			fish[portId] = nil
+			changed = true
+		end
+	end
+
+	if changed then world.setProperty(FISH_KEY, fish) end
 end
 
 --------------------------------------------------------------------------------
