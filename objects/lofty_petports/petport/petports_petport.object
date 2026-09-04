@@ -78,13 +78,15 @@
   "orientations" : [
     {
       "imageLayers" : 
-	  [ 		
-		{ "image" : "petport_hull_lit.png:closed.1", "fullbright" : false },
-		{ "image" : "petport_hull_fullbright.png:closed.1", "fullbright" : true },
+	  [ 
+		{ "image" : "petport_interior_lit.png:closed.1", "fullbright" : false },
+		{ "image" : "petport_interior_fullbright.png:closed.1", "fullbright" : true },
+		
 		{ "image" : "petport_door_lit.png:closed.1", "fullbright" : false },
 		{ "image" : "petport_door_fullbright.png:closed.1", "fullbright" : true },
-		{ "image" : "petport_interior_lit.png:closed.1", "fullbright" : false },
-		{ "image" : "petport_interior_fullbright.png:closed.1", "fullbright" : true }
+		
+		{ "image" : "petport_hull_lit.png:closed.1", "fullbright" : false },
+		{ "image" : "petport_hull_fullbright.png:closed.1", "fullbright" : true }
 	  ],
       "imagePosition" : [-16, -16],
       "direction" : "left",
@@ -98,12 +100,14 @@
     {
       "imageLayers" : 
 	  [ 		
-		{ "image" : "petport_hull_lit.png:closed.1", "fullbright" : false },
-		{ "image" : "petport_hull_fullbright.png:closed.1", "fullbright" : true },
+		{ "image" : "petport_interior_lit.png:closed.1", "fullbright" : false },
+		{ "image" : "petport_interior_fullbright.png:closed.1", "fullbright" : true },
+		
 		{ "image" : "petport_door_lit.png:closed.1", "fullbright" : false },
 		{ "image" : "petport_door_fullbright.png:closed.1", "fullbright" : true },
-		{ "image" : "petport_interior_lit.png:closed.1", "fullbright" : false },
-		{ "image" : "petport_interior_fullbright.png:closed.1", "fullbright" : true }
+		
+		{ "image" : "petport_hull_lit.png:closed.1", "fullbright" : false },
+		{ "image" : "petport_hull_fullbright.png:closed.1", "fullbright" : true }
 	  ],
       "imagePosition" : [-16, -16],
       "direction" : "right",
@@ -121,12 +125,14 @@
   "animation" : "petports_petport.animation",
   "animationParts" : 
   { 
-	"hull_lit" : "petport_hull_lit.png",
-	"hull_fullbright" : "petport_hull_fullbright.png",
-	"door_lit" : "petport_door_lit.png",
+    "interior_lit" : "petport_interior_lit.png",
+	"interior_fullbright" : "petport_interior_fullbright.png",
+	
+    "door_lit" : "petport_door_lit.png",
 	"door_fullbright" : "petport_door_fullbright.png",
-	"interior_lit" : "petport_interior_lit.png",
-	"interior_fullbright" : "petport_interior_fullbright.png"
+	
+	"hull_lit" : "petport_hull_lit.png",
+	"hull_fullbright" : "petport_hull_fullbright.png"
   },
   "animationPosition" : [-16, -16]
 }

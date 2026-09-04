@@ -38,7 +38,7 @@
 	{
 		"stateTypes" : 
 		{
-			"hullState" : 
+			"interiorState" : 
 			{
 				"default" : "closed",
 				"states" : 
@@ -60,7 +60,7 @@
 					"closing" : { "frames" : 10, "mode" : "transition", "transition" : "closed" }
 				}
 			},
-			"interiorState" : 
+			"hullState" : 
 			{
 				"default" : "closed",
 				"states" : 
@@ -75,16 +75,16 @@
 
 		"parts" : 
 		{
-			"hull_lit" : 
+			"interior_lit" : 
 			{
 				"properties" : 
 				{
 					"centered" : false,
-					"zLevel" : 5
+					"zLevel" : 1
 				},
 				"partStates" : 
 				{
-					"hullState" : 
+					"interiorState" : 
 					{
 						"closed" : { "properties" : { "image" : "<partImage>:closed.<frame>" } },
 						"opening" : { "properties" : { "image" : "<partImage>:opening.<frame>" } },
@@ -93,17 +93,17 @@
 					}
 				}
 			},
-			"hull_fullbright" : 
+			"interior_fullbright" : 
 			{
 				"properties" : 
 				{
 					"centered" : false,
-					"zLevel" : 4,
+					"zLevel" : 0,
 					"fullbright" : true
 				},
 				"partStates" : 
 				{
-					"hullState" : 
+					"interiorState" : 
 					{
 						"closed" : { "properties" : { "image" : "<partImage>:closed.<frame>" } },
 						"opening" : { "properties" : { "image" : "<partImage>:opening.<frame>" } },
@@ -149,16 +149,16 @@
 					}
 				}
 			},
-			"interior_lit" : 
+			"hull_lit" : 
 			{
 				"properties" : 
 				{
 					"centered" : false,
-					"zLevel" : 1
+					"zLevel" : 5
 				},
 				"partStates" : 
 				{
-					"interiorState" : 
+					"hullState" : 
 					{
 						"closed" : { "properties" : { "image" : "<partImage>:closed.<frame>" } },
 						"opening" : { "properties" : { "image" : "<partImage>:opening.<frame>" } },
@@ -167,17 +167,17 @@
 					}
 				}
 			},
-			"interior_fullbright" : 
+			"hull_fullbright" : 
 			{
 				"properties" : 
 				{
 					"centered" : false,
-					"zLevel" : 0,
+					"zLevel" : 4,
 					"fullbright" : true
 				},
 				"partStates" : 
 				{
-					"interiorState" : 
+					"hullState" : 
 					{
 						"closed" : { "properties" : { "image" : "<partImage>:closed.<frame>" } },
 						"opening" : { "properties" : { "image" : "<partImage>:opening.<frame>" } },
