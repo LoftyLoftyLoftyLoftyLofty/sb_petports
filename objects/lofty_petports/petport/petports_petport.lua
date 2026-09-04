@@ -1402,7 +1402,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-04n machine output can go to a request crate"
+local PETPORT_BUILD_STAMP = "2026-09-04o the medic log no longer throws on a percent sign"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -11801,8 +11801,20 @@ local function medicWork()
       local stand = standingPointNear(patient.position, MEDIC_REACH)
 
       if stand ~= nil then
-        sb.logInfo("PETPORT %s MEDIC dispatch: patient %s class %s at %s%% health, "
-          .. "approach %s",
+        --  "pct", NOT "%%", AND THIS LINE WOULD HAVE THROWN ON EVERY MEDIC
+        --  DISPATCH. sb.logInfo hands its format string to Star's formatLua,
+        --  which accepts ONLY %s -- and `%%` renders a literal percent that the
+        --  engine then reads as the start of a specifier:
+        --
+        --      (StarException) Improper lua log format specifier %
+        --
+        --  Lua's own string.format is perfectly happy with `%%`, which is why
+        --  it reads as correct and why nothing outside a live medic dispatch
+        --  would ever have found it. petports_luacheck refuses it mechanically
+        --  now; prose was not enough, and this project wrote the same bug twice
+        --  in one day.
+        sb.logInfo("PETPORT %s MEDIC dispatch: patient %s class %s at %s pct "
+          .. "health, approach %s",
           stationUniqueId(), sb.printJson(patient.id), patient.class,
           sb.printJson(math.floor(patient.ratio * 100)), sb.printJson(stand))
 
