@@ -50,107 +50,95 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-04 (four movement fixes, a module set, and a predicate deleted)
+### What is built, as of 2026-09-04 (death costs something now, and it took four tries)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-A LONG SESSION, ALL OF IT MOVEMENT, ALL OF IT VERIFIED IN GAME. AND THE THING
-WORTH READING FIRST IS THAT TWO OF THE FOUR BUGS WERE IN THIS SESSION'S OWN
-FIXES.
+ONE FEATURE, FOUR DEFECTS, AND THREE OF THE FOUR WERE THE SAME MISTAKE WEARING
+DIFFERENT CLOTHES. Everything here is verified in game.
 
 ---
 
-**FOUR MOVEMENT DEFECTS, FIXED AND MEASURED.**
+**UNITS THAT DIE SPILL THE PORT'S LOAD WHERE THEY FELL.** `arch.unit.death`. The
+chart's oldest known issue, and the thing that turns `dd.unit.destructible` from
+a statement of intent into a mechanic -- a unit could always be lost and losing
+one never cost anything, which made the camouflage module a formality. The unit
+sends a position and its entity id; the port spills `petData.cargo` there,
+releases the task, and writes the item back. A real kill mid-deposit: `spilled 1
+stack(s), 0 lost`.
 
-**The jump level guard was off by one boundary.** `arch.pathing.jumpmover`. A
-unit landing on a platform ladder rested EXACTLY 1.0 above its jump source and
-`> JUMP_LEVEL_TOLERANCE` admitted the one case the value exists to refuse. 156
-ticks, 12.6 seconds, task failed. Now `>=`: the unit holds one x position, the
-stall detector fires at 0.327s, takeoff 0.57s after touchdown.
+**THE THREE THAT WERE ONE SHAPE -- A DECISION THAT DID NOT OUTLIVE THE THING IT
+GUARDED AGAINST.** A recall reaches `die()` looking exactly like a lava death, so
+it needs a latch; the latch lives on `self` and the FADE OUTLIVES THE CONTEXT, so
+a unit recalled 68ms before a world unload was serialised mid-death and came back
+with the kill queued and the latch gone; culling instead of fading does not fix
+that either, because `uninit` runs 98ms AFTER the world stop packet and nothing
+ticks after it. `fact.unit.uninitnokill` is the durable half: **ANY UNIT ALIVE AT
+A WORLD UNLOAD IS SERIALISED, WHATEVER IS DONE TO IT FROM `uninit`.** That kills
+the whole class of "clean up on unload" fix and forced the guard onto the reload
+side.
 
-**A mid-arc pather rebuild destroyed every water exit.**
-`arch.locomotion.exitdefer`. Clearing the water IS the swim-mode change, so
-`exiting -> land` always fired mid-flight and the rebuild could not plan from the
-air. Six attempts, five identical to the decimal, 2.13s a cycle. Deferred now
-until the unit can actually plan. Verified: the deferral fires at 1153.46,
-`ARCMOVER steering to plan vx 8` at 1159.45 -- the altitude the plan used to die
--- and the unit lands.
+**THE FOURTH WAS AN INVARIANT ASSERTED WITHOUT CHECKING WHAT WRITES THE FIELD.**
+The reload-side guard first tested `payload.id == self.petId` and PASSED for a
+leftover, because `setPet` accepts any entity id while `self.petId` is nil --
+vanilla's anchor contract, and how a pet re-homes at all. `self.petId` means "a
+unit has claimed me". `self.spawnedPetId`, written only after
+`world.spawnMonster` returns, means "I made this one". `fact.unit.anchoradoption`.
 
-**The walk clearance test was deleted.** `dead.pathing.clearancetest`. 51 fires,
-zero true positives, a premise this document already disproved from source, and
-the same three-line recovery as a check two days older. `origin NOT PLANNABLE`
-went 32 to 0.
-
-**Metabolism modules, and both halves were broken separately.**
-`arch.module.metabolism`. Walkers now read 7.67 and 11.51, flyers 11.02 tiles/s
-by position; a bare unit in the same logs reads 5.9 and 5.40.
-
----
-
-**TWO OF THE FOUR FAILURES WERE MINE, IN THIS SESSION, AND BOTH ARE ENTRIES THIS
-FILE ALREADY CARRIED.**
-
-**A defensive nil guard hid a dead feature.** The walk mover multiplied
-`pather.controlParameters.walkSpeed`, which is nil -- PathMover rebuilds that
-table without the chassis speeds, which is why the jump slowdown has always
-ASSIGNED a literal. `petports_scaledSpeed` returned its argument unchanged for a
-non-number, so it assigned nil to nil and logged nothing.
-`fact.tooling.mergedrefusal`, written into a helper built to be careful, one
-message after the rule was quoted aloud. **THE RULE KEEPS BEING RELEARNED BY THE
-THING THAT QUOTES IT**, which is now the second time that sentence has been
-written here.
-
-**An engine claim was repeated from a code comment without checking it.**
-"Starbound has no slopes" was taken as fact and used in reasoning.
-`fact.pathing.squarestep` disproves it FROM SOURCE, in this repository, and had
-done for a week. `proc.pathing.readsource` exists for exactly this. The standing
-rule from here: an engine claim in a comment cites a source, a probe or a
-measurement, or it does not get written.
+**VERIFIED END TO END**, one lifesoul: picked up, culled at unload with no spill,
+read back off the item, leftover refused, respawned still holding it, delivered.
+Also `fact.unit.deathmessage` -- a `sendEntityMessage` from inside `die()` IS
+delivered after the sender is destroyed, four for four, which was the open
+question the whole design rested on.
 
 ---
 
-**THE CHASSIS WERE NERFED AND NOTHING NEEDED RETUNING FOR IT.** All five to 75%
-rounded -- walk 8 -> 6, run 12 -> 9, fly to 9 -- so Metabolism III buys back
-roughly the old speed and the previous figures become the top of an investment
-curve. Every numeric constant in the four movement files was pulled with comments
-stripped, about ninety, and NOT ONE is a fraction of a speed. The claim that they
-were was asserted first and measured second, which is the wrong order.
+**PRICE ORDERING WAS BUILT LAST SESSION AND NEVER WRITTEN UP.**
+`arch.cargo.valueorder`, landed in `caf2ced` while this document still described
+the ordering it replaced -- exactly the gap check 10 exists to catch. `tidyWork`
+ranks PER UNIT because it is choosing which slot to reclaim; `drainWork` ranks
+PER TRIP because it is choosing what to carry. The `maxStack` proxy it supersedes
+ranked generated weapons alongside dirt, since they declare `maxStack` 1000 and
+stack in practice never. Measured on 79 rules: authored order made `sb_crappyaxe`
+win every pass for a whole session.
 
-**WHAT DOES CHANGE IS NOT A NUMBER OF OURS.** Arc vx comes from
-`{0, +-walkSpeed, +-runSpeed}` in engine code, so every jump now crosses three
-quarters the horizontal distance. A gap that stops being routable produces NO
-EDGE -- the symptom is a detour or "no route", never a unit falling short. Not
-yet seen on the test base.
+**AND ITS OWN COMMENT ARGUES FOR THE OPPOSITE OF WHAT IT DOES.**
+`todo.cargo.drainrationale`. The code is right; the worked example in the
+rationale cannot occur, because `batch` caps a haul at a quarter stack.
 
----
-
-**LINE ENDINGS ARE SETTLED AND THE ZIP WAS INNOCENT.** `.gitattributes` pins the
-rule to the repo -- LF for text, binary for `.png`/`.xcf`, CRLF for `.bat`. The
-twenty-file phantom diff was `core.autocrlf`, a PER-MACHINE setting: invisible on
-a configured clone, a whole-file rewrite on an unconfigured one. `git add
---renormalize .` reduces the staged diff to the files with real content changes.
-`todo.tooling.crlfdrift` is closed by this.
-
-**SMALL AND DONE:** four missing `TASK_LABELS` -- `trap`, `medic`, `fuelfetch`,
-`fish` -- found by diffing the table against every dispatched type.
+**`dd.cargo.portowns` WAS DENYING A CAP THAT ALREADY EXISTED.** It called
+"refusing to dispatch when full" the right unbuilt shape; `drainWork`, `fuelWork`
+and `depositWork` have enforced it all along. Cargo is ONE TRIP'S WORTH. Reading
+that entry straight cost a round of design work sizing a spill for a whole
+network haul.
 
 ---
 
 **STILL OPEN.** The flying-unit partially-submerged check
 (`fact.locomotion.buoyancy`, the `/entityeval` at 0 vs 0.25 has never been run).
 `PLAN DROP`'s second refusal, decided mid-fall from a position the unit is about
-to leave -- 4 harmless fires in the verifying run, and the same measurement-trap
-shape as the check just deleted. Eleven tags cited in `.lua` comments with no
-entry anywhere, which nothing checks; a grep over `*.lua` against the tag set
-would be check 12. `petports_luacheck.py` is still absent from the repo.
+to leave. Eleven tags cited in `.lua` comments with no entry anywhere, which
+nothing checks; a grep over `*.lua` against the tag set would be check 12.
+`petports_luacheck.py` is still absent -- but a tokenising block-balance checker
+now exists and found that the naive strip-comments-then-strip-strings approach is
+WRONG on this codebase: several log strings contain ` -- ` and lose their closing
+quote to the comment pass.
 
-**THE KILL LIST LIVES IN `plan.drawio` NOW, NOT HERE**, and that is deliberate:
-cross-container consolidation, currency in restock beacons, filter search bars,
-sinker platform sliding, sinker fishing, death cargo, the run-animation blink.
-Amphibious swims at walkSpeed as a walker and flySpeed only in aquatic mode --
-noticed in play, by design, and narrowed but not removed by fly = run.
+**LINE ENDINGS ARE SETTLING AS PREDICTED, WITH ONE STRAGGLER MEASURED.**
+`petports_contract.lua` was the only tracked text file still stored CRLF in the
+object database, which `.gitattributes` normalises on the next `git add` of it --
+no `--renormalize` needed for a file being edited anyway. It also carried a
+single `\r\r\n`, removed.
+
+**THE KILL LIST LIVES IN `plan.drawio` NOW, NOT HERE.** Death cargo comes off it
+with this session. Everything else stands: cross-container consolidation,
+currency in restock beacons, filter search bars, sinker platform sliding, sinker
+fishing, the run-animation blink. The chart's whole FINDABLE column is still red
+-- 17 modules and 12 species, and no `treasure/`, `dungeons/` or `biomes/`
+directory exists in the repo at all.
+
 
 ## ARCHITECTURE
 
@@ -440,6 +428,60 @@ misfits produces forty sequential trips rather than forty tasks.
 work tick. It only runs when nothing else has work, so an active network rarely
 reaches it, but an idle one with many crates scans them every second. The fix if
 it ever shows up is a timer like `refreshBeacons` uses, not anything structural.
+
+### Price decides what moves first, and the two generators ask different questions
+`arch.cargo.valueorder` -- see also `arch.cargo.tidying`, `dd.dispatch.emptiestfirst`
+
+**BUILT 2026-09-04**, and written up a session late -- it landed in `caf2ced`
+while the handoff still described the ordering it replaced.
+
+`petports_itemValue(descriptor)` lives in `petports_filters.lua`, lifted out of
+the upcycler's `valueOf` when a second caller appeared. It returns
+`root.itemConfig(...).config.price`, memoised for the life of the script
+context.
+
+**THE FULL DESCRIPTOR, NEVER THE NAME, AND THIS IS THE TRAP.**
+`root.itemConfig` re-runs a generated item's build script with a fresh
+time-based seed when the descriptor carries none, so pricing one sword BY NAME
+returns a different number every call. `table.sort` errors outright on an
+inconsistent order function, so the failure would be a CRASH in the busiest
+generator in the mod rather than a mildly wrong sort. The memo closes the hazard
+rather than merely avoiding it: a seedless descriptor returns its first answer
+forever, so a comparator cannot go inconsistent even if a caller is careless.
+
+**`tidyWork` RANKS PER UNIT.** It is choosing which SLOT to reclaim, and what
+differs between two evictions is the price of the thing being displaced. It
+supersedes a `maxStack`-ascending rule whose arithmetic was sound and whose
+proxy was not -- generated weapons declare `maxStack` 1000 and stack in practice
+never, so the exact items the rule existed for were ranked alongside dirt. Food
+fails it from the other side: a single banana carrying a rot timer is
+unmergeable and occupies a whole slot while declaring otherwise.
+
+**`drainWork` RANKS PER TRIP** -- unit price times `math.min(room, batch)`. It
+is choosing what to CARRY, and a unit hauls one batch per round trip. It
+supersedes walking `machine.rules` in AUTHORED ORDER, which made the winner
+whichever rule the player happened to click first. Measured on a machine holding
+79 rules: `sb_crappyaxe` at rule 32 and `sb_tech` at rule 55 were both over
+quota on every census and the axe won every single pass for a whole session.
+
+**THE TWO MUST NOT BE DESCRIBED AS ONE RULE**, and the drain's own comment
+currently gets its worked example backwards -- see `todo.cargo.drainrationale`.
+What actually happens is that `batch` caps a haul at a quarter stack, so cheap
+bulk tops out around 250 points however large the surplus, while an expensive
+one-off scores its full price against its small surplus. Non-stacking valuables
+sort first, which is the intended outcome; the comment argues for the opposite
+outcome using numbers the cap makes impossible.
+
+**MEMOISED FOR THE SCRIPT CONTEXT AND NOT ON A TIMER.** A price is a pure
+function of a descriptor, so an entry cannot go stale and dropping one only
+guarantees paying to derive it again. An earlier draft refused to memoise
+parameterised descriptors at all, which re-ran a generated weapon's build script
+once a second, per weapon, for as long as it sat in a crate. The key is the
+parameter block serialised, so two stacks sharing a name are priced separately.
+
+**PER OBJECT, NOT GLOBAL.** Three ports on a base hold three independent price
+tables and the upcycler holds a fourth. Bounded and self-cleaning, since the
+context dies with the object, but it is not one cache and nothing shares it.
 
 ### The census must count cargo in transit
 `arch.dispatch.census`
@@ -2082,6 +2124,75 @@ Dropping cargo physically rather than voiding it is deliberate: the dropped
 items immediately become discoverable work for the collection task, so any unit
 whose coverage reaches that spot cleans up after a destroyed port. Claims
 release naturally, since the cargo becomes new items with new ids.
+
+### A unit that dies spills the port's load where it fell -- BUILT AND VERIFIED
+`arch.unit.death` -- see also `arch.unit.exitpaths`, `dd.unit.destructible`, `dd.cargo.portowns`, `fact.unit.uninitnokill`, `fact.unit.anchoradoption`
+
+**BUILT AND VERIFIED IN GAME 2026-09-04.** `dd.unit.destructible` decided units
+could be lost and never made losing one cost anything: cargo lives on the port,
+the unit dropped nothing, and a replacement arrived after `RESPAWN_GRACE`. Death
+was free, which made the camouflage module a formality.
+
+**THE UNIT SENDS A POSITION AND NOTHING ELSE, BECAUSE IT CARRIES NOTHING.**
+Every pickup is handed over on the tick it happens and a `withdraw` never
+touches an item at all -- the port does the `containerConsume` on the arrival
+report. So `die()` sends `petports_unitDied` with its position and its ENTITY
+ID, and the port spills `petData.cargo` there. This is the mechanic
+`arch.unit.headpat`'s header predicted when it called the unit a dumb reporter.
+
+**THE WHOLE OF `cargo`, WITH NO SLICE.** It is one trip's worth by construction
+-- see the correction in `dd.cargo.portowns`.
+
+**`die()` IS A FRESH DEFINITION.** `groundPet.lua` defines none of the death
+hooks and `monster.lua`'s body is unusable here; `fact.unit.groundpetdeath` has
+the detail. It is also the only hook an on-death behaviour could ever use.
+
+**FOUR DEFECTS, AND THREE WERE ONE SHAPE: A DECISION THAT DID NOT OUTLIVE THE
+THING IT WAS PROTECTING AGAINST.** Worth reading in order, because each fix
+exposed the next:
+
+  1. **A recall reaches `die()` looking exactly like a lava death.**
+     `petports_despawn` kills through `petports_unitfadeout`, so without a
+     latch every unsocket would dump the load on the floor -- and so would
+     every world unload, because the port calls `saveAndDespawn` from `uninit`.
+     `self.petportsNoDrop` is the latch.
+  2. **The latch lives on `self` and the FADE OUTLIVES THE CONTEXT.** The port
+     called despawn 68ms before the world was torn down; the effect needs about
+     a second; the still-living unit was serialised into the world save
+     mid-death and came back with the kill queued and the latch gone.
+     `petports_despawn(instant)` culls without the fade on the unload path,
+     which `arch.unit.exitpaths` asked for anyway -- a world unload is "not an
+     event at all. No animation."
+  3. **THE CULL DOES NOT KILL EITHER, AND CANNOT.** `fact.unit.uninitnokill`.
+     Measured: the cull ran 98ms AFTER the world stop packet. Any unit alive at
+     unload is serialised regardless, so the window cannot be closed from that
+     end and the fix had to move to the reload side.
+  4. **`self.petId` MEANS "CLAIMED ME", NOT "SPAWNED BY ME".** A first attempt
+     gated the spill on `payload.id == self.petId` and it passed for a
+     leftover, because the leftover had RE-HOMED --
+     `fact.unit.anchoradoption`. `self.spawnedPetId` is written in exactly one
+     place, the line after `world.spawnMonster` returns, and read in exactly
+     one, the spill handler.
+
+**`self.spawnedPetId` IS NOT PERSISTED AND THAT IS THE POINT.** After any reload
+the port has spawned nothing, so every unit predating the load fails the test.
+The port always despawns on unload, so a unit that comes back from the world
+save is a leftover BY DEFINITION.
+
+**THE REFUSAL IS LOUD**, per `fact.tooling.mergedrefusal`: a silent nil would
+read exactly like the message never arriving, which is the other failure this
+path has to stay able to distinguish. It names both fields, so a refusal where
+they AGREE would falsify the model above.
+
+**THE TASK IS RELEASED TOO**, and before the ownership check is passed rather
+than after, so a stranger's death cannot release the real unit's claim.
+`dd.unit.destructible` predicted the claim would be left to the TTL; the TTL is
+now the backstop for a death that never reports rather than the only collector.
+
+**VERIFIED END TO END 2026-09-04**, one lifesoul: picked up at 13:30:41, culled
+at unload 13:30:47 with no spill, read back off the item at 13:31:00, the
+leftover refused at 13:31:02, respawned still holding it at 13:31:03, delivered
+13:31:09. A real kill mid-deposit spilled 1 stack, 0 lost.
 
 ### Recalls vent-route now, and the refusal that stopped them
 `arch.vent.recall`
@@ -5294,13 +5405,24 @@ the other.
 report is sent, so a port mined in that second loses the item. The port logs
 `ITEM LOST` via sb.logError if cargo arrives with no petData.
 
-**No capacity limit, on purpose.** A cap that silently drops items is worse than
-no cap; the right shape is the port refusing to DISPATCH collection when full,
-and that belongs with whatever capacity model eventually lands. Until then the
-stack count in the log is how unbounded growth stays visible. Note nothing
-enforces per-item `maxStack` on the way in -- `money` reached 70 in one entry --
-which does not matter while cargo is an opaque blob and will matter when it meets
-a container.
+**No HARD capacity limit, on purpose.** A cap that silently drops items is worse
+than no cap. Note nothing enforces per-item `maxStack` on the way in -- `money`
+reached 70 in one entry -- which does not matter while cargo is an opaque blob
+and will matter when it meets a container.
+
+**BUT A SOFT ONE ALREADY EXISTS AND THIS ENTRY USED TO DENY IT, 2026-09-04.**
+The paragraph above went on to say the right shape was "the port refusing to
+DISPATCH collection when full" as though that were unbuilt. It is built, in
+three places, and has been: `drainWork` and `fuelWork` both open with `if
+#self.petData.cargo > 0 then return nil end` -- ONLY WITH EMPTY HANDS -- and
+`depositWork` routes an existing load ahead of any other assignment. **CARGO IS
+ONE TRIP'S WORTH BY CONSTRUCTION.** At most a fish's treasure and a
+medicalgoods.
+
+That sentence was read as licence to size `arch.unit.death`'s spill for a whole
+accumulated network haul, and the design work that followed was wasted. An entry
+describing what is missing has to be checked against the generators before it is
+believed.
 
 ### Claims: exclusive for TAKES, per-port for PUTS
 `dd.dispatch.claimscope`
@@ -6131,16 +6253,20 @@ front of something hostile and watch) before designing around either answer. If
 ghostly does exclude monster damage and it should not, the fix is the team type,
 not the status settings.
 
-**Consequences that follow either way, none of them currently handled:**
+**Consequences, and the first two are handled now -- see `arch.unit.death`,
+2026-09-04:**
 
-  - a unit that dies mid-task leaves its claim behind, and the TTL is what
-    collects it
+  - ~~a unit that dies mid-task leaves its claim behind, and the TTL is what
+    collects it~~ -- the death report releases the task directly. The TTL is
+    the backstop for a death that never reports.
   - cargo already handed to the port is SAFE, since it lives on `petData` and
     not on the unit -- only the existing loss window applies, between
-    `takeItemDrop` and the report landing
+    `takeItemDrop` and the report landing. **AND IT IS NO LONGER FREE:** the
+    port now spills that load where the unit fell, which is what finally makes
+    defending a network worth doing and gives the camouflage module a job.
   - the port respawns a fresh unit after `RESPAWN_GRACE` as though nothing
     happened, which is arguably wrong. A destroyed unit staying destroyed, with
-    the item knowing it, is the other option and is undecided.
+    the item knowing it, is the other option and is STILL undecided.
 
 ### The item IS the pet
 `dd.unit.itemispet`
@@ -10075,6 +10201,80 @@ tiles before the target blinked out.
 path is shared and names the common case. Cosmetic, and noted only so the next
 reader greping fish failures knows that string is one of them.
 
+### `uninit` RUNS AFTER SIMULATION STOPS, SO A KILL ISSUED THERE NEVER COMPLETES
+`fact.unit.uninitnokill` -- see also `arch.unit.death`, `arch.unit.exitpaths`
+
+**MEASURED 2026-09-04.** The port's `uninit` culled its unit with
+`status.setResource("health", 0)` and logged it at 13:22:13.948. The world stop
+packet had arrived at 13:22:13.850, 98ms EARLIER. Nothing ticks after that, so
+the resource was set and no update loop ever acted on it. The unit was written
+into the world save alive, came back on the next load of that world at the
+identical position, and died there.
+
+**SO ANY UNIT ALIVE AT A WORLD UNLOAD IS SERIALISED, WHATEVER IS DONE TO IT FROM
+`uninit`.** Instant or deferred makes no difference; there is no tick left in
+which to die. This invalidates the whole class of "clean it up on unload" fix,
+and it is why `arch.unit.death` had to move its guard to the RELOAD side.
+
+The instant cull is still right, because `arch.unit.exitpaths` wants no
+animation on that path and a half-run fade should not go into a save. It is just
+not a window-closer and must not be described as one.
+
+### `setPet` ACCEPTS ANY ENTITY ID WHILE `self.petId` IS NIL
+`fact.unit.anchoradoption` -- see also `arch.port.anchor`, `arch.unit.death`
+
+**READ FROM `groundPet.lua` AND MEASURED 2026-09-04.** `setPet`'s only guard is
+`if self.petId ~= nil and self.petId ~= entityId then return false end`. That is
+vanilla's anchor contract, the same one `techstation.lua` implements, and it is
+HOW A PET RE-HOMES AFTER A RELOAD. It is not a defect.
+
+**WHAT IT MEANS IS THAT `self.petId` ANSWERS "A UNIT HAS CLAIMED ME", NOT "I
+SPAWNED THIS UNIT".** A monster restored from the world save runs
+`groundPet.findAnchor`, finds a port whose `hasPet` is false, calls `setAnchor`,
+and is adopted -- in under a second, with no log line of its own. Observed twice
+while a port was still initialising and had spawned nothing.
+
+Any question of the form "is this MY unit" therefore needs a field only
+`spawnPet` writes. `self.spawnedPetId` is that field.
+
+### `groundPet.lua` DEFINES NO `die()`, `shouldDie()` OR `uninit()`
+`fact.unit.groundpetdeath` -- see also `fact.unit.groundpetinteract`, `arch.unit.death`
+
+**READ FROM THE VANILLA SOURCE 2026-09-04.** Its only `require` is
+`/scripts/util.lua`. So a `die()` in `petports_contract.lua` is a FRESH
+DEFINITION with no vanilla body to carry forward -- the opposite of
+`interact()`, which had to be reproduced verbatim or pats went visually dead.
+Two functions that look like the same situation and are not.
+
+**`/scripts/monster.lua`'S `die()` IS NOT A MODEL FOR ONE HERE.** Its body is
+three statements and all three are absent from a pet's script context:
+
+    capturable.die()     capturable.lua is in no chassis scripts list, so this
+                         is a nil global and would RAISE. Moot anyway --
+                         every monstertype here sets capturable false.
+    self.deathBehavior   a BEHAVIOR TREE, built by behavior.lua from a
+                         "deathBehavior" config key. These units run
+                         stateMachine.lua and never load behavior.lua, so the
+                         tree is never built and the branch is permanently dead.
+    spawnDrops()         from /scripts/drops.lua, also unlisted, and dropPools
+                         is empty on every chassis.
+
+**SO A UNIT-SIDE ON-DEATH BEHAVIOUR -- gibs, an explosion, a noise -- CANNOT BE
+AUTHORED AS A `deathBehavior` KEY** and has to be spawned from our own `die()`.
+Nothing does that yet.
+
+### A `world.sendEntityMessage` FROM INSIDE `die()` IS STILL DELIVERED
+`fact.unit.deathmessage` -- see also `arch.unit.death`
+
+**MEASURED 2026-09-04, four deaths, and it was the open question the whole
+design rested on.** The port's handler logged in the SAME MILLISECOND as the
+unit's send, every time, on a sender that was being destroyed. The message is
+queued on the world rather than held by the sender, so the sender's destruction
+does not cancel it.
+
+This is what makes a dying entity able to hand off state at all, rather than
+needing the other end to poll for its disappearance.
+
 ### `localAnimator` drawables on a player are ANIMATOR-RELATIVE
 `fact.port.drawablespace` -- see also `arch.port.overlay`, `fact.pane.panesound`, `fact.item.renderlayer`
 
@@ -11553,6 +11753,26 @@ matching when someone rewords a log line.
   disagree.
 
 ---
+
+### `drainWork`'s ordering comment argues for the opposite of what it does
+`todo.cargo.drainrationale` -- see also `arch.cargo.valueorder`
+
+**FOUND 2026-09-04, in code committed the same day.** The comment above the
+queue sort justifies trip-total ordering with a worked example: per-unit
+ordering "would rank a 1000-dirt haul worth 1000 points below a single
+600-point axe, which is wrong for a machine that wants feeding."
+
+**THERE IS NO 1000-DIRT HAUL.** `batch` is
+`math.ceil(stackSizeOf(item) * MACHINE_MIN_BATCH)` with `MACHINE_MIN_BATCH`
+0.25, so a dirt haul tops out at 250 points however large the surplus. Trip
+ordering therefore ranks the axe first as well, and the example cannot occur.
+
+The CODE is right and the behaviour is the intended one -- expensive
+non-stacking items sort first, which is what a fishing base wants moved. Only
+the rationale is wrong, which is the more dangerous half: the next person to
+change this will reason from it.
+
+Rewrite the comment to say what the cap actually buys. No code change.
 
 ### The upcycler's slot order is duplicated in two files with nothing linking them
 `todo.upcycler.slotorderdup`

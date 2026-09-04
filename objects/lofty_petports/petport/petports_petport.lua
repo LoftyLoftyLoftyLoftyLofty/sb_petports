@@ -1402,7 +1402,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-04m only a unit this port SPAWNED may spill"
+local PETPORT_BUILD_STAMP = "2026-09-04n machine output can go to a request crate"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -12845,8 +12845,29 @@ local function fuelWork()
   if self.petData == nil then return nil end
   if self.petData.cargo ~= nil and #self.petData.cargo > 0 then return nil end
 
+  --  BOTH KINDS OF DESTINATION, AND A REQUEST CRATE COUNTS.
+  --
+  --  THE BUG THIS FIXES, 2026-09-04: an upcycler with a treat in its output,
+  --  no deposit beacon anywhere, and one crate with a restock beacon asking
+  --  for treats. Nothing moved, ever. This line read `deposit` only, found
+  --  none, and returned before looking at a single machine -- so the unit was
+  --  never sent to collect, restockDeliverWork never got cargo to match
+  --  against, and the treat sat in the slot stopping the machine.
+  --
+  --  THIS IS A VIABILITY TEST, NOT A DESTINATION ASSIGNMENT, and that is what
+  --  makes including request crates safe. The task returned below is type
+  --  "fuel" targeting the MACHINE; no crate is named in it. Where the load
+  --  actually ends up is decided a tick later by findWork, where
+  --  restockDeliverWork sits directly above depositWork. So restockFetchWork
+  --  and restockDeliverWork remain the only things that fill a request crate,
+  --  and the rule tidyWork states -- no second route into a quota -- is not
+  --  broken by asking a crate whether it would take something.
   local destinations = petports_beaconsFor("deposit")
-  if #destinations == 0 then return nil, "no deposit beacon to store fuel in" end
+  local requesters = restockBeacons()
+
+  if #destinations == 0 and #requesters == 0 then
+    return nil, "no deposit or restock beacon to store fuel in"
+  end
 
   local waiting = 0
   local trickling = 0
@@ -12995,6 +13016,17 @@ local function fuelWork()
         --  a network full of the right crates.
         local anyFilterAccepts = false
 
+        --  ANSWERED BY THE TWO LOOPS BELOW AND ACTED ON AFTER THEM.
+        --
+        --  THE DISPATCH USED TO LIVE INSIDE THE DESTINATION LOOP and nothing
+        --  in it ever referenced `destination` -- the claim, the backoff and
+        --  the service point are all keyed on the MACHINE, because the task
+        --  is a take-from-a-slot. So it re-derived a machine-scoped answer
+        --  once per crate and returned from the middle of a search. Hoisted
+        --  out rather than copied, because a second copy is exactly
+        --  todo.upcycler.slotorderdup wearing different clothes.
+        local wanted = false
+
         for _, destination in ipairs(worthTaking and destinations or {}) do
           if world.entityExists(destination.id)
              --  THE ITEM ACTUALLY HELD. Flavors sort into separate subgroups,
@@ -13012,65 +13044,104 @@ local function fuelWork()
               and world.containerItemsCanFit(destination.id, held) or nil
 
             if fits ~= nil and fits > 0 then
-              --  EXCLUSIVE ACROSS PORTS. See the drain claim above: a take has
-              --  a finite supply, so a per-port claim sends every port's unit
-              --  after the same three items.
-              local workId = "fuel:" .. tostring(machine.id)
+              wanted = true
+              break
+            end
+          end
+        end
 
-              local failure = self.workFailures[workId]
-              local backedOff = failure ~= nil
-                and (failure["until"] or 0) > world.time()
+        --  A REQUEST CRATE THAT ASKED FOR THIS AND IS NOT YET AT ITS MAX.
+        --
+        --  THE PREDICATE MIRRORS restockDeliverWork DELIBERATELY -- names the
+        --  item, `have < max`, and a nil `containerItemsCanFit` read as YES.
+        --  That agreement is load-bearing: this decides whether to FETCH and
+        --  that decides whether to DELIVER, so a stricter test there than
+        --  here strands a unit holding something with nowhere to put it, and
+        --  with no deposit beacon in the network there is no fallback to
+        --  catch it. Change one and change the other.
+        --
+        --  nil from restockHeld means the crate could not be read, and is NOT
+        --  zero -- zero would read as "empty, take everything".
+        if not wanted then
+          for _, crate in ipairs(worthTaking and requesters or {}) do
+            for _, request in ipairs(crate.requests or {}) do
+              if request.item == held.name then
+                anyFilterAccepts = true
 
-              if not backedOff and claimFree(workId) then
-                local stand, standWhy = servicePointNear("machine " .. tostring(machine.id),
-                  machine.id, machine.position, 4)
+                local have = restockHeld(crate.id, request.item)
+                local fits = world.containerItemsCanFit ~= nil
+                  and world.containerItemsCanFit(crate.id, held) or nil
 
-                if stand == nil then
-                  sb.logInfo("PETPORT %s fuel source %s SKIPPED: %s of %s",
-                    stationUniqueId(), sb.printJson(machine.id), tostring(standWhy),
-                    sb.printJson(machine.position))
-                else
-                  sb.logInfo("PETPORT %s collecting %s %s from machine %s",
-                    stationUniqueId(), sb.printJson(held.count),
-                    tostring(held.name), sb.printJson(machine.id))
-
-                  return {
-                    id = workId,
-                    --  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
-                    mediumVerified = true,
-                    type = "fuel",
-                    target = machine.id,
-                    item = held.name,
-                    count = held.count,
-
-                    --  A KEY, NOT AN OFFSET, AND THE DIFFERENCE IS THE WHOLE
-                    --  BUG THIS LINE ONCE HAD.
-                    --
-                    --  This task is read with an OFFSET-taking call --
-                    --  world.containerItemAt(id, MACHINE_SLOT_OUTPUT) -- and
-                    --  consumed by withdrawMisfit, which takes a one-based KEY
-                    --  and applies SLOT_KEY_TO_OFFSET itself. Handing it the
-                    --  raw offset sent the take to slot 0, the INPUT, which on
-                    --  an idle machine is empty:
-                    --
-                    --    collecting 3 petports_petfuel from machine 1
-                    --    tidy of petports_petfuel from 1 took nothing:
-                    --      slot 1 now holds null, not petports_petfuel
-                    --
-                    --  and the unit walked back and forth forever, dispatched
-                    --  by a correct read and defeated by an incorrect take.
-                    --
-                    --  Subtracting SLOT_KEY_TO_OFFSET rather than adding a
-                    --  literal 1, so this stays correct if the bias is ever
-                    --  found to differ.
-                    slot = MACHINE_SLOT_OUTPUT - SLOT_KEY_TO_OFFSET,
-                    position = stand,
-                    containerPosition = machine.position,
-                    port = stationUniqueId(),
-                    dwell = 0
-                  }
+                if have ~= nil and have < request.max
+                   and (fits == nil or fits > 0) then
+                  wanted = true
+                  break
                 end
               end
+            end
+
+            if wanted then break end
+          end
+        end
+
+        if wanted then
+          --  EXCLUSIVE ACROSS PORTS. See the drain claim above: a take has
+          --  a finite supply, so a per-port claim sends every port's unit
+          --  after the same three items.
+          local workId = "fuel:" .. tostring(machine.id)
+
+          local failure = self.workFailures[workId]
+          local backedOff = failure ~= nil
+            and (failure["until"] or 0) > world.time()
+
+          if not backedOff and claimFree(workId) then
+            local stand, standWhy = servicePointNear("machine " .. tostring(machine.id),
+              machine.id, machine.position, 4)
+
+            if stand == nil then
+              sb.logInfo("PETPORT %s fuel source %s SKIPPED: %s of %s",
+                stationUniqueId(), sb.printJson(machine.id), tostring(standWhy),
+                sb.printJson(machine.position))
+            else
+              sb.logInfo("PETPORT %s collecting %s %s from machine %s",
+                stationUniqueId(), sb.printJson(held.count),
+                tostring(held.name), sb.printJson(machine.id))
+
+              return {
+                id = workId,
+                --  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
+                mediumVerified = true,
+                type = "fuel",
+                target = machine.id,
+                item = held.name,
+                count = held.count,
+
+                --  A KEY, NOT AN OFFSET, AND THE DIFFERENCE IS THE WHOLE
+                --  BUG THIS LINE ONCE HAD.
+                --
+                --  This task is read with an OFFSET-taking call --
+                --  world.containerItemAt(id, MACHINE_SLOT_OUTPUT) -- and
+                --  consumed by withdrawMisfit, which takes a one-based KEY
+                --  and applies SLOT_KEY_TO_OFFSET itself. Handing it the
+                --  raw offset sent the take to slot 0, the INPUT, which on
+                --  an idle machine is empty:
+                --
+                --    collecting 3 petports_petfuel from machine 1
+                --    tidy of petports_petfuel from 1 took nothing:
+                --      slot 1 now holds null, not petports_petfuel
+                --
+                --  and the unit walked back and forth forever, dispatched
+                --  by a correct read and defeated by an incorrect take.
+                --
+                --  Subtracting SLOT_KEY_TO_OFFSET rather than adding a
+                --  literal 1, so this stays correct if the bias is ever
+                --  found to differ.
+                slot = MACHINE_SLOT_OUTPUT - SLOT_KEY_TO_OFFSET,
+                position = stand,
+                containerPosition = machine.position,
+                port = stationUniqueId(),
+                dwell = 0
+              }
             end
           end
         end
@@ -13112,15 +13183,19 @@ local function fuelWork()
   --  is why this joins rather than picks.
   local parts = {}
 
+  --  "BEACON", NOT "DEPOSIT BEACON", SINCE 2026-09-04. A request crate naming
+  --  the item now satisfies anyFilterAccepts too, so the old wording would
+  --  send a reader to check deposit filters for an item no crate of EITHER
+  --  kind wanted.
   if #unfilteredNames > 0 then
     table.insert(parts, string.format(
-      "no deposit beacon's filter accepts %s",
+      "no deposit or restock beacon accepts %s",
       table.concat(unfilteredNames, ", ")))
   end
 
   if #unroomyNames > 0 then
     table.insert(parts, string.format(
-      "every crate that accepts %s is full",
+      "every crate that accepts %s is full or already at its quota",
       table.concat(unroomyNames, ", ")))
   end
 
