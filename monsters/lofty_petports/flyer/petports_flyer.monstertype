@@ -120,6 +120,13 @@
       "/scripts/lofty_petports/petports_work.lua",
       "/scripts/lofty_petports/petports_habitat.lua",
       "/scripts/lofty_petports/petports_flavors.lua",
+
+      //  COARSE NAVIGATION, v1. Defines globals only -- nothing in it runs
+      //  at load -- so its position in this list carries no ordering
+      //  requirement the way petports_flyapproach.lua does. Listed beside
+      //  the other shared scripts rather than after groundPet.lua for that
+      //  reason: it shadows nothing.
+      "/scripts/lofty_petports/petports_coarsenav.lua",
       "/monsters/lofty_petports/petports_petBehavior.lua",
       "/monsters/lofty_petports/petports_contract.lua",
       "/monsters/lofty_petports/petports_placement.lua",
