@@ -89,6 +89,10 @@ end
 --  name -> { category = <string>, tags = { [tag] = true } }
 local petportsItemFacts = {}
 
+--  descriptor key -> per-unit price. See petports_itemValue for the key, and
+--  for why nothing here ever needs dropping.
+local petportsItemPrices = {}
+
 --  Parsed manifest, and an id -> group index built alongside it.
 local petportsManifest = nil
 local petportsGroupsById = nil
@@ -273,6 +277,89 @@ function petports_itemFacts(name)
 
 	petportsItemFacts[name] = facts
 	return facts
+end
+
+--  What ONE of this item is worth, in pixels. Zero when nothing can be read.
+--
+--  LIFTED VERBATIM FROM THE UPCYCLER'S valueOf, 2026-09-04, because a second
+--  caller appeared -- tidyWork's eviction ordering. The reasoning is the
+--  upcycler's and is repeated here because this is where it now lives:
+--
+--  PRICE IS THE ONLY UNIVERSAL VALUE AXIS the engine offers, it is on every
+--  item, and it is the same number the sell-for-pixels path uses. Vanilla's
+--  cropshipper values its cargo exactly this way.
+--
+--  THE FULL DESCRIPTOR, NOT THE NAME, AND THIS IS THE WHOLE TRAP.
+--  root.itemConfig re-runs a generated item's build script with a fresh
+--  time-based seed when the descriptor carries no seed, so pricing a specific
+--  sword BY NAME returns a different number every call. A comparator built on
+--  that would reorder itself between calls, and table.sort errors outright on
+--  an inconsistent order function -- so the failure would be a crash in the
+--  busiest generator in the mod, not a mildly wrong sort. Callers hold a
+--  descriptor from world.containerItems; they must pass it whole.
+--
+--  MEMOISED BY NAME AND PARAMETERS, KEPT FOR THE LIFE OF THE SCRIPT CONTEXT.
+--
+--  A price is a PURE FUNCTION OF A DESCRIPTOR. An entry cannot go stale, so
+--  there is no correctness reason to ever drop one, and dropping one only
+--  guarantees paying to derive it again. The parameters have to be in the key
+--  because two stacks sharing a name can be genuinely different items and a
+--  name-only memo would misprice the second -- but with them in the key the
+--  answer is exact, so it is simply kept.
+--
+--  NOT ON A TIMER, AND THIS WAS GOT WRONG ONCE. An earlier draft refused to
+--  memoise parameterised descriptors at all, which made tidyWork re-run a
+--  generated weapon's build script once a second, per weapon, for as long as it
+--  sat in a crate. The proposed repair was to memoise and clear on the beacon
+--  refresh, which is the same mistake five times slower: forty weapons cached
+--  when the chunk loads is nothing, and forty weapons re-derived on any timer
+--  is waste dressed as hygiene. The script context dies with the world, which
+--  is the only lifetime this needs.
+--
+--  THE KEY IS THE PARAMETER BLOCK SERIALISED, the same identity compaction
+--  buckets by. Building it costs a sb.printJson per lookup for parameterised
+--  items, which is worth paying: it is a serialisation against an item build
+--  script that generates abilities, damage curves and animation state.
+--
+--  IT ALSO CLOSES THE CONSISTENCY HAZARD ABOVE RATHER THAN MERELY AVOIDING IT.
+--  A descriptor whose price would re-roll between two calls now returns the
+--  first answer every time, so a comparator built on this cannot go
+--  inconsistent even if a caller hands it something seedless.
+--
+--  RAW PRICE, NOT A FLOORED ONE. The upcycler floors this at
+--  petports_valueFloor so a stack of worthless dirt is still worth one Pet
+--  Treat; that floor is points arithmetic and belongs to the machine. Caching
+--  a floored number here would hand a second caller with a different floor the
+--  first caller's answer.
+function petports_itemValue(descriptor)
+	if type(descriptor) ~= "table" or type(descriptor.name) ~= "string" then
+		return 0
+	end
+
+	local plain = descriptor.parameters == nil
+		or next(descriptor.parameters) == nil
+
+	--  A name never contains a NUL, so a plain item's key can never collide
+	--  with a parameterised one's.
+	local key = descriptor.name
+	if not plain then
+		key = key .. "\0" .. sb.printJson(descriptor.parameters)
+	end
+
+	if petportsItemPrices[key] ~= nil then
+		return petportsItemPrices[key]
+	end
+
+	local price = 0
+	local ok, resolved = pcall(root.itemConfig, descriptor)
+
+	if ok and type(resolved) == "table" and type(resolved.config) == "table" then
+		price = tonumber(resolved.config.price) or 0
+	end
+
+	petportsItemPrices[key] = price
+
+	return price
 end
 
 local function anyOf(list, test)
@@ -652,6 +739,7 @@ end
 --  diagnosed as a filter bug.
 function petports_filterResetCache()
 	petportsItemFacts = {}
+	petportsItemPrices = {}
 	petportsManifest = nil
 	petportsGroupsById = nil
 end

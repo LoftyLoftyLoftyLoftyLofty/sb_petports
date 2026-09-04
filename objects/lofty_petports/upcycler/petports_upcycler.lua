@@ -83,6 +83,11 @@ local FEEDER_KEY = "petports_upcyclerFeeder"
 require "/scripts/lofty_petports/petports_flavors.lua"
 require "/scripts/lofty_petports/petports_upcyclerstate.lua"
 
+--  FOR petports_itemValue ALONE. Nothing here evaluates a filter, and the
+--  manifest this file also owns is loaded lazily on first use, so the cost of
+--  the require is the parse and nothing else.
+require "/scripts/lofty_petports/petports_filters.lua"
+
 local POINTS_KEY = "petports_upcyclerPoints"
 
 --  THE BLIP QUEUE, MIRRORED THE SAME WAY POINTS ARE. A machine mined with four
@@ -163,7 +168,7 @@ local FUEL_ITEM = "petports_petfuel"
 --  in this mod. Pet Treats carry the tag too, so output can never be laundered
 --  back into output -- the value floor means even a zero-price item is worth a
 --  point, so price alone would not have closed that loop.
-local OBJECT_BUILD_STAMP = "2026-08-30b auto-swap resolves the slot deadlock"
+local OBJECT_BUILD_STAMP = "2026-09-04b one price lookup per conversion"
 
 local EXEMPT_TAG = "petports_no_upcycling"
 
@@ -270,48 +275,27 @@ end
 
 --  What a single one of these is worth, in points.
 --
---  PRICE IS THE ONLY UNIVERSAL VALUE AXIS the engine offers, it is on every
---  item, and it is the same number the sell-for-pixels path uses -- so
---  "capture the value without the pixel detour" is expressible rather than
---  hand-authored. Vanilla's cropshipper values its cargo exactly this way.
+--  THE LOOKUP MOVED OUT, 2026-09-04. Everything about reading a price -- why
+--  price is the axis, why the descriptor and never the name, why the memo
+--  refuses parameterised items -- now lives on petports_itemValue in
+--  petports_filters.lua, because tidyWork's eviction ordering became a second
+--  caller. What is left here is the only part that was ever the machine's:
+--  the floor.
 --
---  THE FULL DESCRIPTOR, NOT THE NAME. root.itemConfig re-runs a generated
---  item's build script with a fresh time-based seed when the descriptor carries
---  no seed, so pricing a specific sword by name returns a different number
---  every call. The descriptor from containerItemAt carries its parameters, so
---  it prices the actual item.
+--  THE FLOOR IS PER ITEM, NOT PER STACK, and that is what makes the intended
+--  arithmetic work: dirt is worthless, a stack is 1000, and a stack of dirt is
+--  therefore exactly one Pet Treat. Read the other way it would be one Treat
+--  per stack regardless of size.
 --
---  MEMOISED BY NAME ONLY WHEN THERE ARE NO PARAMETERS, for the same reason: two
---  stacks sharing a name can be genuinely different items, and caching the
---  first one's price would misprice the second.
+--  It stays on this side of the extraction because it is points arithmetic and
+--  means nothing to a caller that only wants to rank two items against each
+--  other. A shared function returning a floored number would also have to
+--  cache one, and would hand a caller with a different floor the first
+--  caller's answer.
 local function valueOf(descriptor)
-	if type(descriptor) ~= "table" or type(descriptor.name) ~= "string" then
-		return self.valueFloor
-	end
-
-	local plain = descriptor.parameters == nil
-		or next(descriptor.parameters) == nil
-
-	if plain and self.valueCache[descriptor.name] ~= nil then
-		return self.valueCache[descriptor.name]
-	end
-
-	local value = self.valueFloor
-	local ok, resolved = pcall(root.itemConfig, descriptor)
-
-	if ok and type(resolved) == "table" and type(resolved.config) == "table" then
-		local price = tonumber(resolved.config.price) or 0
-
-		--  THE FLOOR IS PER ITEM, NOT PER STACK, and that is what makes the
-		--  intended arithmetic work: dirt is worthless, a stack is 1000, and a
-		--  stack of dirt is therefore exactly one Pet Treat. Read the other way
-		--  it would be one Treat per stack regardless of size.
-		if price > self.valueFloor then value = price end
-	end
-
-	if plain then self.valueCache[descriptor.name] = value end
-
-	return value
+	local price = petports_itemValue(descriptor)
+	if price > self.valueFloor then return price end
+	return self.valueFloor
 end
 
 --  Refused regardless of rules. See EXEMPT_TAG.
@@ -336,7 +320,7 @@ local function exempt(descriptor)
 		end
 	end
 
-	--  Cached by NAME, which is safe here where valueOf's cache is not: an
+	--  Cached by NAME, which is safe here where petports_itemValue's is not: an
 	--  item's tags are a property of its definition and no build script
 	--  invents them per instance.
 	self.exemptCache[descriptor.name] = verdict
@@ -1104,11 +1088,15 @@ function update(dt)
 
 	self.carry = self.carry - taken.count
 
-	local gained = valueOf(taken) * taken.count
+	--  ONE LOOKUP, NOT TWO. This was valueOf(taken) here and valueOf(taken)
+	--  again in the state line below -- free for a plain item off the memo, two
+	--  full item-config resolves for a parameterised one, per conversion.
+	local each = valueOf(taken)
+	local gained = each * taken.count
 	storage.points = storage.points + gained
 
 	state(string.format("converting %s at %s point(s) each", taken.name,
-		tostring(valueOf(taken))))
+		tostring(each)))
 
 	--  DELIBERATELY NOT LOGGED PER ITEM. At five a second this was the noisiest
 	--  thing in the mod by a wide margin and buried everything around it -- the
@@ -1167,7 +1155,6 @@ function init()
 
 	self.carry = 0
 	self.flushTimer = 0
-	self.valueCache = {}
 	self.exemptCache = {}
 
 	--  TUNING KNOBS, IN CONFIG RATHER THAN IN CODE.

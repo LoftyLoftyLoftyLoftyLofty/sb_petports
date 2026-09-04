@@ -1402,7 +1402,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-04f chassis speeds nerfed to 6/9"
+local PETPORT_BUILD_STAMP = "2026-09-04h drain serves rules by trip value, not authored order"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -12133,8 +12133,16 @@ local function tidyWork()
                 name = misfit.name,
                 count = misfit.count,
                 slot = misfit.slot,
-                stackSize = stackSizeFor(misfit.name,
-                  type(stack) == "table" and stack.parameters or nil)
+
+                --  THE DESCRIPTOR, NEVER A NAME. See the sort below. When
+                --  there is no descriptor to price -- which needs the slot to
+                --  have emptied between the misfit scan and this read -- the
+                --  candidate is worth nothing rather than being priced from
+                --  its name, because pricing a generated item by name re-rolls
+                --  its build script and would poison the memo for that name
+                --  for the life of the script context.
+                unitValue = type(stack) == "table"
+                  and petports_itemValue(stack) or 0
               })
             end
           end
@@ -12143,27 +12151,55 @@ local function tidyWork()
     end
   end
 
-  --  DENSEST SLOTS FIRST: LOWEST maxStack WINS.
+  --  MOST VALUABLE FIRST: HIGHEST PER-UNIT PRICE WINS.
   --
-  --  A slot is a slot whatever is in it, so every eviction reclaims exactly one
-  --  regardless of what it held. What differs is the PRICE of reclaiming it. A
-  --  slot holding one sword -- maxStack 1 -- is a slot spent on a single item;
-  --  a slot holding 900 dirt is a slot spent on nine hundred. Evicting the sword
-  --  buys the same space for a nine-hundredth of the contents, and what stays
-  --  behind is the stuff that packs.
+  --  SUPERSEDES A maxStack ORDERING, 2026-09-04. That rule read "densest slots
+  --  first", and its arithmetic was sound: a slot is a slot whatever is in it,
+  --  so every eviction reclaims exactly one and what differs is the price of
+  --  reclaiming it. A slot holding one sword was a slot spent on a single item,
+  --  a slot holding 900 dirt was a slot spent on nine hundred, and evicting the
+  --  sword bought the same space for a nine-hundredth of the contents.
+  --
+  --  THE ARITHMETIC WAS SOUND AND THE PROXY WAS NOT. Generated weapons declare
+  --  maxStack 1000 and stack in practice never, because two of them share a
+  --  name and nothing else -- so the exact items the rule was written for were
+  --  ranked alongside dirt. Food shows the same failure from the other side: a
+  --  single banana carrying a rot timer is unmergeable and occupies a whole
+  --  slot while declaring a stack size that says otherwise.
+  --
+  --  AND THE OBJECTIVE CHANGED WITH IT, deliberately rather than as a side
+  --  effect of a better proxy. This no longer ranks by the cost of reclaiming a
+  --  slot. It ranks by what the player would rather see moved first, on the
+  --  grounds that expensive things are generally the important ones -- a
+  --  legendary weapon or an upgrade component deserves attention ahead of a
+  --  stack of dirt. The unstackable-junk case the old rule was chasing comes
+  --  along for free, because that junk is also the expensive junk.
+  --
+  --  PER UNIT, NOT PER SLOT. price times count would rank a full stack of
+  --  anything mildly valuable above every one-off, which is the failure the
+  --  maxStack rule already had, wearing different clothes. What is wanted is
+  --  value CONCENTRATED IN A SINGLE ITEM.
   --
   --  IT MATTERS MORE SINCE FISHING LANDED. A treasure pool returns weapons,
-  --  currency and oddments -- almost all maxStack 1 -- so a fishing base fills
-  --  its crates with exactly the low-density items this now clears first. Before
-  --  fishing the misfits were mostly stackable produce and the ordering barely
-  --  showed.
+  --  currency and oddments, and those are expensive as well as unmergeable, so
+  --  the case that motivated the original ordering still sorts first -- it just
+  --  sorts first for a reason that survives a maxStack of 1000.
   --
-  --  STABLE ON A TIE, by slot then source, so two items of the same stack size
-  --  are still evicted in a fixed order rather than whatever the sort happens to
-  --  do -- an unstable comparator here would make the same crate produce
-  --  different work on identical ticks and make a log impossible to read twice.
+  --  STABLE ON A TIE, by source then slot, so two items of the same value are
+  --  still evicted in a fixed order rather than whatever the sort happens to do
+  --  -- an unstable comparator here would make the same crate produce different
+  --  work on identical ticks and make a log impossible to read twice.
+  --
+  --  THAT STABILITY IS LOAD-BEARING FOR A SECOND REASON NOW. petports_itemValue
+  --  must be handed the descriptor and never the name: root.itemConfig re-runs
+  --  a generated item's build script with a fresh time-based seed when the
+  --  descriptor carries none, so a name-priced sword would return a different
+  --  number between two comparisons of the same pair. table.sort errors outright
+  --  on an inconsistent order function, so that mistake would crash the busiest
+  --  generator in the mod rather than merely misorder it. The prices are read
+  --  once into the record above, before the sort, for the same reason.
   table.sort(viable, function(a, b)
-    if a.stackSize ~= b.stackSize then return a.stackSize < b.stackSize end
+    if a.unitValue ~= b.unitValue then return a.unitValue > b.unitValue end
     if a.source.id ~= b.source.id then return a.source.id < b.source.id end
     return (a.slot or 0) < (b.slot or 0)
   end)
@@ -12182,11 +12218,11 @@ local function tidyWork()
         stationUniqueId(), sb.printJson(source.id), tostring(standWhy),
         sb.printJson(source.position))
     else
-      sb.logInfo("PETPORT %s tidying %s x%s out of %s (slot %s, maxStack %s, "
+      sb.logInfo("PETPORT %s tidying %s x%s out of %s (slot %s, %s each, "
         .. "%s viable candidate(s))",
         stationUniqueId(), tostring(pick.name), sb.printJson(pick.count),
         sb.printJson(source.id), sb.printJson(pick.slot),
-        sb.printJson(pick.stackSize), sb.printJson(#viable))
+        sb.printJson(pick.unitValue), sb.printJson(#viable))
 
       return {
         id = pick.workId,
@@ -12324,7 +12360,38 @@ local function drainWork()
 
     do
 
-      for _, rule in ipairs(machine.rules) do
+      --  MOST VALUABLE TRIP FIRST, AND THE CAPS ARE SIZED BEFORE THE CHOICE.
+      --
+      --  This walked machine.rules in AUTHORED ORDER and served the first rule
+      --  with a surplus, which meant the winner was decided by where a player
+      --  happened to click. Measured 2026-09-04 on a machine holding 79 rules:
+      --  sb_crappyaxe sat at rule 32 and sb_tech at rule 55, both over quota on
+      --  every census, and the axe was chosen every single pass for the whole
+      --  session. Rule position is not a preference and was never meant to be
+      --  read as one.
+      --
+      --  WORTH IS THE WHOLE TRIP, NOT THE ITEM. A unit hauls one batch per
+      --  round trip, so what is being ranked is what that trip delivers: unit
+      --  price times the amount the caps allow. That is the opposite of
+      --  tidyWork, which ranks PER UNIT because it is choosing which slot to
+      --  reclaim rather than what to carry, and the two must not be described
+      --  as the same rule. Sized on the observed prices, per-unit ordering here
+      --  would rank a 1000-dirt haul worth 1000 points below a single 600-point
+      --  axe, which is wrong for a machine that wants feeding.
+      --
+      --  PRICED FROM THE BARE NAME, which is all a rule carries -- the same
+      --  approximation `room` above already makes, and corrected the same way:
+      --  the take below is descriptor-precise off the slot actually read. For a
+      --  generated item the name price is one roll rather than that instance's
+      --  true value, but petports_itemValue memoises it, so the number is at
+      --  least the SAME roll on every pass and the order cannot flap.
+      --
+      --  SCORED ONCE, THEN SORTED, for the reason recorded above the machine
+      --  sort: a comparator that calls into the engine is evaluated O(n log n)
+      --  times and can contradict itself mid-sort.
+      local queue = {}
+
+      for index, rule in ipairs(machine.rules) do
         local held = (self.census or {})[rule.item] or 0
         local surplus = held - rule.max
 
@@ -12361,6 +12428,45 @@ local function drainWork()
           end
 
           if room > 0 then
+            table.insert(queue, {
+              rule = rule,
+              index = index,
+              room = room,
+              batch = batch,
+
+              --  CARRIED, NOT RECOMPUTED. The service pass below caps its take
+              --  by the surplus and reports the holding in its dispatch line,
+              --  and both were locals of this loop before the scoring split.
+              --  Left behind they would have resolved to nil globals, and
+              --  math.min(nil, ...) is an error rather than a wrong answer --
+              --  which is the good case. Reading a stale census twice would
+              --  have been the bad one.
+              held = held,
+              surplus = surplus,
+              worth = petports_itemValue({ name = rule.item })
+                * math.min(room, batch)
+            })
+          end
+        end
+      end
+
+      --  STABLE ON A TIE, by authored position. Two rules of equal worth are
+      --  still served in a fixed order, so the same network produces the same
+      --  work on identical ticks and a log can be read twice.
+      table.sort(queue, function(a, b)
+        if a.worth ~= b.worth then return a.worth > b.worth end
+        return a.index < b.index
+      end)
+
+      for _, queued in ipairs(queue) do
+        local rule = queued.rule
+        local room = queued.room
+        local batch = queued.batch
+        local held = queued.held
+        local surplus = queued.surplus
+
+        do
+          do
             for _, source in ipairs(sources) do
               if world.entityExists(source.id) then
                 local ok, items = pcall(world.containerItems, source.id)
