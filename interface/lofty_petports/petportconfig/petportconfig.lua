@@ -148,7 +148,9 @@ local STATS_SEPARATOR_COLOR = { 184, 148, 64 }
 --  reads as a fault when a player is waiting for work to happen.
 --
 --  TWO TYPES ARE OVERLOADED AND THEIR LABELS HAVE TO STAY GENERIC.
---  `withdraw` covers seed withdrawal, water withdrawal AND restock fetch;
+--  `withdraw` covers seed withdrawal, water withdrawal, restock fetch AND the
+--  medic's fetch leg -- medicWork returns a `withdraw` task under a
+--  `medicfetch:` id, so the type says nothing about which of the four it is;
 --  `deposit` covers ordinary deposit and restock delivery. Naming either one
 --  specifically would be wrong most of the time. Splitting them needs a subtype
 --  on the task, which is a change to dispatch rather than to this table.
@@ -165,10 +167,24 @@ local TASK_LABELS = {
 	replant = "Replanting",
 	water = "Watering Crops",
 	animal = "Tending Livestock",
+	trap = "Emptying Traps",
 
 	drain = "Emptying Upcycler",
 	fuel = "Collecting Treats",
 	upcycle = "Loading Upcycler",
+
+	--  `fuel` AND `fuelfetch` ARE BOTH ABOUT TREATS AND ARE NOT THE SAME JOB.
+	--  `fuel` is work -- pulling treats out of an upcycler's output slot for
+	--  storage. `fuelfetch` is the unit going to a feeder crate to EAT, which
+	--  is the only task on this list it performs for itself, so the label says
+	--  so rather than reusing the word "treats" a second time.
+	fuelfetch = "Refuelling",
+
+	fish = "Fishing",
+
+	--  SINGULAR, because a dose goes to one patient and the label sits under
+	--  one unit. "Patients" would read as a queue the pane cannot show.
+	medic = "Treating a Patient",
 
 	["return"] = "Returning to Port",
 
