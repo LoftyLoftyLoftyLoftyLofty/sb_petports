@@ -1,4 +1,4 @@
-<mxfile host="Electron" modified="2026-09-04T10:21:00.694Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.2.5 Chrome/120.0.6099.109 Electron/28.1.0 Safari/537.36" etag="MqOloX6gZkrSdUYZa_83" version="24.2.5" type="device">
+<mxfile host="Electron" modified="2026-09-04T11:25:11.917Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.2.5 Chrome/120.0.6099.109 Electron/28.1.0 Safari/537.36" etag="XR3RjQQc-qe2G1l_STny" version="24.2.5" type="device">
   <diagram name="Page-1" id="NveRE99YrSAUUvzC1UxD">
     <mxGraphModel dx="1593" dy="938" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
       <root>
@@ -861,6 +861,33 @@
         </mxCell>
         <mxCell id="3ISfEoBmj6Lgr9TAVEry-118" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Pets - fishing quirks&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
           <mxGeometry x="2080" y="4480" width="440" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-119" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Hamster wheel power generator for FU users&lt;br&gt;DEFERRED - not in scope for v1&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="4120" width="520" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-120" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#647687;fontColor=#ffffff;strokeColor=#314354;" vertex="1" parent="1">
+          <mxGeometry x="1560" y="4120" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-121" value="Pet-operated defensive turret?&lt;br&gt;Cute perhaps but do we really need this for v1?" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="4240" width="520" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-122" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#647687;fontColor=#ffffff;strokeColor=#314354;" vertex="1" parent="1">
+          <mxGeometry x="1560" y="4240" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-123" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Letting pets sleep in designated spots, including their petport. Entire sleep system unimplemented.&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="4360" width="520" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-124" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="1560" y="4360" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-125" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Situation where no deposit beacons exist in a system (only restock beacons) doesn&#39;t properly deposit items.&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="1880" width="640" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-126" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Some way to view network inventory.&lt;/font&gt;&lt;div&gt;&lt;font style=&quot;font-size: 20px;&quot;&gt;Maybe also some means by which to request items from the network.&lt;/font&gt;&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="4480" width="520" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-127" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" vertex="1" parent="1">
+          <mxGeometry x="1560" y="4480" width="40" height="40" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>
