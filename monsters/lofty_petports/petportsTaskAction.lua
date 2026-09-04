@@ -140,11 +140,14 @@ local TASK_DEBUG = true
 --  tick of every flight, which is the densest logging in this mod and is meant
 --  to be switched on for a specific question and switched off again.
 --
---  ON 2026-09-04 FOR ONE QUESTION: air control when jumping BACKWARDS out of
---  water fails consistently on the amphibious chassis, repro'd by dropping
---  items at a fixed spot near the fluffalo herd at the test base. SWITCH IT
---  BACK OFF once that is answered.
-local FLIGHT_TRACE = true
+--  ANSWERED AND SWITCHED BACK OFF 2026-09-04. The question was the amphibious
+--  water exit; the answer is arch.locomotion.exitdefer. What the trace supplied
+--  that nothing else could was the pair of lines that separated the two prices
+--  of a mid-arc rebuild -- `vel [0,7.95]` at a plan loss on a vertical launch
+--  against `vel [-8,20.18]` on a dry one -- which is the whole distinction the
+--  fix rests on. It also carried the ladder stall, though the pre-move and
+--  post-move pair would have been enough for that one on its own.
+local FLIGHT_TRACE = false
 
 --  BUILD STAMP.
 --
@@ -168,7 +171,7 @@ local FLIGHT_TRACE = true
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-04b jump level guard is inclusive"
+local BUILD_STAMP = "2026-09-04d jump level guard inclusive, trace off"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the

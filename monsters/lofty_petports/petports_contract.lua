@@ -2941,7 +2941,7 @@ function petports_swimModeTick()
 			--  written per tick by petports_assertSwimMode, independently of
 			--  this, so gravity and buoyancy still flip on the tick the medium
 			--  changes. And a live Arc ends in a Land, which is the plan worth
-			--  keeping. dd.locomotion.otter's objection is about a plan being
+			--  keeping. dd.locomotion.otterswitch's objection is about a plan being
 			--  EXECUTED under the wrong mode; an arc in flight is being carried
 			--  by physics and consults nothing.
 			--

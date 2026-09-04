@@ -50,100 +50,114 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-04 (an overlay that draws, and a silver bullet with thin plating)
+### What is built, as of 2026-09-04 (two locomotion fixes, and a NEXT list that was already done)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-ONE FEATURE SHIPPED, ONE FEATURE KILLED, AND THE KILLED ONE COST MORE.
+TWO PATHING BUGS FOUND, FIXED AND VERIFIED IN GAME. AND THE PREVIOUS STATUS WAS
+CARRYING A FINISHED FEATURE AS ITS TOP PRIORITY.
 
 ---
 
-**THE COVERAGE OVERLAY IS BUILT AND WORKS.** `arch.port.overlay`. A player-side
-script draws the boundary of every network plus a crosshatch across the
-interior, tinted per network, whenever a `petports_petport`-tagged item is in
-the cursor or the hand. `arch.port.coverage` specified this in outline years of
-document ago and the reasoning survived contact intact.
+**THE JUMP LEVEL GUARD WAS OFF BY ONE BOUNDARY.** `arch.pathing.jumpmover`. A
+unit landing on a platform ladder came to rest EXACTLY 1.0 above its jump source,
+and the guard read `> JUMP_LEVEL_TOLERANCE` with the tolerance at 1.0 -- so the
+one case the value exists to refuse was the one case it admitted. It walked at a
+point one floor below its feet for 12.6 seconds across 156 ticks and the task
+failed on no net progress. Now `>=`.
 
-**THE CROSSHATCH WAS NOT IN THE SPEC AND IS THE HALF THAT MAKES IT WORK.** An
-outline-only build, read from the middle of a large base, is indistinguishable
-from a broken overlay -- the nearest edge is off screen. Asked for during the
-session, and correctly.
-
-**COVERAGE SIZE MOVED TO THE `.object`** as `petports_coverageSize`, read once
-in `init`. Everything downstream already took it as a parameter, so nothing else
-changed, and a reskinned port with different reach is now a JSON edit.
-
----
-
-**THE TENTATIVE RECT IS DEAD, AND THE ENTRY IS WORTH READING BEFORE ANYONE
-PROPOSES IT AGAIN.** `dead.port.tentativerect`. Four routes:
-
-  - **A player script cannot see the cursor.** Four aim candidates, all absent,
-    no `mcontroller`, no `activeItem` -- `fact.port.noaimbinding`.
-  - **`imageLayers`** works and was rejected on what it costs.
-  - **LUA SMUGGLING WORKED AND WAS STILL NOT ENOUGH.** A tech script can leave a
-    value on the shared string metatable for the player script to read, and the
-    build did that safely -- passing two numbers, never the `tech` table, which
-    is the version that crashes to desktop. It died because smuggling moves the
-    CALL SITE and cannot manufacture the CONTEXT. A tech runs only while
-    equipped, and `TechType` has exactly three values with no free one.
-  - **Centring the box on the player** was the last live option and was rejected
-    ON DESIGN: a coverage box that follows the player asserts that the player
-    provides coverage. Better no rect than a rect that lies.
-
-The aim probes and the relay were REMOVED with the feature. Dead code that never
-runs rots; the entry is the record.
+**THE GUARD IS THE ONLY RECOVERY, WHICH IS WHY A BOUNDARY MATTERED THIS MUCH.**
+Measured: 156 ticks, min step 0.150, mean 0.345, and NOT ONE step at or below
+`STUCK_MOVE` 0.1 -- so `airborneEdgeStall` was zeroed every tick and
+`UNIT stalled on` never printed. Entering the walk branch permanently disarms the
+detector that would rescue it. Verified after the fix: the unit held ONE x
+position for six ticks, the detector fired at 0.327s, and it took off 0.57s after
+touchdown against 12.6s and a failed task before.
 
 ---
 
-**TWO THINGS THE SESSION FOUND THAT WERE NOT WHAT IT WAS LOOKING FOR.**
+**A MID-ARC PATHER REBUILD WAS DESTROYING THE WATER EXIT, EVERY TIME.**
+`arch.locomotion.exitdefer`. Clearing the water IS the swim-mode change, so
+`exiting -> land` always fired mid-flight, and the rebuild it forces cannot plan
+from the air -- so it only destroyed. Six attempts, five identical to the
+decimal, 2.13 seconds a cycle, forever.
 
-**The registry version is not a geometry version.** The overlay cached on it and
-rebuilt every line about forty times in sixteen seconds, because a port
-republishes when its UNIT MOVES. Now gated on a signature over rect, participate
-and id: thirty-two publishes, one rebuild. The same trap is available to anything
-else that watches that counter.
+**THE PRICE OF A MID-ARC REBUILD IS NOT ONE PRICE, AND THAT IS THE FINDING.**
+The exit launch is `[0,45]` with vx ZERO and `petportsArcMover` turns the
+horizontal on at the apex; the plan died ONE TICK before it. Two dry losses in
+the same session at `vel [-8,20.18]` and `[8,20.18]` cost a replan and nothing
+else, because the horizontal was already applied. A rebuild costs a replan when
+vx is live and costs the whole manoeuvre when it is not.
 
-**A refusal that returns nil with no log is worse than no feature.** The first
-tentative build bailed on three separate conditions silently, so "it is not
-applying" could not be told from "the aim binding is wrong" -- in a function
-whose own comment cited `fact.tooling.mergedrefusal`. The rule keeps having to
-be relearned by the thing that quotes it.
-
----
-
-**A CORRECTION THAT SHOULD NOT HAVE BEEN NEEDED.** A binding was proposed on the
-grounds that OpenStarbound and its forks add it. **THE TARGET IS RETAIL AND
-ALWAYS HAS BEEN**; the repo is a diff baseline and nothing else.
-`ref.tooling.osbaseline` now leads with that, and the aim probe carried a
-`retail` FIELD that refused a non-retail binding even when it answered -- the
-rule as a gate rather than as a comment. That pattern is worth reusing.
-
----
-
-**FILED LATE: THE PART ORDER IS THE TOOLTIP ORDER** (`d1bdda5`, 2026-09-03, not
-mine). `imageLayers` and `animationParts` on the petport were reordered
-hull-first to interior-first, and the animation's `zLevel`s swapped to match --
-interior 0/1, door, hull 4/5. **The layer order the ITEM declares is what the
-inventory tooltip composites**, so a stacking that renders correctly in world
-can still produce a wrong-looking tooltip, and the two have to be kept in step
-by hand. Worth knowing before anyone reorders those lists for tidiness.
+**FIXED BY DEFERRING, AND STATED AS A CAPABILITY RATHER THAN AS A SPECIAL CASE.**
+`petports_canPathfindIn(mode)` asks the pathfindability question about a mode the
+unit is not in yet; `petports_swimModeTick` holds the live plan when the answer
+is no. `petportsCanPathfind` now delegates to it, so there is one spelling --
+`arch.pathing.oneanchor`. Proved behaviour-identical by exhaustion over all 16
+combinations of mode, grounded and gravity. Verified in game: the deferral fires
+at 1153.46, `ARCMOVER steering to plan vx 8` fires at 1159.45 -- the exact
+altitude the plan used to die -- and the unit lands. Three deferrals, three
+transitions, paired 1:1, no latch.
 
 ---
 
-**HOUSEKEEPING, UNRESOLVED.** Twenty files are line-ending flipped against HEAD
--- LICENSE, several `.frames`, `petportsTaskAction.lua`, `petports_petport.lua`,
-this document -- as whole-file rewrites with identical line counts. A transport
-artifact, not work. Every edit this session preserved CRLF, so nothing was made
-worse, but the diffs stay unreadable until it is settled.
-`workbench/tools/petports_luacheck.py` is also absent from the repo.
+**THE PREVIOUS NEXT LIST WAS TWO-THIRDS ALREADY DONE, AND THAT IS THE MORE
+IMPORTANT FINDING.**
 
-**NEXT.** Unchanged and now overdue: medic dispatch across whole-network
-coverage (`todo.dispatch` carry-forward, named the priority four sessions
-running), the flying-unit partially-submerged check, and the `coverageRect()`
-vs `self.networkRects` grep across every generator -- the third reminder.
+**MEDIC NETWORK COVERAGE SHIPPED IN `7a6a319`, 2026-09-02 01:11**, and every
+STATUS since has named it the top priority. `medicPatients` walks
+`self.networkRects` with the union fallback and dedupes by id.
+`arch.dispatch.medicpatients` now records it.
+
+**IT IS THE SECOND CASUALTY OF THE GAP `proc.tooling.gapcheck` WAS WRITTEN FOR.**
+That commit sits in the same unwritten window as the fishing module -- last
+handoff write 2026-09-01 16:05, next 2026-09-02 16:32. Fishing was found by
+accident; this was found by reading the tree. Check 10 would have caught it on
+2026-09-02 had it existed. **A CARRY-FORWARD IS A CLAIM ABOUT THE TREE AND MUST
+BE CHECKED AGAINST THE TREE.**
+
+**THE `coverageRect()` GREP IS DONE AND COMES BACK CLEAN.** Every world-scanning
+generator reaches a union source: `collectionWork`, `medicPatients`,
+`scanFarmables`, `scanAnimals`, `scanContainers`, `fuelGroundWork`,
+`inNetworkCoverage` and `crosshairDrops` walk `self.networkRects`;
+`submergedSpot`, `fishingCheck` and `fishWork` walk `fishingRects()`. Harvest,
+trap, replant and water inherit from `scanFarmables`; the hauling and machine
+generators from `scanContainers`. Five `coverageRect()` sites survive and all
+five are deliberately port-local: `publishRegistry`, `dispatchable` (diag only),
+`diagnosticWork`, `returnWork`, `homePosition`.
+
+**ONE COSMETIC RESIDUE, FILED NOT FIXED.** `collectionWork` scans the union then
+takes `coverageRect()` purely for its empty-scan message, so a port with no drops
+reports `no drops in rect <own rect>` and widens the "just outside" probe around
+its own box. Misleading in exactly the situation that message exists to help.
+
+---
+
+**LINE ENDINGS ARE SETTLED, AND THE CAUSE WAS NOT THE ZIP.** `.gitattributes`
+now pins LF for the repo, binary for `.png`/`.xcf`, CRLF for `.bat`. The 20-file
+phantom diff was line-ending handling living in `core.autocrlf`, which is
+PER-MACHINE -- invisible on a configured clone and a whole-file rewrite on an
+unconfigured one. Dry-run of `git add --renormalize .` reduces the staged diff to
+the three files with real content changes. `todo.tooling.crlfdrift` is closed by
+this rather than fixed.
+
+**SMALL AND DONE:** four missing `TASK_LABELS` -- `trap`, `medic`, `fuelfetch`,
+`fish` -- found by diffing the table against every dispatched task type. The
+overload comment above it was corrected in the same pass: `withdraw` covers four
+things now, not three, because `medicWork` returns one under a `medicfetch:` id.
+
+---
+
+**STILL OPEN, AND ALL OF IT IS NOW ACTUALLY OPEN.** The flying-unit
+partially-submerged check (`fact.locomotion.buoyancy`, the `/entityeval`
+comparison at 0 vs 0.25 has never been run). The landing overshoot behind the
+ladder stall -- `fact.pathing.platformladder`. `petports_luacheck.py` is still
+absent from the repo. And the kill list Lofty now tracks in `plan.drawio`:
+cross-container consolidation, currency in restock beacons, filter search bars,
+sinker platform sliding, sinker fishing, death cargo, and the run-animation
+blink.
 
 ## ARCHITECTURE
 
@@ -1420,6 +1434,31 @@ DEFEATED THE STALL DETECTOR: displacing a quarter tile per cycle kept stuckAncho
 updating and airborneEdgeStall resetting. **A recovery that produces motion can be
 worse than no recovery**, because motion is what the detector reads as health.
 
+**AND THE COMPARISON WAS STRICT, WHICH LET THE ONE CASE THE VALUE EXISTS TO
+REFUSE STRAIGHT THROUGH.** Fixed 2026-09-04, `>` to `>=`. Measured on a platform
+ladder: unit at [2491.19,1166.8], jump source [2491,1165.8], levelGap EXACTLY
+1.0, so the guard did not fire, `off our level` never printed, and the walk
+branch ran instead. 156 ticks cycling four x-positions -- 2490.66, 2490.82,
+2491.18, 2491.35 -- for 12.6 seconds until the task failed on no net progress.
+
+**A FULL TILE IS A DIFFERENT FLOOR**, which is what the constant's own header
+already said it meant to exclude, so the value was never wrong and there was no
+number to invent. `>=` rather than retuning to 0.9 for that reason: a slope or a
+half-step is under a tile by definition, so nothing legitimate lives AT 1.0.
+
+**THE ASYMMETRY IS WHAT SETTLES A BOUNDARY ARGUMENT.** Too strict costs one 0.35s
+replan on an exactly-1.0 half-step. Too loose costs 12.6 seconds and a failed
+task, every time -- because entering the walk branch DISARMS the recovery. Across
+that cycle the minimum step was 0.150 and the mean 0.345, with not one step at or
+below `STUCK_MOVE` 0.1, so `airborneEdgeStall` was zeroed on every single tick
+and `UNIT stalled on` never printed once. This guard is not one safety net among
+several; it is the only thing between a sub-second replan and a hard stall.
+
+**VERIFIED IN GAME 2026-09-04** on the same geometry: the unit held ONE x
+position for six ticks, the guard printed, the detector fired at 0.327s against
+its 0.35 limit, and the replan produced a takeoff from where the unit actually
+was 0.57s after touchdown.
+
 **Launch velocity is corrected upward.** The planner over-estimates jump height.
 Sorted by required rise: 7.0 ok, 8.0 ok, 9.0 FAILS, against a physics ceiling of
 45^2/(2*120) = 8.4375. So moveJump reads the highest point of the arc just
@@ -2563,7 +2602,21 @@ shipped can hold a pair.
 place a player learns the number, and it states it.
 
 ### What counts as a patient, and why no engine field alone can say
-`arch.dispatch.medicpatients` -- see also `fact.unit.damageteams`, `arch.module.liquids`
+`arch.dispatch.medicpatients` -- see also `fact.unit.damageteams`, `arch.module.liquids`, `arch.dispatch.union`, `proc.tooling.gapcheck`
+
+**IT SCANS THE WHOLE NETWORK'S COVERAGE, AND HAS SINCE `7a6a319`, 2026-09-02
+01:11.** `medicPatients` walks `self.networkRects` with the one-element
+`coverageRect()` fallback, exactly as `collectionWork` does, and DEDUPES BY ID --
+which the single-rect version never had to do, because ports in a network
+routinely sit inside each other's rects and a patient in the overlap would be
+listed twice, sorted twice, and burn a claim attempt against work already taken.
+The heal cooldown would have caught the double DOSE and not the double dispatch.
+
+**FILED 2026-09-04, TWO DAYS AND FOUR STATUS REWRITES LATE.** That commit lands
+in the same unwritten window as the fishing module, and every STATUS since named
+this the top priority while it sat finished in the tree. See
+`proc.tooling.gapcheck` -- it is the second casualty of the gap that entry exists
+for, and the first one found by reading the tree rather than by accident.
 
 Five accept classes and three reject reasons, all observed 2026-08-30:
 
@@ -3879,6 +3932,92 @@ every short-circuit in `petports_mediumAllows`.
 wet is not an event anything reports; it is a position, one tick after another.
 The rebuild is mandatory rather than tidy -- `mustEndOnGround` is captured at
 `PathMover:new`, so a live plan built under one mode is invalid under the other.
+
+**THAT PARAGRAPH IS NARROWED BY `arch.locomotion.exitdefer`, 2026-09-04, AND THE
+NARROWING IS NOT COSMETIC.** "Mandatory" was written about a plan being EXECUTED
+under the wrong mode. It is false for a plan being FLOWN: an arc in flight is
+carried by physics and consults `mustEndOnGround` never, so rebuilding one
+destroys it and -- since the destination mode cannot pathfind from the air --
+replaces it with nothing. On a water exit that fired every single time, because
+clearing the water IS the mode change.
+
+### A rebuild that cannot plan can only destroy, so it waits
+`arch.locomotion.exitdefer` -- see also `arch.locomotion.swimmode`, `fact.pathing.canpathfind`, `arch.pathing.arcmover`, `arch.pathing.solvelaunch`, `arch.pathing.oneanchor`
+
+**BUILT AND VERIFIED IN GAME 2026-09-04**, against a loop that ran six times in
+one log and five of those identical to the decimal.
+
+**THE LOOP.** An amphibious unit swims to a jump point at 1149.8, launches
+`[0,45]` against a plan to land at [2487,1158.8], and rises. At 1159.45 the body
+clears the water, the medium reads `air`, `petports_swimModeTick` sees
+`exiting -> land` and rebuilds:
+
+    swim mode exiting -> land at [2486,1159.45] (medium air)
+    freshPather #77 ... swim mode wants land
+    path LOST ... action nil onGround false edge nil of 0
+
+The rebuild produces nothing, because `land` needs ground the unit does not have.
+It falls back into the water it launched from and starts again, 2.13 seconds a
+cycle.
+
+**THE EXIT JUMP IS THE ONE MANOEUVRE THIS WAS GUARANTEED TO BREAK.** Clearing the
+water IS the mode change, so the transition always fires mid-arc. The rule that
+exists to keep plans valid was reliably destroying the only plan that could
+finish the crossing -- not occasionally, and not as an edge case.
+
+**A MID-ARC REBUILD HAS TWO PRICES AND THE DIFFERENCE IS THE HORIZONTAL.** The
+exit launch is vertical with vx ZERO; `arch.pathing.arcmover` turns the
+horizontal on when the arc turns over. Loss altitude 1159.45, next trace line
+1159.74 -- the plan died ONE TICK before the only thing that would have moved it
+sideways. Two dry losses in the same session, at `vel [-8,20.18]` and
+`[8,20.18]`, cost a replan and nothing else: horizontal already applied, so the
+body coasted, landed and replanned. **A rebuild costs a replan when vx is live
+and costs the whole manoeuvre when it is not**, and only the second one loops.
+
+**THE FIX IS STATED AS A CAPABILITY, NOT AS A SPECIAL CASE.**
+`petports_canPathfindIn(mode)` answers the pathfindability question about a mode
+the unit is not in yet, which `petportsCanPathfind` cannot -- during an exit the
+CURRENT mode is `exiting`, which returns true unconditionally, while the mode
+being switched TO is `land`, which needs ground. `swimModeTick` holds the live
+plan when the answer is no. Written as a capability so it covers the next caller
+that fires mid-flight, whatever that turns out to be.
+
+**ONE SPELLING, AND THAT IS WHY IT IS A FUNCTION RATHER THAN AN INLINE TEST.**
+`petportsCanPathfind` now delegates to it -- `arch.pathing.oneanchor` records
+what the last duplicated predicate cost. Proved behaviour-identical by exhaustion
+over all 16 combinations of mode, grounded and gravity: zero disagreements. The
+`petports_freeMover()` call it replaces was `mode == AQUATIC or not
+gravityEnabled`, whose first half is now its own arm and whose second half was
+already the fall-through's second clause.
+
+**WHAT DEFERS, AND WHAT DELIBERATELY DOES NOT.** With gravity on, `land` and
+`diving` defer while airborne; `exiting` and `aquatic` never defer, because both
+can plan mid-water and do so today. So `land -> exiting` still rebuilds in the
+air -- measured twice in the verifying log, both recovering into successful
+takeoffs -- and only the direction that cannot plan is held.
+
+**DEFERRING IS SAFE BECAUSE ONLY THE PATHER WAITS.** The physics are written per
+tick by `petports_assertSwimMode`, independently, so gravity and buoyancy still
+flip on the tick the medium changes. A live Arc ends in a Land, which is the plan
+worth keeping.
+
+**NO STATE AND NO SCHEDULING.** The tick re-asks every tick, so the moment the
+unit is grounded the same mismatch is still there and the rebuild happens then.
+The throttle timestamp is deliberately NOT stamped on a deferral, or landing
+could be made to wait out a second it never spent rebuilding.
+
+**AN if/else RATHER THAN AN EARLY RETURN, AND THAT IS NOT STYLE.** The dive-plan
+expiry at the bottom of `swimModeTick` is the only code that runs whether a task
+is held or not; returning from the deferral would strand it on every deferred
+tick. `proc.tooling.earlyreturn` was on its fourth instance and this would have
+been the fifth.
+
+**MEASURED AFTER THE FIX.** Deferral at 1153.46; `ARCMOVER steering to plan vx 8`
+at 1159.45, the exact altitude the plan used to die; touchdown at
+[2487.27,1159.17] against a plan that wanted [2487,1158.8]. The `exiting -> land`
+transition now happens at `onGround true`, after landing. Three deferrals, three
+transitions, paired 1:1 -- no latch, which was the failure mode to fear here,
+per `proc.tooling.gatereset`.
 
 ### The dive: finding a hole, a board, and getting wet
 `arch.locomotion.dive` -- see also `arch.locomotion.swimmode`, `fact.unit.platformdrop`, `dead.locomotion.oceanlevel`, `todo.locomotion.dropthroughrise`
@@ -9302,6 +9441,45 @@ written; it was not.
 recorded engine fact was, both times it has happened in this mod, our own code
 producing a state the engine never produced. Suspect the mod before the record.
 
+### A PLATFORM LADDER LANDS A UNIT HIGH, AND `2 below us` IS THE ONE THAT BITES
+`fact.pathing.platformladder` -- see also `fact.unit.platformdrop`, `todo.locomotion.dropthroughrise`, `arch.pathing.jumpmover`, `arch.locomotion.dive`
+
+**MEASURED 2026-09-04 ACROSS THREE SESSIONS ON THE SAME TEST BASE.** Platforms
+stacked vertically to form a climbable ladder are the terrain that produces the
+landing overshoot, and Lofty confirms it is a terrain CLASS rather than one bad
+spot. Every rung is a platform, so a unit has to pass through an exact number of
+them and the planner routes down through all of them freely.
+
+**THE DROP REFUSAL PRINTS THE DISCRIMINATOR AND IT IS CHEAP TO GREP.**
+
+    grep -o 'PLAN DROP after landing.*, [0-9.]* below us' | sort | uniq -c
+
+    1 below us   harmless -- the target IS the next surface, so the unit
+                 free-falls the remaining 0.75 straight onto it
+    3 below us   harmless -- open air below, it falls the whole way
+    2 below us   THE FAILURE. An intervening rung catches the body and it
+                 comes to rest EXACTLY 1.0 above the jump source
+
+One session ran five 1s, one 3, and no 2s, and never stalled. The session that
+produced a `2 below us` stalled on it. That is the whole predictor.
+
+**THE DROP RECOVERY CLEARS ONE RUNG, NOT N.** `PLAN DROP` dropped 1167.8 to
+1167.55, then refused the second with *"no platform above the floor to pass"* --
+a probe taken at 1167.55 while the body was still falling, which then settled at
+1166.8, where a rung demonstrably was. That has the shape of the pre/post-move
+measurement trap rather than a wrong rule, and it is decidable only while still
+falling, because `fact.unit.platformdrop` records that `controlDown` from rest
+does nothing on a grounded unit. The window where the decision must be made is
+the window where the position reading is least trustworthy. **INSTRUMENT THE
+PROBE'S INPUTS BEFORE REASONING ABOUT THE RULE.**
+
+**WHY THIS TERRAIN AT ALL.** Vanilla A* was built for approximate pursuit, where
+a monster landing a tile off its node costs nothing because nothing downstream
+reads that node. Nothing in the engine asks a monster to arrive at a SPECIFIC
+TILE and then act there. This mod does -- a Jump edge's source is an exact point
+-- which is why the corrections keep landing in the movers and the tolerances
+rather than in the planner.
+
 ### `world.pointTileCollision` DOES NOT SEE PLATFORMS BY DEFAULT
 `fact.pathing.platformfloor` -- see also `fact.pathing.collisionkinds`, `fact.pathing.liquidstandable`, `arch.pathing.oneanchor`
 
@@ -12125,8 +12303,8 @@ Left in for one build deliberately: that build also landed the colour wire and
 the light effect, and a sound that silently vanished would have been one more
 thing to rule out while reading a log about a light.
 
-### Mixed line endings in petports_petport.lua
-`todo.tooling.crlfdrift` -- see also `proc.tooling.halfedit`
+### Mixed line endings in petports_petport.lua -- CLOSED BY .gitattributes
+`todo.tooling.crlfdrift` -- see also `proc.tooling.halfedit`, `proc.tooling.assertshape`
 
 **FOUND 2026-09-03.** The file is CRLF and carries THREE bare-LF lines, 9815 to
 9817, inside the medic patient generator -- the `if #patients == 0 then` block.
@@ -12137,6 +12315,26 @@ Harmless to Lua and invisible in game. It matters because it is the residue of a
 class of edit that CAN do damage, and because a second one is easier to miss
 beside a first. Every edit to that file since has asserted the count stayed at
 three rather than quietly adding to it.
+
+**RESOLVED 2026-09-04, AND THE CAUSE WAS NOT WHAT ANYONE ASSUMED.** The zip was
+blamed for months and is innocent -- it stores bytes. The repo had NO
+`.gitattributes`, so line-ending handling lived in `core.autocrlf`, which is a
+PER-MACHINE setting: invisible on a configured clone and a twenty-file whole-file
+rewrite on an unconfigured one. Same bytes, two machines, two answers.
+
+`.gitattributes` now pins the rule to the REPO -- LF for text, `binary` for
+`.png` and `.xcf`, CRLF for `.bat` because cmd.exe can mis-parse a batch file
+with LF endings. Measured on a dry run: `git add --renormalize .` reduces the
+staged diff from twenty phantom rewrites to the three files with real content
+changes, and the working copy catches up with `git rm --cached -r . && git reset
+--hard` after the commit.
+
+**WHY THIS CLOSES THE ENTRY RATHER THAN FIXING IT.** With one ending everywhere
+there is no mixed state for a `str_replace` to land in, so the failure this entry
+describes has nowhere to happen. It also retires the per-file "preserve CRLF
+here" rule that both sides of this collaboration had to carry -- a rule that was
+broken twice on 2026-09-04 alone, once by an edit that wrote 18 bare-LF lines
+into this very class of file and once by a checker that could not see `\r`.
 
 ### A unit can be dispatched into magma at a fish it is not equipped for
 `todo.fishing.medium` -- see also `arch.fishing.network`, `arch.dispatch.eligibility`, `arch.fishing.lure`
@@ -12516,6 +12714,15 @@ ignored, with no log line and no warning.
 Same shape as the replant sweep sitting below the petport's no-item return, and
 as the crosshair progress signal sitting below the vent branch's return.
 
+**FIFTH INSTANCE 2026-09-04, CAUGHT BEFORE DELIVERY AND WORTH RECORDING FOR
+THAT REASON.** The first draft of `arch.locomotion.exitdefer` skipped the rebuild
+with an early `return` from `petports_swimModeTick` -- which would have stranded
+the dive-plan expiry at the bottom of that function on every deferred tick, and
+that expiry is the only code there that runs whether a task is held or not. A
+stale dive plan outliving its task, from a fix for something else entirely. It is
+an `if/else` now. **THE RULE BELOW IS WHAT CAUGHT IT**, applied to a new function
+rather than to `update()`, so read it as being about any long tick function.
+
 **THE TEST: for anything in update(), ask which returns are above it and whether
 every one of them means "this genuinely should not run".** Housekeeping, state
 publication and anything the player can trigger from a UI almost never belong
@@ -12574,6 +12781,15 @@ pre-flight assertion failed and the fault was in the assertion:
 - **A top-level comma counter did not skip string literals**, so the comma in
   `"the pather is on %s, not an Arc "` read as an argument separator and a
   correct `sb.logInfo` call was reported as an arity mismatch.
+
+**THIRD INSTANCE 2026-09-04, AND IT WAS THE SAME CRLF TRAP AGAIN.** An assertion
+pass over `petportsTaskAction.lua` anchored its patterns with `re.M` and `$`. In
+a CRLF file the `\r` sits between the text and the newline, so every anchored
+match missed and three correct edits were reported as FAILED. Rewritten to strip
+`\r` per line and compare exact strings. **THIS ENTRY DESCRIBED THE TRAP AND THE
+CHECKER STILL WALKED INTO IT** -- which is the argument for removing the mixed
+state entirely rather than for writing the rule down a third time; see
+`todo.tooling.crlfdrift`.
 
 Both were caught only because the failure was investigated instead of the code
 being edited to satisfy it. **A RED CHECK IS A QUESTION, NOT A VERDICT** -- find
