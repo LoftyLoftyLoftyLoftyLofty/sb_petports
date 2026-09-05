@@ -488,6 +488,34 @@ local function cargoSummary(cargo)
   return "empty"
 end
 
+--  CARGO IS A SEQUENCE, AND A JSON ROUND TRIP DOES NOT PROMISE TO KEEP IT ONE.
+--
+--  Measured 2026-09-05: an item came back from disk with
+--  cargo = {"1": {...}} -- a json OBJECT with a string key -- and every
+--  reader here uses ipairs or #, both of which see that as empty. The next
+--  write-back serialised the "empty" cargo and the stack was gone. A Lua
+--  sequence with a hole (a stack removed by indexing to nil rather than
+--  table.remove) serialises as an object, and once it is an object it stays
+--  one. So cargo is rebuilt as a dense sequence on the way IN and on the way
+--  OUT: numeric keys of either type, sorted, nil holes dropped.
+local function normaliseCargo(cargo)
+  if type(cargo) ~= "table" then return {} end
+
+  local keyed = {}
+  for key, stack in pairs(cargo) do
+    local n = tonumber(key)
+    if n ~= nil and type(stack) == "table" then
+      table.insert(keyed, { n = n, stack = stack })
+    end
+  end
+
+  table.sort(keyed, function(a, b) return a.n < b.n end)
+
+  local dense = {}
+  for _, entry in ipairs(keyed) do table.insert(dense, entry.stack) end
+  return dense
+end
+
 local function cargoTrace(where, cargo)
   if not CARGO_TRACE then return end
   local ok, text = pcall(string.format, "PETPORT CARGO | %-22s | %s",
@@ -1402,7 +1430,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-04o the medic log no longer throws on a percent sign"
+local PETPORT_BUILD_STAMP = "2026-09-05a cargo survives a json object round trip"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -2819,6 +2847,9 @@ local function petDataFrom(item)
   --  after the base config merge, before anything else touches it.
   cargoTrace("petDataFrom: off item", data.cargo)
 
+  data.cargo = normaliseCargo(data.cargo)
+  cargoTrace("petDataFrom: normalised", data.cargo)
+
   trace("read from item", data)
   return data
 end
@@ -3623,6 +3654,7 @@ function writeBackToItem()
     return
   end
 
+  self.petData.cargo = normaliseCargo(self.petData.cargo)
   cargoTrace("writeBack: serialising", self.petData.cargo)
 
   item.parameters = item.parameters or {}
