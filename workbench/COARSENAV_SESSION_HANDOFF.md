@@ -1,183 +1,216 @@
-# COARSE NAV -- SESSION HANDOFF, 2026-09-05 (end of session)
+# COARSE NAV -- SESSION HANDOFF (as of taskAction 06d / coarsenav 07h)
 
-Read this before proposing anything. Everything below marked MEASURED was
-read out of a starbound.log this day; everything marked FACT was read out of
-retail 1.4.4 source pasted into the session. Items from earlier sessions that
-were rolled back are not listed unless re-derived here.
-
-Retail Starbound 1.4.4 only. Never propose an OpenStarbound or fork binding.
+Read this before proposing anything. MEASURED means read out of a
+starbound.log or an engine `.luaprofile`; FACT means read out of retail 1.4.4
+source pasted into a session. Retail Starbound 1.4.4 only; never propose an
+OpenStarbound or fork binding. The OpenStarbound repo's first commit is
+unmodified retail source and may be READ for facts (StarLuaRoot.cpp was).
 
 Builds in play, all tested in game:
-`petports_coarsenav.lua` **2026-09-05q**, `petportsTaskAction.lua`
-**2026-09-05o**, `petports_petport.lua` **2026-09-05a**.
+`petports_coarsenav.lua` **2026-09-07h**, `petportsTaskAction.lua`
+**2026-09-06d**, `petports_flyapproach.lua` **2026-09-06b**,
+`petports_contract.lua` **2026-09-06a**, `petports_petport.lua` **2026-09-07a**.
 
-**STATE:** coarse nav works end to end. MEASURED 05:59-06:01: 164 legs, 136
-chained, 11 tasks done, 1 failed then succeeded on redispatch. Ground unit on a
-farm planet with ponds: 19 tasks done, 0 failed, 0 refusals. Committed.
+**STATE.** Walkers and flyers route end to end; a walker retrieved and
+deposited across the base, a flyer surveyed the whole ship. Performance work
+is DONE for now: no LuaInstructionLimitReached, 12 updates/s, tick max ~75 ms
+on the test laptop, and the engine profile shows our remaining cost is the
+survey itself under a per-update cap, not bookkeeping. This is the starting
+point for the actual feature work, not the end of anything.
+
+**THE TEST MACHINE IS AN HP PROBOOK 440 G5.** Every budget below is tuned so
+the survey is tolerable there. That is the pass criterion; a server has
+headroom, and a future network budget should expose these constants rather
+than a future session loosening them against a faster box.
 
 ---
 
-## THE TEST LOOP IS EXPENSIVE. BUDGET ACCORDINGLY.
+## HOW TO WORK ON THIS
 
-Read the log before proposing a fix. Every fix this session came from a grep,
-and every guess made before the grep was wrong. Say less. Change one thing.
-
-`petports_navWipe()` only when the STORE is known bad -- a change to the anchor
-rule, the cell key rule, what a verdict means, or the index entry format.
-Changes to `petportsTaskAction` never need one. A profile-string change (05q
-added `|a1`) re-buckets on its own, no wipe.
+- Read the log before proposing a fix. Every fix in these two days came from a
+  grep or a profile; every guess made before one was wrong, including "the
+  garbage collector" (twice), which an instruction-limit error falsified.
+- One change, one stamp, one log. `petports_navWipe()` only for a store
+  change: anchor rule, cell key meaning, verdict meaning, index entry format,
+  coverage rule. A profile-string change re-buckets on its own.
+- **Profile, do not guess.** Two instruments:
+  1. Ours: `PETPORTS_PROFILE = true` prints `PROFILE 5.0s | tick max | heap |
+     <sections> | survey: <counters> | world/s: <call counts>` every 5 s per
+     unit. Sections: update, navTick, candidates, sweepStart, sweepStep,
+     neighbours, probeStep, reaches, flush, purge, graphFor, draw, freeMover.
+     Counters: sweeps, sweepR<n>, true1/trueN/false/tooLong/sweepTrue/
+     sweepFalse (+Ticks), edgesFlushed, budgetCut, stepCap, graphBuildStart/
+     Done. `os.clock` IS available; `collectgarbage` IS NOT.
+  2. The engine's: `"scriptProfilingEnabled" : true` in `storage/starbound.config`
+     (not patchable as an asset; per-user only, never a release setting).
+     Writes `storage/lua/<time>.luaprofile` per Lua root on a clean quit:
+     world server, client, item-build. Read the world-server one: our unit is
+     under `/monsters/pets/groundPet.lua:78` -> `petportsTaskUpdateInner`.
+     It attributes time to every function in every mod; ours is what to
+     compare against the others.
+- The engine caps Lua instructions per call (`scriptInstructionLimit`,
+  StarLuaRoot). Exceeding it throws out of `Monster::update`, aborts the
+  update, and the unit snaps to its anchor ("random teleport home"). Nothing
+  in the survey may be O(store size) in one call. Everything now is chunked
+  or bounded; keep it that way.
 
 ---
 
 ## THE STRUCTURE, AS SHIPPED
 
-**Cells.** `PETPORTS_NAV_CELL = 2`, `PETPORTS_NAV_STRIDE = 1`: every tile is
-the origin of a 2x2 window; a position belongs to the cell whose origin is its
-tile (`petports_navCell`, `navCellOrigin`). Lofty's decision, 05c: a
-non-overlapping 2x2 grid could not cover a 7-wide shaft's wall-side tile.
+**Cells.** `PETPORTS_NAV_CELL = 2`, `PETPORTS_NAV_STRIDE = 1` (free movers
+too; `PETPORTS_NAV_STRIDE_FREE` is a knob, tried at 4 and rejected because it
+lost tunnel granularity). Every tile is the origin of a 2x2 window; a
+position belongs to the cell whose origin is its tile.
 
-**Anchors, walker.** Feet on the cell's bottom edge, one row of candidates
-(`x = origin + dx + 0.5`). Accept when: `navFootingUnderCell` finds
-`{Block,Slippery,Platform}` in the row beneath the cell under the part of the
-body inside the cell's own columns; `validStandingPosition(point,
-petports_avoidLiquid())`; `petports_mediumAllows(point, bounds)` is not false.
-Free movers: 2x2 body-fit scan at tile centres, then mediumAllows.
+**Coverage.** `NAV_COVERAGE_MARGIN = 2`: a cell outside every port rectangle
+is not a candidate, for any profile (was 12; megabase edges were unreliable).
+Free-mover nodes trace the coverage edge like a wall; free-mover edges may not
+leave coverage along their length.
 
-**Profile string.** `monsterType|f<freeMover>|b<w,h>|l<liquids>|d<doors>|a<avoidLiquid>`.
+**Anchors, walker.** Feet on the cell's bottom edge, one row of candidates at
+tile centres. Footing `{Block,Slippery,Platform}` in the row beneath under the
+body's part inside the cell's columns; `validStandingPosition(point,
+petports_avoidLiquid())`; `petports_mediumAllows`. Slippery is the mission
+boundary wall, never a floor (Lofty).
 
-**Sweep.** Radius ladder 4 -> 12 by 2 (`PETPORTS_NAV_RADIUS_START/STEP/RADIUS`);
-index entry per cell is `{ at, radius }` (a bare number reads as radius 0);
-candidates sorted narrowest-radius first then nearest, so passes are emergent.
-Seed cell only when grounded and anchored. Top-up every tick a slot is free
-(`NAV_TICK_INTERVAL = 0`), 2 sweeps x 4 workers. Survey runs while idle AND
-while on task whenever the unit's own pather has no live search.
+**Anchors, free mover.** ONE candidate: the window centre (origin+1,
+origin+1). Body-fit against `{Null,Block,Dynamic,Slippery}`; near-surface =
+solid within 0.5 of the body box (or the coverage edge); mediumAllows. One
+layer of nodes along every surface, every cell of a 2-wide tunnel, every
+stair step, nothing in open air. Tile-centre candidates gave a double layer
+and no floor/ceiling nodes at all (measured).
 
-**Verdict.** A probe is `start(anchorA, anchorB)` with the unit's pathOptions
-and `maxDistance 32`, explored 300/tick. TRUE also requires the solved path to
-be at most `3 x anchorDistance + 8` edges (`aStar:result()`), else recorded
-FALSE with a `TOO LONG` line. A TRUE is inserted into the memoised graph at
-once; a FALSE removed from it at once.
+**Profile string.** `type|f<freeMover>|b<w,h>|l<liquids>|d<doors>|a<avoidLiquid>`.
 
-**Routing.** BFS over fine edges (hop count). `petports_navWaypoint` returns
-the farthest path cell within `NAV_LEG_REACH = 8` of the origin, skipping
-hops inside `ARRIVAL_DISTANCE + 0.5`, plus the chosen cell, hop count, origin
-cell and previous cell.
+**Survey.** Radius ladder 4..12 by 2, index entry `{ at, radius }`, narrowest
+first then nearest; a free mover seeds from the nearest anchored cell within
+4 tiles. Runs idle AND on task when the unit's pather has no live search.
+Per update: at most `NAV_STEPS_PER_TICK = 4` sweeps stepped, within
+`NAV_TICK_BUDGET_MS = 10`; a sweep resume steps at most WORKERS probes. Top-up
+at most every `NAV_TOPUP_INTERVAL = 0.25` s, scanning `NAV_CANDIDATE_SCAN =
+60` graph froms from a rotating cursor, keeping a bounded best list of
+`NAV_CLAIM_ATTEMPTS = 8`; empty top-up backs off `NAV_IDLE_INTERVAL = 2` s.
+`PETPORTS_NAV_SWEEPS = 8`, `WORKERS = 4`. Purge once a minute.
 
-**Task action.** Coarse-first, once per target, for a walker whose target is
-> 24 tiles away or has no line of sight (`world.lineTileCollision`). A fresh
-leg plans from `petports_navNearestCell` (nearest anchored graph cell within
-2.5 tiles), only on the ground. A reached leg (grounded, or approachPoint's
-own verdict) chains at once, planning from the cell it just reached
-(`navLegTo`), never from the nearest cell. approachPoint arrival at a
-waypoint never sets `arrived`. A leg pather gets `maxDistance 32` and explores
-at 1200/call. A leg that hits `SEARCH_LIMIT`: multi-hop -> retried at reach 0;
-one hop (or already reach 0) -> `petports_navVerify` re-probes it, the LAST
-hop is contradicted unless the re-probe says false, re-plan. A leg the pather
-refuses without a search for 0.5 s is sent to the same handover; the line
-prints onGround / validStandingPosition(target,false) / liquidAt /
-finder.target. solveLaunch never accepts a downward launch.
+**Verdicts.** Walker: A* probe, `maxDistance 32`, 300/tick; TRUE also needs
+path length <= `3 x distance + 8` edges (else `TOO LONG`, recorded false).
+Free mover: `petports_bodyFitsAlong` (shared with the fishing code) plus
+in-coverage -> TRUE now; blocked -> FALSE now UNLESS `Dynamic` is on the
+line, then the A* fallback (doors). No BFS skip test for free movers.
 
----
+**Store I/O.** Index read memoised per tick, index entries queued and written
+with the edge flush (25 edges / 5 s); no flush per sweep; cell cache TTL 120 s;
+anchors and solid verdicts cached 30 s per profile; profile string and stride
+memoised per tick.
 
-## MEASURED FACTS THAT DECIDED THINGS
+**Graph.** Memoised; own writes never drop it (learned edges are inserted
+and removed in place). Rebuild only on cache expiry or a new unit, as a state
+machine: `NAV_BUILD_CHUNK = 40` cells per update reading, then 320 edges per
+update deriving fine + coarse; the old graph serves until the swap.
 
-- **The unit script updates 12 times a second.** Counted via exploreRate.
-  So `SEARCH_LIMIT 6 s = 72 explores`. The probe that proved a deck-to-deck
-  edge needed 88. Every "would not walk" before taskAction 05h was 72 vs 88.
-- **`maxDistance` bounds how far a search wanders from its start, not path
-  length.** A 5-tile pair was proved with a 166-edge path under the 32 cap.
-  Every comment saying "within 32 tiles of path" was wrong; older comment
-  blocks above `NAV_MAX_DISTANCE` still say it, the correction sits beside
-  the constant.
-- **The candidate walk read the whole index once per known cell** (504 reads
-  per top-up, ~3 s). Fixed coarsenav 05g; both walks read once.
-- **The skip test skipped nothing** until learned edges entered the memo
-  (coarsenav 05h): probes per sweep == candidates per sweep.
-- **A leg reached mid-jump** was cleared with onGround false, and the chain
-  refused to plan from the air. A waypoint arrival from approachPoint set
-  `arrived` and a pickup ran 35 tiles from the item.
-- **Adjacent cells can have opposite shortest routes.** Chaining from the
-  nearest cell instead of the reached cell oscillated on a platform stack.
-- **A store edge can be a stale verdict for THIS unit**: the anchor rule
-  passed avoidLiquid false, the unit's find() refuses a liquid target. 05q.
-- **Cargo:** an item came back from disk with `cargo = {"1":{...}}` (json
-  object); every reader uses ipairs/#; the next write-back erased it.
-  `normaliseCargo` on read and write, petport 05a. Root remover not found.
+**Routing / legs (taskAction).** Coarse-first for any unit (walker or flyer)
+when the target is > 24 tiles or has no line of sight. Legs from the nearest
+graph cell (free mover: nearest VISIBLE cell within 32, nearest-first, first
+hit wins); target cell resolved once per target. `NAV_LEG_REACH = 8`
+(walker), `NAV_FLYER_LEG_REACH = 32` with the leg = farthest visible path
+cell (string-pull). Reached legs chain from `navLegTo`. Leg pather:
+`maxDistance 32`, `NAV_LEG_EXPLORE_RATE = 1200`. Failed leg -> one hop ->
+`petports_navVerify` -> contradict last hop -> re-plan; a leg refused by the
+pather for 0.5 s logs which of `find()`'s two gates closed. Flyer lookahead
+sweep re-checked 5x/s (`petports_flyapproach.lua`).
 
-## FACT (retail source, read this session)
-
-`PathFinder:find(target)`: returns `"pathfinding"` (aStar stays nil) when
-`canPathfind()` is false -- a walker not onGround; returns false when
-`options.mustEndOnGround and not validStandingPosition(target, false)`;
-otherwise `reset()`, `start(mcontroller.position(), target)`, `explore()`.
-`start()` sets `self.target` and calls `world.platformerPathStart(...)`.
-`validStandingPosition(position, avoidLiquid, collisionSet, bounds)`: ground
-rect = full box width, one tile under the feet, against
-`{Null,Block,Dynamic,Platform}` OR (`not avoidLiquid and liquidAt(position)`);
-body rect against `collisionSet or {Null,Block}`. Default explore rate is
-world-fidelity 25..150; ours overrides to 300 / 1200.
-
-**Slippery is NOT ice.** It is the invisible mission-boundary wall (Lofty).
-Treat it as a wall (body fit, solid prefilter); it is never a floor. The
-`fact.pathing.ongroundtest` entry in V2 calls it ice and is wrong there.
+**Overlay.** `PETPORTS_NAV_DEBUG = false` (opt-in; the client `/debug` toggle
+does NOT stop the script drawing). `petports_navDebugToggle()`. One
+`debugPoint` per swept cell within `NAV_DRAW_RANGE = 64`: red if swept within
+10 s, else green (walker) / blue (free mover). Readouts refresh every 2 s.
+`PETPORTS_NAV_VERBOSE` (opt-in) restores per-probe log lines.
 
 ---
 
-## DEAD -- RULED OUT WITH EVIDENCE
+## MEASURED FACTS THAT DECIDED THINGS (this pass)
 
-- "Overlapping cells alone fix the shaft" -- no: the candidate rule did.
-  Overlap was kept by decision; the footing rule is what puts an anchor on a
-  wall-side platform's cell.
-- "The mesh is inconsistent because of maxDistance 32 vs 200" -- partly:
-  matching the cap was necessary, the explore budget (12 Hz x 300) was the
-  larger cause.
-- "Contradict the edge when the walk fails" as the primary correction --
-  works, but every contradicted edge in the 03:42 log was a probe-provable
-  edge the walk under-searched. Verify before contradicting; the code does.
+- The unit script updates 12 times a second (counted).
+- `maxDistance` bounds wander from the start, not path length (166-edge
+  path under the 32 cap).
+- A fresh unit on a big store hit the instruction limit in its first navTick
+  (one-shot graph rebuild); the same call was `graphFor max=1029 ms` every
+  cache expiry before.
+- With the overlay on, `world.debugLine` at 5-7k/s was most of the unit's
+  cost; `petports_navLevelProgress` memoised on the store version recomputed
+  on every flush (3750 of 10072 in the engine profile).
+- The candidate walk was O(store) per top-up: `consider` + `table.sort` +
+  whole-index reads. Now bounded slice + bounded best list.
+- The per-probe log lines were up to 318 lines/s.
+- A flush per sweep was ~1 s of every 5 on a flyer.
+- `petports_navProfile()` under the anchor cache key cost more than the scan
+  it cached; `petports_freeMover()` reads `baseParameters()` every call.
+- A wall-blocked flyer pair ran the A* fallback to its cap (false 26-55 per
+  5 s); the fallback is for doors only now.
+- The 2 s idle spike was two whole-index reads per empty top-up.
+- Port ticks are 30-39 ms at worst (instrumented, `PETPORT slow tick`).
+
+## FACT (retail source)
+
+`PathFinder:find` gates: `canPathfind()` false -> "pathfinding", aStar nil
+(walker not onGround); `mustEndOnGround and not validStandingPosition(target,
+false)` -> false. `StarLuaRoot`: engine owns the collector
+(`tuneAutoGarbageCollection(luaGcPause, luaGcStepMultiplier)`, both 1.2 in
+`client.config` and `worldserver.config`), caps instructions per call,
+and has the `.luaprofile` profiler. `collectgarbage` is not exposed to
+scripts; `os.clock` is.
+
+---
+
+## DEAD
+
+- Sparse stride for flyers (4): lost 2x2 tunnel granularity. Density is cut
+  by WHERE a free mover anchors instead.
+- 1-tile near-surface growth: two layers per surface. 0.3 growth with
+  tile-centre candidates: no floor/ceiling nodes. 0.5 with the window centre
+  is the one that works.
+- "The GC is the stutter": unfalsifiable from script and contradicted by the
+  instruction-limit error. Big single calls were the stutter, every time.
+- The BFS skip test for free movers: cost more than the body sweeps it
+  skipped.
+- Contradict-on-failure as the primary correction: probe-provable edges were
+  being contradicted because the walk under-searched. Verify first (done).
 
 ---
 
 ## OPEN, NOT SCHEDULED
 
-- **First `SEARCH_LIMIT` stall on a target under 24 tiles with line of
-  sight** still exists by design (coarse-first does not fire).
-- **Pond-edge refusals** (05:59 log, `y=1158.8`) did not reproduce after 05q.
-  The instrumented refusal line will name the gate if they return.
-- **Flyers:** legs as "farthest visible node on the path" via the existing LOS
-  check (Lofty). Coarse-first is gated `not freeMover` today. The free-mover
-  graph only needs to be connected, not dense.
-- **Amphibious:** already paths into water it passes through; the manual mode
-  switch is only for the fish target / underwater heal. Combine the existing
-  beach-entry code with leg building. Not a store or profile problem.
-- **openDoors:** profile already carries the flag; drop `Dynamic` from
-  `NAV_SOLID_SET`, the anchor body-fit set and `COARSE_LOS_SET` for openers.
-  Engine-side pathOptions name for door opening still unread (pathutil.lua's
-  `openDoorsAhead` is a movement-side helper, not a pathfinder option).
-- **Pickup is not distance-checked** in the task action (it ran 35 tiles
-  away when `arrived` was set wrongly). Guarded now only by arrival being
-  correct.
-- **Routing is hop-count BFS.** Edge cost is now available (`aStar:result()`
-  length) but not stored or used. The coarse levels are a rejection filter
-  only. Neither has been the cause of a failure since coarsenav 05n.
-- `NAV pass at radius N complete` logs once per unit per boundary and can
-  repeat when new cells appear. Cosmetic.
-- `petports_petBehavior.lua` has never had a build stamp. Twenty files remain
-  CRLF-flipped from zip transport.
+- **Swimmer in open water** -- untested. Expect a rim of nodes along the
+  coverage edge; `petports_bodyFitsAlong` does not check medium mid-segment.
+- **Amphibious** -- combine beach-entry code with leg building (Lofty).
+- **openDoors** -- profile carries the flag; drop `Dynamic` from the three
+  solid sets for openers; engine-side pathOptions name for doors unread.
+- **Network budget** for tens of units: cap concurrent sweeps per port, tune
+  against `setProperty`/s. The constants above are what it would expose.
+- **TTL semantics**: `NAV_SWEEP_TTL` counts world time while unloaded, so a
+  restart after 15 min wipes the mesh. Options: hours-long TTL plus the
+  contradiction path, or age by loaded time.
+- **Variable-size cells** (3-wide/3-tall): would need cell identity to carry
+  extent or a cell table; probes/routing would survive. Not needed after the
+  single-layer fix; noted.
+- **Player-placed waypoints** as forced seed cells: small object, one branch
+  in the seed logic, sits on top of the survey rather than replacing it.
+- `petports_navStats` is called from the idle branch (70 in the last
+  profile); fold it behind VERBOSE. Cosmetic.
+- Pickup is not distance-checked; hop-count BFS routing; coarse levels are a
+  rejection filter only.
+- `petports_gcTune()` is dead code (collectgarbage unavailable); remove.
+- V2 handoff has no coarse-nav entries; `todo.dispatch.reachbudget` should be
+  retired; `fact.pathing.ongroundtest` corrected re Slippery already.
 
 ---
 
-## DIAGNOSTICS AVAILABLE
+## DIAGNOSTICS
 
-- `petports_navProgress()` -- cells / swept / full / frontier / sweeping.
-- `petports_navVerify(fromKey, toKey)` -- one pair, probe to completion now.
-- `petports_navSelfTest()`, `petports_navLevelReport()`, `petports_navStats()`.
-- Log lines: `NAV surveying <cell> at radius N`, `NAV probe A -> B
-  REACHABLE/UNREACHABLE after T tick(s), E edge(s)`, `TOO LONG`, `UNIT coarse
-  first`, `UNIT coarse leg from A to B: heading for P, N hop(s) left`, `UNIT
-  reached coarse leg <cell> with N hop(s) left -- chaining`, `would not walk`,
-  `re-probe says`, `CONTRADICTED`, `refused by the pather ... onGround ...`,
-  `UNIT approach at ... | search <aStar> explores <count>`.
-- Overlay: green = swept cell centres; magenta = cells being probed; yellow
-  line = probe; tick count in a corner. `petports_navDebugToggle()`. Draw
-  runs every tick from navTick and draws every swept cell; turn it off when
-  measuring frame time.
+`petports_navProgress()`, `petports_navVerify(from, to)`, `petports_navSelfTest()`,
+`petports_navLevelReport()`, `petports_navStats()`, `petports_navDebugToggle()`,
+`petports_navVerboseToggle()`, `petports_profToggle()`, `petports_navWipe()`.
+Log lines: `NAV surveying`, `NAV sweep of ... COMPLETE`, `NAV pass at radius`,
+`TOO LONG`, `UNIT coarse first`, `UNIT coarse leg from`, `reached coarse leg
+... chaining`, `would not walk`, `re-probe says`, `CONTRADICTED`, `refused by
+the pather ... onGround ...`, `PROFILE`, `PETPORT slow tick`.
