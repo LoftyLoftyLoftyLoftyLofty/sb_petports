@@ -61,7 +61,7 @@
 --  are unprobeable and time-varying and nobody's fault -- are allowed to
 --  produce optimistic-wrong answers. They fail in the cheap direction.
 
-local COARSENAV_BUILD_STAMP = "2026-09-05b solid cells are refused before the anchor scan"
+local COARSENAV_BUILD_STAMP = "2026-09-05o the seed cell must be anchored and the unit grounded"
 
 local navStamped = false
 
@@ -121,6 +121,43 @@ local NAV_CACHE_TTL = 30.0
 --  what it produces. None of that arithmetic is here yet.
 PETPORTS_NAV_CELL = 2
 
+--  HOW FAR APART CELL ORIGINS ARE, IN TILES. CELLS OVERLAP.
+--
+--  A NON-OVERLAPPING 2x2 GRID CANNOT COVER EVERY TILE, and that was measured
+--  2026-09-05 rather than argued: a 7-wide shaft is three cells and one tile
+--  over, and the leftover tile shares its cell with the shaft wall. The scan
+--  in that cell tries the wall and a tile-centre beside the wall, both refuse,
+--  and the ladder standing on that tile has no anchor anywhere. Which tile is
+--  left over is decided by the parity of the shaft's x, so it cannot be tuned
+--  away.
+--
+--  SO CELL ORIGINS ARE ONE TILE APART AND EVERY CELL IS STILL A 2x2 WINDOW.
+--  Every tile is then the ORIGIN of its own window as well as a member of
+--  three others, so no tile is ever only reachable through a neighbour that
+--  happens to be a wall.
+--
+--  IDENTITY STAYS SINGLE-VALUED. A position belongs to the cell whose origin
+--  is the tile it is in -- petports_navCell -- never to any of the other
+--  windows that also contain it. Cell identity keys the shard property, the
+--  claim id, the sweep index and navBlockKey, and each of those needs exactly
+--  one answer.
+--
+--  WHAT IT COSTS is cells: about four times as many cell identities over the
+--  same ground, and the neighbour box is measured in STRIDES, so a radius of
+--  10 is a 21x21 box of candidate cells rather than 11x11. Overlapping cells
+--  frequently share an anchor and their edges are one-tick trues.
+PETPORTS_NAV_STRIDE = 1
+
+--  The world position of a cell's bottom-left tile corner.
+local function navCellOrigin(cx, cy)
+	return cx * PETPORTS_NAV_STRIDE, cy * PETPORTS_NAV_STRIDE
+end
+
+--  DECLARED HERE, DEFINED WITH THE HIERARCHY BELOW. petports_navLearn needs
+--  it and is written before it; a later `local function` would not be in
+--  scope there and the call would silently hit a nil global.
+local navBlockKey
+
 --  HOW FAR APART TWO CELLS MAY BE AND STILL BE ASKED ABOUT, IN TILES.
 --
 --  EDGES ARE RADIAL, NOT GRID ADJACENCY, AND THE FIRST VERSION HAD THIS WRONG.
@@ -166,7 +203,34 @@ PETPORTS_NAV_CELL = 2
 --  apart now needs an intermediate cell to carry it. That is the right trade
 --  while cells are cheap and plentiful, and it is the first number to raise if
 --  the graph turns out to fragment across a large vertical gap.
-PETPORTS_NAV_RADIUS = 10
+--
+--  NOW THE CEILING OF A LADDER, NOT THE ONLY RADIUS. 2026-09-05: a cell is
+--  swept at PETPORTS_NAV_RADIUS_START first, and each later pass over it
+--  widens by PETPORTS_NAV_RADIUS_STEP until it reaches this. The index records
+--  the largest radius each cell has been swept at, and the candidate ranking
+--  takes the narrowest cells first -- so no cell is swept at 6 until every
+--  known cell has been swept at 4, and so on up. A pass is complete when the
+--  smallest radius among candidates rises.
+--
+--  WHY A LADDER. The first pass at 4 is cheap -- a 9x9 box of candidate
+--  cells rather than 25x25 -- and it already proves local connectivity, which
+--  is what the frontier feeds on and what the skip test needs. Each wider pass
+--  re-runs the same sweep with the same skip test, so a cell already swept at
+--  4 pays only for the ring between 4 and 6, not for the 4 again.
+--
+--  THIS STAYS THE COVERAGE MARGIN. NAV_COVERAGE_MARGIN wants the WIDEST reach
+--  a sweep will ever have, so that the boundary never carves anchored ground.
+PETPORTS_NAV_RADIUS = 12
+PETPORTS_NAV_RADIUS_START = 4
+PETPORTS_NAV_RADIUS_STEP = 2
+
+--  The radius a cell should be swept at next, given the largest radius it
+--  has already been swept at. nil when it is done.
+local function navNextRadius(sweptRadius)
+	if (sweptRadius or 0) >= PETPORTS_NAV_RADIUS then return nil end
+	if (sweptRadius or 0) <= 0 then return PETPORTS_NAV_RADIUS_START end
+	return math.min(sweptRadius + PETPORTS_NAV_RADIUS_STEP, PETPORTS_NAV_RADIUS)
+end
 
 --  HOW FAR PAST NETWORK COVERAGE A SWEEP MAY BE STARTED, IN TILES.
 --
@@ -210,8 +274,7 @@ local function navInCoverage(cx, cy)
 
 	--  THE WHOLE CELL, not its centre. A cell straddling the boundary is inside
 	--  it, which is the same direction the margin errs in.
-	local x0 = cx * PETPORTS_NAV_CELL
-	local y0 = cy * PETPORTS_NAV_CELL
+	local x0, y0 = navCellOrigin(cx, cy)
 	local x1 = x0 + PETPORTS_NAV_CELL
 	local y1 = y0 + PETPORTS_NAV_CELL
 
@@ -291,6 +354,31 @@ end
 --  distance cap and not a reason to raise this.
 local NAV_MAX_DISTANCE = 32
 
+--  maxDistance IS NOT PATH LENGTH. MEASURED 2026-09-05 03:56: a probe under
+--  this cap proved 994,1039 -> 999,1036 (five tiles apart, the deck below,
+--  through the floor) with a 166-EDGE path -- west along the deck, down the
+--  ladder, back east underneath. The cap bounds how far the search wanders
+--  from its start, not how long the route is. So "reachable" meant "there is
+--  SOME route", and the hop-counting router took one 166-edge hop over ten
+--  short ones, and the unit walked twenty seconds the wrong way and timed
+--  out. The comments above that say "within 32 tiles of path" were wrong.
+--
+--  SO A TRUE VERDICT ALSO NEEDS A SHORT PATH: at most this many edges per
+--  tile of anchor distance, plus a constant for the odd step or jump. A
+--  route longer than that is recorded FALSE for the pair -- which is the
+--  design's own argument: a long detour belongs in the graph as the chain of
+--  short hops it is made of, not as one edge that hides it.
+local NAV_EDGE_STRETCH = 3
+local NAV_EDGE_SLACK = 8
+
+--  PUBLIC, 2026-09-05, BECAUSE A LEG MUST BE WALKED WITH THE SAME CAP IT WAS
+--  PROVED WITH. A probe with maxDistance 32 searches a bounded box and can
+--  exhaust it; the unit's pather at 200 searching the same pair has a space
+--  larger than maxNodesToSearch and never finishes -- so the store says
+--  REACHABLE and the walk says nothing, forever. Same start, same end, one
+--  number different. A coarse leg's pather takes this cap.
+PETPORTS_NAV_MAX_DISTANCE = NAV_MAX_DISTANCE
+
 --  THE PROBE'S OPTIONS: the unit's real ones with the distance cap applied.
 --
 --  A COPY, NEVER A MUTATION OF A SHARED TABLE. petports_pathOptions builds a
@@ -311,8 +399,8 @@ end
 function petports_navCell(position)
 	if type(position) ~= "table" then return nil, nil end
 
-	return math.floor(position[1] / PETPORTS_NAV_CELL),
-		math.floor(position[2] / PETPORTS_NAV_CELL)
+	return math.floor(position[1] / PETPORTS_NAV_STRIDE),
+		math.floor(position[2] / PETPORTS_NAV_STRIDE)
 end
 
 function petports_navCellKey(cx, cy)
@@ -390,8 +478,7 @@ end
 local NAV_SOLID_SET = { "Null", "Block", "Dynamic", "Slippery" }
 
 local function navCellSolid(cx, cy)
-	local baseX = cx * PETPORTS_NAV_CELL
-	local baseY = cy * PETPORTS_NAV_CELL
+	local baseX, baseY = navCellOrigin(cx, cy)
 
 	for dx = 0, PETPORTS_NAV_CELL - 1 do
 		for dy = 0, PETPORTS_NAV_CELL - 1 do
@@ -409,9 +496,45 @@ local function navCellSolid(cx, cy)
 	return true
 end
 
+--  WHAT A WALKER MAY REST ON. The same set petportsTaskAction uses for the
+--  question -- Platform in, Dynamic (doors) and Null (unloaded) out.
+local NAV_FOOTING_SET = { "Block", "Slippery", "Platform" }
+
+--  A WALKER'S ANCHOR STANDS ON THE CELL'S OWN GROUND, 2026-09-05.
+--
+--  validStandingPosition accepts footing anywhere under the 1.6-wide bound
+--  box, which overhangs 0.3 into each neighbouring column. So a cell with no
+--  floor of its own could anchor on the edge of a platform in the NEXT cell --
+--  and the engine's pathfinder, asked to start or end there, fails at once:
+--  it wants ground beneath the body inside the space it was given. The anchor
+--  claimed a surface the cell did not contain.
+--
+--  THE RULE: the feet are on the cell's bottom edge, and the row beneath the
+--  cell must hold something standable under the part of the body that is
+--  inside the cell's columns. Ground in a neighbouring column does not count,
+--  however much of the box hangs over it.
+--
+--  ONE ROW OF CANDIDATES, NOT TWO. With cell origins one tile apart (05c),
+--  every row is the bottom edge of some cell, so a candidate standing on a
+--  tile INSIDE the window is just the anchor of the cell below, again. The
+--  second row only ever produced duplicates -- 688 identical-anchor probes in
+--  the 02:04 log -- and each duplicate cost a pair.
+local function navFootingUnderCell(x, baseX, baseY, bounds)
+	--  The body's footprint clipped to the cell's columns, pulled in a little
+	--  so a shared edge does not read as overlap.
+	local left = math.max(baseX, x + bounds[1]) + 0.05
+	local right = math.min(baseX + PETPORTS_NAV_CELL, x + bounds[3]) - 0.05
+
+	if right <= left then return false end
+
+	local ok, hit = pcall(world.rectTileCollision,
+		{ left, baseY - 0.95, right, baseY - 0.05 }, NAV_FOOTING_SET)
+
+	return ok and hit == true
+end
+
 function petports_navAnchor(cx, cy, freeMover)
-	local baseX = cx * PETPORTS_NAV_CELL
-	local baseY = cy * PETPORTS_NAV_CELL
+	local baseX, baseY = navCellOrigin(cx, cy)
 
 	local bounds = mcontroller.boundBox()
 
@@ -421,11 +544,9 @@ function petports_navAnchor(cx, cy, freeMover)
 
 	local tried = 0
 
-	for dx = 0, PETPORTS_NAV_CELL - 1 do
-		for dy = 0, PETPORTS_NAV_CELL - 1 do
-			local x = baseX + dx + 0.5
-
-			if freeMover then
+	if freeMover then
+		for dx = 0, PETPORTS_NAV_CELL - 1 do
+			for dy = 0, PETPORTS_NAV_CELL - 1 do
 				--  CENTRE OF THE TILE, because a free mover is not resting on
 				--  anything -- there is no surface to lift off.
 				--
@@ -435,7 +556,7 @@ function petports_navAnchor(cx, cy, freeMover)
 				--  something that ignores gravity. Dynamic is present because
 				--  fact.pathing.collisionkinds says Dynamic is DOORS, and a
 				--  closed door stops a flyer.
-				local point = { x, baseY + dy + 0.5 }
+				local point = { baseX + dx + 0.5, baseY + dy + 0.5 }
 				local region = {
 					point[1] + bounds[1], point[2] + bounds[2],
 					point[1] + bounds[3], point[2] + bounds[4]
@@ -447,13 +568,20 @@ function petports_navAnchor(cx, cy, freeMover)
 					{ "Null", "Block", "Dynamic", "Slippery" })
 
 				if ok and hit == false then return point end
-			else
-				--  BOTTOM EDGE OF THIS TILE ROW is the surface; the body rests
-				--  `lift` above it.
-				local point = { x, baseY + dy + lift }
+			end
+		end
+	else
+		for dx = 0, PETPORTS_NAV_CELL - 1 do
+			local x = baseX + dx + 0.5
 
-				tried = tried + 1
+			--  FEET ON THE CELL'S BOTTOM EDGE; the body rests `lift` above it.
+			local point = { x, baseY + lift }
 
+			tried = tried + 1
+
+			--  THE CELL'S OWN GROUND FIRST -- one rect test -- then the body
+			--  fit, which is the dearer call.
+			if navFootingUnderCell(x, baseX, baseY, bounds) then
 				local ok, standable = pcall(validStandingPosition, point, false)
 				if ok and standable == true then return point end
 			end
@@ -484,14 +612,18 @@ end
 --  -- up to four validStandingPosition calls per candidate cell.
 --
 --  THE SOURCE CELL IS EXCLUDED. A self-edge answers a question nobody asks.
-function petports_navNeighbours(cx, cy, freeMover)
+function petports_navNeighbours(cx, cy, freeMover, radius)
+	--  THE RADIUS IS THE CALLER'S. A sweep passes the rung of the ladder it is
+	--  on; anything else gets the ceiling.
+	radius = radius or PETPORTS_NAV_RADIUS
+
 	local origin = petports_navAnchor(cx, cy, freeMover)
 	if origin == nil then return {}, nil end
 
 	--  Cells that COULD hold something within the radius. Rounded up, then
 	--  filtered by true anchor distance below -- the box is a cheap prefilter
 	--  and the distance test is the actual rule.
-	local reach = math.ceil(PETPORTS_NAV_RADIUS / PETPORTS_NAV_CELL)
+	local reach = math.ceil(radius / PETPORTS_NAV_STRIDE)
 
 	local found = {}
 	local solid = 0
@@ -518,7 +650,7 @@ function petports_navNeighbours(cx, cy, freeMover)
 
 					local distance = math.sqrt(ax * ax + ay * ay)
 
-					if distance <= PETPORTS_NAV_RADIUS then
+					if distance <= radius then
 						table.insert(found, {
 							cx = nx, cy = ny,
 							anchor = anchor,
@@ -552,8 +684,10 @@ function petports_navNeighbours(cx, cy, freeMover)
 		return a.key < b.key
 	end)
 
-	sb.logInfo("NAV neighbours of %s: %s candidate(s), %s solid cell(s) skipped",
-		petports_navCellKey(cx, cy), sb.printJson(#found), sb.printJson(solid))
+	sb.logInfo("NAV neighbours of %s at radius %s: %s candidate(s), "
+		.. "%s solid cell(s) skipped",
+		petports_navCellKey(cx, cy), sb.printJson(radius), sb.printJson(#found),
+		sb.printJson(solid))
 
 	return found, origin
 end
@@ -899,6 +1033,59 @@ function petports_navLearn(profile, fromKey, toKey, reachable)
 
 	self.petportsNavPending[profile][key] = { r = reachable, t = world.time() }
 
+	--  INTO THE MEMOISED GRAPH NOW, NOT AT THE NEXT FLUSH.
+	--
+	--  MEASURED 2026-09-05, 02:04 LOG: probes per sweep equalled candidates
+	--  per sweep -- median 17 and 17 -- across 721 sweeps. The skip test was
+	--  skipping nothing. navGraphFor memoises on petportsNavVersion, which
+	--  only navCellWrite bumps, so an edge learned two ticks ago sat in the
+	--  pending batch invisible to petports_navReaches until a flush. The
+	--  comment in navAdjacency says a sweep must see its own work; it did not.
+	--
+	--  INSERTED RATHER THAN INVALIDATED. Dropping the memo would rebuild it
+	--  on the next skip test -- a pass over every shard and every edge, per
+	--  probe. Adding one edge to the fine list and the coarse sets is the same
+	--  arithmetic navGraphFor does for that edge, done once.
+	local graph = self.petportsNavGraph
+
+	--  A FALSE LEAVES THE MEMO AT ONCE TOO. Measured 03:30: a contradicted
+	--  edge stayed in the memoised fine list until the next flush, so the
+	--  re-plan chose it again, six seconds at a time. The coarse sets are
+	--  left as they are; they are optimistic by construction.
+	if reachable == false and graph ~= nil and graph.profile == profile
+	   and graph.fine[fromKey] ~= nil then
+		for i = #graph.fine[fromKey], 1, -1 do
+			if graph.fine[fromKey][i] == toKey then
+				table.remove(graph.fine[fromKey], i)
+			end
+		end
+	end
+
+	if reachable == true then
+		if graph ~= nil and graph.profile == profile then
+			graph.fine[fromKey] = graph.fine[fromKey] or {}
+
+			local present = false
+			for _, to in ipairs(graph.fine[fromKey]) do
+				if to == toKey then present = true break end
+			end
+
+			if not present then
+				table.insert(graph.fine[fromKey], toKey)
+
+				for tiles, bucket in pairs(graph.coarse) do
+					local a = navBlockKey(fromKey, tiles)
+					local b = navBlockKey(toKey, tiles)
+
+					if a ~= nil and b ~= nil and a ~= b then
+						bucket[a] = bucket[a] or {}
+						bucket[a][b] = true
+					end
+				end
+			end
+		end
+	end
+
 	self.petportsNavPendingCount = (self.petportsNavPendingCount or 0) + 1
 	self.petportsNavFlushAt = self.petportsNavFlushAt
 		or (world.time() + NAV_FLUSH_INTERVAL)
@@ -918,6 +1105,41 @@ end
 --  Stated here so the gap is visible rather than implied.
 function petports_navContradict(profile, fromKey, toKey)
 	petports_navLearn(profile, fromKey, toKey, false)
+end
+
+--  RE-PROBE ONE EDGE TO COMPLETION, RIGHT NOW. Diagnostic, 2026-09-05.
+--
+--  A leg the unit could not walk is either an edge the world has since
+--  closed, or a disagreement between the probe's search and the walk's --
+--  and those need opposite fixes. This runs the exact probe the store was
+--  built with, for the exact pair, and returns its verdict and tick count.
+--  The verdict is learned as a side effect of petports_navProbeStep, so a
+--  stale true is replaced with the current truth rather than a blind false.
+--
+--  DRIVEN TO COMPLETION IN ONE CALL, on a slot no sweep uses. The spin cap
+--  is a hang guard. This is a frame hitch on purpose and only runs when a
+--  leg has already cost SEARCH_LIMIT seconds.
+local NAV_VERIFY_SLOT = 999
+
+function petports_navVerify(fromKey, toKey)
+	local fx, fy = string.match(fromKey, "^(-?%d+),(-?%d+)$")
+	local tx, ty = string.match(toKey, "^(-?%d+),(-?%d+)$")
+	if fx == nil or tx == nil then return nil, 0 end
+
+	local verdict, spins = "searching", 0
+
+	while verdict == "searching" and spins < 500 do
+		verdict = petports_navProbeStep(
+			{ tonumber(fx), tonumber(fy) }, { tonumber(tx), tonumber(ty) },
+			300, NAV_VERIFY_SLOT)
+		spins = spins + 1
+	end
+
+	if self.petportsNavProbes ~= nil then
+		self.petportsNavProbes[NAV_VERIFY_SLOT] = nil
+	end
+
+	return verdict, spins
 end
 
 --  ------------------------------------------------------------------ PROBE
@@ -1025,6 +1247,37 @@ function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 
 	local result = probe.finder.aStar:explore(exploreRate or 300)
 
+	--  THE PATH LENGTH, ON A TRUE. aStar:result() is the engine's edge list
+	--  for the solved search; read through pcall so a binding surprise is a
+	--  logged unknown rather than a dead probe.
+	local edgeCount = nil
+
+	if result == true then
+		local ok, edges = pcall(function() return probe.finder.aStar:result() end)
+
+		if ok and type(edges) == "table" then
+			edgeCount = #edges
+		else
+			sb.logInfo("NAV probe %s -> %s: aStar:result() unavailable (%s)",
+				fromKey, toKey, tostring(edges))
+		end
+
+		if edgeCount ~= nil and probe.fromAnchor ~= nil
+		   and probe.toAnchor ~= nil then
+			local span = world.magnitude(probe.fromAnchor, probe.toAnchor)
+			local limit = span * NAV_EDGE_STRETCH + NAV_EDGE_SLACK
+
+			if edgeCount > limit then
+				sb.logInfo("NAV probe %s -> %s TOO LONG: %s edge(s) for %s "
+					.. "tile(s) apart (limit %s) -- recorded as unreachable",
+					fromKey, toKey, sb.printJson(edgeCount),
+					sb.printJson(math.floor(span * 10 + 0.5) / 10),
+					sb.printJson(math.floor(limit)))
+				result = false
+			end
+		end
+	end
+
 	if result == true or result == false then
 		--  THE COST, WHICH IS THE WHOLE POINT OF v1. Ticks AND seconds, because
 		--  the two answer different questions: ticks say how much A* work an
@@ -1036,10 +1289,10 @@ function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 		--  field that is structurally always zero is worse than no field, so it
 		--  is gone. Wall-clock cost is read off the log timestamps instead:
 		--  measured 2026-09-04, ~1ms for a TRUE and ~162ms for a FALSE.
-		sb.logInfo("NAV probe %s -> %s %s after %s tick(s)",
+		sb.logInfo("NAV probe %s -> %s %s after %s tick(s), %s edge(s)",
 			fromKey, toKey,
 			result and "REACHABLE" or "UNREACHABLE",
-			sb.printJson(probe.ticks))
+			sb.printJson(probe.ticks), tostring(edgeCount))
 
 		petports_navLearn(petports_navProfile(), fromKey, toKey, result)
 
@@ -1125,11 +1378,11 @@ end
 local NAV_LEVELS = { 4, 8, 16, 32 }
 
 --  A cell key to the key of the block containing it at a given tile size.
-local function navBlockKey(cellKey, tiles)
+navBlockKey = function(cellKey, tiles)
 	local cx, cy = string.match(cellKey, "^(-?%d+),(-?%d+)$")
 	if cx == nil then return nil end
 
-	local divisor = tiles / PETPORTS_NAV_CELL
+	local divisor = tiles / PETPORTS_NAV_STRIDE
 
 	return tostring(math.floor(tonumber(cx) / divisor))
 		.. "," .. tostring(math.floor(tonumber(cy) / divisor))
@@ -1394,9 +1647,16 @@ end
 --  loop on a waypoint it is already standing in.
 --
 --  RETURNS a position and the remaining hop count, or nil.
-function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover)
+--  minAdvance, 2026-09-05: a hop closer than this to the origin is passed
+--  over unless it is the last. At stride 1 consecutive hops are one tile
+--  apart, inside the caller's arrival radius, and a waypoint the unit is
+--  already "at" was being declined -- which handed the leg back to the direct
+--  search it had just failed.
+function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdvance)
 	local path = petports_navPath(profile, fromKey, toKey)
 	if path == nil or #path < 2 then return nil end
+
+	minAdvance = minAdvance or 0
 
 	local origin = petports_navAnchor(
 		tonumber(string.match(path[1], "^(-?%d+),")),
@@ -1414,8 +1674,11 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover)
 		if anchor ~= nil then
 			local dx = anchor[1] - origin[1]
 			local dy = anchor[2] - origin[2]
+			local distance = math.sqrt(dx * dx + dy * dy)
 
-			if math.sqrt(dx * dx + dy * dy) <= (reach or 24) then
+			if distance < minAdvance and i < #path then
+				--  TOO CLOSE TO BE A LEG. Keep walking the path.
+			elseif distance <= (reach or 24) then
 				chosen, chosenAt = anchor, i
 			elseif chosen ~= nil then
 				break
@@ -1432,7 +1695,54 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover)
 
 	if chosen == nil then return nil end
 
-	return chosen, #path - chosenAt
+	--  ALSO THE CHOSEN CELL AND HOW MANY HOPS THE LEG SPANS, so a caller that
+	--  fails to walk the leg can retry it one hop at a time and, when a single
+	--  hop fails, contradict exactly that edge.
+	return chosen, #path - chosenAt, path[chosenAt], chosenAt - 1, path[1],
+		path[chosenAt - 1]
+end
+
+--  THE GRAPH CELL NEAREST A POSITION, 2026-09-05.
+--
+--  MEASURED 03:01: "no leg from 1016,1032" with the unit at [1016.51,1032.56]
+--  mid-jump, and "no leg from 1017,1031" with it standing at [1017.2,1031.8]
+--  on the last tile of a deck whose cells end at 1016. The unit's own cell
+--  was not in the graph either time -- one was air, the other had no floor
+--  under its own columns -- and a leg plan from an unknown cell is nil.
+--
+--  So a leg starts from the nearest cell the graph KNOWS, within `radius`
+--  of the position, measured to that cell's anchor. Nothing is planned from
+--  a cell that has never been swept into the graph.
+function petports_navNearestCell(position, freeMover, radius)
+	radius = radius or 2.5
+
+	local profile = petports_navProfile()
+	local fine = navGraphFor(profile).fine
+	local px, py = petports_navCell(position)
+
+	local reach = math.ceil(radius / PETPORTS_NAV_STRIDE)
+	local bestKey, bestAnchor, bestDistance = nil, nil, nil
+
+	for cx = px - reach, px + reach do
+		for cy = py - reach, py + reach do
+			local key = petports_navCellKey(cx, cy)
+
+			if fine[key] ~= nil then
+				local anchor = petports_navAnchor(cx, cy, freeMover)
+
+				if anchor ~= nil then
+					local distance = world.magnitude(anchor, position)
+
+					if distance <= radius
+					   and (bestDistance == nil or distance < bestDistance) then
+						bestKey, bestAnchor, bestDistance = key, anchor, distance
+					end
+				end
+			end
+		end
+	end
+
+	return bestKey, bestAnchor, bestDistance
 end
 
 --  What is in the store, for a log line. Counted rather than dumped: a full
@@ -1498,17 +1808,55 @@ local NAV_CLAIM_TTL = 120.0
 --  READ FRESH, NOT MEMOISED. The index is one small property and it is the one
 --  thing several units genuinely contend over: two units must not both decide a
 --  cell is unswept because they are each holding a stale copy.
+--  AN INDEX ENTRY IS `{ at = <world time>, radius = <tiles> }`. It was a bare
+--  number -- the sweep time -- until 2026-09-05, when the radius ladder needed
+--  the largest radius a cell had been swept at. A bare number is still read,
+--  as a sweep at radius 0, so a stale index cannot crash a reader; it just
+--  gets re-swept from the bottom rung.
+local function navIndexEntry(value)
+	if type(value) == "number" then return value, 0 end
+	if type(value) ~= "table" then return nil, 0 end
+
+	local at = tonumber(value.at)
+	if at == nil then return nil, 0 end
+
+	return at, tonumber(value.radius) or 0
+end
+
 function petports_navSwept(profile, cellKey)
 	local index = navIndexRead()
 	local cells = index[profile]
 	if type(cells) ~= "table" then return nil end
 
-	local at = cells[cellKey]
-	if type(at) ~= "number" then return nil end
+	local at, radius = navIndexEntry(cells[cellKey])
+	if at == nil then return nil end
 
 	if (world.time() - at) > NAV_SWEEP_TTL then return nil end
 
-	return at
+	return at, radius
+end
+
+--  The largest radius a cell has been swept at, 0 if never or expired.
+function petports_navSweptRadius(profile, cellKey)
+	local at, radius = petports_navSwept(profile, cellKey)
+	if at == nil then return 0 end
+	return radius
+end
+
+--  THE SAME ANSWER FROM AN INDEX ALREADY IN HAND. petports_navSwept reads the
+--  index property fresh on every call, which is right for a single question
+--  and wrong for a walk over every known cell: measured 2026-09-05, the
+--  candidate walk was 504 whole-index reads per top-up and cost about three
+--  seconds between one sweep releasing and the next being claimed -- more
+--  than the sweeps themselves. A walk reads once and asks this.
+local function navSweptRadiusIn(cells, cellKey, now)
+	if type(cells) ~= "table" then return 0 end
+
+	local at, radius = navIndexEntry(cells[cellKey])
+	if at == nil then return 0 end
+	if (now - at) > NAV_SWEEP_TTL then return 0 end
+
+	return radius
 end
 
 --  HOW MANY CELLS ONE UNIT SWEEPS AT ONCE, AND HOW MANY PROBES EACH GETS.
@@ -1541,8 +1889,14 @@ end
 --  restart the other's probe every tick and neither would finish -- the exact
 --  bug that made probes slotted in the first place. Each sweep gets a base
 --  offset; see navSlotBase.
-PETPORTS_NAV_SWEEPS = 4
-PETPORTS_NAV_WORKERS = 8
+--  4 x 8 -> 2 x 4, 2026-09-05. Cut with the stride-1 cells (05c) and the
+--  per-tick top-up (05e): four times the cells and no idle gap between sweeps
+--  meant the 32-slot budget above was being spent every tick, and the survey
+--  is background work. This is a quarter of it -- 8 x 300 expansions per
+--  update. The two numbers stay independent; see above for which to move
+--  first if it needs tuning again.
+PETPORTS_NAV_SWEEPS = 2
+PETPORTS_NAV_WORKERS = 4
 
 local function navSlotBase(index)
 	return (index - 1) * PETPORTS_NAV_WORKERS
@@ -1573,8 +1927,11 @@ function petports_navSweepStart(cx, cy, ownerId, index)
 	local profile = petports_navProfile()
 	local cellKey = petports_navCellKey(cx, cy)
 
-	if petports_navSwept(profile, cellKey) ~= nil then
-		return nil, "already swept"
+	local sweptRadius = petports_navSweptRadius(profile, cellKey)
+	local radius = navNextRadius(sweptRadius)
+
+	if radius == nil then
+		return nil, "already swept to full radius"
 	end
 
 	local workId = "nav:" .. profile .. ":" .. cellKey
@@ -1595,9 +1952,10 @@ function petports_navSweepStart(cx, cy, ownerId, index)
 		ownerId = ownerId,
 		cellKey = cellKey,
 		profile = profile,
+		radius = radius,
 		started = world.time(),
 		job = coroutine.create(function()
-			local neighbours = petports_navNeighbours(cx, cy, freeMover)
+			local neighbours = petports_navNeighbours(cx, cy, freeMover, radius)
 
 			--  N PAIRS IN FLIGHT AT ONCE, ON ONE UNIT.
 			--
@@ -1741,7 +2099,15 @@ function petports_navFinishSweep(index, completed)
 	if completed then
 		local index = navIndexRead()
 		index[sweep.profile] = index[sweep.profile] or {}
-		index[sweep.profile][sweep.cellKey] = world.time()
+
+		--  THE LARGEST RADIUS, NEVER A SMALLER ONE. Another unit may have swept
+		--  this cell wider while we were on it; the ladder only climbs.
+		local _, held = navIndexEntry(index[sweep.profile][sweep.cellKey])
+
+		index[sweep.profile][sweep.cellKey] = {
+			at = world.time(),
+			radius = math.max(held or 0, sweep.radius or 0)
+		}
 		navIndexWrite(index)
 	end
 	petports_claimRelease(sweep.workId, sweep.ownerId)
@@ -1754,8 +2120,8 @@ function petports_navFinishSweep(index, completed)
 		end
 	end
 
-	sb.logInfo("NAV sweep of %s %s", tostring(sweep.cellKey),
-		completed and "COMPLETE" or "ABANDONED")
+	sb.logInfo("NAV sweep of %s at radius %s %s", tostring(sweep.cellKey),
+		sb.printJson(sweep.radius), completed and "COMPLETE" or "ABANDONED")
 
 	sweeps[index] = nil
 end
@@ -1930,8 +2296,7 @@ local function navDrawSafely(fn, ...)
 end
 
 local function navDrawCell(cx, cy, colour)
-	local x0 = cx * PETPORTS_NAV_CELL
-	local y0 = cy * PETPORTS_NAV_CELL
+	local x0, y0 = navCellOrigin(cx, cy)
 	local x1 = x0 + PETPORTS_NAV_CELL
 	local y1 = y0 + PETPORTS_NAV_CELL
 
@@ -2085,9 +2450,11 @@ local function navSweptPoints()
 			--  CELL CENTRE, not the anchor. The anchor is where a probe starts
 			--  and sits at body height; the centre is where the CELL is, which
 			--  is what a coverage picture wants.
+			local ox, oy = navCellOrigin(cx, cy)
+
 			table.insert(points, {
-				cx * PETPORTS_NAV_CELL + PETPORTS_NAV_CELL * 0.5,
-				cy * PETPORTS_NAV_CELL + PETPORTS_NAV_CELL * 0.5
+				ox + PETPORTS_NAV_CELL * 0.5,
+				oy + PETPORTS_NAV_CELL * 0.5
 			})
 		end
 	end
@@ -2219,11 +2586,11 @@ function petports_navDebugDraw()
 		--  false.
 		local corner = NAV_LABEL_CORNERS[((slot - 1) % 4) + 1]
 
+		local ox, oy = navCellOrigin(probe.toCell[1], probe.toCell[2])
+
 		navDrawSafely(world.debugText, tostring(probe.ticks), {
-			probe.toCell[1] * PETPORTS_NAV_CELL
-				+ corner[1] * PETPORTS_NAV_CELL,
-			probe.toCell[2] * PETPORTS_NAV_CELL
-				+ corner[2] * PETPORTS_NAV_CELL
+			ox + corner[1] * PETPORTS_NAV_CELL,
+			oy + corner[2] * PETPORTS_NAV_CELL
 		}, "yellow")
 	end
 end
@@ -2258,8 +2625,26 @@ function petports_navCandidates(limit)
 
 	local found = {}
 
-	if petports_navSwept(profile, mine) == nil and navInCoverage(cx, cy) then
-		table.insert(found, { cx = cx, cy = cy, key = mine, distance = 0 })
+	--  ONE READ FOR THE WHOLE WALK. See navSweptRadiusIn.
+	local sweptCells = navIndexRead()[profile]
+	local now = world.time()
+
+	local mineRadius = navSweptRadiusIn(sweptCells, mine, now)
+
+	--  THE SEED IS ONLY THE UNIT'S CELL WHEN THAT CELL IS WORTH SWEEPING.
+	--  Seen 2026-09-05: green markers on cells a unit was jumping or falling
+	--  through. The seed took petports_navCell(position) unconditionally, so
+	--  a unit in the air seeded a sweep of open air, which found no anchor,
+	--  finished at once and was marked swept. A walker seeds only from the
+	--  ground, and any seed must have an anchor.
+	local freeMover = petports_freeMover()
+	local grounded = freeMover or mcontroller.onGround()
+
+	if mineRadius < PETPORTS_NAV_RADIUS and navInCoverage(cx, cy)
+	   and grounded and petports_navAnchor(cx, cy, freeMover) ~= nil then
+		table.insert(found, {
+			cx = cx, cy = cy, key = mine, distance = 0, radius = mineRadius
+		})
 	end
 
 	local graph = navGraphFor(profile)
@@ -2278,7 +2663,10 @@ function petports_navCandidates(limit)
 		if seen[cellKey] then return end
 		seen[cellKey] = true
 
-		if petports_navSwept(profile, cellKey) ~= nil then return end
+		--  BELOW THE CEILING IS A CANDIDATE, swept or not. A cell swept at 4
+		--  is still owed its 6.
+		local radius = navSweptRadiusIn(sweptCells, cellKey, now)
+		if radius >= PETPORTS_NAV_RADIUS then return end
 
 		local bx, by = string.match(cellKey, "^(-?%d+),(-?%d+)$")
 		if bx == nil then return end
@@ -2290,13 +2678,16 @@ function petports_navCandidates(limit)
 
 		--  CELL CENTRES, not anchors. An anchor costs a scan to derive and this
 		--  is only ranking candidates -- the sweep will compute the real one.
-		local dx = (tonumber(bx) + 0.5) * PETPORTS_NAV_CELL - here[1]
-		local dy = (tonumber(by) + 0.5) * PETPORTS_NAV_CELL - here[2]
+		local ox, oy = navCellOrigin(tonumber(bx), tonumber(by))
+
+		local dx = ox + PETPORTS_NAV_CELL * 0.5 - here[1]
+		local dy = oy + PETPORTS_NAV_CELL * 0.5 - here[2]
 
 		table.insert(found, {
 			cx = tonumber(bx), cy = tonumber(by),
 			key = cellKey,
-			distance = dx * dx + dy * dy
+			distance = dx * dx + dy * dy,
+			radius = radius
 		})
 	end
 
@@ -2305,8 +2696,13 @@ function petports_navCandidates(limit)
 		for _, to in ipairs(tos) do consider(to) end
 	end
 
-	--  NEAREST FIRST, tie-broken on the key because table.sort is not stable.
+	--  NARROWEST FIRST, THEN NEAREST, tie-broken on the key because table.sort
+	--  is not stable. The radius term is what makes the ladder run in PASSES:
+	--  nothing is widened to 6 while any known cell is still owed its 4, and a
+	--  cell the unit has only just discovered goes to the front of the queue
+	--  at 0, so new ground always starts on the bottom rung.
 	table.sort(found, function(a, b)
+		if a.radius ~= b.radius then return a.radius < b.radius end
 		if a.distance ~= b.distance then return a.distance < b.distance end
 		return a.key < b.key
 	end)
@@ -2369,12 +2765,13 @@ local function navPurgeDeadzones(profile)
 	local now = world.time()
 	local dropped = 0
 
-	for cellKey, sweptAt in pairs(cells) do
+	for cellKey, entry in pairs(cells) do
 		if dropped >= NAV_PURGE_PER_PASS then break end
 
 		local bx, by = string.match(cellKey, "^(-?%d+),(-?%d+)$")
+		local sweptAt = navIndexEntry(entry)
 
-		if bx ~= nil and type(sweptAt) == "number"
+		if bx ~= nil and sweptAt ~= nil
 		   and (now - sweptAt) > NAV_SWEEP_TTL
 		   and not navInCoverage(tonumber(bx), tonumber(by)) then
 
@@ -2399,17 +2796,27 @@ local function navPurgeDeadzones(profile)
 	return dropped
 end
 
---  How often an idle unit looks for something to survey. Not every tick: the
---  lookup walks the whole edge set, and there is no hurry -- a cell that goes
---  unswept for a few seconds costs nothing.
-local NAV_TICK_INTERVAL = 2.0
+--  How often an idle unit looks for something to survey.
+--
+--  EVERY TICK, 2026-09-05. It was 2.0 seconds, on the argument that the
+--  candidate lookup walks the whole edge set and a cell that goes unswept for
+--  a few seconds costs nothing. Against that: with four sweeps in flight and
+--  cells finishing out of order, a free slot sat empty for up to two seconds
+--  every time a sweep completed, and at 05c cell counts that idle time was
+--  most of the survey. The lookup still does not run while the roster is full
+--  -- petports_navTick returns before the timer when every slot is busy -- so
+--  the walk is paid only on the tick a slot opens.
+--
+--  Zero rather than removing the timer, so it can be raised again from one
+--  place if the walk ever shows up in frame time.
+local NAV_TICK_INTERVAL = 0.0
 
 --  ONE STEP OF BACKGROUND SURVEYING, CALLED FROM AN IDLE UNIT.
 --
---  A RUNNING SWEEP IS STEPPED EVERY TICK; a new one is only LOOKED FOR on the
---  interval. Those are different costs -- a step is one explore call, a search
---  is a pass over the edge set -- and pacing them together would either make
---  the survey crawl or make the search constant.
+--  A RUNNING SWEEP IS STEPPED EVERY TICK; a new one is LOOKED FOR on the
+--  interval, which is now also every tick but gated on a free slot. Those are
+--  different costs -- a step is one explore call, a search is a pass over the
+--  edge set -- and the slot gate is what keeps the second from being constant.
 --
 --  IT DOES NOT CHECK IDLENESS ITSELF. The caller does, because the caller is
 --  the thing that knows what the unit is doing, and a predicate here would be a
@@ -2457,10 +2864,10 @@ function petports_navTick(dt, ownerId)
 
 			local _, edges, reachable = petports_navStats()
 
-			sb.logInfo("NAV survey COMPLETE for %s -- every known cell swept, "
-				.. "%s edge(s), %s reachable",
-				tostring(petports_navProfile()), sb.printJson(edges),
-				sb.printJson(reachable))
+			sb.logInfo("NAV survey COMPLETE for %s -- every known cell swept "
+				.. "to radius %s, %s edge(s), %s reachable",
+				tostring(petports_navProfile()), sb.printJson(PETPORTS_NAV_RADIUS),
+				sb.printJson(edges), sb.printJson(reachable))
 		end
 
 		return false
@@ -2491,8 +2898,24 @@ function petports_navTick(dt, ownerId)
 			self.petportsNavComplete = false
 			started = true
 
-			sb.logInfo("NAV surveying %s (sweep %s of %s)", cell.key,
-				sb.printJson(index), sb.printJson(PETPORTS_NAV_SWEEPS))
+			local radius = self.petportsNavSweeps[index].radius
+
+			--  A PASS BOUNDARY, SAID ONCE. The candidate order guarantees the
+			--  sweep radius only rises when nothing narrower is left, so the
+			--  first sweep at a wider radius IS the end of the previous pass.
+			--  It can fall again when new ground is found, which is honest.
+			if self.petportsNavPassRadius ~= nil
+			   and radius > self.petportsNavPassRadius then
+				sb.logInfo("NAV pass at radius %s complete for %s -- "
+					.. "sweeping at %s",
+					sb.printJson(self.petportsNavPassRadius or 0),
+					tostring(petports_navProfile()), sb.printJson(radius))
+			end
+			self.petportsNavPassRadius = radius
+
+			sb.logInfo("NAV surveying %s at radius %s (sweep %s of %s)",
+				cell.key, sb.printJson(radius), sb.printJson(index),
+				sb.printJson(PETPORTS_NAV_SWEEPS))
 		end
 	end
 
@@ -2509,15 +2932,21 @@ function petports_navProgress()
 	local profile = petports_navProfile()
 	local graph = navGraphFor(profile)
 
-	local cells, swept = 0, 0
+	local cells, swept, full = 0, 0, 0
 	local seen = {}
+
+	local sweptCells = navIndexRead()[profile]
+	local now = world.time()
 
 	local function count(cellKey)
 		if seen[cellKey] then return end
 		seen[cellKey] = true
 
 		cells = cells + 1
-		if petports_navSwept(profile, cellKey) ~= nil then swept = swept + 1 end
+
+		local radius = navSweptRadiusIn(sweptCells, cellKey, now)
+		if radius > 0 then swept = swept + 1 end
+		if radius >= PETPORTS_NAV_RADIUS then full = full + 1 end
 	end
 
 	for from, tos in pairs(graph.fine) do
@@ -2537,7 +2966,8 @@ function petports_navProgress()
 		profile = profile,
 		cells = cells,
 		swept = swept,
-		frontier = cells - swept,
+		full = full,
+		frontier = cells - full,
 		edges = edges,
 		reachable = reachable,
 		sweeping = sweeping
@@ -2569,6 +2999,7 @@ function petports_navWipe()
 	self.petportsNavCellCache = {}
 	self.petportsNavGraph = nil
 	self.petportsNavComplete = false
+	self.petportsNavPassRadius = nil
 	self.petportsNavVersion = (self.petportsNavVersion or 0) + 1
 
 	sb.logInfo("NAV wiped %s cell shard(s) and the index", sb.printJson(cleared))

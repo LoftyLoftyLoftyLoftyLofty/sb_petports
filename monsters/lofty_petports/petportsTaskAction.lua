@@ -171,7 +171,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-04k long routes walk coarse-nav legs"
+local BUILD_STAMP = "2026-09-05j a leg is reached on the ground and never counts as arrival"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -216,6 +216,18 @@ local SEARCH_LIMIT = 6.0
 --  allowance faster, which is a benefit: A* then returns false honestly instead
 --  of searching indefinitely.
 local EXPLORE_RATE = 300
+
+--  A COARSE LEG SEARCHES AT FOUR TIMES THAT. MEASURED 2026-09-05 03:50: the
+--  walk's search is stable (one aStar for the whole leg) and is stepped 12
+--  times a second -- this script's update cadence -- so SEARCH_LIMIT gives it
+--  72 explores, 21,600 nodes. The probe that proved the same edge needed 88
+--  explores. The walk lost by the margin between 72 and 88, on every
+--  through-the-floor pair, and the re-probe said "true after 88" each time.
+--  At 1200 per explore the same six seconds cover 86,400 nodes, past the
+--  70,000 maxNodesToSearch the probe itself is bounded by, so any edge a
+--  probe can prove, a leg can walk within its limit. The direct search keeps
+--  300: it is not replaying a proof and has no such bound.
+local NAV_LEG_EXPLORE_RATE = 1200
 
 --  How long to wait for a drop to stop falling before calling it unreachable.
 local SETTLE_GRACE = 2.0
@@ -930,7 +942,20 @@ local freshPather
 --  offers has already been PROVEN walkable by a probe of greater reach. That is
 --  the property worth having: a leg is not a guess, it is a replay of a search
 --  that succeeded.
-local NAV_LEG_REACH = 24
+--  24 -> 8, 2026-09-05. Measured 03:00: a 24-tile leg from 981,1039 to
+--  [1000.5,1048.8] took 18 s, and one from 1024,1048 to [1012.5,1031.8]
+--  swallowed five proven hops into a single search that stalled out with "no
+--  net progress" after 10 s. Legs are now chained (a reached leg asks for the
+--  next at once), so a short leg costs one cheap A* rather than a re-plan
+--  stall, and each one is a proven edge or two rather than a guess.
+local NAV_LEG_REACH = 8
+
+--  FARTHER THAN THIS, OR WITH NO LINE OF SIGHT, A WALKER ASKS THE GRAPH
+--  BEFORE THE DIRECT SEARCH rather than after SEARCH_LIMIT seconds of it.
+--  Measured 03:01: every long route paid the full six seconds first, on the
+--  outbound leg, at the crate, and on each recall.
+local COARSE_FIRST_DISTANCE = 24
+local COARSE_LOS_SET = { "Null", "Block", "Dynamic", "Slippery" }
 
 --  WALK THE NEXT LEG OF A COARSE ROUTE, WHEN THERE IS ONE.
 --
@@ -947,22 +972,42 @@ local NAV_LEG_REACH = 24
 --  learned edges since the last leg and the unit may have been moved by
 --  something else; a stale plan is the failure arch.vent.routing already
 --  records. Re-planning is one BFS over a memoised graph.
-local function tryCoarseLeg(stateData, target)
+local function tryCoarseLeg(stateData, target, reach)
   if petports_navWaypoint == nil then return false end
+
+  reach = reach or NAV_LEG_REACH
 
   local profile = petports_navProfile()
   local freeMover = petports_freeMover()
 
-  local fx, fy = petports_navCell(mcontroller.position())
-  local tx, ty = petports_navCell(target)
+  --  NOT IN THE AIR. A plan from the cell a unit is falling through starts
+  --  from a cell that is not in the graph. Wait for the ground.
+  if not freeMover and not mcontroller.onGround() then return false end
 
-  local fromKey = petports_navCellKey(fx, fy)
-  local toKey = petports_navCellKey(tx, ty)
+  local here = mcontroller.position()
+
+  --  FROM THE NEAREST CELL THE GRAPH KNOWS, not the cell the position
+  --  happens to be in. See petports_navNearestCell for the two measured
+  --  cases where those differ.
+  local fromKey = petports_navNearestCell(here, freeMover, 2.5)
+
+  if fromKey == nil then
+    local fx, fy = petports_navCell(here)
+    fromKey = petports_navCellKey(fx, fy)
+  end
+
+  local toKey = petports_navNearestCell(target, freeMover, 3.0)
+
+  if toKey == nil then
+    local tx, ty = petports_navCell(target)
+    toKey = petports_navCellKey(tx, ty)
+  end
 
   if fromKey == toKey then return false end
 
-  local waypoint, remaining = petports_navWaypoint(profile, fromKey, toKey,
-    NAV_LEG_REACH, freeMover)
+  local waypoint, remaining, legCell, legHops, legFrom, legPrev =
+    petports_navWaypoint(profile, fromKey, toKey, reach, freeMover,
+      ARRIVAL_DISTANCE + 0.5)
 
   if waypoint == nil then
     sb.logInfo("UNIT coarse nav has no leg from %s to %s", fromKey, toKey)
@@ -983,6 +1028,12 @@ local function tryCoarseLeg(stateData, target)
 
   stateData.navWaypoint = waypoint
   stateData.navRemaining = remaining
+  stateData.navLegArrived = nil
+  stateData.navLegFrom = legFrom
+  stateData.navLegTo = legCell
+  stateData.navLegPrev = legPrev
+  stateData.navLegHops = legHops
+  stateData.navLegReach = reach
 
   --  EVERYTHING THE OLD TARGET LEFT BEHIND. The same reset tryVentRoute does
   --  on a hop and for the same reason: a search timer, an approach timeout and
@@ -1540,7 +1591,15 @@ local function solveLaunch(pather, edge, source)
 
       --  And the apex it implies must still clear the landing, or the arrival
       --  is descending by a hair and lands on the lip.
-      if discreteRise(candidate, gravity) >= dy + JUMP_ARC_CLEARANCE then
+      --  candidate > 0, MEASURED 2026-09-05 04:25. For a landing five tiles
+      --  BELOW, this solved vy = -39.3 -- a launch INTO the floor.
+      --  discreteRise squares v0, so a downward launch reports a positive
+      --  rise and passed the clearance test; the controller set it, the
+      --  floor won, the unit never left the ground, the arc mover saw every
+      --  edge "consumed" while grounded, refused the drop, replanned, and
+      --  did it again every tick for a minute. A jump goes up.
+      if candidate > 0
+         and discreteRise(candidate, gravity) >= dy + JUMP_ARC_CLEARANCE then
         vx, vy, time, branch = plannedVx, candidate, t, "kept vx"
       end
     end
@@ -1548,8 +1607,9 @@ local function solveLaunch(pather, edge, source)
 
   --  ---- branch 2: pin the apex, solve for vx -------------------------------
   if branch == nil then
-    local rise = math.max(planRise, dy + JUMP_ARC_CLEARANCE)
-    if rise <= 0 then return plannedVx, plannedVy, nil end
+    --  FLOORED AT THE CLEARANCE, never zero or negative: a descent still
+    --  needs to clear its own takeoff lip before it falls.
+    local rise = math.max(planRise, dy + JUMP_ARC_CLEARANCE, JUMP_ARC_CLEARANCE)
 
     vy = discreteLaunchForRise(rise, gravity) * JUMP_VELOCITY_MARGIN
 
@@ -3033,6 +3093,16 @@ freshPather = function(why)
   local options = petports_pathOptions()
   options.run = false
 
+  --  A COARSE LEG IS WALKED WITH THE PROBE'S DISTANCE CAP. Lofty, 2026-09-05:
+  --  the mesh was proved at maxDistance 32 and walked at 200, and the two
+  --  disagree -- see PETPORTS_NAV_MAX_DISTANCE. The leg is at most
+  --  NAV_LEG_REACH tiles of chord and was proved within the cap, so the cap
+  --  loses nothing here and makes the walk reproduce the verdict. Every
+  --  other pather keeps its 200: a direct route across the base still needs it.
+  if why == "coarse leg" and PETPORTS_NAV_MAX_DISTANCE ~= nil then
+    options.maxDistance = PETPORTS_NAV_MAX_DISTANCE
+  end
+
   --  ALWAYS LOGGED, not behind TASK_DEBUG. A pather rebuilt every tick and a
   --  pather rebuilt once look identical from every other line in the log: the
   --  search restarts, reports success, and restarts again. Naming the caller
@@ -3056,7 +3126,17 @@ freshPather = function(why)
     pathOptions = options
   })
 
-  self.pather.finder.exploreRate = function() return EXPLORE_RATE end
+  --  COUNTED, 2026-09-05. exploreRate is consulted once per explore call, so
+  --  this is a free tally of how many times the search was actually stepped
+  --  -- the number that decides whether a walk can reproduce a probe's 85
+  --  ticks, and the number the log had no way of showing.
+  self.petportsExploreCalls = 0
+  self.petportsExploreRate = (why == "coarse leg") and NAV_LEG_EXPLORE_RATE
+    or EXPLORE_RATE
+  self.pather.finder.exploreRate = function()
+    self.petportsExploreCalls = (self.petportsExploreCalls or 0) + 1
+    return self.petportsExploreRate or EXPLORE_RATE
+  end
 
   --  TWO MORE INSTANCE SHADOWS, SAME TECHNIQUE AS exploreRate ABOVE AND FOR THE
   --  SAME REASON: vanilla's PathFinder gates on a flag that is unreadable for a
@@ -5966,6 +6046,34 @@ function petportsTaskAction.update(dt, stateData)
   --  standable is near -- the settle grace below owns that case.
   local routeTarget = approachTargetFor(stateData, target) or target
 
+  --  COARSE FIRST WHEN FAR OR BLIND. Once per target: a walker whose target
+  --  is more than COARSE_FIRST_DISTANCE away, or has solid tiles on the
+  --  straight line to it, asks the graph for a leg now instead of after
+  --  SEARCH_LIMIT seconds of a direct search that has failed on every such
+  --  route measured. If the graph has nothing, the direct search runs as
+  --  before.
+  if stateData.navWaypoint == nil and not stateData.routing
+     and not stateData.arrived and petports_navNearestCell ~= nil
+     and not petports_freeMover() then
+    local routeKey = sb.printJson(routeTarget)
+
+    if stateData.coarseFirstFor ~= routeKey then
+      stateData.coarseFirstFor = routeKey
+
+      local here = mcontroller.position()
+      local far = world.magnitude(here, routeTarget) > COARSE_FIRST_DISTANCE
+      local okLos, blocked = pcall(world.lineTileCollision, here, routeTarget,
+        COARSE_LOS_SET)
+      local blind = okLos and blocked == true
+
+      if (far or blind) and tryCoarseLeg(stateData, routeTarget) then
+        sb.logInfo("UNIT coarse first: target %s is %s -- leg taken",
+          routeKey, far and "far" or "out of sight")
+        return false
+      end
+    end
+  end
+
   --  PRE-FLIGHT: BEFORE ANYTHING ASKS THE PATHFINDER A QUESTION.
   --
   --  Placed above the routing branch rather than beside approachPoint, because
@@ -6422,19 +6530,46 @@ function petportsTaskAction.update(dt, stateData)
   --  because the unit is now a leg closer, or asks for another leg. That loop
   --  is the whole mechanism, and it terminates because petports_navWaypoint
   --  always advances at least one cell.
+  --  A LEG IS REACHED ON THE GROUND, OR NOT YET. Measured 2026-09-05 04:33:
+  --  a jump passed within ARRIVAL_DISTANCE of its landing while still
+  --  rising, the leg was cleared at [972.34,1045.04] with onGround false,
+  --  the chain refused to plan from the air, and the unit fell back to a
+  --  six-second direct search it did not need. Free movers are exempt.
+  --  approachPoint's own verdict on the waypoint counts too (navLegArrived,
+  --  set below), so a ground-resolved arrival a hair outside the raw radius
+  --  cannot leave a unit standing at a leg it will never "reach".
+  local legReached = stateData.navWaypoint ~= nil
+    and (stateData.navLegArrived == true
+      or world.magnitude(stateData.navWaypoint, mcontroller.position())
+         < ARRIVAL_DISTANCE)
+    and (petports_freeMover() or mcontroller.onGround())
+
   if stateData.navWaypoint ~= nil then
-    if world.magnitude(stateData.navWaypoint, mcontroller.position())
-       < ARRIVAL_DISTANCE then
-      sb.logInfo("UNIT reached coarse leg %s, %s hop(s) were left -- resuming "
-        .. "for the real target",
-        sb.printJson(stateData.navWaypoint),
-        sb.printJson(stateData.navRemaining or 0))
+    if legReached then
+      local remaining = stateData.navRemaining or 0
 
       stateData.navWaypoint = nil
       stateData.navRemaining = nil
+      stateData.navLegArrived = nil
       stateData.groundTarget = nil
-      freshPather("coarse leg reached")
-    else
+
+      --  CHAIN, DO NOT RESUME. Measured 2026-09-05 02:41: a reached leg with
+      --  11 hops left went back to the direct search, which had ALREADY
+      --  failed for SEARCH_LIMIT seconds from the previous cell, and the
+      --  unit stood still for another six before asking for the next leg.
+      --  The graph said there were more hops; take the next one now. The
+      --  direct search is only tried again once the graph has run out.
+      if remaining > 0 and tryCoarseLeg(stateData, routeTarget) then
+        sb.logInfo("UNIT reached coarse leg with %s hop(s) left -- chaining "
+          .. "into the next", sb.printJson(remaining))
+      else
+        sb.logInfo("UNIT reached coarse leg, %s hop(s) were left -- resuming "
+          .. "for the real target", sb.printJson(remaining))
+        freshPather("coarse leg reached")
+      end
+    end
+
+    if stateData.navWaypoint ~= nil then
       approachTo = stateData.navWaypoint
     end
   end
@@ -6450,6 +6585,18 @@ function petportsTaskAction.update(dt, stateData)
     --  times out instead. approachPoint resolves the target through
     --  findGroundPosition and does not have this problem.
     if approachPoint(dt, approachTo, ARRIVAL_DISTANCE, false) then
+      --  ARRIVING AT A LEG IS NOT ARRIVING. Measured 2026-09-05 04:33:
+      --  approachPoint registered arrival at the waypoint [974.5,1052.8] a
+      --  tick before the leg test did, `arrived` went true, and the pickup
+      --  ran against an item 35 tiles away -- "collected at [994,1024]"
+      --  from [973,1052]. With a leg active the only thing approachPoint
+      --  can confirm is the leg; the task's arrival is decided when the
+      --  approach is to the real target. Let the leg test see it next tick.
+      if stateData.navWaypoint ~= nil then
+        stateData.navLegArrived = true
+        return false
+      end
+
       stateData.arrived = true
       animator.setAnimationState("movement", "idle")
       return false
@@ -6547,7 +6694,11 @@ function petportsTaskAction.update(dt, stateData)
         local finder = self.pather and self.pather.finder
         local selfStandable = select(2, pcall(validStandingPosition, here, false))
 
-        sb.logInfo("UNIT approach at %s (standable %s) target %s approachPosition %s moved %s onGround %s | hasPath %s aStar %s finderTarget %s",
+        --  SEARCH IDENTITY AND EXPLORE COUNT. If the aStar address changes
+        --  between samples the search is being restarted; if the explore
+        --  count barely moves the search is not being stepped. Either one
+        --  explains a walk that cannot do what the probe did.
+        sb.logInfo("UNIT approach at %s (standable %s) target %s approachPosition %s moved %s onGround %s | hasPath %s aStar %s finderTarget %s | search %s explores %s",
           sb.printJson(here), tostring(selfStandable),
           sb.printJson(task.position),
           sb.printJson(self.approachPosition),
@@ -6555,7 +6706,9 @@ function petportsTaskAction.update(dt, stateData)
           tostring(mcontroller.onGround()),
           tostring(finder and finder.hasPath),
           tostring(finder ~= nil and finder.aStar ~= nil),
-          sb.printJson(finder and finder.target))
+          sb.printJson(finder and finder.target),
+          tostring(finder and finder.aStar),
+          sb.printJson(self.petportsExploreCalls or 0))
       end
     end
 
@@ -6652,6 +6805,68 @@ function petportsTaskAction.update(dt, stateData)
       petports_think("pathing")
 
       if stateData.searchingTimer >= SEARCH_LIMIT then
+        --  A LEG THAT WILL NOT WALK IS A CLAIM THE GRAPH GOT WRONG, OR A LEG
+        --  TOO LONG TO PROVE IN ONE SEARCH. Measured 2026-09-05 03:18: the
+        --  graph routed 994,1039 -> 999,1036 (the deck below, through the
+        --  floor), the direct search for that leg ran out the clock, and the
+        --  failure fell through to vent routing -- which failed the task and
+        --  left the wrong edge in the store for next time.
+        --
+        --  So: a multi-hop leg is retried as ONE hop. A one-hop leg that
+        --  fails is the edge itself being wrong; contradict it (the hook
+        --  petports_navContradict was written for exactly this) and re-plan,
+        --  which now routes around it. Only when the graph has nothing left
+        --  does the old handover run.
+        if stateData.navWaypoint ~= nil and petports_navContradict ~= nil then
+          local legFrom, legTo = stateData.navLegFrom, stateData.navLegTo
+          local legPrev = stateData.navLegPrev or legFrom
+          local hops = stateData.navLegHops or 1
+          local shrunk = (stateData.navLegReach or NAV_LEG_REACH) <= 0
+
+          stateData.navWaypoint = nil
+          stateData.navRemaining = nil
+          stateData.groundTarget = nil
+          stateData.searchingTimer = 0
+
+          --  A LEG ALREADY ASKED FOR AT REACH 0 CANNOT SHRINK FURTHER. It
+          --  may still be two hops, because the first hop is inside the
+          --  arrival radius and was walked past -- measured 03:30, the same
+          --  two-hop leg was "retried" ten times. The hop that will not walk
+          --  is the LAST one; the ones before it are within arm's reach.
+          if hops > 1 and not shrunk then
+            sb.logInfo("UNIT coarse leg %s > %s (%s hops) would not walk -- "
+              .. "retrying one hop at a time", tostring(legFrom),
+              tostring(legTo), sb.printJson(hops))
+
+            if tryCoarseLeg(stateData, routeTarget, 0) then return false end
+          else
+            --  RE-PROBE FIRST, THEN DECIDE. The probe's own verdict for
+            --  this pair, now, with its own search: a false means the store
+            --  was stale and is corrected by the probe itself; a true means
+            --  the probe and the walk disagree, which is the finding this
+            --  line exists to surface, and the edge is contradicted anyway
+            --  so the unit moves.
+            local verdict, spins = nil, 0
+
+            if legPrev ~= nil and legTo ~= nil and petports_navVerify ~= nil then
+              verdict, spins = petports_navVerify(legPrev, legTo)
+            end
+
+            sb.logInfo("UNIT coarse edge %s > %s would not walk in %s s -- "
+              .. "re-probe says %s after %s tick(s) -- %s",
+              tostring(legPrev), tostring(legTo), sb.printJson(SEARCH_LIMIT),
+              tostring(verdict), sb.printJson(spins),
+              verdict == true and "PROBE AND WALK DISAGREE, contradicting anyway"
+                or "contradicted")
+
+            if legPrev ~= nil and legTo ~= nil and verdict ~= false then
+              petports_navContradict(petports_navProfile(), legPrev, legTo)
+            end
+
+            if tryCoarseLeg(stateData, routeTarget) then return false end
+          end
+        end
+
         sb.logInfo("UNIT direct path search hit SEARCH_LIMIT %s with no path -- handing over to vent routing",
           sb.printJson(SEARCH_LIMIT))
         --  Direct route failed. Before giving up, see whether a vent lands us
