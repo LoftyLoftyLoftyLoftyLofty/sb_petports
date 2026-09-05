@@ -82,7 +82,7 @@
 --  delegate, and stays one.
 local vanillaSetJumpState = setJumpState
 
-local BUILD_STAMP = "2026-09-04i free movers get the metabolism scale"
+local BUILD_STAMP = "2026-09-06b the free mover is profiled"
 local stampLogged = false
 
 --  DELETE ME ONCE THE ANSWER IS IN THE LOG.
@@ -1021,7 +1021,7 @@ local function swimApproachSpeed(pather, base)
   return math.min(base, JUMP_APPROACH_SPEED)
 end
 
-function petportsFreeMover(pather)
+local function petportsFreeMoverInner(pather)
   --  Vanilla's consume loop, unmodified. Runs first so the cursor is current
   --  before anything looks ahead of it.
   while isFreeEdge(pather.edge) do
@@ -1088,8 +1088,32 @@ function petportsFreeMover(pather)
   --  inline here, and the validator did not model it -- which is how a plan the
   --  mover would have string-pulled clean over a shallow bar came to be refused
   --  for a contour detour it was never going to fly.
-  local aim, skip = aimAhead(here,
-    function(i) return finder ~= nil and finder.lookAhead and finder:lookAhead(i) or nil end)
+  --  THROTTLED, 2026-09-06. aimAhead runs a body sweep -- up to ten
+  --  rectTileCollision calls and as many mediumAllows calls, each of those
+  --  a liquidAt per body row -- for up to six look-ahead edges, and it ran
+  --  on EVERY tick a free edge was being flown: a few hundred world calls a
+  --  tick, twelve times a second, which is the stutter that appears the
+  --  moment a flyer sets off and stops when it arrives. stringPullClear
+  --  already re-checks on STRING_PULL_RECHECK; the look-ahead now does the
+  --  same, keeping its last answer between checks and re-asking at once
+  --  when the edge being flown changes.
+  local edgeIndex = finder ~= nil and finder.currentEdgeIndex or nil
+  local now = world.time()
+
+  local aim, skip
+
+  if self.petportsAimNext == nil or now >= self.petportsAimNext
+     or self.petportsAimEdge ~= edgeIndex or self.petportsAimAt == nil then
+    self.petportsAimNext = now + STRING_PULL_RECHECK
+    self.petportsAimEdge = edgeIndex
+
+    aim, skip = aimAhead(here,
+      function(i) return finder ~= nil and finder.lookAhead and finder:lookAhead(i) or nil end)
+
+    self.petportsAimAt = { aim = aim, skip = skip or 0 }
+  else
+    aim, skip = self.petportsAimAt.aim, self.petportsAimAt.skip
+  end
 
   --  NO SHORTCUT MEANS THE NEXT WAYPOINT IS THE LEG, AND THE VALIDATOR ONLY
   --  ACCEPTED THIS PLAN BECAUSE IT COULD REACH SOMETHING FURTHER.
@@ -1676,4 +1700,12 @@ function approachPoint(dt, targetPosition, stopDistance, running)
   end
 
   return false
+end
+
+--  PROFILED, 2026-09-06: the free-mover tick is its own section.
+function petportsFreeMover(pather)
+  if petports_profBegin ~= nil then petports_profBegin("freeMover") end
+  local result = petportsFreeMoverInner(pather)
+  if petports_profEnd ~= nil then petports_profEnd("freeMover") end
+  return result
 end

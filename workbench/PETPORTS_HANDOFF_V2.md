@@ -9200,8 +9200,10 @@ block would too, since that is the only thing `slopeUp` recognises.
 Against `pathutil.lua`'s `validStandingPosition`:
 
 1.  `CollisionAny` includes **Slippery**. The Lua set is
-    `{Null, Block, Dynamic, Platform}`. **ICE IS NOT GROUND TO US AND IS TO THE
-    ENGINE.**
+    `{Null, Block, Dynamic, Platform}`. **CORRECTED 2026-09-05: Slippery is
+    NOT ice.** It is the invisible mission-boundary wall (Lofty). So this
+    difference is about a wall the engine would count as floor and the Lua
+    does not, which never arises on a base. The old wording said ice.
 2.  The `translated(0,1)` clause lets the engine count ground **a full tile
     below** the feet -- "rounded collision polys". The Lua has no equivalent.
 3.  Standing INSIDE a Dynamic object switches the engine to `CollisionFloorOnly`.
@@ -9845,7 +9847,8 @@ theories; that entry evidently is not where anyone looks. This is.
 **THE COLLISION KINDS, AND WHAT USES THEM HERE:**
 
     Block       terrain, and crate tops -- see below
-    Slippery    ice
+    Slippery    the invisible mission-boundary wall, NOT ice (Lofty,
+                2026-09-05). A wall for body fit; never a floor.
     Platform    platforms, which support from above and can be dropped through
     Dynamic     DOORS
     Null        unloaded or out of world; an absence, not a surface

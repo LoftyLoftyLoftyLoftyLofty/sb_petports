@@ -61,7 +61,7 @@
 --  are unprobeable and time-varying and nobody's fault -- are allowed to
 --  produce optimistic-wrong answers. They fail in the cheap direction.
 
-local COARSENAV_BUILD_STAMP = "2026-09-05q an anchor obeys the unit's own avoidLiquid"
+local COARSENAV_BUILD_STAMP = "2026-09-07h overlay readouts refresh every two seconds and the candidate slice is smaller"
 
 local navStamped = false
 
@@ -110,7 +110,33 @@ local NAV_EDGES = "petports_navedges:"
 --  discoveries eventually arrive. Our own writes invalidate precisely; nothing
 --  can tell us about somebody else's, and polling every read would undo the
 --  whole point of the memo.
-local NAV_CACHE_TTL = 30.0
+--  30 -> 120, 2026-09-07b. PROFILED: the expiry drops the memoised graph,
+--  and the rebuild that follows read every shard and took 1,029 ms in one
+--  tick -- the periodic big hitch, every 30 s. Another unit's edges now
+--  arrive two minutes late instead of half a minute; claims already keep
+--  units off each other's cells, and a route this unit needs across the
+--  other's area is also in the store when it plans (navPath reads the
+--  memo, which is rebuilt on expiry, so it is at most this stale).
+local NAV_CACHE_TTL = 120.0
+
+--  How often the overlay's derived readouts (level progress, swept points)
+--  are recomputed while the overlay is on; see petports_navLevelProgress.
+local NAV_OVERLAY_REFRESH = 2.0
+
+--  PER-PROBE LOG LINES ARE OPT-IN, 2026-09-07b. PROFILED: 9,327 body-sweep
+--  verdict lines in one session, up to 318 log lines a second -- each a
+--  string.format and a file write on the laptop's disk, inside the tick.
+--  The verdict is in the store and the survey counters are on the PROFILE
+--  line; the per-pair line is for reading a single route's history, so it
+--  is behind this flag. petports_navVerboseToggle() flips it. Lines that
+--  happen per sweep (surveying, neighbours, COMPLETE) stay: tens per 5 s.
+PETPORTS_NAV_VERBOSE = false
+
+function petports_navVerboseToggle()
+	PETPORTS_NAV_VERBOSE = not PETPORTS_NAV_VERBOSE
+	sb.logInfo("NAV verbose %s", PETPORTS_NAV_VERBOSE and "ON" or "OFF")
+	return PETPORTS_NAV_VERBOSE
+end
 
 --  THE ONLY CELL SIZE IN v1.
 --
@@ -148,9 +174,50 @@ PETPORTS_NAV_CELL = 2
 --  frequently share an anchor and their edges are one-tick trues.
 PETPORTS_NAV_STRIDE = 1
 
+--  A FREE MOVER'S STRIDE IS WIDER, 2026-09-06. MEASURED: a flyer on the base
+--  swept 297 cells with 35 candidates each and 1934 edges, 44 of them false
+--  -- open air is homogeneous, every cell anchors, every pair is true, and
+--  iterating that store stalled the world physics thread. A walker's nodes
+--  follow surfaces and are sparse on their own; a flyer's fill the volume.
+--  Four tiles apart is one node per sixteen the walker would have, still
+--  well inside NAV_MAX_DISTANCE, and the leg is string-pulled to the
+--  farthest visible node anyway, so intermediate nodes were never walked
+--  to. The 2x2 window is unchanged: it is a body-fit sample at the origin.
+--
+--  The stride is part of what a cell key MEANS, so it is per profile and
+--  never mixed: a free mover's store is keyed at its own stride.
+--  BACK TO 1, 2026-09-06 (Lofty): the sparse grid lost the granularity a
+--  2x2 zigzag tunnel needs. Density is cut by WHERE a free mover anchors
+--  instead -- see the surface test in petports_navAnchor. Kept as a knob.
+PETPORTS_NAV_STRIDE_FREE = 1
+
+--  READ ONCE PER TICK. 2026-09-06: this was calling petports_freeMover()
+--  on every call, and petports_freeMover() reads mcontroller.baseParameters()
+--  -- the whole movement parameter table converted to Lua -- and navStride
+--  sits under navCellOrigin, which the candidate walk, the coverage test,
+--  the anchor scan and the neighbour box call once PER CELL. Thousands of
+--  full parameter conversions per tick, every tick the unit existed, which
+--  is the stutter that only stopped when the flyer was despawned. The
+--  stride cannot change within a tick; world.time() is the tick stamp.
+local function navStride()
+	local now = world.time()
+
+	if self.petportsNavStrideAt ~= now then
+		self.petportsNavStrideAt = now
+		self.petportsNavStride = PETPORTS_NAV_STRIDE
+
+		if petports_freeMover ~= nil and petports_freeMover() then
+			self.petportsNavStride = PETPORTS_NAV_STRIDE_FREE
+		end
+	end
+
+	return self.petportsNavStride
+end
+
 --  The world position of a cell's bottom-left tile corner.
 local function navCellOrigin(cx, cy)
-	return cx * PETPORTS_NAV_STRIDE, cy * PETPORTS_NAV_STRIDE
+	local stride = navStride()
+	return cx * stride, cy * stride
 end
 
 --  DECLARED HERE, DEFINED WITH THE HIERARCHY BELOW. petports_navLearn needs
@@ -261,7 +328,34 @@ end
 --  the whole justification above -- so writing 16 in both places meant the two
 --  could drift apart silently the first time either was tuned, which happened
 --  the same day the margin was written.
-local NAV_COVERAGE_MARGIN = PETPORTS_NAV_RADIUS
+--  CLAMPED TO THE COVERAGE ITSELF, 2026-09-06 (Lofty). The margin below
+--  was a sweep's reach so the rim would be complete; it also let nodes sit
+--  up to twelve tiles outside every port's rectangle, and a swimmer on a
+--  megabase was surveying the open water below the network for edges that
+--  do not exist. The roam-outside allowance was written for a one-port base
+--  whose pet sometimes had to step out; on a megabase it makes the edges
+--  unreliable. So: a node is inside a port rectangle or it is not a node.
+--  The rim is complete anyway -- the candidate walk stops at the boundary,
+--  so no cell inside is half-known. Two tiles of slack for arrival.
+local NAV_COVERAGE_MARGIN = 2
+
+--  A box version for the free-mover rules: entirely inside some rectangle.
+local function navBoxInCoverage(x0, y0, x1, y1)
+	local rects = self.petportsNetwork
+
+	if type(rects) ~= "table" or #rects == 0 then return true end
+
+	for _, rect in ipairs(rects) do
+		if x0 >= rect[1] - NAV_COVERAGE_MARGIN
+		   and x1 <= rect[3] + NAV_COVERAGE_MARGIN
+		   and y0 >= rect[2] - NAV_COVERAGE_MARGIN
+		   and y1 <= rect[4] + NAV_COVERAGE_MARGIN then
+			return true
+		end
+	end
+
+	return false
+end
 
 --  Is this cell close enough to the network to be worth surveying?
 --
@@ -399,8 +493,9 @@ end
 function petports_navCell(position)
 	if type(position) ~= "table" then return nil, nil end
 
-	return math.floor(position[1] / PETPORTS_NAV_STRIDE),
-		math.floor(position[2] / PETPORTS_NAV_STRIDE)
+	local stride = navStride()
+	return math.floor(position[1] / stride),
+		math.floor(position[2] / stride)
 end
 
 function petports_navCellKey(cx, cy)
@@ -477,7 +572,13 @@ end
 --  entirely closed door is entirely impassable while it stays shut.
 local NAV_SOLID_SET = { "Null", "Block", "Dynamic", "Slippery" }
 
-local function navCellSolid(cx, cy)
+--  CACHED WITH THE ANCHORS (same TTL, same wipe), 2026-09-06s. PROFILED:
+--  pointTileCollision at 1,200-1,300 per second was this, four per cell
+--  for every cell in every neighbour box, never remembered.
+--  How long an anchor or a solid verdict is remembered; see petports_navAnchor.
+local NAV_ANCHOR_TTL = 30.0
+
+local function navCellSolidUncached(cx, cy)
 	local baseX, baseY = navCellOrigin(cx, cy)
 
 	for dx = 0, PETPORTS_NAV_CELL - 1 do
@@ -494,6 +595,23 @@ local function navCellSolid(cx, cy)
 	end
 
 	return true
+end
+
+local function navCellSolid(cx, cy)
+	local key = petports_navCellKey(cx, cy)
+	local now = world.time()
+
+	self.petportsNavSolidCache = self.petportsNavSolidCache or {}
+	local hit = self.petportsNavSolidCache[key]
+
+	if hit ~= nil and (now - hit.at) <= (NAV_ANCHOR_TTL or 30.0) then
+		return hit.solid
+	end
+
+	local solid = navCellSolidUncached(cx, cy)
+	self.petportsNavSolidCache[key] = { at = now, solid = solid }
+
+	return solid
 end
 
 --  WHAT A WALKER MAY REST ON. The same set petportsTaskAction uses for the
@@ -533,7 +651,18 @@ local function navFootingUnderCell(x, baseX, baseY, bounds)
 	return ok and hit == true
 end
 
-function petports_navAnchor(cx, cy, freeMover)
+--  CACHED, 2026-09-06r. PROFILED: with the graph rebuild gone, the largest
+--  survey cost per 5 s was `neighbours` (250-380 ms) against `probeStep`
+--  (100-300 ms) -- the anchor scan over the 9x9 neighbour box, four to
+--  six world calls per cell, 80 cells per sweep, seven sweeps a second,
+--  re-asked for the same cells by every overlapping sweep. An anchor is a
+--  fact about the tiles, which change rarely; thirty seconds is the same
+--  horizon the cell cache uses. Keyed by profile so a chassis change gets
+--  its own answers; nil results are cached too (an air cell is the common
+--  case and the expensive one to keep re-scanning). Wipe clears it.
+--  NAV_ANCHOR_TTL is declared above navCellSolid, which shares it.
+
+local function navAnchorUncached(cx, cy, freeMover)
 	local baseX, baseY = navCellOrigin(cx, cy)
 
 	local bounds = mcontroller.boundBox()
@@ -545,36 +674,77 @@ function petports_navAnchor(cx, cy, freeMover)
 	local tried = 0
 
 	if freeMover then
-		for dx = 0, PETPORTS_NAV_CELL - 1 do
-			for dy = 0, PETPORTS_NAV_CELL - 1 do
-				--  CENTRE OF THE TILE, because a free mover is not resting on
-				--  anything -- there is no surface to lift off.
-				--
-				--  THE WHOLE BODY, NOT A POINT. pointTileCollision would pass a
-				--  flyer through a one-tile gap it cannot fit in. Platform is
-				--  absent from the set deliberately: a platform is passable to
-				--  something that ignores gravity. Dynamic is present because
-				--  fact.pathing.collisionkinds says Dynamic is DOORS, and a
-				--  closed door stops a flyer.
-				local point = { baseX + dx + 0.5, baseY + dy + 0.5 }
-				local region = {
-					point[1] + bounds[1], point[2] + bounds[2],
-					point[1] + bounds[3], point[2] + bounds[4]
-				}
+		--  ONE CANDIDATE, THE WINDOW CENTRE, 2026-09-06w. The four tile-centre
+		--  candidates were both the double layer and the dead end:
+		--
+		--  DOUBLE: cell (x,y) at its upper-row candidate and cell (x,y+1) at
+		--  its lower-row candidate are the SAME point, so every surface got
+		--  two cells per anchor, like the walker's second row before 05h.
+		--
+		--  DEAD END (13:32 log, 20 cells then COMPLETE): a tile-centre body
+		--  overhangs 0.3 into the next row, so the cell beside a floor never
+		--  fits, and the cell beyond it sits 0.7 clear -- outside 06u's 0.3
+		--  growth. Floors and ceilings anchored nothing; only vertical walls
+		--  did, and the survey stopped at the first corner.
+		--
+		--  The window centre (origin + 1, origin + 1) puts the body 0.2 from
+		--  the surface beside it, fits a 2-wide tunnel exactly (1.6 in 2.0),
+		--  and sits on the node lattice. Growth 0.5 takes the 0.2 and refuses
+		--  the 1.2 of the next cell out: one layer, every surface.
+		--
+		--  THE WHOLE BODY, NOT A POINT. pointTileCollision would pass a
+		--  flyer through a one-tile gap it cannot fit in. Platform is absent
+		--  from the set deliberately: a platform is passable to something
+		--  that ignores gravity. Dynamic is present because
+		--  fact.pathing.collisionkinds says Dynamic is DOORS, and a closed
+		--  door stops a flyer.
+		local point = {
+			baseX + PETPORTS_NAV_CELL * 0.5, baseY + PETPORTS_NAV_CELL * 0.5
+		}
+		local region = {
+			point[1] + bounds[1], point[2] + bounds[2],
+			point[1] + bounds[3], point[2] + bounds[4]
+		}
 
-				tried = tried + 1
+		tried = tried + 1
 
-				local ok, hit = pcall(world.rectTileCollision, region,
-					{ "Null", "Block", "Dynamic", "Slippery" })
+		local ok, hit = pcall(world.rectTileCollision, region,
+			{ "Null", "Block", "Dynamic", "Slippery" })
 
-				--  AND THE MEDIUM, as for a walker: a flyer's anchor in water
-				--  it cannot enter is a node it can never reach.
-				if ok and hit == false then
-					local okMedium, allowed = pcall(petports_mediumAllows, point, bounds)
+		--  NEAR A SURFACE, OR NOT A NODE (Lofty, 2026-09-06). Open air needs
+		--  no nodes -- a leg string-pulls across it to the farthest visible
+		--  node -- but the nodes must TRACE the walls, so a 2x2 tunnel that
+		--  zigzags through the interior keeps a node in every cell. Cells in
+		--  the middle of a room anchor nothing. The store follows geometry.
+		local nearSurface = false
 
-					if not okMedium or allowed ~= false then return point end
-				end
-			end
+		if ok and hit == false then
+			local grown = {
+				region[1] - 0.5, region[2] - 0.5, region[3] + 0.5, region[4] + 0.5
+			}
+
+			local okNear, near = pcall(world.rectTileCollision, grown,
+				{ "Block", "Dynamic", "Slippery", "Platform" })
+
+			--  THE COVERAGE EDGE IS A WALL TOO (Lofty, 2026-09-06): a free
+			--  mover's nodes trace it like any other surface, so a swimmer in
+			--  open water gets a rim of nodes along the network boundary and
+			--  nothing beyond it.
+			local insideGrown = navBoxInCoverage(
+				grown[1], grown[2], grown[3], grown[4])
+			local insideBody = navBoxInCoverage(
+				region[1], region[2], region[3], region[4])
+
+			nearSurface = insideBody
+				and ((okNear and near == true) or not insideGrown)
+		end
+
+		--  AND THE MEDIUM, as for a walker: a flyer's anchor in water it
+		--  cannot enter is a node it can never reach.
+		if ok and hit == false and nearSurface then
+			local okMedium, allowed = pcall(petports_mediumAllows, point, bounds)
+
+			if not okMedium or allowed ~= false then return point end
 		end
 	else
 		for dx = 0, PETPORTS_NAV_CELL - 1 do
@@ -619,6 +789,31 @@ function petports_navAnchor(cx, cy, freeMover)
 		tostring(lift))
 end
 
+function petports_navAnchor(cx, cy, freeMover)
+	local key = petports_navCellKey(cx, cy)
+	local profile = petports_navProfile()
+	local now = world.time()
+
+	self.petportsNavAnchorCache = self.petportsNavAnchorCache or {}
+	local cache = self.petportsNavAnchorCache[profile]
+
+	if cache == nil then
+		cache = {}
+		self.petportsNavAnchorCache[profile] = cache
+	end
+
+	local hit = cache[key]
+
+	if hit ~= nil and (now - hit.at) <= NAV_ANCHOR_TTL then
+		return hit.anchor, hit.why
+	end
+
+	local anchor, why = navAnchorUncached(cx, cy, freeMover)
+	cache[key] = { at = now, anchor = anchor, why = why }
+
+	return anchor, why
+end
+
 --  EVERY CELL WORTH ASKING THIS ONE ABOUT.
 --
 --  A PLAIN RADIAL SCAN, CHOSEN OVER A CLEVERER ONE ON PURPOSE. The efficient
@@ -648,7 +843,7 @@ function petports_navNeighbours(cx, cy, freeMover, radius)
 	--  Cells that COULD hold something within the radius. Rounded up, then
 	--  filtered by true anchor distance below -- the box is a cheap prefilter
 	--  and the distance test is the actual rule.
-	local reach = math.ceil(radius / PETPORTS_NAV_STRIDE)
+	local reach = math.ceil(radius / navStride())
 
 	local found = {}
 	local solid = 0
@@ -744,7 +939,13 @@ end
 --  should be invalidated. Wiring the option into petports_pathOptions is a
 --  separate change and the engine's spelling for it has NOT been read from
 --  source yet -- do not guess it.
-function petports_navProfile()
+--  PER TICK, 2026-09-06s. This reads world.monsterType, baseParameters
+--  (through petports_freeMover), boundBox and two config keys, then
+--  formats -- and 06r put it under petports_navAnchor, which the neighbour
+--  box calls 80 times a sweep. PROFILED: neighbours did not fall at all
+--  after the anchor cache, because the cache lookup itself paid for a
+--  profile. None of the inputs change within a tick.
+local function navProfileUncached()
 	local monsterType = world.monsterType(entity.id())
 	local freeMover = petports_freeMover()
 
@@ -773,19 +974,81 @@ function petports_navProfile()
 		petports_avoidLiquid() and "1" or "0")
 end
 
+function petports_navProfile()
+	local now = world.time()
+
+	if self.petportsNavProfileAt ~= now or self.petportsNavProfileMemo == nil then
+		self.petportsNavProfileAt = now
+		self.petportsNavProfileMemo = navProfileUncached()
+	end
+
+	return self.petportsNavProfileMemo
+end
+
 --  ------------------------------------------------------------------ STORE
 
 local function navEdgeKey(fromKey, toKey)
 	return fromKey .. ">" .. toKey
 end
 
+--  INDEX WRITES ARE BATCHED, 2026-09-06. MEASURED: a free mover's sweeps
+--  complete in one step (body sweep), so 490 sweeps in a short window meant
+--  490 whole-index world.setProperty calls plus two claim writes each --
+--  on the world thread, which is the physics stutter that was seen. Own
+--  entries are held in petportsNavIndexPending, merged into every read so
+--  this unit sees its own work at once, and written with the edge flush.
+--  Another unit sees them a flush later, which the claim already covers.
+--  AND READ AT MOST ONCE PER TICK. 2026-09-06: the idle top-up read it
+--  twice every two seconds (purge, then candidates) -- the index holds
+--  EVERY profile's cells, so on a multi-chassis base that is a JSON-to-Lua
+--  conversion of a thousand-entry table, twice, on a two-second beat, which
+--  is the idle spike at that cadence. Memoised on world.time(); a write
+--  through navIndexFlush or navIndexWrite drops the memo.
 local function navIndexRead()
+	local now = world.time()
+
+	if self.petportsNavIndexMemoAt == now and self.petportsNavIndexMemo ~= nil then
+		return self.petportsNavIndexMemo
+	end
+
 	local ok, index = pcall(world.getProperty, NAV_INDEX)
-	if not ok or type(index) ~= "table" then return {} end
+	if not ok or type(index) ~= "table" then index = {} end
+
+	local pending = self.petportsNavIndexPending
+	if type(pending) == "table" then
+		for profile, cells in pairs(pending) do
+			index[profile] = index[profile] or {}
+			for cellKey, entry in pairs(cells) do
+				index[profile][cellKey] = entry
+			end
+		end
+	end
+
+	self.petportsNavIndexMemo = index
+	self.petportsNavIndexMemoAt = now
+
 	return index
 end
 
+local function navIndexQueue(profile, cellKey, entry)
+	self.petportsNavIndexPending = self.petportsNavIndexPending or {}
+	self.petportsNavIndexPending[profile] = self.petportsNavIndexPending[profile] or {}
+	self.petportsNavIndexPending[profile][cellKey] = entry
+	self.petportsNavIndexPendingCount = (self.petportsNavIndexPendingCount or 0) + 1
+end
+
+--  Write the queued index entries: read (which merges them), write, clear.
+local function navIndexFlush()
+	if (self.petportsNavIndexPendingCount or 0) == 0 then return end
+	local index = navIndexRead()
+	self.petportsNavIndexPending = nil
+	self.petportsNavIndexPendingCount = 0
+	self.petportsNavIndexMemo = nil
+	pcall(world.setProperty, NAV_INDEX, index)
+end
+
 local function navIndexWrite(index)
+	self.petportsNavIndexMemo = nil
 	pcall(world.setProperty, NAV_INDEX, index)
 end
 
@@ -805,7 +1068,9 @@ local function navCellRead(profile, cellKey)
 	if (world.time() - self.petportsNavCacheAt) > NAV_CACHE_TTL then
 		self.petportsNavCellCache = {}
 		self.petportsNavCacheAt = world.time()
-		self.petportsNavGraph = nil
+		--  A VERSION BUMP, NOT A DROP, 2026-09-07e: the old graph stays in
+		--  service while the chunked rebuild runs; see navGraphBuildStep.
+		self.petportsNavVersion = (self.petportsNavVersion or 0) + 1
 	end
 
 	local key = navCellProperty(profile, cellKey)
@@ -829,8 +1094,22 @@ local function navCellWrite(profile, cellKey, edges)
 	self.petportsNavCellCache = self.petportsNavCellCache or {}
 	self.petportsNavCellCache[key] = edges
 
+	--  THE MEMOISED GRAPH SURVIVES OUR OWN WRITES, 2026-09-06. PROFILED:
+	--  graphFor n=176..428 per 5 s, 2.1-2.5 s of every 5 -- the graph was
+	--  rebuilt after every flush (every 25 edges, ten to twenty times per 5
+	--  s), each rebuild a pass over every shard and every edge at 200-300
+	--  ms. But a flush writes edges that petports_navLearn ALREADY inserted
+	--  into the memo, one at a time, as they were learned. Nothing in the
+	--  graph changes when they reach the store. So the version still bumps
+	--  (it gates the overlay and the level readout, which are cheap) and the
+	--  graph's own version is moved with it instead of the graph being
+	--  dropped. Another unit's writes still arrive through the cell cache
+	--  TTL, and THAT expiry drops the graph, as before.
 	self.petportsNavVersion = (self.petportsNavVersion or 0) + 1
-	self.petportsNavGraph = nil
+
+	if self.petportsNavGraph ~= nil then
+		self.petportsNavGraph.version = self.petportsNavVersion
+	end
 end
 
 --  self.petportsNavVersion IS BUMPED BY navCellWrite AND IS WHAT MAKES THE
@@ -882,6 +1161,8 @@ local function navPendingFor(profile)
 end
 
 function petports_navFlush()
+	navIndexFlush()
+
 	local pending = self.petportsNavPending
 
 	if type(pending) ~= "table" or next(pending) == nil then
@@ -925,6 +1206,8 @@ function petports_navFlush()
 	self.petportsNavPending = {}
 	self.petportsNavPendingCount = 0
 	self.petportsNavFlushAt = world.time() + NAV_FLUSH_INTERVAL
+
+	petports_profCount("edgesFlushed", written)
 
 	sb.logInfo("NAV flushed %s edge(s) across %s cell(s)",
 		sb.printJson(written), sb.printJson(shards))
@@ -1124,6 +1407,17 @@ function petports_navLearn(profile, fromKey, toKey, reachable)
 	end
 end
 
+--  Queued index entries ride the same timer as the edge flush, so a unit
+--  that learns no edges (every pair known) still writes its sweeps out.
+local function navIndexTick()
+	if (self.petportsNavIndexPendingCount or 0) > 0
+	   and self.petportsNavFlushAt ~= nil
+	   and world.time() >= self.petportsNavFlushAt then
+		navIndexFlush()
+		self.petportsNavFlushAt = nil
+	end
+end
+
 --  THE CORRECTION HOOK, AND NOTHING CALLS IT YET.
 --
 --  A true edge is permanent, so the ONLY thing that can retire one is a unit
@@ -1196,6 +1490,27 @@ end
 --  normal event and only logs at Info.
 --
 --  DEFAULTS TO 1, so the self test and any single-probe caller are unchanged.
+--  A free mover's edge may not leave coverage between two nodes that are
+--  inside it (two port rectangles with a gap between them). Half-tile
+--  samples of the body box against the coverage rectangles.
+function navSegmentInCoverage(from, to)
+	local bounds = mcontroller.boundBox()
+	local samples = math.max(1, math.ceil(world.magnitude(from, to) / 0.5))
+
+	for i = 0, samples do
+		local t = i / samples
+		local x = from[1] + (to[1] - from[1]) * t
+		local y = from[2] + (to[2] - from[2]) * t
+
+		if not navBoxInCoverage(x + bounds[1], y + bounds[2],
+		                        x + bounds[3], y + bounds[4]) then
+			return false
+		end
+	end
+
+	return true
+end
+
 function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 	stampOnce()
 
@@ -1243,14 +1558,64 @@ function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 			return nil
 		end
 
+		--  A FREE MOVER DOES NOT NEED A SEARCH (Lofty, 2026-09-06). Nothing
+		--  pulls it down, so the question between two anchors is only "does
+		--  the body fit all the way along the straight line" -- and the
+		--  fishing code already asks it: petports_bodyFitsAlong in
+		--  petports_contract.lua, the sweep behind swimReachable. One call,
+		--  verdict now. A blocked line is FALSE for the pair, and the graph
+		--  carries the way round as its neighbours.
+		--  A CLEAR LINE IS THE ANSWER; A BLOCKED ONE IS NOT (Lofty,
+		--  2026-09-06). The sweep fails on a door the unit may open or fly
+		--  through, so a blocked sweep falls through to the search below,
+		--  which asks with the unit's own pathOptions.
+		if freeMover then
+			local edges = math.ceil(world.magnitude(from, to))
+
+			if petports_bodyFitsAlong(from, to) == true
+			   and navSegmentInCoverage(from, to) then
+				if PETPORTS_NAV_VERBOSE then
+					sb.logInfo("NAV probe %s -> %s REACHABLE by body sweep, %s edge(s)",
+						fromKey, toKey, sb.printJson(edges))
+				end
+
+				petports_profCount("sweepTrue")
+
+				petports_navLearn(petports_navProfile(), fromKey, toKey, true)
+				self.petportsNavProbes[slot] = nil
+				return true
+			end
+
+			--  A BLOCKED SWEEP ONLY FALLS THROUGH TO A SEARCH WHEN A DOOR IS
+			--  ON THE LINE, 2026-09-06x. PROFILED: `false` 26-55 per 5 s at
+			--  150-330 probe ticks, the largest probe cost on a flyer -- every
+			--  wall-blocked pair ran the A* fallback to its cap. The fallback
+			--  exists for doors (Lofty, 06e); a line blocked by terrain gets
+			--  its detour from the graph's other edges, not from this pair.
+			--  So: Dynamic on the straight line -> search; otherwise false now.
+			local okDoor, door = pcall(world.lineTileCollision, from, to, { "Dynamic" })
+
+			if not (okDoor and door == true) then
+				if PETPORTS_NAV_VERBOSE then
+					sb.logInfo("NAV probe %s -> %s UNREACHABLE by body sweep, %s edge(s)",
+						fromKey, toKey, sb.printJson(edges))
+				end
+
+				petports_profCount("sweepFalse")
+				petports_navLearn(petports_navProfile(), fromKey, toKey, false)
+				self.petportsNavProbes[slot] = nil
+				return false
+			end
+		end
+
 		local finder = PathFinder:new(navPathOptions())
 		finder.exploreRate = function() return exploreRate or 300 end
 		finder:start(from, to)
 
-		sb.logInfo("NAV probe START %s -> %s: %s to %s (profile %s, rate %s, maxDistance %s)",
+		if PETPORTS_NAV_VERBOSE then sb.logInfo("NAV probe START %s -> %s: %s to %s (profile %s, rate %s, maxDistance %s)",
 			fromKey, toKey, sb.printJson(from), sb.printJson(to),
 			tostring(petports_navProfile()), sb.printJson(exploreRate or 300),
-			sb.printJson(NAV_MAX_DISTANCE))
+			sb.printJson(NAV_MAX_DISTANCE)) end
 
 		self.petportsNavProbes[slot] = {
 			finder = finder,
@@ -1302,6 +1667,8 @@ function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 					sb.printJson(math.floor(span * 10 + 0.5) / 10),
 					sb.printJson(math.floor(limit)))
 				result = false
+				petports_profCount("tooLong")
+				petports_profCount("tooLongTicks", probe.ticks or 0)
 			end
 		end
 	end
@@ -1321,6 +1688,14 @@ function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 			fromKey, toKey,
 			result and "REACHABLE" or "UNREACHABLE",
 			sb.printJson(probe.ticks), tostring(edgeCount))
+
+		if result == true then
+			petports_profCount((probe.ticks or 0) <= 1 and "true1" or "trueN")
+			petports_profCount("trueTicks", probe.ticks or 0)
+		elseif edgeCount == nil then
+			petports_profCount("false")
+			petports_profCount("falseTicks", probe.ticks or 0)
+		end
 
 		petports_navLearn(petports_navProfile(), fromKey, toKey, result)
 
@@ -1410,7 +1785,7 @@ navBlockKey = function(cellKey, tiles)
 	local cx, cy = string.match(cellKey, "^(-?%d+),(-?%d+)$")
 	if cx == nil then return nil end
 
-	local divisor = tiles / PETPORTS_NAV_STRIDE
+	local divisor = math.max(1, tiles / navStride())
 
 	return tostring(math.floor(tonumber(cx) / divisor))
 		.. "," .. tostring(math.floor(tonumber(cy) / divisor))
@@ -1425,7 +1800,116 @@ end
 --  SELF-LOOPS ARE DROPPED at every coarse level: a fine edge inside one block
 --  says nothing about leaving it, and keeping it would let a BFS "move" without
 --  going anywhere.
-local function navGraphFor(profile)
+--  THE GRAPH IS BUILT IN CHUNKS ACROSS UPDATES, 2026-09-07e. MEASURED
+--  14:43: a freshly socketed flyer on a store of thousands of cells hit
+--  LuaInstructionLimitReached inside its first navTick -- the one-shot
+--  rebuild (every shard read, every edge keyed, every coarse level derived)
+--  is one Lua call and the engine caps a call's instructions. Before that
+--  it showed as graphFor max=1029 ms every cache expiry. So the rebuild is
+--  a state machine: NAV_BUILD_CHUNK cells per update, and until it is
+--  finished callers get the PREVIOUS graph (or an empty one on first
+--  build). Learned edges during a build go into both the old graph (via
+--  petports_navLearn) and the new one (the pending batch is folded in at
+--  the end), so nothing is lost across the swap.
+local NAV_BUILD_CHUNK = 40
+
+local function navGraphBuildStep(profile)
+	local build = self.petportsNavGraphBuild
+
+	if build == nil or build.profile ~= profile then
+		local cells = navIndexRead()[profile]
+		local keys = {}
+		for cellKey in pairs(type(cells) == "table" and cells or {}) do
+			table.insert(keys, cellKey)
+		end
+
+		build = {
+			profile = profile,
+			version = self.petportsNavVersion or 0,
+			keys = keys,
+			at = 1,
+			edges = {}
+		}
+		self.petportsNavGraphBuild = build
+		petports_profCount("graphBuildStart")
+	end
+
+	local stop = math.min(#build.keys, build.at + NAV_BUILD_CHUNK - 1)
+
+	for k = build.at, stop do
+		local cellKey = build.keys[k]
+		for to, entry in pairs(navCellRead(profile, cellKey)) do
+			build.edges[cellKey .. ">" .. to] = entry
+		end
+	end
+
+	build.at = stop + 1
+
+	if build.at <= #build.keys then return nil end
+
+	--  PHASE TWO, ALSO IN CHUNKS, 2026-09-07g. The engine profile put
+	--  navGraphBuildStep at 728 with 157 self: the derivation at the end
+	--  (every edge keyed into fine, then four coarse levels per edge) was
+	--  still one call over the whole store. So reading finishes, the edge
+	--  keys become a list, and each update derives NAV_BUILD_CHUNK x 8
+	--  edges until the list is done; then the swap.
+	if build.edgeKeys == nil then
+		for key, entry in pairs(navPendingFor(profile) or {}) do
+			build.edges[key] = entry
+		end
+
+		build.edgeKeys = {}
+		for key in pairs(build.edges) do table.insert(build.edgeKeys, key) end
+		build.edgeAt = 1
+		build.fine = {}
+		build.coarse = {}
+		for _, tiles in ipairs(NAV_LEVELS) do build.coarse[tiles] = {} end
+	end
+
+	local edgeStop = math.min(#build.edgeKeys, build.edgeAt + NAV_BUILD_CHUNK * 8 - 1)
+
+	for k = build.edgeAt, edgeStop do
+		local key = build.edgeKeys[k]
+		local entry = build.edges[key]
+
+		if type(entry) == "table" and entry.r == true then
+			local from, to = string.match(key, "^(.-)>(.*)$")
+
+			if from ~= nil and to ~= nil then
+				build.fine[from] = build.fine[from] or {}
+				table.insert(build.fine[from], to)
+
+				for _, tiles in ipairs(NAV_LEVELS) do
+					local a = navBlockKey(from, tiles)
+					local b = navBlockKey(to, tiles)
+
+					if a ~= nil and b ~= nil and a ~= b then
+						local bucket = build.coarse[tiles]
+						bucket[a] = bucket[a] or {}
+						bucket[a][b] = true
+					end
+				end
+			end
+		end
+	end
+
+	build.edgeAt = edgeStop + 1
+
+	if build.edgeAt <= #build.edgeKeys then return nil end
+
+	self.petportsNavGraph = {
+		profile = profile,
+		version = self.petportsNavVersion or 0,
+		fine = build.fine,
+		coarse = build.coarse
+	}
+	self.petportsNavGraphBuild = nil
+	petports_profCount("graphBuildDone")
+
+	return self.petportsNavGraph
+end
+
+local function navGraphForInner(profile)
 	local cached = self.petportsNavGraph
 
 	if cached ~= nil and cached.profile == profile
@@ -1433,38 +1917,28 @@ local function navGraphFor(profile)
 		return cached
 	end
 
-	local fine = navAdjacency(profile)
-	local coarse = {}
+	--  Stale or absent: advance the build ONE chunk PER UPDATE (many callers
+	--  ask per tick; the first one pays), and answer with what we have
+	--  meanwhile. An absent graph answers empty, which every caller already
+	--  treats as "nothing known yet".
+	local now = world.time()
 
-	for _, tiles in ipairs(NAV_LEVELS) do coarse[tiles] = {} end
-
-	for from, tos in pairs(fine) do
-		for _, to in ipairs(tos) do
-			for _, tiles in ipairs(NAV_LEVELS) do
-				local a = navBlockKey(from, tiles)
-				local b = navBlockKey(to, tiles)
-
-				if a ~= nil and b ~= nil and a ~= b then
-					local bucket = coarse[tiles]
-					bucket[a] = bucket[a] or {}
-
-					--  A SET, NOT A LIST. Hundreds of fine edges collapse onto
-					--  one coarse edge, and appending would make the coarse
-					--  graph LARGER than the fine one it summarises.
-					bucket[a][b] = true
-				end
-			end
-		end
+	if self.petportsNavGraphBuildAt ~= now then
+		self.petportsNavGraphBuildAt = now
+		local done = navGraphBuildStep(profile)
+		if done ~= nil then return done end
 	end
 
-	self.petportsNavGraph = {
-		profile = profile,
-		version = self.petportsNavVersion or 0,
-		fine = fine,
-		coarse = coarse
-	}
+	if cached ~= nil and cached.profile == profile then return cached end
 
-	return self.petportsNavGraph
+	return { profile = profile, version = -1, fine = {}, coarse = {} }
+end
+
+local function navGraphFor(profile)
+	petports_profBegin("graphFor")
+	local g = navGraphForInner(profile)
+	petports_profEnd("graphFor")
+	return g
 end
 
 --  BFS over one coarse level. Set-valued adjacency, so pairs() not ipairs().
@@ -1706,6 +2180,27 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdva
 
 			if distance < minAdvance and i < #path then
 				--  TOO CLOSE TO BE A LEG. Keep walking the path.
+			elseif freeMover then
+				--  A FREE MOVER'S LEG IS THE FARTHEST PATH CELL IT CAN SEE
+				--  (Lofty, 2026-09-05): string-pull, the same way a moving
+				--  target is chased. Within reach, and with nothing solid on
+				--  the straight line from the origin. A blocked cell is
+				--  passed over, not a stop -- a later one round the corner
+				--  may be visible again. The first hop is always eligible so
+				--  a route that exists is never returned as nil.
+				if distance <= (reach or 24) then
+					local okLos, blocked = pcall(world.lineTileCollision,
+						origin, anchor, { "Null", "Block", "Dynamic", "Slippery" })
+
+					if i == 2 or (okLos and blocked == false) then
+						chosen, chosenAt = anchor, i
+					end
+				elseif chosen ~= nil then
+					break
+				else
+					chosen, chosenAt = anchor, i
+					break
+				end
 			elseif distance <= (reach or 24) then
 				chosen, chosenAt = anchor, i
 			elseif chosen ~= nil then
@@ -1741,36 +2236,67 @@ end
 --  So a leg starts from the nearest cell the graph KNOWS, within `radius`
 --  of the position, measured to that cell's anchor. Nothing is planned from
 --  a cell that has never been swept into the graph.
+--  FOR A FREE MOVER, THE NEAREST CELL IT CAN SEE. Its nodes trace surfaces
+--  (2026-09-06), so a position in the middle of a room has no node within
+--  arm's reach; the graph cell for it is the nearest wall node with a clear
+--  body-wide line to it, out to the probe distance. The last leg ends on
+--  that wall node and the direct search covers the sighted remainder.
 function petports_navNearestCell(position, freeMover, radius)
 	radius = radius or 2.5
+
+	if freeMover then radius = math.max(radius, NAV_MAX_DISTANCE) end
 
 	local profile = petports_navProfile()
 	local fine = navGraphFor(profile).fine
 	local px, py = petports_navCell(position)
 
-	local reach = math.ceil(radius / PETPORTS_NAV_STRIDE)
-	local bestKey, bestAnchor, bestDistance = nil, nil, nil
+	local reach = math.ceil(radius / navStride())
+
+	--  NEAREST-FIRST, STOP AT THE FIRST THAT QUALIFIES. 2026-09-06: the
+	--  free-mover version swept the body to EVERY graph cell within 32
+	--  tiles before choosing -- ~150 cells x up to 64 rect queries, on
+	--  every chained leg, on the world thread. That was the stutter. Cells
+	--  are gathered by cell-centre distance (no world calls), sorted, and
+	--  the anchor and the sight sweep are computed in that order; the first
+	--  visible one is the answer, which is usually the first or second.
+	local candidates = {}
 
 	for cx = px - reach, px + reach do
 		for cy = py - reach, py + reach do
 			local key = petports_navCellKey(cx, cy)
 
 			if fine[key] ~= nil then
-				local anchor = petports_navAnchor(cx, cy, freeMover)
+				local ox, oy = navCellOrigin(cx, cy)
+				local dx = ox + PETPORTS_NAV_CELL * 0.5 - position[1]
+				local dy = oy + PETPORTS_NAV_CELL * 0.5 - position[2]
 
-				if anchor ~= nil then
-					local distance = world.magnitude(anchor, position)
-
-					if distance <= radius
-					   and (bestDistance == nil or distance < bestDistance) then
-						bestKey, bestAnchor, bestDistance = key, anchor, distance
-					end
-				end
+				table.insert(candidates, {
+					cx = cx, cy = cy, key = key, rough = dx * dx + dy * dy
+				})
 			end
 		end
 	end
 
-	return bestKey, bestAnchor, bestDistance
+	table.sort(candidates, function(a, b)
+		if a.rough ~= b.rough then return a.rough < b.rough end
+		return a.key < b.key
+	end)
+
+	for _, c in ipairs(candidates) do
+		local anchor = petports_navAnchor(c.cx, c.cy, freeMover)
+
+		if anchor ~= nil then
+			local distance = world.magnitude(anchor, position)
+
+			if distance <= radius
+			   and (not freeMover
+			        or petports_bodyFitsAlong(position, anchor) == true) then
+				return c.key, anchor, distance
+			end
+		end
+	end
+
+	return nil
 end
 
 --  What is in the store, for a log line. Counted rather than dumped: a full
@@ -1923,7 +2449,13 @@ end
 --  is background work. This is a quarter of it -- 8 x 300 expansions per
 --  update. The two numbers stay independent; see above for which to move
 --  first if it needs tuning again.
-PETPORTS_NAV_SWEEPS = 2
+--  2 -> 6, 2026-09-06r. PROFILED at 2: probeStep 100-300 ms per 5 s, so
+--  the search budget was mostly idle; sweeps complete in a tick or two and
+--  the two slots were the ceiling on cells per second (~7). Workers stay
+--  at 4; most verdicts are one tick.
+--  6 -> 8, 2026-09-06x. PROFILED at 6: tick max 30-60 ms on the laptop,
+--  update rate 12/s, navTick 13-27% -- room for two more.
+PETPORTS_NAV_SWEEPS = 8
 PETPORTS_NAV_WORKERS = 4
 
 local function navSlotBase(index)
@@ -2020,8 +2552,17 @@ function petports_navSweepStart(cx, cy, ownerId, index)
 							local fresh = known ~= nil
 								and (age or 0) < NAV_SWEEP_TTL
 
-							local joined = (not fresh) and petports_navReaches(
-								profile, cellKey, candidate.key) or nil
+							--  NO BFS SKIP TEST FOR A FREE MOVER, 2026-09-06y.
+							--  PROFILED: reaches n=4400-5800 per 5 s, 1.4-1.6 s
+							--  of every 5, growing with the graph -- to avoid
+							--  body sweeps that cost a millisecond each. The
+							--  skip test only pays when the probe it skips is a
+							--  search; a walker keeps it.
+							local joined = nil
+
+							if not fresh and not freeMover then
+								joined = petports_navReaches(profile, cellKey, candidate.key)
+							end
 
 							if not fresh and joined ~= true then
 								active[slot] = candidate
@@ -2067,6 +2608,34 @@ end
 --  fact.tooling.mergedrefusal, in the one place it would be hardest to notice.
 --  EVERY RUNNING SWEEP, ONE RESUME EACH. Returns "running" while any is alive,
 --  "done" on the tick the last one finishes, nil when none are.
+--  A PER-TICK TIME BUDGET FOR STEPPING SWEEPS, 2026-09-07a. PROFILED: a
+--  free mover's probes resolve synchronously (a body sweep, ~1 ms), so eight
+--  sweeps x four workers could spend 32+ ms in one tick, and did -- tick max
+--  85-150 ms, ~1000 probes per 5 s, a lurch on every tick the unit moved.
+--  The free-mover lookahead was 30-50 ms per 5 s: not it. With os.clock
+--  available (PROFILE reports it), stepping stops for the tick once this
+--  many milliseconds have been spent and the remaining sweeps resume next
+--  tick, in rotating order so a starved one goes first. Without a clock the
+--  budget is ignored. Tuned for the laptop: this is the pass criterion.
+local NAV_TICK_BUDGET_MS = 10.0
+
+--  AND AT MOST THIS MANY SWEEPS PER UPDATE, 2026-09-07d. The engine caps
+--  the Lua instructions one update may execute (scriptInstructionLimit in
+--  StarLuaRoot, from starbound.config) and threw LuaInstructionLimitReached
+--  out of Monster::update at 14:43, which aborts the whole update mid-way.
+--  A time budget cannot see instructions, and one sweep resume can resolve
+--  several body sweeps in a row; a count cap can. The rotation below means
+--  every sweep still gets stepped within two updates.
+local NAV_STEPS_PER_TICK = 4
+
+local function navTickClock()
+	if type(os) == "table" and type(os.clock) == "function" then
+		local ok, t = pcall(os.clock)
+		if ok and type(t) == "number" then return t end
+	end
+	return nil
+end
+
 function petports_navSweepStep()
 	local sweeps = self.petportsNavSweeps
 	if sweeps == nil or next(sweeps) == nil then return nil end
@@ -2079,8 +2648,38 @@ function petports_navSweepStep()
 	for index in pairs(sweeps) do table.insert(indices, index) end
 	table.sort(indices)
 
+	--  Rotated so the sweep cut off last tick is stepped first this tick.
+	local count = #indices
+	local start = (self.petportsNavStepRotate or 0) % count
+	local rotated = {}
+	for i = 1, count do
+		table.insert(rotated, indices[((start + i - 1) % count) + 1])
+	end
+	indices = rotated
+
+	local began = navTickClock()
+	local stepped = 0
+
 	for _, index in ipairs(indices) do
 		local sweep = sweeps[index]
+
+		if stepped >= NAV_STEPS_PER_TICK then
+			petports_profCount("stepCap")
+			self.petportsNavStepRotate = (self.petportsNavStepRotate or 0) + stepped
+			return "running"
+		end
+
+		if began ~= nil and stepped > 0 then
+			local now = navTickClock()
+
+			if now ~= nil and (now - began) * 1000 >= NAV_TICK_BUDGET_MS then
+				petports_profCount("budgetCut")
+				self.petportsNavStepRotate = (self.petportsNavStepRotate or 0) + stepped
+				return "running"
+			end
+		end
+
+		stepped = stepped + 1
 
 		if sweep ~= nil then
 			if coroutine.status(sweep.job) == "dead" then
@@ -2098,6 +2697,8 @@ function petports_navSweepStep()
 			end
 		end
 	end
+
+	self.petportsNavStepRotate = 0
 
 	if alive > 0 then return "running" end
 
@@ -2119,24 +2720,32 @@ function petports_navFinishSweep(index, completed)
 	local sweep = sweeps[index]
 	if sweep == nil then return end
 
-	--  FLUSH FIRST, THEN MARK. A cell marked swept whose edges never landed is
-	--  a cell nothing will revisit for NAV_SWEEP_TTL and that has nothing in it
-	--  -- the one ordering that can lose a whole sweep silently.
-	petports_navFlush()
+	--  NO FLUSH HERE ANY MORE, 2026-09-06t. It used to flush first and mark
+	--  second so a cell could not be marked swept with its edges unwritten.
+	--  Since 06e the mark is QUEUED (navIndexQueue) and written by the same
+	--  flush that writes the edges -- navIndexFlush is the first thing
+	--  petports_navFlush does -- so the ordering is kept without a flush per
+	--  sweep. PROFILED: a flush per sweep was flush n=60-73, ~1 s of every 5
+	--  on a free mover whose sweeps finish in a tick, and the largest cost
+	--  left in navTick.
 
 	if completed then
 		local index = navIndexRead()
-		index[sweep.profile] = index[sweep.profile] or {}
+		local cells = index[sweep.profile] or {}
 
 		--  THE LARGEST RADIUS, NEVER A SMALLER ONE. Another unit may have swept
 		--  this cell wider while we were on it; the ladder only climbs.
-		local _, held = navIndexEntry(index[sweep.profile][sweep.cellKey])
+		local _, held = navIndexEntry(cells[sweep.cellKey])
 
-		index[sweep.profile][sweep.cellKey] = {
+		navIndexQueue(sweep.profile, sweep.cellKey, {
 			at = world.time(),
 			radius = math.max(held or 0, sweep.radius or 0)
-		}
-		navIndexWrite(index)
+		})
+
+		--  Written with the next edge flush, or now if nothing is pending
+		--  there for a while; see navIndexFlush.
+		self.petportsNavFlushAt = self.petportsNavFlushAt
+			or (world.time() + NAV_FLUSH_INTERVAL)
 	end
 	petports_claimRelease(sweep.workId, sweep.ownerId)
 
@@ -2150,6 +2759,9 @@ function petports_navFinishSweep(index, completed)
 
 	sb.logInfo("NAV sweep of %s at radius %s %s", tostring(sweep.cellKey),
 		sb.printJson(sweep.radius), completed and "COMPLETE" or "ABANDONED")
+
+	petports_profCount(completed and "sweeps" or "abandoned")
+	petports_profCount("sweepR" .. tostring(sweep.radius or 0))
 
 	sweeps[index] = nil
 end
@@ -2382,7 +2994,16 @@ function petports_navLevelProgress()
 
 	local held = self.petportsNavLevelStats
 
-	if held ~= nil and held.profile == profile and held.version == version then
+	--  ONCE EVERY NAV_OVERLAY_REFRESH SECONDS, NOT PER VERSION, 2026-09-07h.
+	--  The engine profile put this at 3750 of the unit's 10072 with the
+	--  overlay on: the version bumps on every flush (several a second) and
+	--  each recompute keys every cell into four coarse levels. A readout
+	--  two seconds old is a readout.
+	local now = world.time()
+
+	if held ~= nil and held.profile == profile
+	   and (held.version == version
+	        or (now - (held.at or 0)) < NAV_OVERLAY_REFRESH) then
 		return held.levels
 	end
 
@@ -2442,8 +3063,7 @@ function petports_navLevelProgress()
 	self.petportsNavLevelStats = {
 		profile = profile,
 		version = version,
-		levels = levels
-	}
+		levels = levels, at = now }
 
 	return levels
 end
@@ -2462,8 +3082,13 @@ end
 local function navSweptPoints()
 	local version = self.petportsNavVersion or 0
 	local held = self.petportsNavSweptPoints
+	local now = world.time()
 
-	if held ~= nil and held.version == version then return held.points end
+	--  Same two-second refresh as the level readout; see petports_navLevelProgress.
+	if held ~= nil and (held.version == version
+	   or (now - (held.at or 0)) < NAV_OVERLAY_REFRESH) then
+		return held.points
+	end
 
 	local profile = petports_navProfile()
 	local index = navIndexRead()
@@ -2480,14 +3105,17 @@ local function navSweptPoints()
 			--  is what a coverage picture wants.
 			local ox, oy = navCellOrigin(cx, cy)
 
+			local at = navIndexEntry(cells[cellKey])
+
 			table.insert(points, {
 				ox + PETPORTS_NAV_CELL * 0.5,
-				oy + PETPORTS_NAV_CELL * 0.5
+				oy + PETPORTS_NAV_CELL * 0.5,
+				at = at or 0
 			})
 		end
 	end
 
-	self.petportsNavSweptPoints = { version = version, points = points }
+	self.petportsNavSweptPoints = { version = version, points = points, at = now }
 
 	return points
 end
@@ -2510,7 +3138,27 @@ local NAV_LABEL_CORNERS = {
 	{ 0.55, 0.25 }    --  bottom right
 }
 
-PETPORTS_NAV_DEBUG = true
+--  OFF BY DEFAULT, 2026-09-06. PROFILED: with the overlay on, navTick
+--  cost 100 ms per update on average and 650 ms at worst, and the update
+--  rate fell to six a second; world.debugLine ran at 5,000-7,000 calls per
+--  second, two per swept cell per tick, for every swept cell in the store.
+--  That was the whole of the flyer stutter that survived the survey fixes.
+--  petports_navDebugToggle() turns it on; when on, only cells within
+--  NAV_DRAW_RANGE of the unit are drawn.
+--  BACK ON, 2026-09-06p, now that the graph is no longer rebuilt per flush
+--  and the draw is culled and one call per cell.
+--  OPT-IN AGAIN, 2026-09-06z. PROFILED with client debug rendering OFF:
+--  draw 1.1-1.8 s of every 5, debugPoint 7,500 per second. The client
+--  toggle does not stop the script drawing; only this flag does, and the
+--  draw is the largest section in navTick whenever it is on. Turn it on
+--  with petports_navDebugToggle() to watch a pass, and off after.
+PETPORTS_NAV_DEBUG = false
+
+--  96 -> 64, 2026-09-06y. PROFILED at 96: debugPoint 8,000 per second and
+--  the update rate back down to 6-7/s. The draw is now its own PROFILE
+--  section so the range can be traded against the tick rate on purpose.
+local NAV_DRAW_RANGE = 64
+local NAV_DRAW_FRESH = 10.0
 
 --  Toggle from a console: /entityeval return petports_navDebugToggle()
 function petports_navDebugToggle()
@@ -2571,9 +3219,23 @@ function petports_navDebugDraw()
 			{ here[1] + 2, here[2] + 3 }, "green")
 	end
 
-	--  COVERAGE FIRST, so the probe overlay draws on top of it.
+	--  COVERAGE FIRST, so the probe overlay draws on top of it. CULLED to
+	--  what is near the unit; see PETPORTS_NAV_DEBUG. ONE debugPoint per
+	--  cell rather than two debugLines (Lofty, 2026-09-06), and BLUE for a
+	--  free mover so its store reads differently from a walker's green
+	--  crosses at a glance.
+	--  RED WHILE FRESH (Lofty, 2026-09-06): a cell swept within the last
+	--  NAV_DRAW_FRESH seconds draws red, so the front of a pass is visible
+	--  at a glance and its speed can be judged by eye.
+	local sweptColour = petports_freeMover() and "blue" or "green"
+	local now = world.time()
+
 	for _, point in ipairs(navSweptPoints()) do
-		navDrawPoint(point, "green")
+		if math.abs(point[1] - here[1]) <= NAV_DRAW_RANGE
+		   and math.abs(point[2] - here[2]) <= NAV_DRAW_RANGE then
+			local fresh = (now - (point.at or 0)) <= NAV_DRAW_FRESH
+			navDrawSafely(world.debugPoint, point, fresh and "red" or sweptColour)
+		end
 	end
 
 	local probes = self.petportsNavProbes
@@ -2645,6 +3307,13 @@ end
 --  THE SEED IS THE UNIT'S OWN CELL. With an empty graph there is no frontier,
 --  and the cell a unit is standing in is the one place its connectivity is
 --  certainly worth knowing.
+--  How many graph cells one candidate walk examines; see the slice below.
+--  300 -> 60, 2026-09-07h. Each scanned from brings its edges, so 300 froms
+--  was a few thousand consider() calls per top-up; the engine profile had
+--  candidates at 2881 of 10072 even after 07g. Sixty froms four times a
+--  second still covers a thousand-cell graph in about four seconds.
+local NAV_CANDIDATE_SCAN = 60
+
 function petports_navCandidates(limit)
 	local here = mcontroller.position()
 	local cx, cy = petports_navCell(here)
@@ -2668,15 +3337,41 @@ function petports_navCandidates(limit)
 	local freeMover = petports_freeMover()
 	local grounded = freeMover or mcontroller.onGround()
 
-	if mineRadius < PETPORTS_NAV_RADIUS and navInCoverage(cx, cy)
-	   and grounded and petports_navAnchor(cx, cy, freeMover) ~= nil then
+	--  A FREE MOVER'S OWN CELL USUALLY HAS NO ANCHOR (06u: only cells that
+	--  touch a surface do), so a flyer at its station, hovering clear of the
+	--  wall, seeded nothing after a wipe and the survey reported COMPLETE
+	--  with zero cells (13:27 log). The seed is the nearest anchored cell
+	--  within a few tiles instead; the anchor cache makes the box cheap.
+	local seedX, seedY, seedKey = cx, cy, mine
+
+	if freeMover and petports_navAnchor(cx, cy, freeMover) == nil then
+		local best = nil
+
+		for dx = -4, 4 do
+			for dy = -4, 4 do
+				local d = dx * dx + dy * dy
+
+				if (best == nil or d < best)
+				   and petports_navAnchor(cx + dx, cy + dy, freeMover) ~= nil then
+					best = d
+					seedX, seedY = cx + dx, cy + dy
+				end
+			end
+		end
+
+		seedKey = petports_navCellKey(seedX, seedY)
+		mineRadius = navSweptRadiusIn(sweptCells, seedKey, now)
+	end
+
+	if mineRadius < PETPORTS_NAV_RADIUS and navInCoverage(seedX, seedY)
+	   and grounded and petports_navAnchor(seedX, seedY, freeMover) ~= nil then
 		table.insert(found, {
-			cx = cx, cy = cy, key = mine, distance = 0, radius = mineRadius
+			cx = seedX, cy = seedY, key = seedKey, distance = 0, radius = mineRadius
 		})
 	end
 
 	local graph = navGraphFor(profile)
-	local seen = { [mine] = true }
+	local seen = { [mine] = true, [seedKey] = true }
 
 	--  CELLS THIS UNIT IS ALREADY SWEEPING. The claim would refuse them anyway,
 	--  but a refusal costs a claim read and burns one of NAV_CLAIM_ATTEMPTS --
@@ -2702,7 +3397,12 @@ function petports_navCandidates(limit)
 		--  OUT OF COVERAGE IS NOT A CANDIDATE. It stays in the graph if some
 		--  earlier sweep found it -- an edge is an edge -- but nothing goes and
 		--  surveys it, so the frontier cannot walk off across the planet.
-		if not navInCoverage(tonumber(bx), tonumber(by)) then return end
+		--  Asked only of a cell never swept (07g): a swept cell was inside
+		--  coverage when swept, and the rectangles do not move between
+		--  top-ups. navInCoverage was 174 of consider's 591 in the profile.
+		if radius <= 0 and not navInCoverage(tonumber(bx), tonumber(by)) then
+			return
+		end
 
 		--  CELL CENTRES, not anchors. An anchor costs a scan to derive and this
 		--  is only ranking candidates -- the sweep will compute the real one.
@@ -2719,9 +3419,36 @@ function petports_navCandidates(limit)
 		})
 	end
 
-	for from, tos in pairs(graph.fine) do
-		consider(from)
-		for _, to in ipairs(tos) do consider(to) end
+	--  A BOUNDED SLICE OF THE GRAPH PER CALL, 2026-09-07f. MEASURED 14:51:
+	--  candidates max=103 ms and a second LuaInstructionLimitReached after
+	--  the chunked rebuild -- this walk visited every cell and every edge
+	--  in one call, then sorted every result. The graph carries a key list
+	--  built once per version; each call scans NAV_CANDIDATE_SCAN froms
+	--  from a rotating cursor. Nearest-first ranking still holds within the
+	--  slice, and the cursor reaches every cell within a few calls, so the
+	--  frontier is served in turn rather than all at once.
+	if graph.fineKeys == nil then
+		graph.fineKeys = {}
+		for from in pairs(graph.fine) do table.insert(graph.fineKeys, from) end
+		table.sort(graph.fineKeys)
+	end
+
+	local keys = graph.fineKeys
+	local total = #keys
+
+	if total > 0 then
+		local cursor = (self.petportsNavScanCursor or 0) % total
+		local scanned = 0
+
+		while scanned < total and scanned < NAV_CANDIDATE_SCAN do
+			local from = keys[(cursor % total) + 1]
+			consider(from)
+			for _, to in ipairs(graph.fine[from] or {}) do consider(to) end
+			cursor = cursor + 1
+			scanned = scanned + 1
+		end
+
+		self.petportsNavScanCursor = cursor
 	end
 
 	--  NARROWEST FIRST, THEN NEAREST, tie-broken on the key because table.sort
@@ -2729,16 +3456,42 @@ function petports_navCandidates(limit)
 	--  nothing is widened to 6 while any known cell is still owed its 4, and a
 	--  cell the unit has only just discovered goes to the front of the queue
 	--  at 0, so new ground always starts on the bottom rung.
-	table.sort(found, function(a, b)
+	--  A BOUNDED BEST LIST, NOT A SORT, 2026-09-07g. The engine profile
+	--  (.luaprofile, 15:13) put table.sort at 280 of this unit's 2264 and
+	--  consider() at 591: every cell below the ceiling was collected and
+	--  then all of them sorted to keep eight. Insertion into a list of at
+	--  most `limit` is O(n x limit) with limit 8, and the same order.
+	local function before(a, b)
 		if a.radius ~= b.radius then return a.radius < b.radius end
 		if a.distance ~= b.distance then return a.distance < b.distance end
 		return a.key < b.key
-	end)
-
-	if limit ~= nil then
-		while #found > limit do table.remove(found) end
 	end
 
+	if limit ~= nil and #found > limit then
+		local best = {}
+
+		for _, entry in ipairs(found) do
+			local placed = false
+
+			for i = 1, #best do
+				if before(entry, best[i]) then
+					table.insert(best, i, entry)
+					placed = true
+					break
+				end
+			end
+
+			if not placed and #best < limit then
+				table.insert(best, entry)
+			elseif #best > limit then
+				table.remove(best)
+			end
+		end
+
+		return best
+	end
+
+	table.sort(found, before)
 	return found
 end
 
@@ -2764,7 +3517,9 @@ end
 --
 --  CAPPED, because each attempt is a claim read and a swept lookup, and a unit
 --  that cannot find work in four tries can afford to wait two seconds.
-local NAV_CLAIM_ATTEMPTS = 4
+--  4 -> 8, 2026-09-06z, with the top-up now four times a second: one
+--  top-up has to be able to refill every one of PETPORTS_NAV_SWEEPS slots.
+local NAV_CLAIM_ATTEMPTS = 8
 
 --  HOW MANY STALE OUT-OF-COVERAGE CELLS ARE DROPPED PER PASS.
 --
@@ -2784,7 +3539,7 @@ local NAV_CLAIM_ATTEMPTS = 4
 --  be a spike on a two-second timer for work that has no deadline at all.
 local NAV_PURGE_PER_PASS = 4
 
-local function navPurgeDeadzones(profile)
+local function navPurgeDeadzonesInner(profile)
 	local index = navIndexRead()
 	local cells = index[profile]
 
@@ -2824,6 +3579,13 @@ local function navPurgeDeadzones(profile)
 	return dropped
 end
 
+local function navPurgeDeadzones(profile)
+	petports_profBegin("purge")
+	local r = navPurgeDeadzonesInner(profile)
+	petports_profEnd("purge")
+	return r
+end
+
 --  How often an idle unit looks for something to survey.
 --
 --  EVERY TICK, 2026-09-05. It was 2.0 seconds, on the argument that the
@@ -2839,6 +3601,17 @@ end
 --  place if the walk ever shows up in frame time.
 local NAV_TICK_INTERVAL = 0.0
 
+--  BUT AN EMPTY TOP-UP BACKS OFF. 2026-09-06: a free mover's sweeps
+--  complete in one step, so a slot is free nearly every tick, and once the
+--  graph is fully swept the top-up ran twelve times a second forever: a
+--  whole-index world.getProperty in the purge, the candidate walk, and
+--  nothing to start. A walker never showed this because its slots stay
+--  full for seconds at a time. When the top-up finds nothing, wait this
+--  long before asking again; a new cell can only appear via a sweep, and
+--  there is none running.
+local NAV_IDLE_INTERVAL = 2.0
+local NAV_TOPUP_INTERVAL = 0.25
+
 --  ONE STEP OF BACKGROUND SURVEYING, CALLED FROM AN IDLE UNIT.
 --
 --  A RUNNING SWEEP IS STEPPED EVERY TICK; a new one is LOOKED FOR on the
@@ -2849,10 +3622,264 @@ local NAV_TICK_INTERVAL = 0.0
 --  IT DOES NOT CHECK IDLENESS ITSELF. The caller does, because the caller is
 --  the thing that knows what the unit is doing, and a predicate here would be a
 --  second answer to a question petportsTaskAction already answers.
-function petports_navTick(dt, ownerId)
+--  ============================================================================
+--  PROFILER, 2026-09-06 (Lofty: profile, do not guess). Two instruments:
+--
+--  1. SECTION TIMERS, if the sandbox exposes os.clock (checked at install,
+--     reported once). petports_profBegin/End around a section; the report
+--     gives calls, total ms and worst single call per section, and the
+--     worst whole-update tick.
+--  2. WORLD-CALL COUNTS, always. The world.* functions that touch tiles,
+--     liquids and properties are wrapped in counting proxies. These are the
+--     calls that cross to the world thread, which is where the stutter
+--     lives, so their count per second is the number that matters even
+--     without a clock.
+--
+--  A REPORT LINE EVERY PROF_REPORT_INTERVAL SECONDS while enabled:
+--    PROFILE <secs>s | tick max Nms | <section> n=.. ms=.. max=.. | world/s: ..
+--  petports_profToggle() flips it. Off, the wrappers still count (cheap)
+--  but nothing is timed or logged.
+--  ============================================================================
+PETPORTS_PROFILE = true
+
+local PROF_REPORT_INTERVAL = 5.0
+local PROF_WORLD_FUNCTIONS = {
+	"rectTileCollision", "lineTileCollision", "pointTileCollision",
+	"liquidAt", "getProperty", "setProperty", "debugLine", "debugText",
+	"debugPoint", "entityQuery", "material", "platformerPathStart"
+}
+
+--  SURVEY THROUGHPUT COUNTERS, 2026-09-06q. Bumped at the sites that mean
+--  something and reported on the PROFILE line as a "survey:" segment:
+--  sweeps done / abandoned, verdicts by kind (true in one tick, true in
+--  more, false, too long, sweep-true for free movers), total probe ticks
+--  spent on each kind (which is the search budget consumed), cells gained
+--  to the frontier, and edges flushed. This is the number a "make it
+--  propagate faster" change has to move, and where the ticks go says
+--  which pairs to stop searching.
+local profSurvey = {}
+
+function petports_profCount(name, by)
+	profSurvey[name] = (profSurvey[name] or 0) + (by or 1)
+end
+
+local profClock = nil
+local profSections = {}
+local profOpen = {}
+local profWorldCounts = {}
+local profTickStart, profTickMax = nil, 0
+local profReportAt = nil
+local profInstalled = false
+
+local function profNow()
+	if profClock == nil then return nil end
+	local ok, t = pcall(profClock)
+	if ok and type(t) == "number" then return t end
+	return nil
+end
+
+--  THE GARBAGE COLLECTOR, 2026-09-07c. PROFILED after every other cost was
+--  named: single probes of ~1 ms show maxima of 50-65 ms, `candidates`
+--  maxima of 40-180 ms, `freeMover` maxima of 40 ms -- outliers of the same
+--  size landing in whichever section is running, a few times a second.
+--  That is the shape of a collector pause: the survey allocates a table or
+--  three per probe and a string per key, hundreds of times a second, and
+--  Lua 5.1's incremental collector pays for it in steps whose size grows
+--  with the heap. Two things here: the PROFILE line reports the heap
+--  (collectgarbage("count"), in KB) and its growth per interval, and
+--  petports_gcTune() sets the collector to work in smaller, more frequent
+--  steps (setpause 100, setstepmul 400) so the pauses shrink -- opt-in,
+--  reported, reversible with the same call, because whether the sandbox
+--  exposes collectgarbage at all is measured here, not assumed.
+local profGcTuned = false
+
+function petports_gcTune()
+	if type(collectgarbage) ~= "function" then
+		sb.logInfo("GC tune: collectgarbage is not available")
+		return false
+	end
+
+	profGcTuned = not profGcTuned
+
+	local pause = profGcTuned and 100 or 200
+	local stepmul = profGcTuned and 400 or 200
+
+	local okP = pcall(collectgarbage, "setpause", pause)
+	local okS = pcall(collectgarbage, "setstepmul", stepmul)
+
+	sb.logInfo("GC tune %s: setpause %s (%s), setstepmul %s (%s)",
+		profGcTuned and "ON" or "OFF (defaults)", tostring(pause),
+		okP and "ok" or "refused", tostring(stepmul), okS and "ok" or "refused")
+
+	return profGcTuned
+end
+
+local function profHeapKb()
+	if type(collectgarbage) ~= "function" then return nil end
+	local ok, kb = pcall(collectgarbage, "count")
+	if ok and type(kb) == "number" then return kb end
+	return nil
+end
+
+local profHeapLast = nil
+
+function petports_profInstall()
+	if profInstalled then return end
+	profInstalled = true
+
+	local kb = profHeapKb()
+	sb.logInfo("PROFILE heap: %s", kb ~= nil
+		and (tostring(math.floor(kb)) .. " KB, collectgarbage available")
+		or "collectgarbage NOT available")
+
+	if type(os) == "table" and type(os.clock) == "function" then
+		profClock = os.clock
+	end
+
+	local counted = 0
+
+	for _, name in ipairs(PROF_WORLD_FUNCTIONS) do
+		local original = world[name]
+
+		if type(original) == "function" then
+			--  The world table may refuse assignment; a refusal is reported,
+			--  not fatal, and that function simply is not counted.
+			local ok = pcall(function()
+				world[name] = function(...)
+					profWorldCounts[name] = (profWorldCounts[name] or 0) + 1
+					return original(...)
+				end
+			end)
+
+			if ok then
+				profWorldCounts[name] = 0
+				counted = counted + 1
+			end
+		end
+	end
+
+	sb.logInfo("PROFILE installed: clock %s, %s of %s world functions counted",
+		profClock ~= nil and "os.clock" or "NONE (counts only)",
+		sb.printJson(counted), sb.printJson(#PROF_WORLD_FUNCTIONS))
+end
+
+function petports_profToggle()
+	PETPORTS_PROFILE = not PETPORTS_PROFILE
+	sb.logInfo("PROFILE %s", PETPORTS_PROFILE and "ON" or "OFF")
+	return PETPORTS_PROFILE
+end
+
+function petports_profBegin(section)
+	if not PETPORTS_PROFILE then return end
+	profOpen[section] = profNow()
+end
+
+function petports_profEnd(section)
+	if not PETPORTS_PROFILE then return end
+
+	local started = profOpen[section]
+	profOpen[section] = nil
+
+	local entry = profSections[section]
+	if entry == nil then
+		entry = { calls = 0, ms = 0, max = 0 }
+		profSections[section] = entry
+	end
+
+	entry.calls = entry.calls + 1
+
+	local now = profNow()
+	if started ~= nil and now ~= nil then
+		local ms = (now - started) * 1000
+		entry.ms = entry.ms + ms
+		if ms > entry.max then entry.max = ms end
+	end
+end
+
+--  Call once per update, at the very start and the very end.
+function petports_profTickBegin()
+	if not PETPORTS_PROFILE then return end
+	profTickStart = profNow()
+end
+
+function petports_profTickEnd()
+	if not PETPORTS_PROFILE then return end
+
+	local now = profNow()
+	if profTickStart ~= nil and now ~= nil then
+		local ms = (now - profTickStart) * 1000
+		if ms > profTickMax then profTickMax = ms end
+	end
+
+	local t = world.time()
+	profReportAt = profReportAt or (t + PROF_REPORT_INTERVAL)
+	if t < profReportAt then return end
+
+	local span = PROF_REPORT_INTERVAL
+	profReportAt = t + PROF_REPORT_INTERVAL
+
+	local parts = {}
+
+	for name, entry in pairs(profSections) do
+		table.insert(parts, string.format("%s n=%s ms=%s max=%s",
+			name, tostring(entry.calls),
+			tostring(math.floor(entry.ms * 10 + 0.5) / 10),
+			tostring(math.floor(entry.max * 10 + 0.5) / 10)))
+	end
+	table.sort(parts)
+
+	local calls = {}
+	for name, count in pairs(profWorldCounts) do
+		if count > 0 then
+			table.insert(calls, { name = name, count = count })
+		end
+	end
+	table.sort(calls, function(a, b) return a.count > b.count end)
+
+	local callParts = {}
+	for _, c in ipairs(calls) do
+		table.insert(callParts, string.format("%s %s",
+			c.name, tostring(math.floor(c.count / span + 0.5))))
+	end
+
+	local surveyParts = {}
+	for name, count in pairs(profSurvey) do
+		table.insert(surveyParts, string.format("%s %s", name, tostring(count)))
+	end
+	table.sort(surveyParts)
+
+	local heap = profHeapKb()
+	local heapText = "n/a"
+
+	if heap ~= nil then
+		local grew = profHeapLast ~= nil and (heap - profHeapLast) or 0
+		profHeapLast = heap
+		heapText = string.format("%s KB (%s%s KB/5s)%s",
+			tostring(math.floor(heap)), grew >= 0 and "+" or "",
+			tostring(math.floor(grew)), profGcTuned and " gc-tuned" or "")
+	end
+
+	sb.logInfo("PROFILE %ss | tick max %sms | heap %s | %s | survey: %s | world/s: %s",
+		tostring(span),
+		tostring(math.floor(profTickMax * 10 + 0.5) / 10),
+		heapText,
+		#parts > 0 and table.concat(parts, " | ") or "no sections",
+		#surveyParts > 0 and table.concat(surveyParts, ", ") or "idle",
+		#callParts > 0 and table.concat(callParts, ", ") or "none")
+
+	profSections = {}
+	profSurvey = {}
+	profTickMax = 0
+	for name in pairs(profWorldCounts) do profWorldCounts[name] = 0 end
+end
+
+local function navTickInner(dt, ownerId)
+	navIndexTick()
 	--  BEFORE THE STEP, so the pair currently in flight is drawn even on the
 	--  tick it resolves and clears itself.
+	petports_profBegin("draw")
 	petports_navDebugDraw()
+	petports_profEnd("draw")
 
 	--  STEP EVERY RUNNING SWEEP, EVERY TICK. Only the SEARCH for new cells is
 	--  on the interval below; stepping is one explore call per slot and must not
@@ -2870,11 +3897,27 @@ function petports_navTick(dt, ownerId)
 	--  ON THE SAME TIMER AS THE SEARCH, and before it: a purge can only make
 	--  the candidate list shorter or leave it alone, never longer, so doing it
 	--  first costs nothing and keeps the graph the search walks smaller.
-	navPurgeDeadzones(petports_navProfile())
+	--  THE PURGE ON ITS OWN SLOW TIMER. It can only remove entries older
+	--  than NAV_SWEEP_TTL (fifteen minutes), so once a minute is plenty.
+	local now = world.time()
+
+	if self.petportsNavPurgeAt == nil or now >= self.petportsNavPurgeAt then
+		self.petportsNavPurgeAt = now + 60.0
+		navPurgeDeadzones(petports_navProfile())
+	end
+
+	--  THE TOP-UP RUNS AT MOST FOUR TIMES A SECOND, 2026-09-06z. PROFILED:
+	--  candidates n=16-22 per 5 s at 400-530 ms -- a walk over every known
+	--  cell, every tick a slot was free, and with eight sweeps finishing in
+	--  a tick each that was most ticks. A quarter second of latency on a
+	--  new sweep costs nothing the frontier notices.
+	self.petportsNavTimer = NAV_TOPUP_INTERVAL
 
 	local candidates = petports_navCandidates(NAV_CLAIM_ATTEMPTS)
 
 	if #candidates == 0 then
+		self.petportsNavTimer = NAV_IDLE_INTERVAL
+
 		--  SAID ONCE, THEN NEVER AGAIN UNTIL SOMETHING CHANGES.
 		--
 		--  THE SURVEY DOES TERMINATE, and until now nothing announced it. New
@@ -2955,6 +3998,33 @@ function petports_navTick(dt, ownerId)
 	return false
 end
 
+function petports_navTick(dt, ownerId)
+	petports_profInstall()
+	petports_profBegin("navTick")
+	local result = navTickInner(dt, ownerId)
+	petports_profEnd("navTick")
+	return result
+end
+
+--  SUB-SECTIONS OF navTick, 2026-09-06: wrapped by reassignment so the
+--  bodies stay untouched. Removed with the profiler when it goes.
+local function profWrap(name, fn)
+	return function(...)
+		petports_profBegin(name)
+		local a, b, c, d, e, f = fn(...)
+		petports_profEnd(name)
+		return a, b, c, d, e, f
+	end
+end
+
+petports_navNeighbours = profWrap("neighbours", petports_navNeighbours)
+petports_navFlush = profWrap("flush", petports_navFlush)
+petports_navProbeStep = profWrap("probeStep", petports_navProbeStep)
+petports_navReaches = profWrap("reaches", petports_navReaches)
+petports_navSweepStart = profWrap("sweepStart", petports_navSweepStart)
+petports_navSweepStep = profWrap("sweepStep", petports_navSweepStep)
+petports_navCandidates = profWrap("candidates", petports_navCandidates)
+
 --  Where the survey has got to. For a log line or an eval, not for logic.
 function petports_navProgress()
 	local profile = petports_navProfile()
@@ -3028,6 +4098,11 @@ function petports_navWipe()
 	self.petportsNavGraph = nil
 	self.petportsNavComplete = false
 	self.petportsNavPassRadius = nil
+	self.petportsNavIndexPending = nil
+	self.petportsNavIndexPendingCount = 0
+	self.petportsNavIndexMemo = nil
+	self.petportsNavAnchorCache = nil
+	self.petportsNavSolidCache = nil
 	self.petportsNavVersion = (self.petportsNavVersion or 0) + 1
 
 	sb.logInfo("NAV wiped %s cell shard(s) and the index", sb.printJson(cleared))

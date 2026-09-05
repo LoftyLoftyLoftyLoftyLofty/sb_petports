@@ -1430,7 +1430,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-05a cargo survives a json object round trip"
+local PETPORT_BUILD_STAMP = "2026-09-07a a slow port tick is logged with its cost"
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -14578,7 +14578,7 @@ function setAnimationStateForAllHullComponents(anim)
     animator.setAnimationState("interiorState", anim)
 end
 
-function update(dt)
+local function updateInner(dt)
   if self.firstUpdate then
     self.firstUpdate = false
     stationUniqueId()
@@ -15061,4 +15061,31 @@ end
 function onInteraction(args)
   --  Falls through to the container UI declared by uiConfig on the object.
   return config.getParameter("interactAction")
+end
+
+--  A SLOW PORT TICK IS LOGGED, 2026-09-07a. The unit-side profiler cannot
+--  see this script, and hiccups on a ~5 s cadence with the unit's own
+--  update flat (PROFILE tick max 60-90 ms, no instruction limit) point at
+--  the port's periodic scan. os.clock is available in this sandbox
+--  (measured); a tick over PETPORT_SLOW_TICK_MS prints its cost once.
+local PETPORT_SLOW_TICK_MS = 30
+
+function update(dt)
+  local began = nil
+  if type(os) == "table" and type(os.clock) == "function" then
+    local ok, t = pcall(os.clock)
+    if ok and type(t) == "number" then began = t end
+  end
+
+  updateInner(dt)
+
+  if began ~= nil then
+    local ok, t = pcall(os.clock)
+    if ok and type(t) == "number" then
+      local ms = (t - began) * 1000
+      if ms >= PETPORT_SLOW_TICK_MS then
+        sb.logInfo("PETPORT slow tick: %s ms", tostring(math.floor(ms)))
+      end
+    end
+  end
 end

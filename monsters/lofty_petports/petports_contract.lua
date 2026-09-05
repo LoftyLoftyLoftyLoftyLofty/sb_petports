@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-09-04l a death report carries the entity id"
+local CONTRACT_BUILD_STAMP = "2026-09-06a the swim sweep is shared with coarse nav"
 
 local contractStamped = false
 
@@ -2219,22 +2219,32 @@ PETPORTS_DIVE_SWIM_SAMPLES = 14
 --  the free-mover machinery still has to plan the actual route. A false yes
 --  costs one abandoned board and a plan that fails honestly; a false no costs a
 --  walk to a diving board that was never needed.
-local function swimReachable(target)
-	if target == nil then return false end
+--  SHARED WITH COARSE NAV, 2026-09-06: a free mover's edge between two
+--  anchors is this same question, so it lives here once. Half-tile steps,
+--  never fewer samples than the fishing code always used; the box is 1.6
+--  wide, so consecutive samples overlap and no tile is stepped over.
+function petports_bodyFitsAlong(from, to)
+	if from == nil or to == nil then return false end
 
-	local from = mcontroller.position()
+	local length = world.magnitude(from, to)
+	local samples = math.max(PETPORTS_DIVE_SWIM_SAMPLES, math.ceil(length / 0.5))
 
-	for i = 0, PETPORTS_DIVE_SWIM_SAMPLES do
-		local t = i / PETPORTS_DIVE_SWIM_SAMPLES
+	for i = 0, samples do
+		local t = i / samples
 		local at = {
-			from[1] + ((target[1] - from[1]) * t),
-			from[2] + ((target[2] - from[2]) * t)
+			from[1] + ((to[1] - from[1]) * t),
+			from[2] + ((to[2] - from[2]) * t)
 		}
 
 		if not bodyFitsAt(at) then return false end
 	end
 
 	return true
+end
+
+local function swimReachable(target)
+	if target == nil then return false end
+	return petports_bodyFitsAlong(mcontroller.position(), target)
 end
 
 --  BOARDS THAT HAVE ALREADY REFUSED, AND WHY THIS IS NOT THE "BEST BOARD" WORK.

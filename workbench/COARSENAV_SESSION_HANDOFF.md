@@ -1,188 +1,183 @@
-# COARSE NAV — SESSION HANDOFF, 2026-09-05
+# COARSE NAV -- SESSION HANDOFF, 2026-09-05 (end of session)
 
-Read this before proposing anything. Several hours went into the items marked
-DEAD; re-deriving them costs a test round each.
+Read this before proposing anything. Everything below marked MEASURED was
+read out of a starbound.log this day; everything marked FACT was read out of
+retail 1.4.4 source pasted into the session. Items from earlier sessions that
+were rolled back are not listed unless re-derived here.
 
-Builds in play: `petports_coarsenav.lua` **2026-09-05m**,
-`petportsTaskAction.lua` **2026-09-05i**. Both untested at time of writing.
+Retail Starbound 1.4.4 only. Never propose an OpenStarbound or fork binding.
+
+Builds in play, all tested in game:
+`petports_coarsenav.lua` **2026-09-05q**, `petportsTaskAction.lua`
+**2026-09-05o**, `petports_petport.lua` **2026-09-05a**.
+
+**STATE:** coarse nav works end to end. MEASURED 05:59-06:01: 164 legs, 136
+chained, 11 tasks done, 1 failed then succeeded on redispatch. Ground unit on a
+farm planet with ponds: 19 tasks done, 0 failed, 0 refusals. Committed.
 
 ---
 
 ## THE TEST LOOP IS EXPENSIVE. BUDGET ACCORDINGLY.
 
-A wipe-and-rebuild costs Lofty **~15 minutes** of sitting and waiting. Do not
-propose "wipe and try this" as a way of narrowing a hypothesis. Read the
-existing logs and dumps first; most questions are already answered in them.
+Read the log before proposing a fix. Every fix this session came from a grep,
+and every guess made before the grep was wrong. Say less. Change one thing.
 
-Only `petports_navWipe()` when the STORE is known bad — a change to
-`petports_navAnchor`, to the cell key rule, or to what an edge means. Changes to
-`petportsTaskAction` never need one.
-
-Retail Starbound 1.4.4 only. Never propose an OpenStarbound or fork binding.
+`petports_navWipe()` only when the STORE is known bad -- a change to the anchor
+rule, the cell key rule, what a verdict means, or the index entry format.
+Changes to `petportsTaskAction` never need one. A profile-string change (05q
+added `|a1`) re-buckets on its own, no wipe.
 
 ---
 
-## THE FAILURE BEING CHASED
+## THE STRUCTURE, AS SHIPPED
 
-A unit deposits an item on the far side of the ship and cannot get home. It
-walks most of the route correctly and stalls at one spot, which Lofty marks as
-the "yellow X": the west lip of the y1036 deck, around world x1017.
+**Cells.** `PETPORTS_NAV_CELL = 2`, `PETPORTS_NAV_STRIDE = 1`: every tile is
+the origin of a 2x2 window; a position belongs to the cell whose origin is its
+tile (`petports_navCell`, `navCellOrigin`). Lofty's decision, 05c: a
+non-overlapping 2x2 grid could not cover a 7-wide shaft's wall-side tile.
 
-Relevant geometry, derived from the ship layout and confirmed against unit
-positions in logs:
+**Anchors, walker.** Feet on the cell's bottom edge, one row of candidates
+(`x = origin + dx + 0.5`). Accept when: `navFootingUnderCell` finds
+`{Block,Slippery,Platform}` in the row beneath the cell under the part of the
+body inside the cell's own columns; `validStandingPosition(point,
+petports_avoidLiquid())`; `petports_mediumAllows(point, bounds)` is not false.
+Free movers: 2x2 body-fit scan at tile centres, then mediumAllows.
 
-- y1036 corridor is in two pieces: **x990..1010** and **x1018..1084**, with a
-  seven-tile hole between them.
-- The deposit target sits at **[1005.5,1036.8]**, on the west piece.
-- Crossing the hole means dropping to the y1031 level and climbing back.
-- Home port is **[981,1044]**, approached at **[981.5,1039.8]**.
+**Profile string.** `monsterType|f<freeMover>|b<w,h>|l<liquids>|d<doors>|a<avoidLiquid>`.
 
----
+**Sweep.** Radius ladder 4 -> 12 by 2 (`PETPORTS_NAV_RADIUS_START/STEP/RADIUS`);
+index entry per cell is `{ at, radius }` (a bare number reads as radius 0);
+candidates sorted narrowest-radius first then nearest, so passes are emergent.
+Seed cell only when grounded and anchored. Top-up every tick a slot is free
+(`NAV_TICK_INTERVAL = 0`), 2 sweeps x 4 workers. Survey runs while idle AND
+while on task whenever the unit's own pather has no live search.
 
-## FIXED AND CONFIRMED WORKING — DO NOT REOPEN
+**Verdict.** A probe is `start(anchorA, anchorB)` with the unit's pathOptions
+and `maxDistance 32`, explored 300/tick. TRUE also requires the solved path to
+be at most `3 x anchorDistance + 8` edges (`aStar:result()`), else recorded
+FALSE with a `TOO LONG` line. A TRUE is inserted into the memoised graph at
+once; a FALSE removed from it at once.
 
-1. **Leg chaining.** A reached leg with hops remaining chains straight into the
-   next instead of resuming the final target. Before, each leg cost a full
-   6-second `SEARCH_LIMIT` failure first. Confirmed: five legs chained in ~7s.
+**Routing.** BFS over fine edges (hop count). `petports_navWaypoint` returns
+the farthest path cell within `NAV_LEG_REACH = 8` of the origin, skipping
+hops inside `ARRIVAL_DISTANCE + 0.5`, plus the chosen cell, hop count, origin
+cell and previous cell.
 
-2. **One hop per leg.** `petports_navWaypoint` used to take the farthest cell
-   within a 24-tile `reach`, swallowing several proven edges into one unproven
-   leg. It now advances exactly one graph hop. `NAV_LEG_REACH` is gone.
-
-3. **The downward launch.** `solveLaunch` branch 1 accepted a NEGATIVE launch
-   velocity for a descent, because `discreteRise` squares `v0` and returns a
-   positive rise for a downward launch. Measured: `-39.3333`, accepted, set on a
-   grounded unit, floor wins, unit never leaves the ground. Branch 1 now
-   requires `candidate > 0`; branch 2's rise is floored at
-   `JUMP_ARC_CLEARANCE`. **Confirmed in game** — the ledge jump executes.
-
-4. **Anchors were not on nodes.** `petports_navAnchor` produced tile centres
-   (`x.5`); pathfinder nodes are integers (`petports_nodePosition` is
-   `floor(x + 0.5)`). Every anchor sat exactly on a node seam with zero margin.
-   Candidates are now integers. **Confirmed: 206/206 anchors on `.0`.**
-
-5. **Anchors in mid air.** `validStandingPosition` tests whether the BODY FITS,
-   not whether it can stand, so every body-sized pocket of open air anchored.
-   `navHasFooting` now requires support in `[x-0.5, x+0.5]` one row under the
-   feet, against `{"Block","Slippery","Platform"}`. **Confirmed: 0/206
-   anchorless-with-edges, down from 28/204.**
-
-6. **Arrival in mid air.** `ARRIVAL_DISTANCE` is 1.5 and a jump passes within
-   that of its landing point while still falling. The chain then planned from
-   the cell the unit was falling THROUGH. Arrival now requires `onGround`, and
-   `tryCoarseLeg` refuses to plan while airborne. Confirmed.
+**Task action.** Coarse-first, once per target, for a walker whose target is
+> 24 tiles away or has no line of sight (`world.lineTileCollision`). A fresh
+leg plans from `petports_navNearestCell` (nearest anchored graph cell within
+2.5 tiles), only on the ground. A reached leg (grounded, or approachPoint's
+own verdict) chains at once, planning from the cell it just reached
+(`navLegTo`), never from the nearest cell. approachPoint arrival at a
+waypoint never sets `arrived`. A leg pather gets `maxDistance 32` and explores
+at 1200/call. A leg that hits `SEARCH_LIMIT`: multi-hop -> retried at reach 0;
+one hop (or already reach 0) -> `petports_navVerify` re-probes it, the LAST
+hop is contradicted unless the re-probe says false, re-plan. A leg the pather
+refuses without a search for 0.5 s is sent to the same handover; the line
+prints onGround / validStandingPosition(target,false) / liquidAt /
+finder.target. solveLaunch never accepts a downward launch.
 
 ---
 
-## THE PENDING FIX (untested)
+## MEASURED FACTS THAT DECIDED THINGS
 
-`petports_navCell` is `floor(x / 2)`; a node is `floor(x + 0.5)`. They round on
-different boundaries, so a position can sit in one cell while the node it
-occupies is in the next.
+- **The unit script updates 12 times a second.** Counted via exploreRate.
+  So `SEARCH_LIMIT 6 s = 72 explores`. The probe that proved a deck-to-deck
+  edge needed 88. Every "would not walk" before taskAction 05h was 72 vs 88.
+- **`maxDistance` bounds how far a search wanders from its start, not path
+  length.** A 5-tile pair was proved with a 166-edge path under the 32 cap.
+  Every comment saying "within 32 tiles of path" was wrong; older comment
+  blocks above `NAV_MAX_DISTANCE` still say it, the correction sits beside
+  the constant.
+- **The candidate walk read the whole index once per known cell** (504 reads
+  per top-up, ~3 s). Fixed coarsenav 05g; both walks read once.
+- **The skip test skipped nothing** until learned edges entered the memo
+  (coarsenav 05h): probes per sweep == candidates per sweep.
+- **A leg reached mid-jump** was cleared with onGround false, and the chain
+  refused to plan from the air. A waypoint arrival from approachPoint set
+  `arrived` and a pickup ran 35 tiles from the item.
+- **Adjacent cells can have opposite shortest routes.** Chaining from the
+  nearest cell instead of the reached cell oscillated on a platform stack.
+- **A store edge can be a stale verdict for THIS unit**: the anchor rule
+  passed avoidLiquid false, the unit's find() refuses a liquid target. 05q.
+- **Cargo:** an item came back from disk with `cargo = {"1":{...}}` (json
+  object); every reader uses ipairs/#; the next write-back erased it.
+  `normaliseCargo` on read and write, petport 05a. Root remover not found.
 
-Measured: unit settled at `[1011.8,1031.8]` after the ledge. `floor(1011.8/2)`
-is **505**; its node is **1012**, which is in cell **506**. Cell `506,515` has
-anchor `[1012,1031.8]` — the exact point the unit was standing on — and a direct
-edge to `502,518`, one hop from home. Cell `505,515` has never existed in the
-store. Result: `sourceIsolated`, journey dropped half a hop short.
+## FACT (retail source, read this session)
 
-`petports_navCellAt` resolves a position to its node first. Used for both ends
-of a leg plan, the survey seed and the breadcrumb trail. Free movers pass
-through unchanged (the node y term is not an identity for a tile-centre anchor).
+`PathFinder:find(target)`: returns `"pathfinding"` (aStar stays nil) when
+`canPathfind()` is false -- a walker not onGround; returns false when
+`options.mustEndOnGround and not validStandingPosition(target, false)`;
+otherwise `reset()`, `start(mcontroller.position(), target)`, `explore()`.
+`start()` sets `self.target` and calls `world.platformerPathStart(...)`.
+`validStandingPosition(position, avoidLiquid, collisionSet, bounds)`: ground
+rect = full box width, one tile under the feet, against
+`{Null,Block,Dynamic,Platform}` OR (`not avoidLiquid and liquidAt(position)`);
+body rect against `collisionSet or {Null,Block}`. Default explore rate is
+world-fidelity 25..150; ours overrides to 300 / 1200.
 
-**Expected next log:** `leg 6 TAKEN: 506,515 > 502,518` then `journey ARRIVED`.
-
----
-
-## DEAD — RULED OUT WITH EVIDENCE
-
-- **"The route is greedy / badly weighted."** BFS minimises hops rather than
-  cost, which is true and has NOT been the cause of any observed failure. Every
-  route inspected was legitimate given the graph. Do not rewrite the search
-  before something measurably fails on it.
-- **"It should use vents."** There are ZERO vents on this network
-  (`vents: none`, `planRoute impossible: vent list is empty`). Vent routing has
-  never run. What looks like ducts is ship corridors.
-- **"The overlay shows cells floating in air."** Two separate causes, both
-  fixed: the marker was drawn at the cell centre, which is a TILE CORNER; and
-  the anchors themselves were genuinely in air (item 5). The overlay now marks
-  anchors, and swept cells with no anchor draw a grey box.
-- **Anchors sitting one tile clear of a 1-wide platform.** Caused by a footing
-  test that used the full 1.6-wide bound box, which overhangs 0.3 into each
-  neighbour. Narrowed to the node's own catchment. Fixed.
-
----
-
-## THE GRANULARITY QUESTION — CURRENT EVIDENCE SAYS NO
-
-Lofty's standing theory is that 2x2 cells miss one-wide platforms in
-odd-width vertical shafts, and that the fix is cell size 1 (or a 1-tile stride).
-**The last dump does not support this.** The ladder the unit climbs at x1028
-is fully represented:
-
-```
-cell 514,521  anchor [1028,1042.8]  out 16 in 16
-cell 514,522  anchor [1028,1044.8]  out 14 in 14
-cell 514,523  anchor [1028,1046.8]  out  8 in  8
-cell 514,524  anchor [1028,1048.8]  out  8 in  8
-```
-
-Those are exactly the positions the unit stood at while climbing in an earlier
-log. Nothing is missing. Before concluding the granularity is at fault, produce
-a cell that (a) contains a standable node and (b) is absent from a dump.
-
-**There IS a real granularity concern, but it is a different one.**
-`petports_navAnchor` returns the FIRST acceptable candidate and stops, scanning
-`dx = 0` before `dx = 1`. So a cell holding both ordinary floor and a ladder
-rung anchors on whichever is reached first. Measured skew in the last dump:
-**194 anchors on the even (left) node, 12 on the odd**. If a route ever needs
-the feature on the right-hand node of a cell that also has floor on the left,
-the graph cannot express it. That is the argument for cell size 1 — not missing
-cells.
-
-If cell size 1 is attempted:
-- `PETPORTS_NAV_CELL = 1`. Do NOT use a 1-tile stride with 2-wide cells: cell
-  identity must be single-valued, and it keys the shard property, the claim id,
-  the sweep index and `navBlockKey`.
-- At size 1 the cell IS the node, so `petports_navCell` and
-  `petports_navCellAt` must collapse to the same function.
-- The coarse ladder `NAV_LEVELS = {4,8,16,32}` wants a `2` in front or the
-  first level does nothing.
-- Expect roughly double the cells (the anchored set is close to
-  one-dimensional), and consider cutting `PETPORTS_NAV_RADIUS` again — probe
-  count goes with the AREA of the candidate box.
+**Slippery is NOT ice.** It is the invisible mission-boundary wall (Lofty).
+Treat it as a wall (body fit, solid prefilter); it is never a floor. The
+`fact.pathing.ongroundtest` entry in V2 calls it ice and is wrong there.
 
 ---
 
-## DIAGNOSTICS AVAILABLE
+## DEAD -- RULED OUT WITH EVIDENCE
 
-- `petports_navDumpGraph()` / `(radius)` — every node: tile extent, anchor or
-  refusal reason, swept age, coverage, out/in degree, then every outgoing edge
-  with distance, `dx`, `dy` and both directions' verdicts. Includes target-only
-  cells. Radius is centred on the nearest PLAYER.
-- `NAVT` trace — every leg request with its reason, the full path, every edge's
-  verdict both ways, every candidate cell considered (including skipped ones and
-  why), and each leg's outcome with a clock and odometer.
-- `petports_navExplain(from, to)` — one-call diagnosis of a refused route.
-- Overlay: green cross = anchor, blue = two-way edge, red = one-way with a
-  chevron, orange box = sink (in-edges, no out-edges), grey box = swept cell with
-  no anchor. `PETPORTS_NAV_EDGE_RADIUS` is live-tunable via `/entityeval`.
-
-`grep 'dy -'` on the trace finds every descent, which is where the failures
-have clustered.
+- "Overlapping cells alone fix the shaft" -- no: the candidate rule did.
+  Overlap was kept by decision; the footing rule is what puts an anchor on a
+  wall-side platform's cell.
+- "The mesh is inconsistent because of maxDistance 32 vs 200" -- partly:
+  matching the cap was necessary, the explore budget (12 Hz x 300) was the
+  larger cause.
+- "Contradict the edge when the walk fails" as the primary correction --
+  works, but every contradicted edge in the 03:42 log was a probe-provable
+  edge the walk under-searched. Verify before contradicting; the code does.
 
 ---
 
 ## OPEN, NOT SCHEDULED
 
-- **Arrival at 0.82 tiles failed.** `drop:134`, unit at `[1051.28,1036.8]`,
-  target `[1052.1,1036.88]`, `ARRIVAL_DISTANCE` 1.5. Six approaches, then "no
-  vent route". Nothing to do with coarse nav.
-- **`ARCPLAN VERDICT`** decides "the plan's Land is on the ASCENDING crossing"
-  for a landing BELOW the takeoff. The verdict text is wrong even where the new
-  branch-2 path produces a working launch. Cosmetic so far.
-- **Free-mover anchors** are still tile centres, deliberately. Same seam
-  argument applies; no flyer has been measured failing on it. Reopen the first
-  time a flyer hovers beside a waypoint instead of reaching it.
-- **`petports_petBehavior.lua`** has never had a build stamp.
-- Twenty files remain CRLF-flipped from zip transport.
+- **First `SEARCH_LIMIT` stall on a target under 24 tiles with line of
+  sight** still exists by design (coarse-first does not fire).
+- **Pond-edge refusals** (05:59 log, `y=1158.8`) did not reproduce after 05q.
+  The instrumented refusal line will name the gate if they return.
+- **Flyers:** legs as "farthest visible node on the path" via the existing LOS
+  check (Lofty). Coarse-first is gated `not freeMover` today. The free-mover
+  graph only needs to be connected, not dense.
+- **Amphibious:** already paths into water it passes through; the manual mode
+  switch is only for the fish target / underwater heal. Combine the existing
+  beach-entry code with leg building. Not a store or profile problem.
+- **openDoors:** profile already carries the flag; drop `Dynamic` from
+  `NAV_SOLID_SET`, the anchor body-fit set and `COARSE_LOS_SET` for openers.
+  Engine-side pathOptions name for door opening still unread (pathutil.lua's
+  `openDoorsAhead` is a movement-side helper, not a pathfinder option).
+- **Pickup is not distance-checked** in the task action (it ran 35 tiles
+  away when `arrived` was set wrongly). Guarded now only by arrival being
+  correct.
+- **Routing is hop-count BFS.** Edge cost is now available (`aStar:result()`
+  length) but not stored or used. The coarse levels are a rejection filter
+  only. Neither has been the cause of a failure since coarsenav 05n.
+- `NAV pass at radius N complete` logs once per unit per boundary and can
+  repeat when new cells appear. Cosmetic.
+- `petports_petBehavior.lua` has never had a build stamp. Twenty files remain
+  CRLF-flipped from zip transport.
+
+---
+
+## DIAGNOSTICS AVAILABLE
+
+- `petports_navProgress()` -- cells / swept / full / frontier / sweeping.
+- `petports_navVerify(fromKey, toKey)` -- one pair, probe to completion now.
+- `petports_navSelfTest()`, `petports_navLevelReport()`, `petports_navStats()`.
+- Log lines: `NAV surveying <cell> at radius N`, `NAV probe A -> B
+  REACHABLE/UNREACHABLE after T tick(s), E edge(s)`, `TOO LONG`, `UNIT coarse
+  first`, `UNIT coarse leg from A to B: heading for P, N hop(s) left`, `UNIT
+  reached coarse leg <cell> with N hop(s) left -- chaining`, `would not walk`,
+  `re-probe says`, `CONTRADICTED`, `refused by the pather ... onGround ...`,
+  `UNIT approach at ... | search <aStar> explores <count>`.
+- Overlay: green = swept cell centres; magenta = cells being probed; yellow
+  line = probe; tick count in a corner. `petports_navDebugToggle()`. Draw
+  runs every tick from navTick and draws every swept cell; turn it off when
+  measuring frame time.

@@ -171,7 +171,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-05o a refusal says which of find's two gates closed"
+local BUILD_STAMP = "2026-09-06d the update is profiled"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -950,6 +950,11 @@ local freshPather
 --  stall, and each one is a proven edge or two rather than a guess.
 local NAV_LEG_REACH = 8
 
+--  A FREE MOVER'S LEG REACHES AS FAR AS ITS LEG PATHER CAN SEARCH: the leg
+--  is the farthest path cell in sight (see petports_navWaypoint), and the
+--  leg pather's maxDistance is the probe cap, so the two match.
+local NAV_FLYER_LEG_REACH = 32
+
 --  FARTHER THAN THIS, OR WITH NO LINE OF SIGHT, A WALKER ASKS THE GRAPH
 --  BEFORE THE DIRECT SEARCH rather than after SEARCH_LIMIT seconds of it.
 --  Measured 03:01: every long route paid the full six seconds first, on the
@@ -995,21 +1000,39 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
   --  apart, the unit landing in cell N+1 after reaching cell N's anchor,
   --  and the two cells' shortest routes pointing opposite ways. Up, down,
   --  up, down, a strike every five seconds.
-  local fromKey = fromOverride or petports_navNearestCell(here, freeMover, 2.5)
+  --  A free mover's cells are four tiles apart (PETPORTS_NAV_STRIDE_FREE),
+  --  so its nearest graph cell can be that far away.
+  local nearRadius = freeMover and ((PETPORTS_NAV_STRIDE_FREE or 4) + 1.5) or 2.5
+
+  local fromKey = fromOverride or petports_navNearestCell(here, freeMover, nearRadius)
 
   if fromKey == nil then
     local fx, fy = petports_navCell(here)
     fromKey = petports_navCellKey(fx, fy)
   end
 
-  local toKey = petports_navNearestCell(target, freeMover, 3.0)
+  --  ONCE PER TARGET. The target does not move between chained legs, and
+  --  for a free mover this lookup is a sight sweep per candidate cell.
+  local targetKey = sb.printJson(target)
+  local toKey = nil
 
-  if toKey == nil then
-    local tx, ty = petports_navCell(target)
-    toKey = petports_navCellKey(tx, ty)
+  if stateData.navToFor == targetKey then
+    toKey = stateData.navToKey
+  else
+    toKey = petports_navNearestCell(target, freeMover, nearRadius + 0.5)
+
+    if toKey == nil then
+      local tx, ty = petports_navCell(target)
+      toKey = petports_navCellKey(tx, ty)
+    end
+
+    stateData.navToFor = targetKey
+    stateData.navToKey = toKey
   end
 
   if fromKey == toKey then return false end
+
+  if freeMover and reach == NAV_LEG_REACH then reach = NAV_FLYER_LEG_REACH end
 
   local waypoint, remaining, legCell, legHops, legFrom, legPrev =
     petports_navWaypoint(profile, fromKey, toKey, reach, freeMover,
@@ -5042,7 +5065,7 @@ local function runAndMunch(dt, task)
   end
 end
 
-function petportsTaskAction.update(dt, stateData)
+local function petportsTaskUpdateInner(dt, stateData)
   local task = stateData.task
 
   --  BEFORE ANY EARLY RETURN BELOW. Every one of them is a tick the unit spent
@@ -6067,9 +6090,10 @@ function petportsTaskAction.update(dt, stateData)
   --  SEARCH_LIMIT seconds of a direct search that has failed on every such
   --  route measured. If the graph has nothing, the direct search runs as
   --  before.
+  --  FREE MOVERS TOO, 2026-09-06. The "far" and "blind" tests are the
+  --  same; the leg they get is a sighted one.
   if stateData.navWaypoint == nil and not stateData.routing
-     and not stateData.arrived and petports_navNearestCell ~= nil
-     and not petports_freeMover() then
+     and not stateData.arrived and petports_navNearestCell ~= nil then
     local routeKey = sb.printJson(routeTarget)
 
     if stateData.coarseFirstFor ~= routeKey then
@@ -7918,4 +7942,18 @@ function petportsTaskAction.leavingState(stateData)
      and self.petportsTask.id == stateData.task.id then
     report(stateData, "failed", "interrupted")
   end
+end
+
+--  PROFILED, 2026-09-06: the whole update is one section and one tick.
+function petportsTaskAction.update(dt, stateData)
+  if petports_profInstall ~= nil then petports_profInstall() end
+  if petports_profTickBegin ~= nil then petports_profTickBegin() end
+  if petports_profBegin ~= nil then petports_profBegin("update") end
+
+  local result = petportsTaskUpdateInner(dt, stateData)
+
+  if petports_profEnd ~= nil then petports_profEnd("update") end
+  if petports_profTickEnd ~= nil then petports_profTickEnd() end
+
+  return result
 end
