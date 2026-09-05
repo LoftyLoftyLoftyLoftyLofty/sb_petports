@@ -171,7 +171,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-05j a leg is reached on the ground and never counts as arrival"
+local BUILD_STAMP = "2026-09-05m a refused leg has to stay refused for half a second"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -5071,7 +5071,16 @@ function petportsTaskAction.update(dt, stateData)
   --  branch below is untouched by it; a unit handed real work simply stops
   --  being idle, and the half-finished sweep is abandoned by the next
   --  navSweepStart rather than held open.
-  if petports_navTick ~= nil and munchMayHold(task) then
+  --  AND ON TASK TOO, WHENEVER THE UNIT'S OWN PATHER IS NOT SEARCHING.
+  --  2026-09-05: a farming unit is never idle, so its base was never
+  --  surveyed and every route was the direct search. A sweep step is one
+  --  explore call per slot; the only thing it competes with is a live A*
+  --  on this same unit, so that is the one time it yields. Walking a found
+  --  path costs no search and the survey runs alongside it.
+  local finder = self.pather and self.pather.finder
+  local searching = finder ~= nil and finder.aStar ~= nil and not finder.hasPath
+
+  if petports_navTick ~= nil and (munchMayHold(task) or not searching) then
     petports_navTick(dt, entity.uniqueId())
   end
 
@@ -6797,7 +6806,37 @@ function petportsTaskAction.update(dt, stateData)
         tostring(self.pather.jumpTimer))
     end
 
-    if finder ~= nil and not finder.hasPath and finder.aStar ~= nil then
+    --  A LEG THE PATHER REFUSED WITHOUT SEARCHING. find() returns false
+    --  before any search when the target fails its own standing test (for
+    --  this unit, with its own avoidLiquid), so aStar stays nil, the
+    --  search timer never runs, and the handover below never fires --
+    --  measured 2026-09-05 05:23 as a progress-strike loop on one leg. A
+    --  refused leg is a wrong anchor for this profile: send it straight to
+    --  the handover, which contradicts and re-plans.
+    --  AND IT HAS TO STAY REFUSED. Measured 2026-09-05 05:41: the tick
+    --  after freshPather, before move() has called find() at all, looks
+    --  identical -- aStar nil, no path -- and a healthy leg was failed 120
+    --  ms after it was planned, its edge contradicted on a re-probe that
+    --  said true after one tick. A real refusal persists; a fresh pather
+    --  does not.
+    if finder ~= nil and finder.aStar == nil and not finder.hasPath
+       and stateData.navWaypoint ~= nil then
+      stateData.navRefusedTimer = (stateData.navRefusedTimer or 0) + dt
+
+      if stateData.navRefusedTimer >= 0.5 then
+        sb.logInfo("UNIT coarse leg target %s refused by the pather without "
+          .. "a search for %s s -- treating as a failed leg",
+          sb.printJson(stateData.navWaypoint),
+          sb.printJson(stateData.navRefusedTimer))
+        stateData.navRefusedTimer = 0
+        stateData.searchingTimer = SEARCH_LIMIT
+      end
+    else
+      stateData.navRefusedTimer = 0
+    end
+
+    if finder ~= nil and not finder.hasPath
+       and (finder.aStar ~= nil or stateData.searchingTimer >= SEARCH_LIMIT) then
       stateData.searchingTimer = stateData.searchingTimer + dt
 
       --  A* alive with no path is the unit thinking, by definition. Most such

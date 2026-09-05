@@ -61,7 +61,7 @@
 --  are unprobeable and time-varying and nobody's fault -- are allowed to
 --  produce optimistic-wrong answers. They fail in the cheap direction.
 
-local COARSENAV_BUILD_STAMP = "2026-09-05p an anchor refuses a medium the chassis will not enter"
+local COARSENAV_BUILD_STAMP = "2026-09-05q an anchor obeys the unit's own avoidLiquid"
 
 local navStamped = false
 
@@ -595,7 +595,14 @@ function petports_navAnchor(cx, cy, freeMover)
 			--  a unit anywhere. Seen 2026-09-05: a plain ground unit on an
 			--  ocean world surveying the seabed.
 			if navFootingUnderCell(x, baseX, baseY, bounds) then
-				local ok, standable = pcall(validStandingPosition, point, false)
+				--  THE UNIT'S OWN avoidLiquid, NOT false. Measured 2026-09-05
+				--  05:23: the anchor rule passed avoidLiquid false and accepted
+				--  [2533.5,1158.8] in water; the unit's pather, built with
+				--  avoidLiquid true, refused that target outright -- no search,
+				--  no SEARCH_LIMIT, no contradiction, a progress-strike loop.
+				--  The anchor must be a point the unit's own find() will take.
+				local ok, standable = pcall(validStandingPosition, point,
+					petports_avoidLiquid())
 
 				if ok and standable == true then
 					local okMedium, allowed = pcall(petports_mediumAllows, point, bounds)
@@ -753,14 +760,17 @@ function petports_navProfile()
 	--  reachability difference exactly like a liquid permission.
 	local bounds = mcontroller.boundBox()
 
-	return string.format("%s|f%s|b%s|l%s|d%s",
+	--  avoidLiquid IS PART OF THE CAPABILITY, 2026-09-05: two chassis that
+	--  differ only in it anchor different cells and must not share a store.
+	return string.format("%s|f%s|b%s|l%s|d%s|a%s",
 		tostring(monsterType),
 		freeMover and "1" or "0",
 		string.format("%.2f,%.2f",
 			(bounds[3] or 0) - (bounds[1] or 0),
 			(bounds[4] or 0) - (bounds[2] or 0)),
 		table.concat(liquids, "+"),
-		tostring(config.getParameter("petports_canOpenDoors", nil)))
+		tostring(config.getParameter("petports_canOpenDoors", nil)),
+		petports_avoidLiquid() and "1" or "0")
 end
 
 --  ------------------------------------------------------------------ STORE
