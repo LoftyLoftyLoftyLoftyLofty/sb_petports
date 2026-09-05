@@ -61,7 +61,7 @@
 --  are unprobeable and time-varying and nobody's fault -- are allowed to
 --  produce optimistic-wrong answers. They fail in the cheap direction.
 
-local COARSENAV_BUILD_STAMP = "2026-09-05o the seed cell must be anchored and the unit grounded"
+local COARSENAV_BUILD_STAMP = "2026-09-05p an anchor refuses a medium the chassis will not enter"
 
 local navStamped = false
 
@@ -567,7 +567,13 @@ function petports_navAnchor(cx, cy, freeMover)
 				local ok, hit = pcall(world.rectTileCollision, region,
 					{ "Null", "Block", "Dynamic", "Slippery" })
 
-				if ok and hit == false then return point end
+				--  AND THE MEDIUM, as for a walker: a flyer's anchor in water
+				--  it cannot enter is a node it can never reach.
+				if ok and hit == false then
+					local okMedium, allowed = pcall(petports_mediumAllows, point, bounds)
+
+					if not okMedium or allowed ~= false then return point end
+				end
 			end
 		end
 	else
@@ -580,10 +586,22 @@ function petports_navAnchor(cx, cy, freeMover)
 			tried = tried + 1
 
 			--  THE CELL'S OWN GROUND FIRST -- one rect test -- then the body
-			--  fit, which is the dearer call.
+			--  fit, then THE MEDIUM. validStandingPosition is called with
+			--  avoidLiquid false so a sinker's seabed still counts, which
+			--  means it says nothing about whether THIS chassis may be in
+			--  the liquid standing there. petports_mediumAllows is the
+			--  chassis's own answer (module liquids, swim capability), and
+			--  it is the same predicate the task action uses before sending
+			--  a unit anywhere. Seen 2026-09-05: a plain ground unit on an
+			--  ocean world surveying the seabed.
 			if navFootingUnderCell(x, baseX, baseY, bounds) then
 				local ok, standable = pcall(validStandingPosition, point, false)
-				if ok and standable == true then return point end
+
+				if ok and standable == true then
+					local okMedium, allowed = pcall(petports_mediumAllows, point, bounds)
+
+					if not okMedium or allowed ~= false then return point end
+				end
 			end
 		end
 	end
