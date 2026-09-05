@@ -171,7 +171,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-05m a refused leg has to stay refused for half a second"
+local BUILD_STAMP = "2026-09-05n a chained leg plans from the cell it just reached"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -972,7 +972,7 @@ local COARSE_LOS_SET = { "Null", "Block", "Dynamic", "Slippery" }
 --  learned edges since the last leg and the unit may have been moved by
 --  something else; a stale plan is the failure arch.vent.routing already
 --  records. Re-planning is one BFS over a memoised graph.
-local function tryCoarseLeg(stateData, target, reach)
+local function tryCoarseLeg(stateData, target, reach, fromOverride)
   if petports_navWaypoint == nil then return false end
 
   reach = reach or NAV_LEG_REACH
@@ -989,7 +989,13 @@ local function tryCoarseLeg(stateData, target, reach)
   --  FROM THE NEAREST CELL THE GRAPH KNOWS, not the cell the position
   --  happens to be in. See petports_navNearestCell for the two measured
   --  cases where those differ.
-  local fromKey = petports_navNearestCell(here, freeMover, 2.5)
+  --  THE CELL THE CALLER SAYS WE ARE IN, when it says. A chained leg plans
+  --  from the cell it just reached, not the nearest cell to wherever the
+  --  body settled: measured 2026-09-05 05:52, a stack of platforms one tile
+  --  apart, the unit landing in cell N+1 after reaching cell N's anchor,
+  --  and the two cells' shortest routes pointing opposite ways. Up, down,
+  --  up, down, a strike every five seconds.
+  local fromKey = fromOverride or petports_navNearestCell(here, freeMover, 2.5)
 
   if fromKey == nil then
     local fx, fy = petports_navCell(here)
@@ -6568,9 +6574,12 @@ function petportsTaskAction.update(dt, stateData)
       --  unit stood still for another six before asking for the next leg.
       --  The graph said there were more hops; take the next one now. The
       --  direct search is only tried again once the graph has run out.
-      if remaining > 0 and tryCoarseLeg(stateData, routeTarget) then
-        sb.logInfo("UNIT reached coarse leg with %s hop(s) left -- chaining "
-          .. "into the next", sb.printJson(remaining))
+      local reachedCell = stateData.navLegTo
+
+      if remaining > 0
+         and tryCoarseLeg(stateData, routeTarget, nil, reachedCell) then
+        sb.logInfo("UNIT reached coarse leg %s with %s hop(s) left -- chaining "
+          .. "into the next", tostring(reachedCell), sb.printJson(remaining))
       else
         sb.logInfo("UNIT reached coarse leg, %s hop(s) were left -- resuming "
           .. "for the real target", sb.printJson(remaining))
