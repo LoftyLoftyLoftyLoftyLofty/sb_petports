@@ -171,7 +171,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-05n a chained leg plans from the cell it just reached"
+local BUILD_STAMP = "2026-09-05o a refusal says which of find's two gates closed"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -6833,10 +6833,24 @@ function petportsTaskAction.update(dt, stateData)
       stateData.navRefusedTimer = (stateData.navRefusedTimer or 0) + dt
 
       if stateData.navRefusedTimer >= 0.5 then
+        --  WHICH GATE. Retail pathing.lua PathFinder:find has exactly two
+        --  ways to leave aStar nil: canPathfind() false (a walker not
+        --  onGround returns "pathfinding" and never starts) and
+        --  mustEndOnGround with validStandingPosition(target, false) false
+        --  (returns false). Both are cheap to re-ask here, so the line says
+        --  which it was instead of leaving it to the next session.
+        local wp = stateData.navWaypoint
+        local okStand, stand = pcall(validStandingPosition, wp, false)
+        local okLiquid, liquid = pcall(world.liquidAt, wp)
+
         sb.logInfo("UNIT coarse leg target %s refused by the pather without "
-          .. "a search for %s s -- treating as a failed leg",
-          sb.printJson(stateData.navWaypoint),
-          sb.printJson(stateData.navRefusedTimer))
+          .. "a search for %s s -- onGround %s, validStandingPosition(target,false) %s, "
+          .. "liquidAt %s, finder.target %s -- treating as a failed leg",
+          sb.printJson(wp), sb.printJson(stateData.navRefusedTimer),
+          tostring(mcontroller.onGround()),
+          tostring(okStand and stand),
+          okLiquid and sb.printJson(liquid) or "err",
+          sb.printJson(finder.target))
         stateData.navRefusedTimer = 0
         stateData.searchingTimer = SEARCH_LIMIT
       end
