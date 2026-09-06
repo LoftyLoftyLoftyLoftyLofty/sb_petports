@@ -1,4 +1,4 @@
-<mxfile host="Electron" modified="2026-09-06T10:21:05.858Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.2.5 Chrome/120.0.6099.109 Electron/28.1.0 Safari/537.36" etag="vmG3rMfWExHaxdynLW3c" version="24.2.5" type="device">
+<mxfile host="Electron" modified="2026-09-06T18:21:03.925Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.2.5 Chrome/120.0.6099.109 Electron/28.1.0 Safari/537.36" etag="R4ZI7vO0n5QKE6WWSKhX" version="24.2.5" type="device">
   <diagram name="Page-1" id="NveRE99YrSAUUvzC1UxD">
     <mxGraphModel dx="1434" dy="844" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
       <root>
@@ -641,10 +641,10 @@
           <mxGeometry x="1000" y="3760" width="520" height="80" as="geometry" />
         </mxCell>
         <mxCell id="3ISfEoBmj6Lgr9TAVEry-34" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Bring pets to Maxwell to have their achievements evaluated. Reward players for their first time accomplishing a particular achievement.&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
-          <mxGeometry x="1000" y="3880" width="520" height="80" as="geometry" />
+          <mxGeometry x="1000" y="4000" width="520" height="80" as="geometry" />
         </mxCell>
         <mxCell id="3ISfEoBmj6Lgr9TAVEry-35" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Display achievements a pet has earned on their details tab in the petport - but only after visiting Maxwell.&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
-          <mxGeometry x="1000" y="4000" width="520" height="80" as="geometry" />
+          <mxGeometry x="1000" y="4120" width="520" height="80" as="geometry" />
         </mxCell>
         <mxCell id="3ISfEoBmj6Lgr9TAVEry-36" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
           <mxGeometry x="1560" y="3520" width="40" height="40" as="geometry" />
@@ -656,10 +656,10 @@
           <mxGeometry x="1560" y="3760" width="40" height="40" as="geometry" />
         </mxCell>
         <mxCell id="3ISfEoBmj6Lgr9TAVEry-39" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
-          <mxGeometry x="1560" y="3880" width="40" height="40" as="geometry" />
+          <mxGeometry x="1560" y="4000" width="40" height="40" as="geometry" />
         </mxCell>
         <mxCell id="3ISfEoBmj6Lgr9TAVEry-40" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
-          <mxGeometry x="1560" y="4000" width="40" height="40" as="geometry" />
+          <mxGeometry x="1560" y="4120" width="40" height="40" as="geometry" />
         </mxCell>
         <mxCell id="3ISfEoBmj6Lgr9TAVEry-41" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;UI POLISH AND COMPRESSION&lt;/font&gt;&lt;div&gt;&lt;font style=&quot;font-size: 20px;&quot;&gt;Shine layers etc&lt;/font&gt;&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#0050ef;fontColor=#ffffff;strokeColor=#001DBC;" parent="1" vertex="1">
           <mxGeometry x="1680" y="3400" width="320" height="80" as="geometry" />
@@ -860,31 +860,37 @@
           <mxGeometry x="2080" y="4520" width="440" height="40" as="geometry" />
         </mxCell>
         <mxCell id="3ISfEoBmj6Lgr9TAVEry-119" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Hamster wheel power generator for FU users&lt;br&gt;DEFERRED - not in scope for v1&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
-          <mxGeometry x="1000" y="4120" width="520" height="80" as="geometry" />
-        </mxCell>
-        <mxCell id="3ISfEoBmj6Lgr9TAVEry-120" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#647687;fontColor=#ffffff;strokeColor=#314354;" parent="1" vertex="1">
-          <mxGeometry x="1560" y="4120" width="40" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="3ISfEoBmj6Lgr9TAVEry-121" value="Pet-operated defensive turret?&lt;br&gt;Cute perhaps but do we really need this for v1?" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
           <mxGeometry x="1000" y="4240" width="520" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="3ISfEoBmj6Lgr9TAVEry-122" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#647687;fontColor=#ffffff;strokeColor=#314354;" parent="1" vertex="1">
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-120" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#647687;fontColor=#ffffff;strokeColor=#314354;" parent="1" vertex="1">
           <mxGeometry x="1560" y="4240" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="3ISfEoBmj6Lgr9TAVEry-123" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Letting pets sleep in designated spots, including their petport. Entire sleep system unimplemented.&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-121" value="Pet-operated defensive turret?&lt;br&gt;Cute perhaps but do we really need this for v1?" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
           <mxGeometry x="1000" y="4360" width="520" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="3ISfEoBmj6Lgr9TAVEry-124" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-122" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#647687;fontColor=#ffffff;strokeColor=#314354;" parent="1" vertex="1">
           <mxGeometry x="1560" y="4360" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="3ISfEoBmj6Lgr9TAVEry-126" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Some way to view network inventory.&lt;/font&gt;&lt;div&gt;&lt;font style=&quot;font-size: 20px;&quot;&gt;Maybe also some means by which to request items from the network.&lt;/font&gt;&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-123" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Letting pets sleep in designated spots, including their petport. Entire sleep system unimplemented.&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
           <mxGeometry x="1000" y="4480" width="520" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="3ISfEoBmj6Lgr9TAVEry-127" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-124" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
           <mxGeometry x="1560" y="4480" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-126" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Some way to view network inventory.&lt;/font&gt;&lt;div&gt;&lt;font style=&quot;font-size: 20px;&quot;&gt;Maybe also some means by which to request items from the network.&lt;/font&gt;&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="1000" y="4600" width="520" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-127" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
+          <mxGeometry x="1560" y="4600" width="40" height="40" as="geometry" />
         </mxCell>
         <mxCell id="l3tF_ScwuKrG0czlncNS-3" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;universe_server.config and the storage lockup timer&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
           <mxGeometry x="2125" y="4200" width="555" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="l3tF_ScwuKrG0czlncNS-4" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Highway nodes for coarse navigation&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="3880" width="520" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="l3tF_ScwuKrG0czlncNS-5" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#e3c800;fontColor=#000000;strokeColor=#B09500;" vertex="1" parent="1">
+          <mxGeometry x="1560" y="3880" width="40" height="40" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>

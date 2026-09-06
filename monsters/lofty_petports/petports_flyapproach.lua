@@ -82,7 +82,7 @@
 --  delegate, and stays one.
 local vanillaSetJumpState = setJumpState
 
-local BUILD_STAMP = "2026-09-06b the free mover is profiled"
+local BUILD_STAMP = "2026-09-07a flyPathClear is the one sight test, and the task action can ask it"
 local stampLogged = false
 
 --  DELETE ME ONCE THE ANSWER IS IN THE LOG.
@@ -641,6 +641,16 @@ local function flyPathClear(from, to)
   end
 
   return true
+end
+
+--  THE SAME TEST, FOR THE TASK ACTION. 2026-09-07a: the coarse-first gate and
+--  the in-flight sight latch in petportsTaskAction need "can this body fly
+--  the straight line" and were using world.lineTileCollision -- a ray, tile
+--  only, blind to medium. A ray passes through poison; this does not. One
+--  spelling of the sight question, for the reason arch.pathing.oneanchor
+--  gives: two resolvers asking it would disagree exactly where it matters.
+function petports_flyPathClear(from, to)
+  return flyPathClear(from, to)
 end
 
 --  MAY THIS UNIT STRING-PULL RIGHT NOW, AND IS THE LINE ACTUALLY CLEAR?

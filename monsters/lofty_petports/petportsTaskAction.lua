@@ -178,7 +178,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-07g a chase logs once when it starts and once per re-aim"
+local BUILD_STAMP = "2026-09-07h a free mover that can see its target drops the hops"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -1018,6 +1018,36 @@ local NAV_FLYER_LEG_REACH = 32
 --  outbound leg, at the crate, and on each recall.
 local COARSE_FIRST_DISTANCE = 24
 local COARSE_LOS_SET = { "Null", "Block", "Dynamic", "Slippery" }
+
+--  A FREE MOVER THAT CAN SEE ITS TARGET DOES NOT WANT A COARSE LEG.
+--
+--  2026-09-07h. The coarse-first test ran once per route target and the
+--  chain then took every remaining hop; nothing between those two points
+--  asked "can I see it now". A fish that came into full view three hops
+--  early was followed around the remaining three, and that is the detour
+--  that was being watched. Two changes, one test:
+--
+--    the gate   for a free mover, sight OVERRIDES far. The direct search
+--               is only starved on long routes it has to plan; a body-clear
+--               straight line is not planned, it is flown (string-pull).
+--    the latch  while a leg is held, the same test runs on a timer and a
+--               clear line drops the leg and every hop behind it.
+--
+--  THE TEST IS petports_flyPathClear, NOT world.lineTileCollision. The ray
+--  was tile-only, so it passed through liquid the chassis is forbidden to
+--  enter; poison hanging in the ocean is exactly the case a swimmer must not
+--  latch across. flyPathClear sweeps the body box and samples the medium.
+--
+--  RANGE-BOUNDED, because the sweep is one rectTileCollision and one
+--  mediumAllows per 0.8 tile. Beyond SIGHT_LATCH_RANGE the coarse route is
+--  taken without looking, and the latch looks again once inside it. The
+--  interval is the chase interval so a unit re-aiming twice a second is not
+--  also sweeping more often than that. NEITHER NUMBER IS MEASURED; the rate
+--  limit is the real bound and the range only caps a single sweep.
+--
+--  WALKERS ARE UNCHANGED. A walker's straight line is not a route.
+local SIGHT_LATCH_RANGE = 64
+local SIGHT_LATCH_INTERVAL = 0.5
 
 --  WALK THE NEXT LEG OF A COARSE ROUTE, WHEN THERE IS ONE.
 --
@@ -6187,14 +6217,28 @@ local function petportsTaskUpdateInner(dt, stateData)
       stateData.coarseFirstFor = routeKey
 
       local here = mcontroller.position()
-      local far = world.magnitude(here, routeTarget) > COARSE_FIRST_DISTANCE
-      local okLos, blocked = pcall(world.lineTileCollision, here, routeTarget,
-        COARSE_LOS_SET)
-      local blind = okLos and blocked == true
+      local span = world.magnitude(here, routeTarget)
+      local far = span > COARSE_FIRST_DISTANCE
+      local wanted, why
 
-      if (far or blind) and tryCoarseLeg(stateData, routeTarget) then
-        sb.logInfo("UNIT coarse first: target %s is %s -- leg taken",
-          routeKey, far and "far" or "out of sight")
+      if petports_freeMover() then
+        --  SIGHT OVERRIDES FAR, see SIGHT_LATCH_RANGE.
+        local seen = span <= SIGHT_LATCH_RANGE
+          and petports_flyPathClear(here, routeTarget) == true
+        wanted = not seen
+        why = (span > SIGHT_LATCH_RANGE) and "beyond sight range"
+          or "no clear line"
+      else
+        local okLos, blocked = pcall(world.lineTileCollision, here, routeTarget,
+          COARSE_LOS_SET)
+        local blind = okLos and blocked == true
+        wanted = far or blind
+        why = far and "far" or "out of sight"
+      end
+
+      if wanted and tryCoarseLeg(stateData, routeTarget) then
+        sb.logInfo("UNIT coarse first: target %s is %s (%s tiles) -- leg taken",
+          routeKey, why, sb.printJson(math.floor(span * 10 + 0.5) / 10))
         return false
       end
     end
@@ -6664,6 +6708,37 @@ local function petportsTaskUpdateInner(dt, stateData)
   --  approachPoint's own verdict on the waypoint counts too (navLegArrived,
   --  set below), so a ground-resolved arrival a hair outside the raw radius
   --  cannot leave a unit standing at a leg it will never "reach".
+  --  THE LATCH. A free mover holding a leg looks at the real target on a
+  --  timer, and a clear line drops the leg and the hops behind it; the next
+  --  tick resolves approachTo normally and string-pull flies the line. See
+  --  SIGHT_LATCH_RANGE for why this exists and why it is this test.
+  if stateData.navWaypoint ~= nil and petports_freeMover() then
+    stateData.sightTimer = (stateData.sightTimer or 0) - dt
+
+    if stateData.sightTimer <= 0 then
+      stateData.sightTimer = SIGHT_LATCH_INTERVAL
+
+      local here = mcontroller.position()
+      local span = world.magnitude(here, routeTarget)
+
+      if span <= SIGHT_LATCH_RANGE
+         and petports_flyPathClear(here, routeTarget) == true then
+        sb.logInfo("UNIT SIGHT latch: target %s is %s tiles away on a clear "
+          .. "line -- dropping the leg to %s and %s hop(s) behind it",
+          sb.printJson(routeTarget),
+          sb.printJson(math.floor(span * 10 + 0.5) / 10),
+          sb.printJson(stateData.navWaypoint),
+          sb.printJson(stateData.navRemaining or 0))
+
+        stateData.navWaypoint = nil
+        stateData.navRemaining = nil
+        stateData.navLegArrived = nil
+        stateData.groundTarget = nil
+        freshPather("target in sight")
+      end
+    end
+  end
+
   local legReached = stateData.navWaypoint ~= nil
     and (stateData.navLegArrived == true
       or world.magnitude(stateData.navWaypoint, mcontroller.position())

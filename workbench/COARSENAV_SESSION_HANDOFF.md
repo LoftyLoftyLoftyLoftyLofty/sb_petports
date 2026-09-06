@@ -1,4 +1,4 @@
-# COARSE NAV -- SESSION HANDOFF (as of coarsenav 07t / taskAction 07g / petport 07l / habitat 07a)
+# COARSE NAV -- SESSION HANDOFF (as of coarsenav 07t / taskAction 07h / petport 07l / flyapproach 07a / habitat 07a)
 
 Read this before proposing anything. MEASURED means read out of a
 starbound.log or an engine `.luaprofile`; FACT means read out of retail 1.4.4
@@ -8,7 +8,7 @@ unmodified retail source and may be READ for facts (StarLuaRoot.cpp was).
 
 Builds in play:
 `petports_coarsenav.lua` **2026-09-07t**, `petportsTaskAction.lua`
-**2026-09-07g**, `petports_flyapproach.lua` **2026-09-06b**,
+**2026-09-07h**, `petports_flyapproach.lua` **2026-09-07a**,
 `petports_contract.lua` **2026-09-06a**, `petports_petport.lua` **2026-09-07l**,
 `petports_habitat.lua` **2026-09-07a** (its first stamp), `petports_work.lua`
 (claims memo, unstamped). Committed 2026-09-06 after the tracked-target
@@ -20,6 +20,21 @@ taskAction 07f/07g, petport 07l). Nav-relevant residue: coarsenav 07t
 (below), and every drift re-resolve re-runs the coarse-first test
 (`todo.pathing.retestrate`) -- 19 `coarse nav has no leg` lines for a 19
 re-aim medic intercept, one `coarseLeg` at 22 ms.
+**2026-09-06, LATER: THE SIGHT LATCH (taskAction 07h, flyapproach 07a) AND
+THE DESIGN OF WHAT COMES NEXT.** There was no latch: the coarse-first test
+ran once per target and the chain took every hop. Now a free mover holding
+a leg asks `petports_flyPathClear` (body sweep + medium samples) twice a
+second and drops the leg on a clear line; the gate uses the same test and
+sight overrides "far" for free movers. VERIFIED: three latches in the
+faraway-fish log, the largest dropping 9 hops at 47 tiles. The poison maze is measured (eight identical
+`PLAN REFUSED` in four seconds; the engine plans through poison and nothing
+else knows it is there). Decisions in V2: `dd.pathing.arteryfirst`,
+`dd.pathing.highwaynode`, `dd.pathing.boundarystore`,
+`dd.pathing.railsanchor`, `dd.pathing.probeprofile`. Build order:
+`todo.pathing.boundarycells` (probe carries its profile; boundary
+discovery; per-profile interpretation, which closes poison), then
+`todo.pathing.amphibiousbridge` as adjacency to boundary cells, then highway
+nodes. The "lookout" long-edge idea is REJECTED and must not come back.
 **SOAK TEST, 2026-09-05 22:21 -> 00:25 (2 h, 1.2 M lines), on these builds:**
 zero LuaInstructionLimitReached; 14 unit ticks over 200 ms in two hours
 (one of 1,689 ms at 22:23:09, in the task action OUTSIDE navTick --
@@ -310,15 +325,18 @@ is deep enough. Rares have shallow variants, which is why they appear.
 
 ## OPEN, NOT SCHEDULED
 
-- **Poison inside the ocean** (`todo.pathing.poisonocean`) -- after
-  amphibious, by decision 2026-09-06. `petports_bodyFitsAlong` does not check medium mid-segment and
+- **Poison inside the ocean** (`todo.pathing.poisonocean`) -- closed by
+  `todo.pathing.boundarycells` step 3, which is BEFORE amphibious in the
+  build order decided later on 2026-09-06 (boundary cells first, then the
+  bridge as adjacency to them). `petports_bodyFitsAlong` does not check medium mid-segment and
   the string-pull's line test is a solid test; both gate on a non-empty
   `|l<x>|` deny list so `|l|` units pay nothing. Swimmer in open water is
   otherwise verified by the 07b soak (no rim seen).
-- **Amphibious** (`todo.pathing.amphibiousbridge`) -- NEXT, 2026-09-06:
-  walkers, flyers and swimmers route long-distance; this chassis does not,
-  and two "moved 0 in 10s" failures in the tracked-target log were it. The
-  mode boundary as a hop in the route: dive pair as a bridging edge f0 -> f1, exit as the
+- **Amphibious** (`todo.pathing.amphibiousbridge`) -- after boundary cells,
+  2026-09-06. Restated as adjacency to a boundary cell, multi-hop by
+  requirement (an otter enters and exits as often as the destination
+  needs), air pockets as the strategic case. The mode boundary as a hop in
+  the route: dive pair as a bridging edge f0 -> f1, exit as the
   reverse. Two disjoint graphs today; 4,807 `no leg` lines in the soak.
 - **openDoors** -- profile carries the flag; drop `Dynamic` from the three
   solid sets for openers; engine-side pathOptions name for doors unread.

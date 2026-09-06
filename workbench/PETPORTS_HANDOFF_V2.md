@@ -50,52 +50,50 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-06 (a target that moves is one table row, and the medic proved it at 30 tiles)
+### What is built, as of 2026-09-06 (tracked targets and the sight latch verified; the shape of open-medium routing decided)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-**THE LAST TWO SESSIONS WERE PERFORMANCE; THIS ONE WAS THE FIRST FEATURE ON TOP
-OF THE RESULT.** Coarse navigation is built, profiled and stable enough on the
-test machine that the missing behaviour can be worked on instead of the
-frame budget (`arch.pathing.coarsenav`, `fact.tooling.frameceiling`); the one
-hitch left is retail's `worldStorageInterval` and is not ours
-(`fact.tooling.worldstorage`).
+**MOVING TARGETS ARE TRACKED AT ONE LAYER, BUILT AND VERIFIED.**
+`arch.pathing.trackedtarget`: one table says which tasks aim at an entity; the
+live position, the drift re-resolve, the coverage exit and the on-arrival
+chase read it. Verified on a medic intercepting a patient that moved ~30
+tiles (19 re-aims, dosed at 0.64), on fish (`arrived` at 30 tiles, un-latched
+and re-aimed), and on animals including a modded flying moth. Medic carries
+`target`, not `patient`. Coarsenav 07t fixed the placeholder graph's missing
+level table on the way.
 
-**MOVING TARGETS ARE TRACKED AT ONE LAYER, BUILT AND VERIFIED 2026-09-06.**
-`arch.pathing.trackedtarget`. The handoff entry said unbuilt; the code had
-already built most of it for fish on 09-02 (live position, drift re-resolve)
-and left animal and medic out of the list. Now one table, `TRACKED_TARGETS`,
-says which task types aim at an entity, how close is arrived, and whether the
-target can leave coverage; the live position, the drift re-resolve, the
-per-tick coverage exit and the on-arrival chase all read it. Medic carries
-`target` instead of `patient`, on the task and on the report.
+**THE SIGHT LATCH IS BUILT AND VERIFIED.** `arch.pathing.sightlatch`: a free
+mover holding a coarse leg looks at the real target twice a second with the
+body-swept, medium-sampled line test, and a clear line drops the leg and
+every hop behind it; the coarse-first gate uses the same test and sight
+overrides "far" for free movers. Verified in the faraway-fish log: three
+latches, the largest at 47 tiles with 9 hops dropped -- a unit on a 12-hop
+shoreline route to a target in plain view across open water. Every
+free-mover `coarse first` line reads "no clear line"; "far" appears only on
+walkers.
 
-**VERIFIED THREE WAYS IN ONE LOG.** A flyer dispatched at a wounded
-amphibious unit that walked ~30 tiles during a 4.3 s approach re-aimed 19
-times and dosed at a gap of 0.64 -- the drift re-resolve alone, `arrived`
-never latching stale. A fish `arrived` at 30 tiles (the arrival test's known
-optimism, `todo.pathing.arrivedstall`) and the chase un-latched it, re-aimed
-twice, then gave up correctly when the fish left coverage. Fourteen animal
-harvests including a modded flying moth (`om_mm-farmmoth`) taken in the air.
-Zero "kept moving" budget exhaustions, so the 10 s chase budget has not been
-tested against anything.
+**THE POISON MAZE IS MEASURED AND NOT FIXABLE WITH WHAT EXISTS.** A swimmer
+sent at a fish behind a poison pocket: the engine A* routes through the
+poison, the medium check refuses the plan (`edge 17 of 36 ends at
+[2509,1130.8], which is a liquid this chassis will not enter`), the next
+tick plans the same route, eight identical refusals in four seconds until
+the watchdog. The engine cannot see forbidden liquid and the coarse graph
+does not know where the poison is. That is `todo.pathing.boundarycells`.
 
-**ONE DEFECT FOUND ON THE WAY, NOT OURS THIS SESSION: THE PLACEHOLDER GRAPH.**
-`navGraphForInner` serves `{ fine = {}, coarse = {} }` while a fresh unit's
-first rebuild is in flight, and `navCoarseReaches` indexed a level table it
-does not have -- twelve sweeps died on `attempt to index a nil value
-(local 'adjacency')`, every one on a unit still building. Coarsenav 07t
-returns nil ("unknown") for a missing level, which is what the coarse ladder
-already means by a spent budget.
-
-**COSTS SEEN, NOT YET BOUNDED.** Every drift re-resolve changes the
-coarse-first key, so the far/blind test and its `nearestCell` lookup re-run
-per re-aim: 19 `coarse nav has no leg` lines for the 19 re-aims above, one
-22 ms `coarseLeg` call among them. Fine on a flyer at that rate; a walker
-chasing something at 0.5 s intervals would pay it twice a second
-(`todo.pathing.retestrate`).
+**THE SHAPE OF OPEN-MEDIUM ROUTING WAS DECIDED THIS SESSION, IN WORDS, AND IS
+RECORDED AS DECISIONS.** In order: `dd.pathing.arteryfirst` (highways over
+mesh growth; radial lookout rejected), `dd.pathing.highwaynode`
+(player-placed, unwired, probed by units, coverage 32 and residency),
+`dd.pathing.boundarystore` (one shared store for liquid boundaries, keyed on
+liquid and body, never per profile), `dd.pathing.railsanchor` (rails are
+creepable edges for free movers), `dd.pathing.probeprofile` (the probe
+carries the profile it probes; surrogate entities rejected). Build order:
+boundary cells, then the amphibious bridge as adjacency to them, then
+highway nodes. The tracked-target work and the latch are done ahead of all
+of that.
 
 ---
 
@@ -103,36 +101,33 @@ chasing something at 0.5 s intervals would pay it twice a second
 (`fact.locomotion.buoyancy`, the `/entityeval` at 0 vs 0.25 has never been run).
 `PLAN DROP`'s second refusal, decided mid-fall from a position the unit is about
 to leave. Eleven tags cited in `.lua` comments with no entry anywhere, which
-nothing checks. `petports_luacheck.py` is still absent. Units at a standing
-point in water dispatched at cliff animals fail "moved 0 in 10s" -- the
-chassis cannot path there, which is `todo.pathing.amphibiousbridge`, now NEXT
-by decision: walkers, flyers and swimmers route long-distance and the
-amphibious chassis is the one that does not, so it goes before
-`todo.pathing.poisonocean`.
+nothing checks. `petports_luacheck.py` is still absent. Every drift re-resolve
+re-runs the coarse-first test (`todo.pathing.retestrate`). The amphibious
+chassis has no long-distance route across a mode boundary
+(`todo.pathing.amphibiousbridge`, now stated as boundary-cell adjacency).
 
 **THE PLAYER-FACING NETWORK PANE IS THE NEXT DESIGN, AND IT DECIDES A DEAD
 END.** Delivering to a player is one more `TRACKED_TARGETS` row on the unit
 side and is BLOCKED on the port side: there is no request mechanism, because
 there is no pane yet that shows a player the contents of every network they
-stand in coverage of. That pane's "request from network" button is the whole
-answer to "where does this item belong" -- the player says. Automatic
-cross-crate defragmentation is abandoned in favour of it
-(`dd.cargo.playerdefrag`).
+stand in coverage of. Automatic cross-crate defragmentation is abandoned in
+favour of it (`dd.cargo.playerdefrag`).
 
 **LINE ENDINGS.** `petports_petport.lua` and `petports_contract.lua` are CRLF
-on disk; `petportsTaskAction.lua` and `petports_coarsenav.lua` are LF. The
-three bare-LF lines once measured inside petport.lua are gone.
+on disk; `petportsTaskAction.lua`, `petports_coarsenav.lua` and
+`petports_flyapproach.lua` are LF.
 
 **THE KILL LIST LIVES IN `plan.drawio` NOW, NOT HERE.** Cross-crate
-consolidation comes off it with this session (see `dd.cargo.playerdefrag`).
-Everything else stands: currency in restock beacons, filter search bars,
-sinker platform sliding, sinker fishing, the run-animation blink. The chart's
-whole FINDABLE column is still red -- 17 modules and 12 species, and no
-`treasure/`, `dungeons/` or `biomes/` directory exists in the repo at all.
+consolidation came off it this session. Everything else stands: currency in
+restock beacons, filter search bars, sinker platform sliding, sinker fishing,
+the run-animation blink. The chart's whole FINDABLE column is still red -- 17
+modules and 12 species, and no `treasure/`, `dungeons/` or `biomes/`
+directory exists in the repo at all.
 
-**STAMPS AT SESSION END:** coarsenav 07t, taskAction 07g, petport 07l,
-habitat 07a, contract 06a, flyapproach 06b. Committed 2026-09-06 after the
-verification log.
+**STAMPS AT SESSION END:** coarsenav 07t, taskAction 07h, petport 07l,
+flyapproach 07a, habitat 07a, contract 06a. The tracked-target builds were
+committed after their verification log; 07h and flyapproach 07a are after
+that commit.
 
 
 ## ARCHITECTURE
@@ -220,6 +215,42 @@ coarse-first test (`todo.pathing.retestrate`).
 **WHAT IT DOES NOT DO.** It does not predict; it aims at where the target is
 now. It does not chase across a mode boundary (`todo.pathing.amphibiousbridge`).
 It does not tell the progress watchdog anything (`todo.pathing.arrivedstall`).
+
+### A free mover that can see its target drops the hops
+`arch.pathing.sightlatch` -- see also `arch.pathing.coarsenav`, `arch.pathing.trackedtarget`, `todo.pathing.poisonocean`, `dd.pathing.arteryfirst`
+
+**BUILT AND VERIFIED 2026-09-06 (taskAction 07h, flyapproach 07a).** Three
+latches in the faraway-fish log; the largest: `target [2510,1151.8] is 47
+tiles away on a clear line -- dropping the leg to [2530,1182] and 9 hop(s)
+behind it`, on a 12-hop route. The others: 34.6 tiles with 3 behind, 10.3
+tiles with 0 behind. Zero errors; tick max unchanged.
+
+**THE MECHANISM THAT WAS ASSUMED TO EXIST DID NOT.** The coarse-first test
+ran once per route target (keyed on it) and the leg chain then asked only
+"hops left?" at each boundary. Nothing between those two points asked "can I
+see it now", so a fish in full view three hops early was followed around the
+remaining three. That was the detour, not a latch losing to hop-tracing.
+
+**ONE TEST, TWO USES.** `petports_flyPathClear(from, to)` -- flyapproach's
+body-box sweep along the line with `petports_mediumAllows` sampled at every
+0.8-tile step -- is exported and is the only sight test. The coarse-first
+gate, for free movers, asks it instead of `world.lineTileCollision`, and
+sight overrides "far": a body-clear straight line is not planned, it is
+flown. While a leg is held the same test runs every `SIGHT_LATCH_INTERVAL`
+(0.5 s) against the real route target, and a clear line clears `navWaypoint`,
+`navRemaining` and `groundTarget`, rebuilds the pather, and logs `UNIT SIGHT
+latch: target ... N tiles away on a clear line -- dropping the leg ... and K
+hop(s) behind it`. Bounded to `SIGHT_LATCH_RANGE` (64); beyond it the leg is
+taken without looking. Neither number is measured.
+
+**WHY THE RAY HAD TO GO.** `lineTileCollision` is tile-only: it passed through
+liquid the chassis is forbidden to enter, so a swimmer could be given "line of
+sight" to a fish across a poison pocket and latch into it. The swept test
+refuses at the first poisoned sample, so the route stays coarse -- which is
+correct, and is where `todo.pathing.boundarycells` takes over.
+
+**WALKERS ARE UNCHANGED.** Their gate keeps far-or-blind with the ray; a
+walker's straight line is not a route.
 
 ### Restock beacons — BUILT, and the design that survived contact
 `arch.beacon.restock`
@@ -7040,6 +7071,143 @@ the pane is the design blocker, and the unit side of delivery is one
 **WHAT IT DOES NOT SUPERSEDE.** `dd.cargo.portowns` (cargo is one trip's
 worth) and the existing single-crate compaction stand.
 
+### Long-distance routing is artery-first, and growing the mesh outward is rejected
+`dd.pathing.arteryfirst` -- see also `arch.pathing.coarsenav`, `dd.pathing.highwaynode`, `arch.pathing.sightlatch`
+
+**DECIDED 2026-09-06.** The surface-hugging cell graph is the LOCAL layer.
+Long-distance traversal -- for walkers and free movers alike -- prefers a
+small set of player-placed highway nodes (`dd.pathing.highwaynode`); the
+BFS branches off the artery into the cell graph as it does today. Free-mover
+anchors exist only within half a tile of a solid, so the swim and fly graphs
+route along shores and seabeds and never across an open middle; the fix is
+not more nodes of the same kind.
+
+**REJECTED:** growing the free-mover mesh radially over time -- "lookout"
+rays from the frontier learning long edges into the same store, seeding
+islands from a port tile scan. Both are the mesh discovering more of itself
+from the surface out, and in a complex build they do harm rather than good:
+more nodes in open medium is more detours, not fewer. A port scan without a
+connecting edge also yields components that route nowhere.
+
+**THE NAVMESH ANALOGY THAT DECIDED IT.** A 3D navmesh keeps nodes at
+junctions and thoroughfares and optimises the rest out; destinations only
+need to reach the nearest artery. Arteries there are often placed by hand.
+Here the player is building actively, so the artery has to be something the
+player can place and re-place -- which is the highway node.
+
+### Highway nodes: player-placed, unwired, probed by the fleet, and part of coverage
+`dd.pathing.highwaynode` -- see also `dd.pathing.arteryfirst`, `arch.network.registry`, `arch.port.coverage`, `arch.vent.routing`, `dd.pathing.probeprofile`
+
+**DECIDED 2026-09-06, NOT BUILT.** An object the player places to say "route
+through here". Two variants, matching the two anchor rules: floor-anchored
+(a walker anchor, gravity pathing) and background-anchored (a free-mover
+anchor, exempt from the near-solid rule that empties open medium of nodes).
+
+**NOT WIRED, BECAUSE A PLACED NODE CAN BE WRONG.** A wire is an assertion of
+an edge and cannot be trusted. A node is a survey candidate: an anchored cell
+with a 32-tile probe radius whose neighbour list is other nodes in range, and
+units probe the pairs under their own profiles into the same per-profile
+store. A misplaced node yields a false or nothing -- the failure the graph
+already prices -- never a trusted lie. An object script cannot probe for
+itself: it has `world.platformerPathStart` but no body to take parameters
+from, and the verdict must be the fleet's.
+
+**IT PROVIDES COVERAGE AND RESIDENCY, OR IT IS USELESS.** A node is a
+registry entry with a 32-rect (the port's is 64) and its own residency
+stagehand. Without coverage, the two ends of a highway sit in disparate
+networks and nothing is dispatched across it; with it, a chain of nodes joins
+two ports into one network and every scan, coverage test and dispatch that
+reads `petports_networkRects` sees the run without knowing a node from a
+port. `petports_entriesCompatible` has to admit a node entry. A pet in the
+garage on the left of the base then has a route to tasks on the right.
+
+**THE OVERLAY.** While a node or a port is held, the coverage overlay also
+draws node-to-node links for a chosen profile -- the store's highway edges
+between registry entries -- so the player sees which placements connected.
+A single node placed in a gap is the player's answer to "they won't fly to
+the second island", and the drawn range is what tells them where it reaches.
+
+**ITS SWEEPS ARE ITS OWN.** Long-range angled sweeps run from the node on
+the node's cadence and write highway edges only; they do not grow the cell
+graph, which is the whole difference from `dd.pathing.arteryfirst`'s rejected
+lookout.
+
+### The liquid boundary is one shared store, never six copies of the ocean
+`dd.pathing.boundarystore` -- see also `todo.pathing.boundarycells`, `todo.pathing.poisonocean`, `todo.pathing.amphibiousbridge`, `arch.pathing.mediummixed`, `arch.locomotion.dive`
+
+**DECIDED 2026-09-06, NOT BUILT.** Where the water is does not depend on who
+is asking; what it MEANS does. Boundary cells -- the surface row, which side
+is wet, the liquid type, the openings a body fits through -- live in one
+store family keyed on liquid type and body width (`petports_navbounds:
+<liquid>|b<w,h>:<cell>`), written by whichever unit surveys past and read by
+every profile. Each profile interprets a boundary cell at graph-build time
+from its own liquid permissions and gravity: a wall (forbidden liquid), a
+bridge (a gravity-switchable chassis), a floor or ceiling to route along, or
+nothing. Each profile still probes its own edges TO the cell.
+
+**WHY NOT PER PROFILE.** The per-profile shard format would have cost no new
+store machinery, and it would have made every chassis discover every
+shoreline itself: the ocean surface is the common case and six chassis is
+six copies, contradicted separately when the player drains a pool. The
+deciding case is the otter, whose `f0` and `f1` are two views of one body --
+the boundary is precisely the thing that joins them, and a per-profile
+boundary puts the seam inside the one chassis that needs it seamless.
+
+**WHAT IT COSTS.** A second store family: index, wipe, stats, debug draw and
+the graph loader each grow a branch, and the interpretation runs per build
+rather than once at write.
+
+**NOTHING PROBES FOR THE EDGE TODAY.** Every anchor test is a filter on a
+candidate generated for another reason -- `validStandingPosition` with
+`avoidLiquid`, `petports_mediumAllows`, the `mixed` refusal -- so the
+boundary is where anchors stop, never a position the graph holds. The only
+code that finds the actual surface is the dive trace, per task and
+discarded. Discovery is that trace made local: a cell whose window has
+liquid above `PETPORTS_SUBMERGED_FILL` in some tiles and not others is a
+candidate, and the trace's prefer-up walk finds the surface row and the
+openings. It runs in the survey over the candidates it already visits.
+
+### Rails are creepable edges, and every rail material counts
+`dd.pathing.railsanchor` -- see also `arch.pathing.coarsenav`, `dd.pathing.highwaynode`
+
+**DECIDED 2026-09-06, NOT BUILT.** A free mover treats a rail as it treats
+any terrain edge it can creep along: a rail tile is a near-surface for the
+free-mover anchor rule, so a rail run gets anchors along its length. This
+includes `metamaterial:rail` and its variants (`railsafe`, `railstop`,
+`railreverse`), because bumpers, sensors and tram stops are built of them.
+A rail is a player-constructed route with a purpose and the graph must be
+able to explore along it.
+
+**THE ENGINE FACT UNDER IT.** Rails have no collision type. `rails.lua`
+detects them with `world.material(pos, "foreground")` and a name table
+(`rustyrail`, `compositerail`, `metamaterial:rail*`); `navFootingUnderCell`
+and the free-mover near-surface test are `rectTileCollision` calls and
+cannot see them. Honouring a rail is a material test on the tiles beside the
+body box, not a collision set entry.
+
+### The probe carries the profile it probes; surrogate probing entities are rejected
+`dd.pathing.probeprofile` -- see also `fact.pathing.pathstartparams`, `arch.pathing.coarsenav`, `arch.locomotion.swimmode`, `todo.pathing.amphibiousbridge`
+
+**DECIDED 2026-09-06, NOT BUILT.** A walker probe from a swimming otter, or
+an exit probe with `exiting`'s physics, is run by calling
+`world.platformerPathStart` directly with a copy of `baseParameters()` (the
+wrapper's `jumpModifier` adjustment applied) overlaid by the probed
+profile's `gravityEnabled` and `liquidBuoyancy`. The coarse probe already
+drives `aStar:explore()` and `aStar:result()` itself, so the wrapper is
+bypassed for the one thing it did that mattered.
+
+**REJECTED:** two invisible surrogate monsters spawned at the port to probe
+on the amphibious unit's behalf. Proposed on the belief that the search reads
+the entity's parameters; it does not (`fact.pathing.pathstartparams`). A
+surrogate would compute verdicts in another script context against another
+body, and need spawning, placing, networking and keeping alive.
+
+**WHY IT MATTERS FOR THE OTTER.** Air-pocket entry and exit is the amphibious
+chassis's strategic advantage: a pocket surrounded by water is a land
+component whose only edges in are bridges, and it is surveyed by a unit that
+is swimming past it. That unit has to be able to learn walker edges while
+wet, which this is.
+
 ## DESIGN INTENT -- PLANNED
 
 ### The drone is always running
@@ -10689,6 +10857,21 @@ independent events; they share a frame whenever both fire. The survey
 stride (`arch.pathing.surveystride`) phases the survey by entity id; the
 task-side resolvers are not yet phased (`todo.tooling.lockstepphase`).
 
+### The search takes movement parameters as an argument; only the wrapper reads the entity's
+`fact.pathing.pathstartparams` -- see also `fact.pathing.canpathfind`, `dd.pathing.probeprofile`
+
+`world.platformerPathStart(startPosition, endPosition, ActorMovementParameters
+movementParameters, PlatformerAStar::Parameters searchParameters)` -- the
+movement parameters are passed in. Retail `/scripts/pathing.lua` (read
+2026-09-06): `PathFinder:start` calls `mcontroller.baseParameters()` inline,
+adds `jumpSpeed * status.stat("jumpModifier")` to `airJumpProfile.jumpSpeed`,
+and hands the copy to the binding; `PathFinder:canPathfind` is `onGround() or
+not baseParameters().gravityEnabled`; `PathMover:new` captures
+`mustEndOnGround = baseParameters().gravityEnabled`. So the SEARCH can be run
+under any parameters a script chooses; what is bound to the entity's live
+mode is the start gate and the mover. `fact.pathing.canpathfind` stands as
+written -- it is about the gate.
+
 ## DISPROVEN
 
 ### Sinker jumping underwater was never a liquid problem
@@ -13291,10 +13474,22 @@ index read itself (~1000 entries converted) stays over a frame until the
 index is sharded; that is the second half.
 
 ### Poison inside the ocean: a denied liquid enclosed by an allowed one
-`todo.pathing.poisonocean` -- see also `arch.pathing.mediummixed`, `arch.pathing.coarsenav`, `arch.pathing.mediumenforcement`
+`todo.pathing.poisonocean` -- see also `arch.pathing.mediummixed`, `arch.pathing.coarsenav`, `arch.pathing.mediumenforcement`, `todo.pathing.boundarycells`, `dd.pathing.boundarystore`
 
-OPENED 2026-09-06, Lofty's adversarial case, to be done BEFORE amphibious
-routing. A player can build a poisoned pocket (background tiles, poison
+**MEASURED 2026-09-06 AND RESTATED.** A swimmer sent at a fish behind a
+poison pocket: the engine A* routes through the poison, the medium check
+refuses the plan (`PLAN REFUSED ... edge 17 of 36 ends at [2509,1130.8],
+which is a liquid this chassis will not enter`), the next tick plans the
+same route, eight refusals in four seconds until the watchdog fails the
+task. The refusal is correct and there is nothing to refuse INTO: the
+engine cannot see forbidden liquid and the coarse graph does not know
+where the pocket is, so `coarse nav has no leg`. The two gaps below are
+real but the fix is not two gates; it is `todo.pathing.boundarycells`,
+where a boundary cell whose liquid the profile forbids is a wall for that
+profile at graph-build time. The sight half is already closed by
+`arch.pathing.sightlatch` (the ray is gone from the free-mover gate).
+
+OPENED 2026-09-06, Lofty's adversarial case. A player can build a poisoned pocket (background tiles, poison
 inserted) inside open ocean water; it is the deliberate mechanism for a
 selective membrane that only units carrying a poison block module pass.
 Two gaps against it: `petports_bodyFitsAlong` checks solids along a
@@ -13339,8 +13534,37 @@ chasing at `CHASE_RETARGET_INTERVAL` would pay it twice a second, and
 distance (re-test only when the target has moved more than a leg's reach
 from the last tested point) or by time. Measure a walker chase first.
 
+### Liquid boundary cells: a third cell kind, in the shared store
+`todo.pathing.boundarycells` -- see also `dd.pathing.boundarystore`, `todo.pathing.poisonocean`, `todo.pathing.amphibiousbridge`, `dd.pathing.probeprofile`, `arch.locomotion.dive`
+
+OPENED 2026-09-06. THE NEXT BUILD, in this order: (1) the probe carries its
+profile (`dd.pathing.probeprofile`), so a gravity-switchable unit surveys
+both its stores in either mode -- measured 35 `f0` cells against 12 `f1`
+for the otter, because it only surveys the mode it is in and is almost
+never wet; (2) boundary discovery in the survey, into
+`petports_navbounds:<liquid>|b<w,h>:<cell>`, using the dive trace's method
+locally; (3) the graph loader reads boundary cells per profile -- a wall
+where the liquid is forbidden, which closes the poison maze; (4) then
+`todo.pathing.amphibiousbridge`. The store family needs index, wipe, stats
+and debug-draw branches; `petports_navWipe` must clear it.
+
 ### Amphibious long-range motion needs the mode boundary as a hop in the route
-`todo.pathing.amphibiousbridge` -- see also `arch.pathing.mediummixed`, `arch.pathing.coarsenav`, `todo.pathing.poisonocean`
+`todo.pathing.amphibiousbridge` -- see also `arch.pathing.mediummixed`, `arch.pathing.coarsenav`, `todo.pathing.poisonocean`, `todo.pathing.boundarycells`, `dd.pathing.boundarystore`
+
+**RESTATED 2026-09-06: THE BRIDGE IS ADJACENCY TO A BOUNDARY CELL, NOT AN
+EDGE BETWEEN TWO MESHES.** With `todo.pathing.boundarycells` in the store, a
+dive is land cell -> boundary cell -> swim cell and an exit is the reverse;
+the otter's graph loader admits boundary cells as passable and probes its
+own edges to them (a dive: the opening fits the body and `diveSighted` from
+the land anchor; an exit: a walker probe under `exiting`'s parameters from
+the surface point to the land anchor). Routing across any number of
+crossings is then the ordinary BFS over one graph. Multi-hop is a
+requirement: an otter must enter and exit water as many times as the
+destination needs. The dive and exit PRIMITIVES (`arch.locomotion.dive`,
+`arch.locomotion.exitdefer`) are reused as the leg executors, and
+`petports_currentTaskDestination` has to return the active leg's target so
+`desiredSwimMode` keeps a swimmer aquatic while the route is still wet.
+Builds after boundary cells.
 
 **PROMOTED 2026-09-06 -- NEXT, AHEAD OF `todo.pathing.poisonocean`.**
 Long-distance coarse routing is verified for walkers, flyers and swimmers;
