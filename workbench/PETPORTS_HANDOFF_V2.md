@@ -50,94 +50,52 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-06 (every frame-crossing call has a name, and the 30 s hitch is the engine's)
+### What is built, as of 2026-09-06 (a target that moves is one table row, and the medic proved it at 30 tiles)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-ONE FEATURE, FOUR DEFECTS, AND THREE OF THE FOUR WERE THE SAME MISTAKE WEARING
-DIFFERENT CLOTHES. Everything here is verified in game.
+**THE LAST TWO SESSIONS WERE PERFORMANCE; THIS ONE WAS THE FIRST FEATURE ON TOP
+OF THE RESULT.** Coarse navigation is built, profiled and stable enough on the
+test machine that the missing behaviour can be worked on instead of the
+frame budget (`arch.pathing.coarsenav`, `fact.tooling.frameceiling`); the one
+hitch left is retail's `worldStorageInterval` and is not ours
+(`fact.tooling.worldstorage`).
 
-**2026-09-05/06 ADDENDUM, NOT A REWRITE: COARSE NAV IS BUILT AND WORKS.** Walkers
-and flyers route across the base by leg chains over a surveyed cell graph
-(`arch.pathing.coarsenav`); the long-network starvation in
-`todo.dispatch.reachbudget` is resolved by it. Two performance passes followed
-and are measured (`fact.tooling.luaprofile`, `proc.tooling.profilefirst`).
-The living detail is `COARSENAV_SESSION_HANDOFF.md`; this doc holds the
-entries that outlive it.
+**MOVING TARGETS ARE TRACKED AT ONE LAYER, BUILT AND VERIFIED 2026-09-06.**
+`arch.pathing.trackedtarget`. The handoff entry said unbuilt; the code had
+already built most of it for fish on 09-02 (live position, drift re-resolve)
+and left animal and medic out of the list. Now one table, `TRACKED_TARGETS`,
+says which task types aim at an entity, how close is arrived, and whether the
+target can leave coverage; the live position, the drift re-resolve, the
+per-tick coverage exit and the on-arrival chase all read it. Medic carries
+`target` instead of `patient`, on the task and on the report.
 
-**2026-09-06 ADDENDUM: THE THIRD PERFORMANCE PASS.** The criterion moved
-to "no single call crosses a frame" (`fact.tooling.frameceiling`). Built
-and measured, one change per log: the network survey stride and a 4 ms
-turn budget (`arch.pathing.surveystride`); the claims memo and the
-three-tick port beat (`arch.dispatch.claimsmemo`, `arch.port.beatstages`);
-sections on the state-entry resolvers, a bounded resumable nearest-cell
-search and a yielding neighbour scan (`arch.pathing.boundedresolvers`); a
-stall detector on both entity kinds and the rule for reading it
-(`arch.tooling.stalldetector`). Two stalls it named were ours and are
-fixed -- a tile string into `world.objectSpaces` (`fact.tooling.
-stringentity`) and the unbounded resolvers above. The one it could not
-name was isolated by control to retail's `worldStorageInterval`
-(`fact.tooling.worldstorage`, `fact.tooling.configfiles`) and is not ours.
-The swimmer-refusal fix (taskAction 07b) is verified: zero contradictions
-across every log since. Stamps: coarsenav 07n-07s, taskAction 07b-07e,
-petport 07h-07k, habitat 07a, work.lua (unstamped). UNCOMMITTED.
+**VERIFIED THREE WAYS IN ONE LOG.** A flyer dispatched at a wounded
+amphibious unit that walked ~30 tiles during a 4.3 s approach re-aimed 19
+times and dosed at a gap of 0.64 -- the drift re-resolve alone, `arrived`
+never latching stale. A fish `arrived` at 30 tiles (the arrival test's known
+optimism, `todo.pathing.arrivedstall`) and the chase un-latched it, re-aimed
+twice, then gave up correctly when the fish left coverage. Fourteen animal
+harvests including a modded flying moth (`om_mm-farmmoth`) taken in the air.
+Zero "kept moving" budget exhaustions, so the 10 s chase budget has not been
+tested against anything.
 
----
+**ONE DEFECT FOUND ON THE WAY, NOT OURS THIS SESSION: THE PLACEHOLDER GRAPH.**
+`navGraphForInner` serves `{ fine = {}, coarse = {} }` while a fresh unit's
+first rebuild is in flight, and `navCoarseReaches` indexed a level table it
+does not have -- twelve sweeps died on `attempt to index a nil value
+(local 'adjacency')`, every one on a unit still building. Coarsenav 07t
+returns nil ("unknown") for a missing level, which is what the coarse ladder
+already means by a spent budget.
 
-**UNITS THAT DIE SPILL THE PORT'S LOAD WHERE THEY FELL.** `arch.unit.death`. The
-chart's oldest known issue, and the thing that turns `dd.unit.destructible` from
-a statement of intent into a mechanic -- a unit could always be lost and losing
-one never cost anything, which made the camouflage module a formality. The unit
-sends a position and its entity id; the port spills `petData.cargo` there,
-releases the task, and writes the item back. A real kill mid-deposit: `spilled 1
-stack(s), 0 lost`.
-
-**THE THREE THAT WERE ONE SHAPE -- A DECISION THAT DID NOT OUTLIVE THE THING IT
-GUARDED AGAINST.** A recall reaches `die()` looking exactly like a lava death, so
-it needs a latch; the latch lives on `self` and the FADE OUTLIVES THE CONTEXT, so
-a unit recalled 68ms before a world unload was serialised mid-death and came back
-with the kill queued and the latch gone; culling instead of fading does not fix
-that either, because `uninit` runs 98ms AFTER the world stop packet and nothing
-ticks after it. `fact.unit.uninitnokill` is the durable half: **ANY UNIT ALIVE AT
-A WORLD UNLOAD IS SERIALISED, WHATEVER IS DONE TO IT FROM `uninit`.** That kills
-the whole class of "clean up on unload" fix and forced the guard onto the reload
-side.
-
-**THE FOURTH WAS AN INVARIANT ASSERTED WITHOUT CHECKING WHAT WRITES THE FIELD.**
-The reload-side guard first tested `payload.id == self.petId` and PASSED for a
-leftover, because `setPet` accepts any entity id while `self.petId` is nil --
-vanilla's anchor contract, and how a pet re-homes at all. `self.petId` means "a
-unit has claimed me". `self.spawnedPetId`, written only after
-`world.spawnMonster` returns, means "I made this one". `fact.unit.anchoradoption`.
-
-**VERIFIED END TO END**, one lifesoul: picked up, culled at unload with no spill,
-read back off the item, leftover refused, respawned still holding it, delivered.
-Also `fact.unit.deathmessage` -- a `sendEntityMessage` from inside `die()` IS
-delivered after the sender is destroyed, four for four, which was the open
-question the whole design rested on.
-
----
-
-**PRICE ORDERING WAS BUILT LAST SESSION AND NEVER WRITTEN UP.**
-`arch.cargo.valueorder`, landed in `caf2ced` while this document still described
-the ordering it replaced -- exactly the gap check 10 exists to catch. `tidyWork`
-ranks PER UNIT because it is choosing which slot to reclaim; `drainWork` ranks
-PER TRIP because it is choosing what to carry. The `maxStack` proxy it supersedes
-ranked generated weapons alongside dirt, since they declare `maxStack` 1000 and
-stack in practice never. Measured on 79 rules: authored order made `sb_crappyaxe`
-win every pass for a whole session.
-
-**AND ITS OWN COMMENT ARGUES FOR THE OPPOSITE OF WHAT IT DOES.**
-`todo.cargo.drainrationale`. The code is right; the worked example in the
-rationale cannot occur, because `batch` caps a haul at a quarter stack.
-
-**`dd.cargo.portowns` WAS DENYING A CAP THAT ALREADY EXISTED.** It called
-"refusing to dispatch when full" the right unbuilt shape; `drainWork`, `fuelWork`
-and `depositWork` have enforced it all along. Cargo is ONE TRIP'S WORTH. Reading
-that entry straight cost a round of design work sizing a spill for a whole
-network haul.
+**COSTS SEEN, NOT YET BOUNDED.** Every drift re-resolve changes the
+coarse-first key, so the far/blind test and its `nearestCell` lookup re-run
+per re-aim: 19 `coarse nav has no leg` lines for the 19 re-aims above, one
+22 ms `coarseLeg` call among them. Fine on a flyer at that rate; a walker
+chasing something at 0.5 s intervals would pay it twice a second
+(`todo.pathing.retestrate`).
 
 ---
 
@@ -145,24 +103,36 @@ network haul.
 (`fact.locomotion.buoyancy`, the `/entityeval` at 0 vs 0.25 has never been run).
 `PLAN DROP`'s second refusal, decided mid-fall from a position the unit is about
 to leave. Eleven tags cited in `.lua` comments with no entry anywhere, which
-nothing checks; a grep over `*.lua` against the tag set would be check 12.
-`petports_luacheck.py` is still absent -- but a tokenising block-balance checker
-now exists and found that the naive strip-comments-then-strip-strings approach is
-WRONG on this codebase: several log strings contain ` -- ` and lose their closing
-quote to the comment pass.
+nothing checks. `petports_luacheck.py` is still absent. Units at a standing
+point in water dispatched at cliff animals fail "moved 0 in 10s" -- the
+chassis cannot path there, which is `todo.pathing.amphibiousbridge`, now NEXT
+by decision: walkers, flyers and swimmers route long-distance and the
+amphibious chassis is the one that does not, so it goes before
+`todo.pathing.poisonocean`.
 
-**LINE ENDINGS ARE SETTLING AS PREDICTED, WITH ONE STRAGGLER MEASURED.**
-`petports_contract.lua` was the only tracked text file still stored CRLF in the
-object database, which `.gitattributes` normalises on the next `git add` of it --
-no `--renormalize` needed for a file being edited anyway. It also carried a
-single `\r\r\n`, removed.
+**THE PLAYER-FACING NETWORK PANE IS THE NEXT DESIGN, AND IT DECIDES A DEAD
+END.** Delivering to a player is one more `TRACKED_TARGETS` row on the unit
+side and is BLOCKED on the port side: there is no request mechanism, because
+there is no pane yet that shows a player the contents of every network they
+stand in coverage of. That pane's "request from network" button is the whole
+answer to "where does this item belong" -- the player says. Automatic
+cross-crate defragmentation is abandoned in favour of it
+(`dd.cargo.playerdefrag`).
 
-**THE KILL LIST LIVES IN `plan.drawio` NOW, NOT HERE.** Death cargo comes off it
-with this session. Everything else stands: cross-container consolidation,
-currency in restock beacons, filter search bars, sinker platform sliding, sinker
-fishing, the run-animation blink. The chart's whole FINDABLE column is still red
--- 17 modules and 12 species, and no `treasure/`, `dungeons/` or `biomes/`
-directory exists in the repo at all.
+**LINE ENDINGS.** `petports_petport.lua` and `petports_contract.lua` are CRLF
+on disk; `petportsTaskAction.lua` and `petports_coarsenav.lua` are LF. The
+three bare-LF lines once measured inside petport.lua are gone.
+
+**THE KILL LIST LIVES IN `plan.drawio` NOW, NOT HERE.** Cross-crate
+consolidation comes off it with this session (see `dd.cargo.playerdefrag`).
+Everything else stands: currency in restock beacons, filter search bars,
+sinker platform sliding, sinker fishing, the run-animation blink. The chart's
+whole FINDABLE column is still red -- 17 modules and 12 species, and no
+`treasure/`, `dungeons/` or `biomes/` directory exists in the repo at all.
+
+**STAMPS AT SESSION END:** coarsenav 07t, taskAction 07g, petport 07l,
+habitat 07a, contract 06a, flyapproach 06b. Committed 2026-09-06 after the
+verification log.
 
 
 ## ARCHITECTURE
@@ -203,6 +173,53 @@ direct search; and nothing in the survey may be O(store) inside one update
 (10 ms, 4 sweep steps); the store grows with the surveyed surface (7.6 MB on
 a six-port islet after two hours) and is per-profile; the sweep TTL is six
 hours. A network budget for tens of units is not built.
+
+### A task that aims at an entity is one row in one table, and everything that follows reads the row
+`arch.pathing.trackedtarget` -- see also `todo.pathing.movingtarget`, `todo.pathing.arrivedstall`, `todo.pathing.retestrate`, `arch.pathing.standablerank`
+
+**BUILT 2026-09-06 (taskAction 07f/07g, petport 07l), VERIFIED IN GAME ON
+MEDIC, ANIMAL AND FISH.** `TRACKED_TARGETS` in `petportsTaskAction.lua` maps a
+task type to `{ field, noun, reach, moves, goneIsDone }`; `trackedEntity(task)`
+is the only reader. Four things key off it and nothing else does:
+
+- `currentTarget` returns the entity's LIVE position for any row, `task.position`
+  for everything else.
+- `approachTargetFor` re-resolves the standing point when the raw target
+  drifts more than `TARGET_DRIFT` (1.5) from where it was last resolved -- and
+  NOT while a walker is airborne, because a re-resolve mid-jump discards the
+  arc mover's launch record (`fact.pathing.arcmoverthrottle`). Free movers are
+  exempt from the gate.
+- The per-tick coverage check fails a task whose target has `moves` and has
+  left `petports_inNetwork` -- the early give-up that was fish-only.
+- THE CHASE runs before every type branch once `arrived` has latched: target
+  gone -> failed (or left to the type branch if `goneIsDone`); target beyond
+  `reach` -> un-latch `arrived`, clear `groundTarget`, re-aim at most every
+  `CHASE_RETARGET_INTERVAL` (0.5 s), spend the dwell as a budget, and report
+  failed WITH `retry` when it runs out so the port re-dispatches against the
+  current position instead of resting. `CHASE_BUDGET` is 10 s and is the dwell
+  a tracked task gets when the port sends none; fish keep `FISH_DWELL`, also
+  10. The type branches only ever see a target that is present and in reach.
+
+**WHY ONE LAYER.** The medic patient is the worst moving target and the
+handoff said so on 08-30: whoever built animal chasing had to build it where
+the medic path would get it for free, or write it twice. The delivery-to-
+player task will be a fifth row with a noun and a reach and no new branch.
+
+**THE FISH BRANCH WAS THE PROTOTYPE.** It had the live position, the drift
+re-resolve, the coverage exit and the chase, each written for one task type
+and each cited as "unbuilt" by the entries and comments about animals and
+medics. The control log before the lift and the log after read the same for
+fish: identical wording, no new failures.
+
+**MEASURED.** Medic at a target moving ~30 tiles: 19 re-resolves in 4.3 s,
+dosed at 0.64; the previous build walked to a snapshot and accepted anything
+within 5. Fish `arrived` at 30.4 tiles and was un-latched (`UNIT CHASE ... of
+the fish: 30.4227 away (reach 5), re-aim 1`). Every re-resolve re-runs the
+coarse-first test (`todo.pathing.retestrate`).
+
+**WHAT IT DOES NOT DO.** It does not predict; it aims at where the target is
+now. It does not chase across a mode boundary (`todo.pathing.amphibiousbridge`).
+It does not tell the progress watchdog anything (`todo.pathing.arrivedstall`).
 
 ### Restock beacons — BUILT, and the design that survived contact
 `arch.beacon.restock`
@@ -7002,6 +7019,27 @@ target first, one of them after 10.5 tiles of travel. If a duplicate is ever see
 in play, this entry is where to start and `fact.fishing.despawnwindow` has the
 timings.
 
+### The player says where an item belongs, and the network pane is how
+`dd.cargo.playerdefrag` -- see also `arch.pathing.trackedtarget`, `dd.cargo.portowns`, `arch.cargo.valueorder`
+
+**DECIDED 2026-09-06.** Automatic defragmentation across crates -- deciding
+programmatically which of several containers a stack "belongs" in and
+consolidating toward it -- is NOT built and comes off the kill list. It was
+never going to give a sane result for every player build; the misfile and
+compaction generators already cover the cases that have a right answer
+(`arch.cargo.valueorder`).
+
+**WHAT REPLACES IT.** A player standing in coverage of one or more networks
+gets a pane that shows the union of those networks' storage as ONE
+container -- a census readout -- with a "request from network" action per
+item that queues a unit to fetch it and deliver it to the player. Where the
+item ends up is then the player's decision, made by taking it. Not drafted;
+the pane is the design blocker, and the unit side of delivery is one
+`TRACKED_TARGETS` row.
+
+**WHAT IT DOES NOT SUPERSEDE.** `dd.cargo.portowns` (cargo is one trip's
+worth) and the existing single-crate compaction stand.
+
 ## DESIGN INTENT -- PLANNED
 
 ### The drone is always running
@@ -11730,7 +11768,11 @@ that players hit it in practice, or if an upstream fix lands in OpenStarbound
 and the overwrite becomes a patch against something narrower.
 
 ### Animals move, and nothing chases them
-`todo.farming.animalsmove`
+`todo.farming.animalsmove` -- see also `arch.pathing.trackedtarget`
+
+**RESOLVED 2026-09-06 BY `arch.pathing.trackedtarget`.** Fourteen for
+fourteen in the verification log, moths included; the out-of-reach failure
+this entry measured no longer exists as a report.
 
 **TRIAGED 2026-08-30 -- FOLDS INTO `todo.pathing.movingtarget`.** Same root cause at a different altitude: a ground target resolved once against an entity that wanders. The `ANIMAL_REACH` measurement stays here as evidence; the fix belongs there.
 
@@ -12754,7 +12796,17 @@ and the stripe fills `row_180_11.png` / `_alt.png` are generated uniform
 fills, not designed art.
 
 ### The stall watchdog cannot tell "no progress" from "arrived, target moved"
-`todo.pathing.arrivedstall` -- see also `todo.unit.progressdirection`
+`todo.pathing.arrivedstall` -- see also `todo.unit.progressdirection`, `arch.pathing.trackedtarget`
+
+**MEASURED AGAIN 2026-09-06, AND HALF OF IT IS MASKED NOW.** `arrived`
+latched with a fish 30.4 tiles away and the chase in
+`arch.pathing.trackedtarget` un-latched it, so for a tracked target a
+premature arrival costs a re-aim rather than a wasted dispatch. The watchdog
+half stands: two "moved 0 in 10s" failures in the same log were units at a
+water standing point sent at cliff animals, which is a chassis that cannot
+path there (`todo.pathing.amphibiousbridge`), and the watchdog reported it as
+a stall rather than as unreachable. Still the right entry to fix alongside
+`todo.unit.progressdirection`.
 
 **DEFERRED 2026-09-03 -- NOT WORTH ACTING ON AT PRESENT.** The wasted dispatch
 it costs has not become a problem, and `todo.pathing.movingtarget` is itself
@@ -12782,7 +12834,15 @@ re-resolve, never a stall. Cheap to separate and worth doing before it masks a
 real stall.
 
 ### Farm animals move and nothing re-resolves the target
-`todo.pathing.movingtarget` -- see also `todo.pathing.arrivedstall`, `todo.farming.animalsmove`
+`todo.pathing.movingtarget` -- see also `todo.pathing.arrivedstall`, `todo.farming.animalsmove`, `arch.pathing.trackedtarget`
+
+**RESOLVED 2026-09-06 BY `arch.pathing.trackedtarget`.** The layering
+requirement below was honoured: one table, and the medic got it for free. The
+airborne gate is built. What was said here about "no clean solution" was true
+of a periodic replan; a drift-triggered re-resolve plus an on-arrival chase
+turned out to be clean enough to verify on a target moving 30 tiles. Kept for
+the reasoning, which was right, and for the record that this entry read
+"unbuilt" while the fish branch had already built most of it.
 
 **DEFERRED 2026-09-03 -- SHIPS AS IT IS, AND FINE-TUNED LATER IF IT IS EVER
 HIT.** The impact fell out on its own: terrestrial targets move far slower than
@@ -13266,8 +13326,27 @@ Two parts: give the sinker a jump at a fish within reach of a standable
 column; and have dispatch skip a sinker for fish with no column, since
 each attempt is a claim cycle the rest of the network paid for.
 
+### Every drift re-resolve re-runs the coarse-first test
+`todo.pathing.retestrate` -- see also `arch.pathing.trackedtarget`, `arch.pathing.coarsenav`, `arch.pathing.boundedresolvers`
+
+OPENED 2026-09-06. The coarse-first gate keys on `sb.printJson(routeTarget)`,
+so a target that drifts past `TARGET_DRIFT` gets a fresh far/blind test and,
+with it, a `nearestCell` lookup and a `navWaypoint` call: 19 `coarse nav has
+no leg` lines for 19 re-aims on the medic intercept, one of them a 22 ms
+`coarseLeg` call. Harmless at a flyer's rate on a small graph; a walker
+chasing at `CHASE_RETARGET_INTERVAL` would pay it twice a second, and
+`nearestCell` on a free mover is a sight sweep per candidate. Bound it by
+distance (re-test only when the target has moved more than a leg's reach
+from the last tested point) or by time. Measure a walker chase first.
+
 ### Amphibious long-range motion needs the mode boundary as a hop in the route
 `todo.pathing.amphibiousbridge` -- see also `arch.pathing.mediummixed`, `arch.pathing.coarsenav`, `todo.pathing.poisonocean`
+
+**PROMOTED 2026-09-06 -- NEXT, AHEAD OF `todo.pathing.poisonocean`.**
+Long-distance coarse routing is verified for walkers, flyers and swimmers;
+the amphibious chassis is the only one without it, and the two "moved 0 in
+10s" failures in the tracked-target log were exactly that (a unit at a water
+standing point sent at a cliff animal).
 
 OPENED 2026-09-06 (after poisonocean). The amphibious unit surveys two
 disjoint graphs (`|f0|` land, `|f1|` swim; the swim one grew 6k -> 30k

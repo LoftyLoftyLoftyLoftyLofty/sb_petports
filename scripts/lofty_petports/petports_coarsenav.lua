@@ -61,7 +61,7 @@
 --  are unprobeable and time-varying and nobody's fault -- are allowed to
 --  produce optimistic-wrong answers. They fail in the cheap direction.
 
-local COARSENAV_BUILD_STAMP = "2026-09-07s a stall between ticks is logged"
+local COARSENAV_BUILD_STAMP = "2026-09-07t the placeholder graph has no coarse levels and says so"
 
 local navStamped = false
 
@@ -2068,7 +2068,17 @@ local function navCoarseReaches(graph, tiles, fromKey, toKey, budget)
 	if a == nil or b == nil then return nil end
 	if a == b then return true end
 
+	--  NO LEVEL, NO ANSWER, 2026-09-07t. navGraphForInner hands back a
+	--  placeholder `{ fine = {}, coarse = {} }` while a rebuild is in flight
+	--  and no older graph exists -- a fresh unit's first minute -- and that
+	--  placeholder has no level tables. MEASURED 2026-09-06 05:32..05:39:
+	--  twelve sweeps died here on "attempt to index a nil value (local
+	--  'adjacency')", every one on a unit whose graph was still building.
+	--  nil is "unknown", which is what every caller already treats a spent
+	--  budget as; the coarse ladder is a rejection filter only.
 	local adjacency = graph.coarse[tiles]
+	if adjacency == nil then return nil end
+
 	local visited = { [a] = true }
 	local frontier = { a }
 	local expanded = 0
@@ -3002,7 +3012,7 @@ function petports_navLevelReport()
 		local blocks, edges = {}, 0
 		local nodes = 0
 
-		for from, tos in pairs(graph.coarse[tiles]) do
+		for from, tos in pairs(graph.coarse[tiles] or {}) do
 			blocks[from] = true
 			for to in pairs(tos) do
 				blocks[to] = true

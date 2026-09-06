@@ -1435,7 +1435,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-07k a stall between ticks is logged"
+local PETPORT_BUILD_STAMP = "2026-09-07l a medic task carries target, not patient"
 
 --  PORT PROFILER, 2026-09-07b. MEASURED 21:00: six ports on a small islet,
 --  59 port ticks over 30 ms in 39 s totalling 3.7 s, worst 268 ms, while
@@ -2657,12 +2657,12 @@ function init()
 
       if dosed > 0 then
         spendSeed(self.task.item)
-        petports_healRecord(report.patient or self.task.patient, MEDIC_DURATION)
+        petports_healRecord(report.target or self.task.target, MEDIC_DURATION)
         metrics.add("dosed", dosed)
 
         sb.logInfo("PETPORT %s medic finished: patient %s dosed, one %s spent, "
           .. "next dose for them in %ss",
-          stationUniqueId(), sb.printJson(report.patient or self.task.patient),
+          stationUniqueId(), sb.printJson(report.target or self.task.target),
           tostring(self.task.item), sb.printJson(MEDIC_DURATION))
       else
         --  NOT A FAILURE AND NOT SILENT. The trip happened and nothing was
@@ -11978,7 +11978,11 @@ local function medicWork()
           --  THE ENTITY ID TRAVELS, NOT JUST THE POSITION. Arrival re-reads
           --  health from the entity, because a patient who recovered on the
           --  way should not cost a medical good.
-          patient = patient.id,
+          --  `target`, NOT `patient`, 2026-09-07l: the unit's tracked-target
+          --  layer (TRACKED_TARGETS in petportsTaskAction) reads one field
+          --  name for every task that aims at an entity, and the patient is
+          --  the one that moves fastest.
+          target = patient.id,
           patientClass = patient.class,
 
           item = MEDIC_ITEM,

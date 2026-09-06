@@ -178,7 +178,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-07e the object-bounds lookup has a section"
+local BUILD_STAMP = "2026-09-07g a chase logs once when it starts and once per re-aim"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -733,10 +733,10 @@ local WATER_DROP_HEIGHT = 1.0
 local WATER_REACH = 4.0
 
 --  HOW CLOSE COUNTS AS ARRIVED AT A PATIENT. Wider than WATER_REACH because a
---  tile does not move and a patient does -- see todo.pathing.movingtarget, which
---  is unbuilt, so the approach position was resolved once and the patient has
---  been walking ever since. The dose is an AREA burst covering ten tiles, so
---  tolerance here is doing the work a re-resolve would otherwise have to.
+--  tile does not move and a patient does. Since 2026-09-07f the patient is a
+--  TRACKED target (see TRACKED_TARGETS): the approach re-resolves as they walk
+--  and the unit chases on arrival, so this is the burst's radius and not a
+--  tolerance for stale aim any more.
 --
 --  MUST NOT EXCEED THE BURST'S HALF-WIDTH. petports_medicburst uses a +/-40px
 --  poly, five tiles from centre, so a unit that "arrived" further than that
@@ -753,10 +753,19 @@ local MEDIC_REACH = 5.0
 --  Tolerance here is doing the work a re-resolve would otherwise have to.
 local FISH_REACH = 5.0
 
---  HOW OFTEN A UNIT RE-AIMS AT A FISH THAT HAS MOVED OUT OF REACH. Twice a
---  second: fast enough to follow something swimming, slow enough that the pather
---  gets to run a path rather than being re-pointed mid-step.
-local FISH_RETARGET_INTERVAL = 0.5
+--  HOW OFTEN A UNIT RE-AIMS AT A TRACKED TARGET THAT HAS MOVED OUT OF REACH.
+--  Twice a second: fast enough to follow something swimming, slow enough that
+--  the pather gets to run a path rather than being re-pointed mid-step. Was
+--  FISH_RETARGET_INTERVAL until 2026-09-07f; the value is unchanged.
+local CHASE_RETARGET_INTERVAL = 0.5
+
+--  HOW LONG A UNIT CHASES A TRACKED TARGET BEFORE HANDING THE TASK BACK.
+--
+--  Spent as the dwell: a tracked task's dwell is a chase budget rather than a
+--  wait, and the port re-dispatches against the target's CURRENT position when
+--  it runs out (retryable, no backoff). Fish carry their own dwell from the
+--  port (FISH_DWELL, also 10); animal and medic tasks carry none and get this.
+local CHASE_BUDGET = 10.0
 
 --  A TREASURE POOL NAME OUT OF WHATEVER SHAPE THE MONSTERTYPE DECLARED.
 --
@@ -826,6 +835,47 @@ end
 --  which is the measurement worth having before any catch-up behaviour is
 --  designed.
 local ANIMAL_REACH = 6.0
+
+--  TRACKED TARGETS -- THE ONE PLACE THAT KNOWS WHICH TASKS AIM AT AN ENTITY.
+--
+--  A task whose target is a live entity aims at where it IS, not where the
+--  port saw it. Everything that follows from that -- the live position in
+--  currentTarget, the drift re-resolve in approachTargetFor, the coverage
+--  check every tick, the chase on arrival -- reads this table and nothing
+--  else, so a new tracked task (delivering to a player, say) is one row here
+--  and no new branch anywhere. todo.pathing.movingtarget asked for exactly
+--  this layering: the cow fix is the player fix.
+--
+--    field  the task field holding the entity id
+--    noun   how log lines name it
+--    reach  how close counts as arrived; nil means the type does its own
+--           arrival test and is never chased (a crop does not move, a drop
+--           only falls and its dwell is a pickup retry budget)
+--    moves  whether it can leave network coverage under its own power, which
+--           is the only thing the per-tick coverage check gives up on
+--    goneIsDone  a target that vanished is a good outcome, not a failure,
+--           and the type branch reports it (a patient who is gone cost
+--           nothing)
+--
+--  MEDIC USED TO CARRY `patient` AND NOW CARRIES `target`, 2026-09-07f, so
+--  the field column is uniform; the port writes it and reads it back off the
+--  report under the same name.
+local TRACKED_TARGETS = {
+  collect = { field = "target", noun = "drop", reach = nil, moves = false },
+  harvest = { field = "target", noun = "crop", reach = nil, moves = false },
+  trap = { field = "target", noun = "trap", reach = nil, moves = false },
+  animal = { field = "target", noun = "animal", reach = ANIMAL_REACH, moves = true },
+  fish = { field = "target", noun = "fish", reach = FISH_REACH, moves = true },
+  medic = { field = "target", noun = "patient", reach = MEDIC_REACH, moves = true,
+            goneIsDone = true }
+}
+
+--  The tracked entity id for a task, or nil when the task aims at a position.
+local function trackedEntity(task)
+  local row = task ~= nil and TRACKED_TARGETS[task.type] or nil
+  if row == nil then return nil, nil end
+  return task[row.field], row
+end
 
 --  How close the unit has to be before it fires the harvest.
 --
@@ -1263,10 +1313,12 @@ function petportsTaskAction.enterWith(args)
   --  sweep and the unit entering the state.
   --
   --  So: report and clear before refusing.
-  if (task.type == "collect" or task.type == "harvest"
-      or task.type == "animal" or task.type == "fish"
-      or task.type == "trap")
-     and not world.entityExists(task.target) then
+  --  NOT FOR A TARGET WHOSE ABSENCE IS GOOD NEWS (goneIsDone): the medic
+  --  branch reports a vanished patient as done with no dose spent, and a
+  --  failure here would feed the backoff ladder for an outcome nobody minds.
+  local trackedId, trackedRow = trackedEntity(task)
+  if trackedId ~= nil and not trackedRow.goneIsDone
+     and not world.entityExists(trackedId) then
     if task.port then
       world.sendEntityMessage(task.port, "petports_taskReport", {
         id = task.id,
@@ -1298,7 +1350,10 @@ function petportsTaskAction.enterWith(args)
     --  For "diag" this is the dwell; for "collect" and "harvest" it doubles as
     --  the retry budget once the unit has arrived.
     dwellTimer = task.dwell
-      or ((task.type == "harvest") and HARVEST_TIMEOUT or 3.0),
+      or ((task.type == "harvest") and HARVEST_TIMEOUT)
+      or (TRACKED_TARGETS[task.type] ~= nil and TRACKED_TARGETS[task.type].reach ~= nil
+          and CHASE_BUDGET)
+      or 3.0,
     arrived = false,
     searchingTimer = 0,
     settleTimer = 0,
@@ -3368,7 +3423,7 @@ local function report(stateData, outcome, reason, cargo, retry)
       --  the medic branch -- patient gone, patient recovered, patient out of
       --  reach -- costs the player nothing.
       dosed = task.dosed,
-      patient = task.patient,
+      target = task.target,
 
       unit = entity.uniqueId()
     })
@@ -3966,13 +4021,17 @@ local function currentTarget(task)
   --  A FISH MOVES FURTHER AND FASTER THAN ANY OF THE OTHER THREE. A crop does
   --  not move at all, a drop only falls, and an animal wanders inside a pen; a
   --  fish is actively chasing a lure at swimSpeed 3 and darting at biteSpeed 30.
-  if task.type ~= "collect" and task.type ~= "harvest"
-     and task.type ~= "animal" and task.type ~= "fish" then
+  --
+  --  THE LIST IS TRACKED_TARGETS NOW, 2026-09-07f, and medic is on it. The
+  --  patient walked to a dispatch-time snapshot before that, which is the
+  --  worst case of the whole moving-target problem: a wounded player runs.
+  local trackedId = trackedEntity(task)
+  if trackedId == nil then
     return task.position
   end
 
-  if not world.entityExists(task.target) then return nil end
-  return world.entityPosition(task.target)
+  if not world.entityExists(trackedId) then return nil end
+  return world.entityPosition(trackedId)
 end
 
 --  Cached so the resolve runs once per task rather than once per tick.
@@ -4041,7 +4100,14 @@ local function approachTargetFor(stateData, rawPosition)
     stateData.groundTargetFrom = nil
   end
 
-  if stateData.groundTarget ~= nil and stateData.groundTargetFrom ~= nil
+  --  NOT WHILE AIRBORNE, 2026-09-07f. A re-resolve mid-jump discards the
+  --  launch record and nothing steers the descent (fact.pathing.
+  --  arcmoverthrottle); todo.pathing.movingtarget made this gate the one hard
+  --  requirement. A walker keeps its last answer until it lands. Free movers
+  --  are never on the ground and are exempt -- fish chasing was built on them.
+  local grounded = petports_freeMover() or mcontroller.onGround()
+
+  if grounded and stateData.groundTarget ~= nil and stateData.groundTargetFrom ~= nil
      and world.magnitude(rawPosition, stateData.groundTargetFrom) > TARGET_DRIFT then
     stateData.groundTarget = nil
     stateData.groundTargetFrom = nil
@@ -5153,11 +5219,12 @@ local function petportsTaskUpdateInner(dt, stateData)
     return true
   end
 
-  --  A FISH THAT LEAVES THE NETWORK IS NOT WORTH FOLLOWING.
+  --  A TARGET THAT LEAVES THE NETWORK IS NOT WORTH FOLLOWING.
   --
-  --  It is the only target that can move out of coverage under its own power.
-  --  Everything else is a crop, a crate, a machine or a drop -- none of which
-  --  relocate -- and an animal wanders inside a pen rather than out of a base.
+  --  Fish, animals and patients can move out of coverage under their own
+  --  power (TRACKED_TARGETS.moves); a crop, a crate, a machine or a drop
+  --  cannot. Fish-only until 2026-09-07f, and a player being followed is the
+  --  case that made it general.
   --
   --  CHECKED EVERY TICK, NOT AT ARRIVAL. A fish chasing a lure covers ground
   --  fast, and the point of this is to give up EARLY: a unit that follows one
@@ -5166,13 +5233,15 @@ local function petportsTaskUpdateInner(dt, stateData)
   --
   --  petports_inNetwork RETURNS TRUE WHEN THE UNIT HAS NO NETWORK YET, so this
   --  cannot strand a task on a unit that has not been told its rects.
-  if task.type == "fish" and task.target ~= nil
-     and world.entityExists(task.target) then
+  local movingId, movingRow = trackedEntity(task)
+  if movingId ~= nil and movingRow.moves
+     and world.entityExists(movingId) then
 
-    local fishAt = world.entityPosition(task.target)
-    if fishAt ~= nil and not petports_inNetwork(fishAt) then
+    local movingAt = world.entityPosition(movingId)
+    if movingAt ~= nil and not petports_inNetwork(movingAt) then
       report(stateData, "failed",
-        "the fish left network coverage at " .. sb.printJson(fishAt))
+        "the " .. movingRow.noun .. " left network coverage at "
+        .. sb.printJson(movingAt))
       return true
     end
   end
@@ -7080,26 +7149,91 @@ local function petportsTaskUpdateInner(dt, stateData)
     return false
   end
 
-  if task.type == "animal" then
-    if not world.entityExists(task.target) then
-      report(stateData, "failed", "animal was gone on arrival")
-      return true
-    end
+  --  THE CHASE, FOR EVERY TRACKED TARGET WITH A REACH. Lifted out of the fish
+  --  branch 2026-09-07f, where it was written for one task type; the fish
+  --  branch below still runs its own act once this says the fish is in reach.
+  --  Anything that returns here is a chase step or a spent budget; the type
+  --  branches only see a target that is present and within reach.
+  local chasedId, chasedRow = trackedEntity(task)
+  if chasedId ~= nil and chasedRow.reach ~= nil then
+    if not world.entityExists(chasedId) then
+      --  A PATIENT WHO IS GONE COSTS NOTHING AND IS NOT A FAILURE -- the medic
+      --  branch reports done, and does so below; leave that outcome to it.
+      if not chasedRow.goneIsDone then
+        report(stateData, "failed", string.format(
+          "the %s was gone before the unit reached it", chasedRow.noun))
+        return true
+      end
+    else
+      local there = world.entityPosition(chasedId)
+      local gap = there and world.magnitude(mcontroller.position(), there) or nil
 
+      if gap == nil or gap > chasedRow.reach then
+        --  GO AFTER IT AGAIN RATHER THAN WAIT FOR IT TO COME BACK.
+        --
+        --  `arrived` latches once the unit reaches its approach point, and every
+        --  other task can rely on that because their targets stay put. A tracked
+        --  one does not, so a latched `arrived` leaves the unit standing still
+        --  for the whole dwell while the target walks away -- which is what
+        --  "sits in place for a while" was. Measured on a fish: 12.3s from
+        --  dispatch to the miss report, nearly all of it stationary.
+        --
+        --  CLEARING groundTarget IS THE OTHER HALF. approachTargetFor caches its
+        --  answer and returns the cache on every later call, so the live position
+        --  from currentTarget would resolve straight back to the same stale
+        --  standing spot without this.
+        --
+        --  RATE LIMITED, because re-resolving a standing position and re-aiming
+        --  the pather every tick is expensive and gives a unit that twitches
+        --  rather than moves. Twice a second tracks a fish and still lets a path
+        --  run.
+        --
+        --  THE DWELL IS A CHASE BUDGET rather than a wait. It still bounds the
+        --  whole attempt; it simply is not spent standing still any more.
+        stateData.chaseRetarget = (stateData.chaseRetarget or 0) - dt
+
+        if stateData.chaseRetarget <= 0 then
+          --  ONE LINE PER RE-AIM, 2026-09-07g. The 07f log had 14 animal and
+          --  4 medic tasks all succeed and no way to tell whether the chase
+          --  had run once or never; the whole feature was invisible. Twice a
+          --  second at most, and only while out of reach, so it cannot flood.
+          stateData.chaseCount = (stateData.chaseCount or 0) + 1
+          sb.logInfo("UNIT CHASE %s of the %s: %s away (reach %s), re-aim %s, "
+            .. "budget %s s left, unit at %s %s at %s",
+            sb.printJson(chasedId), chasedRow.noun, sb.printJson(gap or "unknown"),
+            sb.printJson(chasedRow.reach), sb.printJson(stateData.chaseCount),
+            sb.printJson(stateData.dwellTimer), sb.printJson(mcontroller.position()),
+            chasedRow.noun, sb.printJson(there))
+
+          stateData.chaseRetarget = CHASE_RETARGET_INTERVAL
+          stateData.arrived = false
+          stateData.groundTarget = nil
+          stateData.approachTimer = APPROACH_TIMEOUT
+        end
+
+        stateData.dwellTimer = stateData.dwellTimer - dt
+        if stateData.dwellTimer <= 0 then
+          --  RETRYABLE. The unit reached the target's last known position and
+          --  the target had left it -- which is what a fish chasing a lure, an
+          --  animal in a pen or a player does, and is not evidence that
+          --  anything is wrong. The port re-dispatches against the CURRENT
+          --  position rather than resting on a stale one.
+          report(stateData, "failed", string.format(
+            "arrived but the %s is %s away (reach %s) -- it kept moving",
+            chasedRow.noun, sb.printJson(gap or "unknown"),
+            sb.printJson(chasedRow.reach)), nil, true)
+          return true
+        end
+        return false
+      end
+    end
+  end
+
+  if task.type == "animal" then
+    --  PRESENT AND IN REACH, or the chase above would have returned.
     local here = mcontroller.position()
     local there = world.entityPosition(task.target)
     local reach = world.magnitude(here, there)
-
-    --  NOTHING CHASES. If the animal walked further than ANIMAL_REACH during
-    --  the approach, this fails and says by how much -- which is the number
-    --  that decides whether catch-up behaviour is worth building.
-    if reach > ANIMAL_REACH then
-      report(stateData, "failed", string.format(
-        "animal %s moved out of reach: %s away (limit %s), unit at %s animal at %s",
-        sb.printJson(task.target), sb.printJson(reach),
-        sb.printJson(ANIMAL_REACH), sb.printJson(here), sb.printJson(there)))
-      return true
-    end
 
     --  THE TYPE IS CHECKED ON THIS SIDE TOO, and not as belt-and-braces: both
     --  calls below run inside the ANIMAL's script, where a throw kills the
@@ -7273,9 +7407,9 @@ local function petportsTaskUpdateInner(dt, stateData)
     --  or by simply having been at 99% when the port looked. Spending a medical
     --  good on someone who recovered while the unit walked is the one waste this
     --  task can actually prevent, so it checks twice.
-    if task.patient == nil or not world.entityExists(task.patient) then
+    if task.target == nil or not world.entityExists(task.target) then
       report(stateData, "done", string.format(
-        "patient %s is gone -- no dose spent", sb.printJson(task.patient)))
+        "patient %s is gone -- no dose spent", sb.printJson(task.target)))
       return true
     end
 
@@ -7283,34 +7417,27 @@ local function petportsTaskUpdateInner(dt, stateData)
     --  ladder and would penalise this port for an outcome that is GOOD: someone
     --  got better. The distinction matters because the ladder is what protects
     --  the network from a target it genuinely cannot service.
-    local health = world.entityHealth(task.patient)
+    local health = world.entityHealth(task.target)
 
     if type(health) ~= "table" or health[2] == nil or health[2] <= 0 then
       report(stateData, "done", string.format(
-        "patient %s reports no health -- no dose spent", sb.printJson(task.patient)))
+        "patient %s reports no health -- no dose spent", sb.printJson(task.target)))
       return true
     end
 
     if health[1] >= health[2] then
       report(stateData, "done", string.format(
         "patient %s recovered on the way (%s/%s) -- no dose spent",
-        sb.printJson(task.patient), tostring(health[1]), tostring(health[2])))
+        sb.printJson(task.target), tostring(health[1]), tostring(health[2])))
       return true
     end
 
+    --  IN REACH, or the chase above would have returned. The out-of-reach
+    --  failure that lived here until 2026-09-07f ("likely moved while
+    --  walking") is the chase's spent-budget report now.
     local here = mcontroller.position()
-    local there = world.entityPosition(task.patient)
+    local there = world.entityPosition(task.target)
     local gap = world.magnitude(here, there)
-
-    --  FAILED, NOT DONE, WHEN OUT OF REACH -- this one IS a failure, because the
-    --  patient is still hurt and nothing was delivered. The backoff ladder
-    --  should see it, and re-dispatch is the correct response.
-    if gap > MEDIC_REACH then
-      report(stateData, "failed", string.format(
-        "arrived but patient %s is %s away (reach %s) -- likely moved while walking",
-        sb.printJson(task.patient), sb.printJson(gap), sb.printJson(MEDIC_REACH)))
-      return true
-    end
 
     --  CAST AT THE PATIENT, NOT AT THE UNIT. The burst is an area, but centring
     --  it on the patient is what makes MEDIC_REACH and the poly half-width
@@ -7322,12 +7449,12 @@ local function petportsTaskUpdateInner(dt, stateData)
     if not ok then
       report(stateData, "failed", string.format(
         "spawnProjectile failed at patient %s: %s",
-        sb.printJson(task.patient), tostring(err)))
+        sb.printJson(task.target), tostring(err)))
       return true
     end
 
     sb.logInfo("UNIT medic DOSE patient %s (%s) at %s: health %s/%s, gap %s, effect %s for %ss",
-      sb.printJson(task.patient), tostring(task.patientClass), sb.printJson(there),
+      sb.printJson(task.target), tostring(task.patientClass), sb.printJson(there),
       tostring(health[1]), tostring(health[2]), sb.printJson(gap),
       tostring(task.effect), tostring(task.duration))
 
@@ -7340,7 +7467,7 @@ local function petportsTaskUpdateInner(dt, stateData)
     task.dosed = 1
 
     report(stateData, "done", string.format(
-      "dosed patient %s at %s/%s health", sb.printJson(task.patient),
+      "dosed patient %s at %s/%s health", sb.printJson(task.target),
       tostring(health[1]), tostring(health[2])))
     return true
   end
@@ -7630,60 +7757,10 @@ local function petportsTaskUpdateInner(dt, stateData)
   end
 
   if task.type == "fish" then
-    --  THE FISH MOVES, SO ARRIVAL IS A RANGE CHECK RATHER THAN A POSITION.
-    if not world.entityExists(task.target) then
-      report(stateData, "failed",
-        "the fish was gone before the unit reached it")
-      return true
-    end
-
+    --  THE FISH MOVES, SO ARRIVAL IS A RANGE CHECK RATHER THAN A POSITION --
+    --  and that check is the shared chase above since 2026-09-07f, which was
+    --  written here first for this one task type. Present and in reach here.
     local there = world.entityPosition(task.target)
-    local gap = there and world.magnitude(mcontroller.position(), there) or nil
-
-    if gap == nil or gap > FISH_REACH then
-      --  GO AFTER IT AGAIN RATHER THAN WAIT FOR IT TO COME BACK.
-      --
-      --  `arrived` latches once the unit reaches its approach point, and every
-      --  other task can rely on that because their targets stay put. A fish does
-      --  not, so a latched `arrived` leaves the unit standing still for the whole
-      --  dwell while the fish swims away -- which is what "sits in place for a
-      --  while" was. Measured: 12.3s from dispatch to the miss report, nearly
-      --  all of it stationary.
-      --
-      --  CLEARING groundTarget IS THE OTHER HALF. approachTargetFor caches its
-      --  answer and returns the cache on every later call, so the live position
-      --  from currentTarget would resolve straight back to the same stale
-      --  standing spot without this.
-      --
-      --  RATE LIMITED, because re-resolving a standing position and re-aiming
-      --  the pather every tick is expensive and gives a unit that twitches
-      --  rather than swims. Twice a second tracks a fish and still lets a path
-      --  run.
-      --
-      --  THE DWELL IS NOW A CHASE BUDGET rather than a wait. It still bounds the
-      --  whole attempt; it simply is not spent standing still any more.
-      stateData.fishRetarget = (stateData.fishRetarget or 0) - dt
-
-      if stateData.fishRetarget <= 0 then
-        stateData.fishRetarget = FISH_RETARGET_INTERVAL
-        stateData.arrived = false
-        stateData.groundTarget = nil
-        stateData.approachTimer = APPROACH_TIMEOUT
-      end
-
-      stateData.dwellTimer = stateData.dwellTimer - dt
-      if stateData.dwellTimer <= 0 then
-        --  RETRYABLE. The unit reached the fish's last known position and the
-        --  fish had left it -- which is what a fish chasing a lure does, and is
-        --  not evidence that anything is wrong. The port re-dispatches against
-        --  the fish's CURRENT position rather than resting on a stale one.
-        report(stateData, "failed", string.format(
-          "arrived but the fish is %s away (reach %s) -- it kept moving",
-          sb.printJson(gap or "unknown"), sb.printJson(FISH_REACH)), nil, true)
-        return true
-      end
-      return false
-    end
 
     --  THE LOOT IS ROLLED HERE, NOT DROPPED BY THE FISH.
     --

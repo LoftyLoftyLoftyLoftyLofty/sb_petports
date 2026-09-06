@@ -1,4 +1,4 @@
-# COARSE NAV -- SESSION HANDOFF (as of coarsenav 07s / taskAction 07e / petport 07k / habitat 07a)
+# COARSE NAV -- SESSION HANDOFF (as of coarsenav 07t / taskAction 07g / petport 07l / habitat 07a)
 
 Read this before proposing anything. MEASURED means read out of a
 starbound.log or an engine `.luaprofile`; FACT means read out of retail 1.4.4
@@ -7,12 +7,19 @@ OpenStarbound or fork binding. The OpenStarbound repo's first commit is
 unmodified retail source and may be READ for facts (StarLuaRoot.cpp was).
 
 Builds in play:
-`petports_coarsenav.lua` **2026-09-07s**, `petportsTaskAction.lua`
-**2026-09-07e**, `petports_flyapproach.lua` **2026-09-06b**,
-`petports_contract.lua` **2026-09-06a**, `petports_petport.lua` **2026-09-07k**,
+`petports_coarsenav.lua` **2026-09-07t**, `petportsTaskAction.lua`
+**2026-09-07g**, `petports_flyapproach.lua` **2026-09-06b**,
+`petports_contract.lua` **2026-09-06a**, `petports_petport.lua` **2026-09-07l**,
 `petports_habitat.lua` **2026-09-07a** (its first stamp), `petports_work.lua`
-(claims memo, unstamped). ALL UNCOMMITTED as of 2026-09-06; see the third
-pass below for what each one was measured against.
+(claims memo, unstamped). Committed 2026-09-06 after the tracked-target
+verification log; see the third pass below for what each one was measured
+against.
+**2026-09-06, AFTER THE THIRD PASS: THE FIRST FEATURE ON TOP OF IT.** Moving
+targets are tracked at one layer (`arch.pathing.trackedtarget` in V2;
+taskAction 07f/07g, petport 07l). Nav-relevant residue: coarsenav 07t
+(below), and every drift re-resolve re-runs the coarse-first test
+(`todo.pathing.retestrate`) -- 19 `coarse nav has no leg` lines for a 19
+re-aim medic intercept, one `coarseLeg` at 22 ms.
 **SOAK TEST, 2026-09-05 22:21 -> 00:25 (2 h, 1.2 M lines), on these builds:**
 zero LuaInstructionLimitReached; 14 unit ticks over 200 ms in two hours
 (one of 1,689 ms at 22:23:09, in the task action OUTSIDE navTick --
@@ -256,6 +263,7 @@ whole pass is a hunt for calls over 16.7 ms.
 | coarsenav 07s, petport 07k | a 0.5 s gap no section owned | STALL detector on both entity kinds; `neighbours` section closed across the yield (it had reported 2750 ms of wall time) | first STALL log: one 1.4 s stall WITH an owner, two without |
 | habitat 07a, taskAction 07e | `approachTarget 1273` with `standable 6`: `pcall(world.objectSpaces, "2498,1163")` on a replant target | refuse non-numeric ids, log once per target; `objectBounds` section | `HABITAT objectPoints ... refusing` x2, no stall after |
 | (no change) | all-entity stalls every 30.3 s, no owner, present ports-only | control: patch `universe_server.config:worldStorageInterval` 30000 -> 45000 | cadence 45.25 / 90.48 s: engine, not ours |
+| coarsenav 07t | 12 `NAV sweep of ... FAILED: attempt to index a nil value (local 'adjacency')`, all on units whose first graph build was in flight | `navCoarseReaches` returns nil (unknown) when the placeholder graph `{ fine = {}, coarse = {} }` has no level table; self-test loop gets `or {}` | zero FAILED in the next two logs |
 
 **READ THE STALL LINES THIS WAY** (`arch.tooling.stalldetector`): same
 `clock` on every entity = one frame; the entity with the long `tick max` or
@@ -302,13 +310,15 @@ is deep enough. Rares have shallow variants, which is why they appear.
 
 ## OPEN, NOT SCHEDULED
 
-- **Poison inside the ocean** (`todo.pathing.poisonocean`) -- NEXT, before
-  amphibious. `petports_bodyFitsAlong` does not check medium mid-segment and
+- **Poison inside the ocean** (`todo.pathing.poisonocean`) -- after
+  amphibious, by decision 2026-09-06. `petports_bodyFitsAlong` does not check medium mid-segment and
   the string-pull's line test is a solid test; both gate on a non-empty
   `|l<x>|` deny list so `|l|` units pay nothing. Swimmer in open water is
   otherwise verified by the 07b soak (no rim seen).
-- **Amphibious** (`todo.pathing.amphibiousbridge`) -- the mode boundary as a
-  hop in the route: dive pair as a bridging edge f0 -> f1, exit as the
+- **Amphibious** (`todo.pathing.amphibiousbridge`) -- NEXT, 2026-09-06:
+  walkers, flyers and swimmers route long-distance; this chassis does not,
+  and two "moved 0 in 10s" failures in the tracked-target log were it. The
+  mode boundary as a hop in the route: dive pair as a bridging edge f0 -> f1, exit as the
   reverse. Two disjoint graphs today; 4,807 `no leg` lines in the soak.
 - **openDoors** -- profile carries the flag; drop `Dynamic` from the three
   solid sets for openers; engine-side pathOptions name for doors unread.
