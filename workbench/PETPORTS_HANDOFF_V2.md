@@ -59,6 +59,14 @@ here disagrees with anything below, this is right and that is stale.
 ONE FEATURE, FOUR DEFECTS, AND THREE OF THE FOUR WERE THE SAME MISTAKE WEARING
 DIFFERENT CLOTHES. Everything here is verified in game.
 
+**2026-09-05/06 ADDENDUM, NOT A REWRITE: COARSE NAV IS BUILT AND WORKS.** Walkers
+and flyers route across the base by leg chains over a surveyed cell graph
+(`arch.pathing.coarsenav`); the long-network starvation in
+`todo.dispatch.reachbudget` is resolved by it. Two performance passes followed
+and are measured (`fact.tooling.luaprofile`, `proc.tooling.profilefirst`).
+The living detail is `COARSENAV_SESSION_HANDOFF.md`; this doc holds the
+entries that outlive it.
+
 ---
 
 **UNITS THAT DIE SPILL THE PORT'S LOAD WHERE THEY FELL.** `arch.unit.death`. The
@@ -141,6 +149,43 @@ directory exists in the repo at all.
 
 
 ## ARCHITECTURE
+
+### Coarse navigation — a surveyed cell graph that walkers and flyers route over
+`arch.pathing.coarsenav` -- see also `todo.dispatch.reachbudget`, `fact.pathing.updaterate`, `fact.pathing.maxdistance`, `proc.tooling.profilefirst`
+
+**BUILT 2026-09-04..06, IN GAME, AND SOAKED FOR TWO HOURS.** Retail 1.4.4 only.
+The full shape, every constant, every measured fact and the open list live in
+`workbench/COARSENAV_SESSION_HANDOFF.md`, which is rewritten at feature
+boundaries; this entry is the part that will still be true in a month.
+
+**THE PROBLEM IT SOLVES.** The engine's A* is starved on long routes (see
+`todo.dispatch.reachbudget`): the unit script updates 12 times a second
+(`fact.pathing.updaterate`), so `SEARCH_LIMIT` seconds of a direct search is
+a few tens of thousands of nodes, and a route across a base needs more.
+
+**THE SHAPE.** Idle or on-task units SURVEY: each 2x2 window at a 1-tile stride
+is a cell; a cell has at most one ANCHOR (a standing point for walkers; the
+window centre, near a surface, for free movers); pairs of anchored cells within
+a radius are PROBED (a capped A* for walkers, a body sweep for free movers)
+and the verdicts stored per cell as world properties, one index per chassis
+profile. Routing is a BFS over true edges; a LEG is the farthest path cell
+within reach (walkers) or the farthest VISIBLE one (free movers, string-pull),
+walked by the ordinary pather with the probe's own distance cap and a larger
+explore budget, then CHAINED from the cell just reached. A leg that will not
+walk is re-probed and, if the probe disagrees with the walk, contradicted.
+Coarse legs are asked for FIRST when the target is far or out of sight.
+
+**WHAT MADE IT WORK, IN ORDER OF HOW WRONG THE PREVIOUS BELIEF WAS:** the
+walk and the probe must use the same `maxDistance`; the walk gets fewer
+explores than the probe because of the update rate; `maxDistance` is not path
+length (`fact.pathing.maxdistance`); a leg must chain, not hand back to the
+direct search; and nothing in the survey may be O(store) inside one update
+(`fact.tooling.luaprofile`). All measured.
+
+**COSTS THAT ARE ACCEPTED.** Survey work is background and capped per update
+(10 ms, 4 sweep steps); the store grows with the surveyed surface (7.6 MB on
+a six-port islet after two hours) and is per-profile; the sweep TTL is six
+hours. A network budget for tens of units is not built.
 
 ### Restock beacons — BUILT, and the design that survived contact
 `arch.beacon.restock`
@@ -7090,6 +7135,49 @@ missing.
 
 ## ENGINE FACTS
 
+### The unit script updates twelve times a second
+`fact.pathing.updaterate` -- see also `arch.pathing.coarsenav`
+
+**COUNTED 2026-09-05** by wrapping `PathFinder.exploreRate`, which the engine
+consults once per explore: twelve calls a second, one stable `aStar` for the
+whole search. So every per-tick budget in this mod is per twelfth of a
+second, and "six seconds of search" is 72 explores, not 360. This is why a
+probe (unbounded in ticks) could prove an edge in 88 explores that the walk
+(`SEARCH_LIMIT` 6.0) never found: 72 < 88.
+
+### `maxDistance` bounds wander from the start, not path length
+`fact.pathing.maxdistance` -- see also `arch.pathing.coarsenav`
+
+**MEASURED 2026-09-05:** a probe under `maxDistance 32` proved a pair five
+tiles apart with a 166-edge path (west along a deck, down a ladder, back east
+underneath). The cap is how far the search may wander from its start; the
+route can be any length inside that box. Every comment that said "within 32
+tiles of path" was wrong. A true verdict now also requires the solved path to
+be at most `3 x distance + 8` edges.
+
+### The engine's own script profiler, the instruction cap, and what the sandbox exposes
+`fact.tooling.luaprofile` -- see also `proc.tooling.profilefirst`
+
+**READ FROM RETAIL `StarLuaRoot.cpp` (OpenStarbound's first, unmodified
+commit) AND CONFIRMED IN GAME 2026-09-05.**
+
+- `"scriptProfilingEnabled" : true` in `storage/starbound.config` (the root
+  config, NOT a patchable asset; per-user, never a release setting) makes
+  every Lua root write `storage/lua/<time>.luaprofile` on a clean quit: one
+  file each for the world server, the client and item builds, JSON sorted
+  by total, with `function`, `source:line`, `self`, `total` and nested
+  `calls`. It attributes time across every mod; ours sits under
+  `/monsters/pets/groundPet.lua:78`.
+- `scriptInstructionLimit` caps the Lua instructions ONE call may execute.
+  Exceeding it throws `LuaInstructionLimitReached` out of `Monster::update`,
+  aborts the update, and the unit snaps to its anchor -- the "random
+  teleport home". Nothing in a script may be O(store) in one call.
+- The collector is engine-owned: `tuneAutoGarbageCollection(luaGcPause,
+  luaGcStepMultiplier)`, both 1.2 in `client.config` and `worldserver.config`.
+- The sandbox exposes `os.clock` (measured) and does NOT expose
+  `collectgarbage` (measured). `setmetatable` and `pcall` are available;
+  `pcall` around an engine call is a rounding error on the call.
+
 ### The 19px grid is chest slot shadowing, not a pane constraint
 `fact.art.chestslotshadow`
 
@@ -12194,7 +12282,12 @@ has a matching function in the Lua -- plausible as a third failure mode, not
 observed, so not asserted.
 
 ### Coverage is the dispatch radius, and a large network outruns the pathfinder
-`todo.dispatch.reachbudget` -- see also `todo.dispatch.sourcebackoff`, `arch.dispatch.eligibility`, `arch.port.coverage`
+`todo.dispatch.reachbudget` -- see also `todo.dispatch.sourcebackoff`, `arch.dispatch.eligibility`, `arch.port.coverage`, `arch.pathing.coarsenav`
+
+**RESOLVED 2026-09-05 BY `arch.pathing.coarsenav`.** The starvation described
+below is exactly what coarse navigation removes: a route across the network is
+a chain of short, pre-proven legs instead of one starved search. Kept here for
+the measurements and the diagnosis, which were right.
 
 **FILED 2026-09-01, WITH MEASUREMENTS, AND DELIBERATELY NOT FOUGHT THAT NIGHT.**
 It is a design question with several defensible answers and no cheap one.
@@ -12885,6 +12978,18 @@ entirely -- the same reachability argument that killed the distance veto in
 `arch.fishing.network`. Not a 1.0 change.
 
 ## PROCESS
+
+### Profile before proposing; the log before the fix
+`proc.tooling.profilefirst` -- see also `fact.tooling.luaprofile`
+
+**TWO DAYS OF PERFORMANCE WORK, 2026-09-05/06, AND EVERY FIX CAME FROM A
+NUMBER.** Every guess made before the number was wrong -- including "the
+garbage collector", twice, which an instruction-limit error falsified. The
+order that worked: (1) our own `PROFILE` line (sections, survey counters,
+world-call counts, `os.clock`) on the unit and `PETPORT profile` on the port,
+(2) the engine's `.luaprofile` when a section's total did not add up to its
+parts, (3) a control test that removes the mod entirely before blaming it.
+When the doc says a cost is where it is, that is where a line said it was.
 
 ### A correction filed against a decision does not correct the decision
 `proc.pathing.supersede`

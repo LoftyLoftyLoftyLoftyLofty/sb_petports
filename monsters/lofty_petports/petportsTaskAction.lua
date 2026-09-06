@@ -136,6 +136,13 @@ local ARRIVAL_DISTANCE = 1.5
 --  Per-second approach tracing. Noisy; off once reachability is understood.
 local TASK_DEBUG = true
 
+--  PER-TICK MOVE SAMPLES (UNIT pre-move / post-move) ARE OPT-IN, 2026-09-07a.
+--  One line each per tick of every held path: ~20 lines a second per moving
+--  unit, which was most of a multi-hour log by volume. The per-second
+--  tracing under TASK_DEBUG stays; these two are for reading one specific
+--  stall and are off until someone needs them.
+local TASK_TRACE_MOVES = false
+
 --  PER-TICK FLIGHT TRACE. See flightTrace. OFF FOR RELEASE -- it is one line per
 --  tick of every flight, which is the densest logging in this mod and is meant
 --  to be switched on for a specific question and switched off again.
@@ -171,7 +178,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-06d the update is profiled"
+local BUILD_STAMP = "2026-09-07a the per-tick move samples are opt-in"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -5337,7 +5344,7 @@ local function petportsTaskUpdateInner(dt, stateData)
   --  that position at all. The two lines together bracket the mover, so a value
   --  can be attributed to the tick that actually used it.
   local preFinder = self.pather and self.pather.finder
-  if preFinder ~= nil and preFinder.hasPath then
+  if TASK_TRACE_MOVES and preFinder ~= nil and preFinder.hasPath then
     local preEdge = preFinder.edges and preFinder.currentEdgeIndex
       and preFinder.edges[preFinder.currentEdgeIndex]
     local preSource = preEdge and preEdge.source and preEdge.source.position
@@ -6802,7 +6809,7 @@ local function petportsTaskUpdateInner(dt, stateData)
     --  Every tick WHILE a path is held, so the tick before a loss is on record
     --  rather than inferred. This is the noisiest line in the mod -- it is here
     --  for the jump diagnosis and should come out once that is settled.
-    if hasPath then
+    if TASK_TRACE_MOVES and hasPath then
       local edge = finder.edges and finder.currentEdgeIndex
         and finder.edges[finder.currentEdgeIndex]
 

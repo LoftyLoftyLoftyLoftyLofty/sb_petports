@@ -721,7 +721,12 @@ PET_NAME_MAX = 24
 CLAIM_TTL = 30.0
 
 --  How often to look for work and to push claim expiry out.
-WORK_INTERVAL = 1.0
+--  1.0 -> 2.0, 2026-09-07c. PROFILED: six ports on a small islet spent
+--  ~10% of the world thread in their own ticks, dispatchWork 30 ms a call.
+--  A fresh drop no longer waits for this beat -- crosshairRefresh wakes
+--  dispatch the moment it sees a new one -- so the beat only paces the
+--  slow-moving generators (containers, crops, animals, patients).
+WORK_INTERVAL = 2.0
 
 --  How often to re-state an unchanged dispatch rejection.
 REJECT_REPEAT = 30.0
@@ -1430,7 +1435,78 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-07a a slow port tick is logged with its cost"
+local PETPORT_BUILD_STAMP = "2026-09-07g a service point is remembered for thirty seconds"
+
+--  PORT PROFILER, 2026-09-07b. MEASURED 21:00: six ports on a small islet,
+--  59 port ticks over 30 ms in 39 s totalling 3.7 s, worst 268 ms, while
+--  the units' own updates were flat. The unit-side profiler cannot see this
+--  script, so this is the same idea in miniature: phases are timed with
+--  os.clock and a "PETPORT profile" line every PORT_PROF_INTERVAL seconds
+--  gives calls / total ms / worst ms per phase. Off by setting
+--  PETPORT_PROFILE false; the wrappers then cost a function call.
+PETPORT_PROFILE = true
+
+local PORT_PROF_INTERVAL = 10.0
+local portProfPhases = {}
+local portProfAt = nil
+
+local function portClock()
+  if type(os) == "table" and type(os.clock) == "function" then
+    local ok, t = pcall(os.clock)
+    if ok and type(t) == "number" then return t end
+  end
+  return nil
+end
+
+local function portProf(name, fn, ...)
+  if not PETPORT_PROFILE then return fn(...) end
+
+  local began = portClock()
+  local a, b, c = fn(...)
+  local now = portClock()
+
+  local phase = portProfPhases[name]
+  if phase == nil then
+    phase = { calls = 0, ms = 0, max = 0 }
+    portProfPhases[name] = phase
+  end
+
+  phase.calls = phase.calls + 1
+
+  if began ~= nil and now ~= nil then
+    local ms = (now - began) * 1000
+    phase.ms = phase.ms + ms
+    if ms > phase.max then phase.max = ms end
+  end
+
+  return a, b, c
+end
+
+local function portProfReport()
+  if not PETPORT_PROFILE then return end
+
+  local t = world.time()
+  portProfAt = portProfAt or (t + PORT_PROF_INTERVAL)
+  if t < portProfAt then return end
+  portProfAt = t + PORT_PROF_INTERVAL
+
+  local parts = {}
+  for name, phase in pairs(portProfPhases) do
+    if phase.ms >= 1 then
+      table.insert(parts, string.format("%s n=%s ms=%s max=%s", name,
+        tostring(phase.calls),
+        tostring(math.floor(phase.ms + 0.5)),
+        tostring(math.floor(phase.max + 0.5))))
+    end
+  end
+  table.sort(parts)
+
+  sb.logInfo("PETPORT profile %s (%ss): %s", stationUniqueId(),
+    tostring(PORT_PROF_INTERVAL),
+    #parts > 0 and table.concat(parts, " | ") or "nothing over 1 ms")
+
+  portProfPhases = {}
+end
 
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -2292,7 +2368,12 @@ function init()
     return true
   end))
 
-  self.workTimer = 0
+  --  STAGGERED, 2026-09-07c. Every port on a base started its beats at
+  --  load and scanned the same network on the same tick. A random phase
+  --  spreads six ports across the beat instead of stacking them.
+  self.workTimer = math.random() * WORK_INTERVAL
+  self.crosshairTimer = math.random() * CROSSHAIR_INTERVAL
+  self.paneTimer = math.random() * PANE_MIRROR_INTERVAL
   self.task = nil
 
   --  The pane write this port last ACTED ON, accepted or refused. Echoed in the
@@ -3511,6 +3592,7 @@ local function refreshBeacons(dt)
   local found, containers, census, censusStacks, machines = scanContainers()
 
   self.beacons = found
+  self.beaconVersion = (self.beaconVersion or 0) + 1
   self.census = census
   self.machines = machines
 
@@ -4961,19 +5043,18 @@ function mirrorPaneState(dt)
   --
   --  Reading the container costs one call per mirror write and cannot lag,
   --  because it is the same thing the player just changed.
-  local socketed = socketedItem() ~= nil
-
-  --  A CHANGE HERE BYPASSES THE TIMER. Waiting out the remaining fraction of an
-  --  interval would leave the window open for exactly as long as this is meant
-  --  to close it.
-  if socketed ~= self.paneSocketed then
-    self.paneSocketed = socketed
-    self.paneTimer = 0
-  end
-
+  --  NOT POLLED EVERY TICK ANY MORE, 2026-09-07c. The container read that
+  --  closed the duplication window ran every tick; it now runs on the
+  --  interval, and the window stays closed because containerCallback()
+  --  (the engine's hook for a change in this object's container) zeroes
+  --  the timer synchronously with the change -- the same tick the item
+  --  leaves, before any pane click can land.
   self.paneTimer = (self.paneTimer or 0) - (dt or 0)
   if self.paneTimer > 0 then return end
   self.paneTimer = PANE_MIRROR_INTERVAL
+
+  local socketed = portProf("pane.socketed", socketedItem) ~= nil
+  self.paneSocketed = socketed
 
   --  A PORT-LEVEL FIELD, SO IT IS ON BOTH BRANCHES. The enabled checkbox sits
   --  above the divider and means something whether or not anything is socketed
@@ -5113,7 +5194,15 @@ function mirrorPaneState(dt)
   if ok and signature == self.paneSignature then return end
   if ok then self.paneSignature = signature end
 
-  object.setConfigParameter(PANE_STATE_KEY, state)
+  --  WRITTEN ONLY WHEN IT CHANGED, 2026-09-07c. The write is what syncs to
+  --  every client; an unchanged blob every half second was churn for
+  --  nothing (mirrorPaneState was 1.9 s of a 128 s port profile).
+  local okJ, blob = portProf("pane.json", pcall, sb.printJson, state)
+
+  if okJ and blob == self.paneLastBlob then return end
+  if okJ then self.paneLastBlob = blob end
+
+  portProf("pane.write", object.setConfigParameter, PANE_STATE_KEY, state)
 end
 
 --------------------------------------------------------------------------------
@@ -5697,7 +5786,7 @@ local function standingPointForTarget(position, entityId, radius, mediumVerified
   return nil
 end
 
-local function servicePointNear(label, entityId, position, radius)
+local function servicePointNearUncached(label, entityId, position, radius)
   local suits, why = targetSuits(position, entityId)
 
   if not suits then
@@ -5728,6 +5817,37 @@ local function servicePointNear(label, entityId, position, radius)
   end
 
   return stand
+end
+
+--  REMEMBERED PER OBJECT AND PER SOCKETED UNIT, 2026-09-07g. PROFILED 22:01:
+--  findWork's cost was spread across twenty-two generators, and what the
+--  heavy ones share is this -- a standable-spot search around every machine
+--  and crate a generator looks at, re-derived every beat, by every
+--  generator, by every port, for objects that do not move (the "standable
+--  candidate" lines were a sixth of the log). A found spot is good for
+--  SERVICE_POINT_TTL; a refusal is retried sooner, since terrain around a
+--  crate does get built. The key carries the socketed unit's seed because
+--  the suitability test inside depends on which unit is asking.
+SERVICE_POINT_TTL = 30.0
+SERVICE_POINT_RETRY = 5.0
+
+local function servicePointNear(label, entityId, position, radius)
+  self.servicePoints = self.servicePoints or {}
+
+  local key = tostring(entityId) .. "|" .. tostring(radius or 4) .. "|"
+    .. tostring(self.petData and self.petData.seed)
+  local held = self.servicePoints[key]
+  local now = world.time()
+
+  if held ~= nil then
+    local ttl = held.stand ~= nil and SERVICE_POINT_TTL or SERVICE_POINT_RETRY
+    if (now - held.at) < ttl then return held.stand, held.why end
+  end
+
+  local stand, why = servicePointNearUncached(label, entityId, position, radius)
+  self.servicePoints[key] = { at = now, stand = stand, why = why }
+
+  return stand, why
 end
 
 local function findStandingPoint(rect)
@@ -13370,7 +13490,7 @@ local function findWork()
   --
   --  UNGATED, AND IT MUST STAY UNGATED. This is the leash. A unit that cannot
   --  be recalled wanders out of coverage and stays there.
-  local recall = returnWork()
+  local recall = portProf("g.return", returnWork)
   if dispatchable(recall) ~= nil then return recall end
 
   --  FOOD SITS DIRECTLY UNDER RECALL, AND ABOVE THE FUEL GATE. THAT ORDER IS
@@ -13389,10 +13509,10 @@ local function findWork()
   --  THE FLOOR BEFORE THE CRATE. A treat lying on the ground is free and is on
   --  a despawn timer; a crate trip is neither, and the crate will still be full
   --  in a minute. Same perishability rule that puts collect above harvest.
-  local scrap, noScrap = fuelGroundWork()
+  local scrap, noScrap = portProf("g.fuelGround", fuelGroundWork)
   if dispatchable(scrap) ~= nil then return scrap end
 
-  local grub, noGrub = fuelFetchWork()
+  local grub, noGrub = portProf("g.fuelFetch", fuelFetchWork)
   if dispatchable(grub) ~= nil then return grub end
 
   if noScrap ~= nil and noScrap ~= self.fuelGroundReason then
@@ -13419,7 +13539,7 @@ local function findWork()
   --  IT GATES ITSELF. There is no participation group for medic -- the module is
   --  the switch -- so unlike the four below, this is not wrapped in a flag. It
   --  returns nil immediately when no medic module is socketed.
-  local dose, noDose = medicWork()
+  local dose, noDose = portProf("g.medic", medicWork)
   if dispatchable(dose) ~= nil then return dose end
 
   --  SAID OUT LOUD, CHANGE-GATED. The first build of this returned nil for
@@ -13446,14 +13566,14 @@ local function findWork()
   --  nothing in the log looking like an error because every individual task
   --  succeeded.
   local putBack, noPutBack
-  if doReplant then putBack, noPutBack = replantWork() end
+  if doReplant then putBack, noPutBack = portProf("g.replant", replantWork) end
   if dispatchable(putBack) ~= nil then return putBack end
 
   --  WATER SITS WITH REPLANT, ABOVE DEPOSIT, and for exactly the same reason:
   --  a unit carrying liquid that matches dry soil is mid-job, and deposit fires
   --  on ANY cargo.
   local wet, noWet
-  if doWater then wet, noWet = waterWork() end
+  if doWater then wet, noWet = portProf("g.water", waterWork) end
   if dispatchable(wet) ~= nil then return wet end
 
   --  RESTOCK DELIVERY SITS HERE FOR THE THIRD TIME OVER. A unit holding a stack
@@ -13464,10 +13584,10 @@ local function findWork()
   --  looking wrong -- which is precisely what replantWork's header records
   --  happening when it was written on the wrong side of this line.
   local restock
-  if doSorting then restock = restockDeliverWork() end
+  if doSorting then restock = portProf("g.restock", restockDeliverWork) end
   if dispatchable(restock) ~= nil then return restock end
 
-  local drop, noDrop = depositWork()
+  local drop, noDrop = portProf("g.deposit", depositWork)
   if dispatchable(drop) ~= nil then return drop end
 
   --  FUEL GATES THE ACQUISITION OF WORK, NOT THE EXECUTION OF IT.
@@ -13544,7 +13664,7 @@ local function findWork()
 		--  standing next to nine hundred more. Topping up on the way to a crate
 		--  is a better feature and a much bigger one -- it needs a detour rule
 		--  and can ping-pong -- so it is not smuggled in here.
-		local topUp = doHauling and collectionWork(true) or nil
+		local topUp = doHauling and portProf("g.collectTopUp", collectionWork, true) or nil
 
 		if topUp ~= nil then
 			sb.logInfo("PETPORT %s stalled with cargo -- topping up %s instead of idling",
@@ -13558,7 +13678,7 @@ local function findWork()
 	end
 
   local work, why
-  if doHauling then work, why = collectionWork() end
+  if doHauling then work, why = portProf("g.collect", collectionWork) end
   if dispatchable(work) ~= nil then return work end
 
   --  FISH SIT BETWEEN COLLECT AND HARVEST, AND IT IS THE SAME ARGUMENT BOTH
@@ -13573,7 +13693,7 @@ local function findWork()
   --  NO PARTICIPATION GROUP GATES THIS. The four groups are port switches; the
   --  fishing module on the socketed unit is the only switch, and petportCanFish
   --  is where that is read. A player who does not want fish unsockets it.
-  local fish, noFish = fishWork()
+  local fish, noFish = portProf("g.fish", fishWork)
   if dispatchable(fish) ~= nil then return fish end
 
   --  HARVEST SITS BELOW COLLECT, and the reason is perishability. An item drop
@@ -13585,14 +13705,14 @@ local function findWork()
   --  them, deposit runs because deposit outranks collect, come back, harvest
   --  the next one.
   local crop, noCrop
-  if doHarvest then crop, noCrop = harvestWork() end
+  if doHarvest then crop, noCrop = portProf("g.harvest", harvestWork) end
   if dispatchable(crop) ~= nil then return crop end
 
   --  BESIDE CROP HARVESTING, below collection, for the same reason: an animal
   --  that is ready stays ready, where a drop on the ground is on a despawn
   --  timer. Nothing is lost by clearing the ground first.
   local beast, noBeast
-  if doAnimals then beast, noBeast = animalWork() end
+  if doAnimals then beast, noBeast = portProf("g.animal", animalWork) end
   if dispatchable(beast) ~= nil then return beast end
 
   --  TRAPS SIT WITH CROPS AND ANIMALS, AND BELOW BOTH.
@@ -13603,17 +13723,17 @@ local function findWork()
   --  newest and the least likely to be what a player is watching -- and being
   --  last among equals costs nothing when none of the three perish.
   local trap, noTrap
-  if doTraps then trap, noTrap = trapWork() end
+  if doTraps then trap, noTrap = portProf("g.trap", trapWork) end
   if dispatchable(trap) ~= nil then return trap end
 
   --  Fetching is the lowest-priority thing a unit can do: it is the only work
   --  that MANUFACTURES cargo rather than clearing something. See withdrawWork.
   local fetch, noFetch
-  if doReplant then fetch, noFetch = withdrawWork() end
+  if doReplant then fetch, noFetch = portProf("g.withdraw", withdrawWork) end
   if dispatchable(fetch) ~= nil then return fetch end
 
   local fetchWater, noFetchWater
-  if doWater then fetchWater, noFetchWater = withdrawWaterWork() end
+  if doWater then fetchWater, noFetchWater = portProf("g.withdrawWater", withdrawWaterWork) end
   if dispatchable(fetchWater) ~= nil then return fetchWater end
 
   --  RESTOCKING SITS ABOVE TIDYING AND BELOW EVERYTHING ELSE. It manufactures
@@ -13621,7 +13741,7 @@ local function findWork()
   --  player who asked for 2000 hazard blocks asked for something, where tidying
   --  is the network's own housekeeping and nobody requested it.
   local stock, noStock
-  if doSorting then stock, noStock = restockFetchWork() end
+  if doSorting then stock, noStock = portProf("g.restockFetch", restockFetchWork) end
   if dispatchable(stock) ~= nil then return stock end
 
   --  FUEL SITS ABOVE TIDYING because it UNBLOCKS something. A machine whose
@@ -13629,7 +13749,7 @@ local function findWork()
   --  that is otherwise halted -- where tidying is purely cosmetic and nothing
   --  waits on it.
   local fuel, noFuel
-  if doMachines then fuel, noFuel = fuelWork() end
+  if doMachines then fuel, noFuel = portProf("g.fuel", fuelWork) end
   if dispatchable(fuel) ~= nil then return fuel end
 
   --  BELOW EVERYTHING, INCLUDING FETCHING. Tidying is the only work that is
@@ -13637,14 +13757,14 @@ local function findWork()
   --  timer is running, and every other job represents something that either
   --  perishes or is already half done.
   local tidy, noTidy
-  if doSorting then tidy, noTidy = tidyWork() end
+  if doSorting then tidy, noTidy = portProf("g.tidy", tidyWork) end
   if dispatchable(tidy) ~= nil then return tidy end
 
   --  THE VERY BOTTOM. Tidying moves something that is in the wrong box;
   --  compaction reshapes something that is already in the right one. If there
   --  is any other job in the network at all, it outranks this.
   local squash, noSquash
-  if doSorting then squash, noSquash = compactWork() end
+  if doSorting then squash, noSquash = portProf("g.compact", compactWork) end
   if dispatchable(squash) ~= nil then return squash end
 
   --  BELOW THE VERY BOTTOM. Draining is the only IRREVERSIBLE work in the mod:
@@ -13655,7 +13775,7 @@ local function findWork()
   --  Nothing is waiting on it either. The surplus has been sitting there and
   --  will keep sitting there.
   local drain, noDrain
-  if doMachines then drain, noDrain = drainWork() end
+  if doMachines then drain, noDrain = portProf("g.drain", drainWork) end
   if dispatchable(drain) ~= nil then return drain end
 
 	--  The old noDrop fallback lived here and is now unreachable: noDrop is only
@@ -13667,7 +13787,7 @@ local function findWork()
   --  against this port's own rect, so a point outside it means the generator is
   --  wrong -- which is what the original assertion was always for.
   if DIAG_FALLBACK then
-    local diag = diagnosticWork()
+    local diag = portProf("g.diagnostic", diagnosticWork)
     if dispatchable(diag) ~= nil then return diag end
   end
 
@@ -13784,7 +13904,7 @@ local function dispatchWork()
     return reject("no unit")
   end
 
-  local work, why = findWork()
+  local work, why = portProf("findWork", findWork)
   if work == nil then
     return reject(why)
   end
@@ -13802,7 +13922,7 @@ local function dispatchWork()
   --  candidate falls through to the next kind of work instead of ending the
   --  tick. See RECT_CHECKED_TYPES and dispatchable() above findWork.
 
-  if not petports_claimTake(work.id, stationUniqueId(), petUniqueId(),
+  if not portProf("claimTake", petports_claimTake, work.id, stationUniqueId(),
                             work.type, work.position, CLAIM_TTL) then
     --  Name the work. "claimed by another owner" on its own does not say
     --  whether two ports are racing for one drop or one crate, and those are
@@ -13830,7 +13950,8 @@ local function dispatchWork()
     work.cargo = manifest
   end
 
-  if not world.callScriptedEntity(self.petId, "petports_assignTask", work) then
+  if not portProf("assignTask", world.callScriptedEntity, self.petId,
+                  "petports_assignTask", work) then
     --  The unit refused -- already holding something, or the contract is
     --  missing. Do not sit on a claim for work nobody is doing.
     petports_claimRelease(work.id, stationUniqueId())
@@ -14145,11 +14266,29 @@ local function crosshairStorable(dropId, cache)
 
   if cache[descriptor.name] ~= nil then return cache[descriptor.name] end
 
+  --  THE FILTER HALF IS CACHED, THE SPACE HALF IS NOT, 2026-09-07c. Whether
+  --  a beacon's filter accepts a name only changes when the filter is edited
+  --  or the beacon set is re-scanned (refreshBeacons, which bumps
+  --  beaconVersion); whether the crate has room changes every time a pet
+  --  deposits, so containerItemsCanFit is still asked live, once per
+  --  accepting beacon.
+  self.filterVerdicts = self.filterVerdicts or {}
+  if self.filterVerdicts.version ~= (self.beaconVersion or 0) then
+    self.filterVerdicts = { version = self.beaconVersion or 0 }
+  end
+
   local storable = false
 
   for _, beacon in ipairs(petports_beaconsFor("deposit")) do
-    if world.entityExists(beacon.id)
-       and petports_filterAccepts(beacon.filter, descriptor.name) then
+    local verdictKey = tostring(beacon.id) .. "|" .. descriptor.name
+    local accepts = self.filterVerdicts[verdictKey]
+
+    if accepts == nil then
+      accepts = petports_filterAccepts(beacon.filter, descriptor.name) == true
+      self.filterVerdicts[verdictKey] = accepts
+    end
+
+    if world.entityExists(beacon.id) and accepts then
 
       --  nil means the engine will not answer, read as YES for the same reason
       --  as above: the quiet marker is the safer guess.
@@ -14322,6 +14461,30 @@ local function crosshairRefresh(dt)
 
   local wanted = crosshairWanted()
 
+  --  A DROP THIS PORT HAS NOT SEEN BEFORE WAKES DISPATCH NOW, 2026-09-07c.
+  --  This scan already runs on CROSSHAIR_INTERVAL; it is the earliest the
+  --  port can know a drop exists, so ingress latency is this interval, not
+  --  WORK_INTERVAL. Only while idle: a busy port's task already owns it.
+  self.crosshairKnownDrops = self.crosshairKnownDrops or {}
+  local fresh = false
+
+  for dropId in pairs(wanted) do
+    if not self.crosshairKnownDrops[dropId] then
+      self.crosshairKnownDrops[dropId] = true
+      fresh = true
+    end
+  end
+
+  for dropId in pairs(self.crosshairKnownDrops) do
+    if wanted[dropId] == nil and not world.entityExists(dropId) then
+      self.crosshairKnownDrops[dropId] = nil
+    end
+  end
+
+  if fresh and self.task == nil and (self.workTimer or 0) > 0 then
+    self.workTimer = 0
+  end
+
   --  RETIRE FIRST, so a state change never shows two markers at once on one
   --  drop -- the old colour would sit on top of the new one for a frame.
   for dropId, marker in pairs(self.crosshairs) do
@@ -14472,16 +14635,17 @@ crosshairClear = function()
   end
 end
 
+
 local function workUpdate(dt)
   self.workTimer = self.workTimer - dt
   if self.workTimer > 0 then return end
   self.workTimer = WORK_INTERVAL
 
-  petports_claimsSweep()
+  portProf("claimsSweep", petports_claimsSweep)
 
   --  Same sweep, same reason: a port killed mid-session leaves an entry naming
   --  a fish that is already gone, and nothing else will ever withdraw it.
-  petports_fishSweep()
+  portProf("fishSweep", petports_fishSweep)
 
   --  RE-PUBLISH IF OUR OWN ENTRY HAS GONE.
   --
@@ -14510,16 +14674,16 @@ local function workUpdate(dt)
   --  a treat and under the mark should eat it rather than have the ground rung
   --  below refuse on "carrying a load" and the crate rung send it walking. One
   --  tick earlier and the whole question stops arising.
-  nibbleFromCargo()
+  portProf("nibbleFromCargo", nibbleFromCargo)
 
-  refreshNetwork()
-  refreshBeacons(WORK_INTERVAL)
-  refreshFarmables(WORK_INTERVAL)
-  refreshAnimals(WORK_INTERVAL)
-  publishUnitPosition()
+  portProf("refreshNetwork", refreshNetwork)
+  portProf("refreshBeacons", refreshBeacons, WORK_INTERVAL)
+  portProf("refreshFarmables", refreshFarmables, WORK_INTERVAL)
+  portProf("refreshAnimals", refreshAnimals, WORK_INTERVAL)
+  portProf("publishUnitPosition", publishUnitPosition)
 
   --  Cheap: loadUniqueEntity on an existing stagehand and out.
-  ensureResidency()
+  portProf("ensureResidency", ensureResidency)
 
   --  A HEARTBEAT, CHANGE-GATED ON WHAT IT ACTUALLY REPORTS.
   --
@@ -14544,9 +14708,9 @@ local function workUpdate(dt)
   end
 
   if self.task == nil then
-    dispatchWork()
+    portProf("dispatchWork", dispatchWork)
   else
-    trackWork()
+    portProf("trackWork", trackWork)
   end
 end
 
@@ -14606,7 +14770,7 @@ local function updateInner(dt)
   --  ticks -- a marker refreshed on the work timer would spend most of its life
   --  describing the previous task. It has its own, faster interval and gates
   --  itself internally.
-  crosshairRefresh(dt)
+  portProf("crosshairRefresh", crosshairRefresh, dt)
 
   --  ABOVE THE NO-ITEM RETURN, AND THAT IS THE POINT.
   --
@@ -14629,7 +14793,7 @@ local function updateInner(dt)
   --
   --  Takes dt now rather than WORK_INTERVAL, because it is no longer riding a
   --  timer that has already fired. It gates itself on REPLANT_SWEEP_INTERVAL.
-  sweepReplants(dt)
+  portProf("sweepReplants", sweepReplants, dt)
 
   --  ABOVE EVERY EARLY RETURN IN THIS FUNCTION, AND THAT IS THE ONLY PLACE IT
   --  CAN GO.
@@ -14650,7 +14814,7 @@ local function updateInner(dt)
   --  the tick it is not: petData is cleared further down, in the branch below.
   --  mirrorPaneState asks the container instead, which is why that check exists
   --  and why it has to stay.
-  mirrorPaneState(dt)
+  portProf("mirrorPaneState", mirrorPaneState, dt)
 
   local item = socketedItem()
 
@@ -15055,7 +15219,8 @@ end
   --  not carry it.
   pushUnitLight()
 
-  workUpdate(dt)
+  portProf("workUpdate", workUpdate, dt)
+  portProfReport()
 end
 
 function onInteraction(args)
@@ -15088,4 +15253,13 @@ function update(dt)
       end
     end
   end
+end
+
+--  THE ENGINE CALLS THIS WHEN THIS OBJECT'S CONTAINER CHANGES. 2026-09-07c:
+--  the pane mirror and the work beat both want to know at once -- the
+--  mirror so a departed pet's modules are never clickable, the beat so a
+--  freshly socketed pet is not left waiting out an interval.
+function containerCallback()
+  self.paneTimer = 0
+  if self.task == nil then self.workTimer = 0 end
 end

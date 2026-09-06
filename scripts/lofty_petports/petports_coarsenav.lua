@@ -61,7 +61,7 @@
 --  are unprobeable and time-varying and nobody's fault -- are allowed to
 --  produce optimistic-wrong answers. They fail in the cheap direction.
 
-local COARSENAV_BUILD_STAMP = "2026-09-07h overlay readouts refresh every two seconds and the candidate slice is smaller"
+local COARSENAV_BUILD_STAMP = "2026-09-07m the COMPLETE line no longer reads every shard in the store"
 
 local navStamped = false
 
@@ -789,7 +789,25 @@ local function navAnchorUncached(cx, cy, freeMover)
 		tostring(lift))
 end
 
+--  EVICTED WHOLESALE ON THE TTL, 2026-09-07i. Entries were checked for age
+--  on read but never removed, so over hours every cell ever scanned by a
+--  neighbour box (a 25x25 box per sweep at radius 12) stayed in the
+--  anchor and solid caches forever. Clearing both every NAV_ANCHOR_TTL
+--  bounds them to what one TTL's worth of sweeps touched.
+local function navCachesTick()
+	local now = world.time()
+
+	if self.petportsNavCachesAt == nil
+	   or (now - self.petportsNavCachesAt) > NAV_ANCHOR_TTL then
+		self.petportsNavCachesAt = now
+		self.petportsNavAnchorCache = nil
+		self.petportsNavSolidCache = nil
+	end
+end
+
 function petports_navAnchor(cx, cy, freeMover)
+	navCachesTick()
+
 	local key = petports_navCellKey(cx, cy)
 	local profile = petports_navProfile()
 	local now = world.time()
@@ -1004,6 +1022,60 @@ end
 --  conversion of a thousand-entry table, twice, on a two-second beat, which
 --  is the idle spike at that cadence. Memoised on world.time(); a write
 --  through navIndexFlush or navIndexWrite drops the memo.
+--  ONE PROPERTY PER PROFILE, 2026-09-07k. MEASURED 19:39: a freshly
+--  socketed unit's first two updates took ~1 s each, entirely in the first
+--  index read -- every profile's cells in one property, converted whole on
+--  every read, and reads happen on every top-up. The index grew with hours
+--  of survey across three chassis and every read paid for all of it. Now
+--  `petports_navindex:<profile>` holds one profile's cells and a unit only
+--  ever converts its own; `petports_navindex` itself is a registry of
+--  profile names so wipe and stats can still enumerate everything.
+--
+--  navIndexRead() keeps its shape -- a table indexed by profile -- but the
+--  profiles load lazily through a metatable, so `index[profile]` costs one
+--  read of one profile, memoised per tick. pairs() over it sees only the
+--  profiles touched this tick; enumerate with navIndexProfiles().
+local function navIndexProperty(profile)
+	return NAV_INDEX .. ":" .. profile
+end
+
+local function navIndexProfiles()
+	local ok, registry = pcall(world.getProperty, NAV_INDEX)
+	if not ok or type(registry) ~= "table" then return {} end
+
+	local names = {}
+	for profile in pairs(type(registry.profiles) == "table" and registry.profiles or {}) do
+		table.insert(names, profile)
+	end
+	table.sort(names)
+	return names
+end
+
+local function navIndexRegister(profile)
+	local ok, registry = pcall(world.getProperty, NAV_INDEX)
+	if not ok or type(registry) ~= "table" then registry = {} end
+	registry.profiles = registry.profiles or {}
+
+	if registry.profiles[profile] == true then return end
+
+	registry.profiles[profile] = true
+	pcall(world.setProperty, NAV_INDEX, registry)
+end
+
+local function navIndexProfileRead(profile)
+	local ok, cells = pcall(world.getProperty, navIndexProperty(profile))
+	if not ok or type(cells) ~= "table" then cells = {} end
+
+	local pending = self.petportsNavIndexPending
+	if type(pending) == "table" and type(pending[profile]) == "table" then
+		for cellKey, entry in pairs(pending[profile]) do
+			cells[cellKey] = entry
+		end
+	end
+
+	return cells
+end
+
 local function navIndexRead()
 	local now = world.time()
 
@@ -1011,18 +1083,14 @@ local function navIndexRead()
 		return self.petportsNavIndexMemo
 	end
 
-	local ok, index = pcall(world.getProperty, NAV_INDEX)
-	if not ok or type(index) ~= "table" then index = {} end
-
-	local pending = self.petportsNavIndexPending
-	if type(pending) == "table" then
-		for profile, cells in pairs(pending) do
-			index[profile] = index[profile] or {}
-			for cellKey, entry in pairs(cells) do
-				index[profile][cellKey] = entry
-			end
+	local index = setmetatable({}, {
+		__index = function(t, profile)
+			if type(profile) ~= "string" then return nil end
+			local cells = navIndexProfileRead(profile)
+			rawset(t, profile, cells)
+			return cells
 		end
-	end
+	})
 
 	self.petportsNavIndexMemo = index
 	self.petportsNavIndexMemoAt = now
@@ -1037,19 +1105,35 @@ local function navIndexQueue(profile, cellKey, entry)
 	self.petportsNavIndexPendingCount = (self.petportsNavIndexPendingCount or 0) + 1
 end
 
---  Write the queued index entries: read (which merges them), write, clear.
+--  Write the queued entries, one property per profile that has any.
 local function navIndexFlush()
 	if (self.petportsNavIndexPendingCount or 0) == 0 then return end
+
+	local pending = self.petportsNavIndexPending or {}
 	local index = navIndexRead()
+
+	for profile in pairs(pending) do
+		local cells = index[profile]
+		navIndexRegister(profile)
+		pcall(world.setProperty, navIndexProperty(profile), cells)
+	end
+
 	self.petportsNavIndexPending = nil
 	self.petportsNavIndexPendingCount = 0
 	self.petportsNavIndexMemo = nil
-	pcall(world.setProperty, NAV_INDEX, index)
 end
 
+--  Write back every profile the caller touched in this index table (the
+--  ones loaded through the metatable, i.e. rawly present).
 local function navIndexWrite(index)
+	for profile, cells in pairs(index) do
+		if type(profile) == "string" and type(cells) == "table" then
+			navIndexRegister(profile)
+			pcall(world.setProperty, navIndexProperty(profile), cells)
+		end
+	end
+
 	self.petportsNavIndexMemo = nil
-	pcall(world.setProperty, NAV_INDEX, index)
 end
 
 local function navCellProperty(profile, cellKey)
@@ -1601,8 +1685,14 @@ function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 						fromKey, toKey, sb.printJson(edges))
 				end
 
+				--  NOT STORED, 2026-09-07i. A false edge is only worth keeping
+				--  when it saves a search, and a free mover's re-check is a
+				--  one-millisecond sweep. Stored, they were most of a flyer's
+				--  shards: at radius 12 a cell sees ~600 pairs and nearly all
+				--  are wall-blocked, so the store grew to hundreds of entries
+				--  per cell over a long session -- world-file bloat, bigger
+				--  shard reads, longer rebuilds, for nothing.
 				petports_profCount("sweepFalse")
-				petports_navLearn(petports_navProfile(), fromKey, toKey, false)
 				self.petportsNavProbes[slot] = nil
 				return false
 			end
@@ -2308,7 +2398,8 @@ function petports_navStats()
 	local pending = self.petportsNavPendingCount or 0
 	local swept = 0
 
-	for profile, cells in pairs(index) do
+	for _, profile in ipairs(navIndexProfiles()) do
+		local cells = index[profile]
 		profiles = profiles + 1
 
 		for cellKey in pairs(type(cells) == "table" and cells or {}) do
@@ -2347,7 +2438,16 @@ end
 --  mean re-sweeping it forever. WE LOOKED AND FOUND NOTHING has to be
 --  distinguishable from NOBODY LOOKED -- the same distinction that made
 --  petports_navAnchor return nil rather than false.
-local NAV_SWEEP_TTL = 900.0
+--  15 MINUTES -> 6 HOURS, 2026-09-07j. world.time() counts while the world
+--  is unloaded, so the old value measured absence, not staleness: a restart
+--  after lunch dropped the whole mesh, and a world left running re-ran the
+--  full 4..12 ladder every fifteen minutes forever, rewriting every shard
+--  each time. Stale edges are caught where they are used -- a leg that will
+--  not walk is re-probed and contradicted (taskAction 05c/05f) -- so the TTL
+--  only needs to be shorter than "someone rebuilt the base and nobody ever
+--  walked there since". A pass over the store is still a full survey when
+--  it does come due.
+local NAV_SWEEP_TTL = 21600.0
 
 --  How long a sweep claim is held before it lapses. Generously longer than a
 --  sweep takes, because the cost of a stale claim is one unit idling and the
@@ -3930,15 +4030,21 @@ local function navTickInner(dt, ownerId)
 		--  CLEARED ON ANY START BELOW, so walking the unit into new ground and
 		--  re-opening the frontier announces itself again rather than
 		--  completing in silence.
-		if not self.petportsNavComplete then
+		--  NOT WHILE THE GRAPH IS STILL BEING BUILT: an empty candidate list
+		--  from an empty graph is "not ready", not "complete".
+		if not self.petportsNavComplete and self.petportsNavGraphBuild == nil then
 			self.petportsNavComplete = true
 
-			local _, edges, reachable = petports_navStats()
-
+			--  NO petports_navStats HERE ANY MORE, 2026-09-07m. It walks every
+			--  profile's index and reads every shard in the store, cold -- on
+			--  a base of thousands of cells that was a 700-2,900 ms tick, once
+			--  per freshly socketed unit and again each time the frontier
+			--  closed, which is the two-second planet lockup that survived
+			--  every other fix. The counts are one /entityeval away
+			--  (petports_navStats, petports_navDumpStore) when wanted.
 			sb.logInfo("NAV survey COMPLETE for %s -- every known cell swept "
-				.. "to radius %s, %s edge(s), %s reachable",
-				tostring(petports_navProfile()), sb.printJson(PETPORTS_NAV_RADIUS),
-				sb.printJson(edges), sb.printJson(reachable))
+				.. "to radius %s",
+				tostring(petports_navProfile()), sb.printJson(PETPORTS_NAV_RADIUS))
 		end
 
 		return false
@@ -4078,15 +4184,81 @@ end
 --  to delete, and world properties cannot be enumerated -- so without the index
 --  a wipe would leave orphaned shards that nothing could ever find or clear,
 --  and the next survey would silently inherit them.
+--  SIZE THE STORE, 2026-09-07l. Retail has no way to enumerate world
+--  properties, but every one of ours is reachable from the registry:
+--  registry -> per-profile index -> per-cell shard. This walks them and logs
+--  one line per profile with cell count, shard count, edges (true/false),
+--  and the serialised size in bytes (sb.printJson length, which is what the
+--  world file and the property map actually hold), plus the claims table.
+--  Read, not held: nothing is retained after the call.
+--  /entityeval return petports_navDumpStore()
+function petports_navDumpStore()
+	local index = navIndexRead()
+	local grand = 0
+
+	for _, profile in ipairs(navIndexProfiles()) do
+		local cells = index[profile]
+		local cellCount, shards, trues, falses, bytes = 0, 0, 0, 0, 0
+
+		local okIdx, idxJson = pcall(sb.printJson, cells)
+		if okIdx then bytes = bytes + #idxJson end
+
+		for cellKey in pairs(type(cells) == "table" and cells or {}) do
+			cellCount = cellCount + 1
+
+			local ok, shard = pcall(world.getProperty, navCellProperty(profile, cellKey))
+
+			if ok and type(shard) == "table" then
+				shards = shards + 1
+
+				for _, entry in pairs(shard) do
+					if type(entry) == "table" then
+						if entry.r == true then trues = trues + 1 else falses = falses + 1 end
+					end
+				end
+
+				local okJ, json = pcall(sb.printJson, shard)
+				if okJ then bytes = bytes + #json end
+			end
+		end
+
+		grand = grand + bytes
+
+		sb.logInfo("NAV STORE %s: %s cell(s), %s shard(s), %s true / %s false edge(s), %s KB",
+			profile, sb.printJson(cellCount), sb.printJson(shards),
+			sb.printJson(trues), sb.printJson(falses),
+			sb.printJson(math.floor(bytes / 1024)))
+	end
+
+	local okC, claims = pcall(world.getProperty, "petports_claims")
+	local claimCount, claimBytes = 0, 0
+
+	if okC and type(claims) == "table" then
+		for _ in pairs(claims) do claimCount = claimCount + 1 end
+		local okJ, json = pcall(sb.printJson, claims)
+		if okJ then claimBytes = #json end
+	end
+
+	sb.logInfo("NAV STORE claims: %s entr(ies), %s KB | store total %s KB",
+		sb.printJson(claimCount), sb.printJson(math.floor(claimBytes / 1024)),
+		sb.printJson(math.floor((grand + claimBytes) / 1024)))
+
+	return math.floor((grand + claimBytes) / 1024)
+end
+
 function petports_navWipe()
 	local index = navIndexRead()
 	local cleared = 0
 
-	for profile, cells in pairs(index) do
+	for _, profile in ipairs(navIndexProfiles()) do
+		local cells = index[profile]
+
 		for cellKey in pairs(type(cells) == "table" and cells or {}) do
 			pcall(world.setProperty, navCellProperty(profile, cellKey), nil)
 			cleared = cleared + 1
 		end
+
+		pcall(world.setProperty, navIndexProperty(profile), nil)
 	end
 
 	pcall(world.setProperty, NAV_INDEX, nil)

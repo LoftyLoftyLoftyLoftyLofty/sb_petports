@@ -1,4 +1,4 @@
-# COARSE NAV -- SESSION HANDOFF (as of taskAction 06d / coarsenav 07h)
+# COARSE NAV -- SESSION HANDOFF (as of coarsenav 07m / taskAction 07a / petport 07g)
 
 Read this before proposing anything. MEASURED means read out of a
 starbound.log or an engine `.luaprofile`; FACT means read out of retail 1.4.4
@@ -6,16 +6,32 @@ source pasted into a session. Retail Starbound 1.4.4 only; never propose an
 OpenStarbound or fork binding. The OpenStarbound repo's first commit is
 unmodified retail source and may be READ for facts (StarLuaRoot.cpp was).
 
-Builds in play, all tested in game:
-`petports_coarsenav.lua` **2026-09-07h**, `petportsTaskAction.lua`
-**2026-09-06d**, `petports_flyapproach.lua` **2026-09-06b**,
-`petports_contract.lua` **2026-09-06a**, `petports_petport.lua` **2026-09-07a**.
+Builds in play:
+`petports_coarsenav.lua` **2026-09-07m**, `petportsTaskAction.lua`
+**2026-09-07b**, `petports_flyapproach.lua` **2026-09-06b**,
+`petports_contract.lua` **2026-09-06a**, `petports_petport.lua` **2026-09-07g**.
+**SOAK TEST, 2026-09-05 22:21 -> 00:25 (2 h, 1.2 M lines), on these builds:**
+zero LuaInstructionLimitReached; 14 unit ticks over 200 ms in two hours
+(one of 1,689 ms at 22:23:09, in the task action OUTSIDE navTick --
+unsectioned, see open list); 96 port ticks over 100 ms, worst 315 ms;
+store 4.9 -> 7.6 MB, all of it the free-mover ladder finishing (flyer 50k
+-> 77k true edges, ~80 per cell at radius 12), not a leak. Acceptable for
+a small unit count (Lofty). ONE REAL DEFECT FOUND IN IT: 6,702 of 6,975
+"refused by the pather" lines were free movers in water (onGround false is
+their normal state); each good leg was failed at 0.5 s, re-probed (true),
+contradicted and re-planned -- 4,002 contradictions on |f1| profiles, and
+the false edges growing in the aquatic stores. taskAction 07b makes the
+refusal detector walker-only; UNTESTED as written. Expect the aquatic false
+counts in `petports_navDumpStore` to stop growing and the zigzag to go. Five of the 14 big unit ticks were `candidates`
+at ~220 ms with the survey idle: the graph rebuild's FIRST step (read the
+profile index, build the key list) is still one call.
 
 **STATE.** Walkers and flyers route end to end; a walker retrieved and
-deposited across the base, a flyer surveyed the whole ship. Performance work
-is DONE for now: no LuaInstructionLimitReached, 12 updates/s, tick max ~75 ms
-on the test laptop, and the engine profile shows our remaining cost is the
-survey itself under a per-update cap, not bookkeeping. This is the starting
+deposited across the base, a flyer surveyed the whole ship. Six ports on a
+small islet with seven units was "runs like crap" at the start of the second
+performance pass and is near acceptable at the end of it: unit updates flat,
+port ticks ~3.5% of the world thread, the 2 s planet lockup found and
+removed (07m). No LuaInstructionLimitReached since 07f. This is the starting
 point for the actual feature work, not the end of anything.
 
 **THE TEST MACHINE IS AN HP PROBOOK 440 G5.** Every budget below is tuned so
@@ -162,6 +178,56 @@ scripts; `os.clock` is.
 
 ---
 
+## SECOND PERFORMANCE PASS (07i..07m, petport 07a..07g) -- WHAT WAS FOUND
+
+Every one of these was read off a log, a `PROFILE` line, a `PETPORT profile`
+line, or an engine `.luaprofile`. In the order found:
+
+- **Long-run "memory leak" (hours):** three growth paths, all ours. Anchor and
+  solid caches never evicted (07i: cleared every 30 s). Free movers stored
+  every false edge, ~600 pairs per cell at radius 12 (07i: not stored). The
+  15-minute sweep TTL re-ran the whole ladder forever while loaded and wiped
+  the mesh on any restart after lunch (07j: six hours). The store itself is
+  small: `petports_navDumpStore()` measured 1.6 MB for seven profiles.
+- **Fresh unit's first two updates took ~1 s each:** the index was one
+  property holding every profile's cells, converted whole on every read
+  (07k: one property per profile, `petports_navindex:<profile>`, plus a
+  registry). MIGRATION: run `petports_navWipe()` on the old build before
+  loading 07k, or old shards are orphaned.
+- **Log volume, 170-320 lines/s:** `UNIT pre-move/post-move` per tick
+  (taskAction 07a: behind `TASK_TRACE_MOVES`), per-probe NAV lines (07b:
+  behind `PETPORTS_NAV_VERBOSE`), `UNIT standable candidate` (petport 07g).
+- **Ports.** `PETPORT profile` (petport 07b/07d/07e/07f): six ports in
+  lockstep at 1 s beats, `dispatchWork` 30 ms a call, `crosshairRefresh` and
+  `mirrorPaneState` every tick. Petport 07c: 2 s beats with random phase,
+  drop-triggered dispatch from the crosshair scan (ingress <= 0.5 s),
+  filter-accepts cached per beacon+name (space still live), pane mirror on
+  its interval with `containerCallback()` closing the duplication window and
+  writes only on change. Petport 07g: `servicePointNear` cached 30 s per
+  object per socketed unit (refusals retried at 5 s) -- the standable-spot
+  search was what all 22 generators shared. `findWork` is now the port's
+  top phase at ~2 s per 128 s across six ports; the cross-port shared scan
+  (one port scans, publishes, the rest read) is the next structural step
+  and has not been built.
+- **The 2 s planet lockup:** `survey COMPLETE` called `petports_navStats()`,
+  which reads every shard of every profile cold. Fired per fresh unit and per
+  closed frontier. 07m: gone; COMPLETE is also not declared while the graph
+  is still being built.
+- **pcall** is not a cost here: every one wraps an engine call that costs
+  100-1000x more than the wrapper (measured by the probe timings and absent
+  from the engine profile).
+
+## FISHING NOTE (not a bug)
+
+Vanilla `fishingspawner.config`: rarity thresholds ascending, lower is rarer
+(`roll <= 0.001` legendary), `roll = random + bias`, bias starts 0.2 and
+DROPS 0.1 per spawn; legendary needs bias 0 (third spawn on) AND a 0.1%
+roll AND `deep` (>= 25 tiles below `world.oceanLevel`). Every legendary in
+every pool is deep-only. Lofty eyeballed the islet: ~1/6 of water coverage
+is deep enough. Rares have shallow variants, which is why they appear.
+
+---
+
 ## DEAD
 
 - Sparse stride for flyers (4): lost 2x2 tunnel granularity. Density is cut
@@ -195,11 +261,24 @@ scripts; `os.clock` is.
   single-layer fix; noted.
 - **Player-placed waypoints** as forced seed cells: small object, one branch
   in the seed logic, sits on top of the survey rather than replacing it.
-- `petports_navStats` is called from the idle branch (70 in the last
-  profile); fold it behind VERBOSE. Cosmetic.
+- `petports_gcTune()` is dead code (collectgarbage unavailable); remove.
+  The port profiler's `portProf("pane.json", pcall, ...)` is two wrappers
+  deep for no reason; flatten when the profiler comes out.
+- Pane mirror still builds the state blob every 0.5 s (~1.4 ms x 6 ports);
+  a change signature (task id, fuel, cargo count, stats) would make idle
+  free.
+- Cross-port shared scanning (see second pass above).
+- **Section the task action outside navTick**: tryCoarseLeg /
+  petports_navNearestCell (free mover: sight sweeps to graph cells out to
+  32 tiles) and the direct search, so a 1.7 s outlier gets a name.
+- **Chunk the graph build's start** (index read + key list) like the rest of
+  it; and/or **cap the free-mover ladder at radius 8**, which halves the
+  free-mover stores and every read of them.
+- Network budget for tens of units: the per-update caps above are what it
+  would expose; six ports x seven units is ~35% of the world thread on the
+  laptop with everything idle-surveying.
 - Pickup is not distance-checked; hop-count BFS routing; coarse levels are a
   rejection filter only.
-- `petports_gcTune()` is dead code (collectgarbage unavailable); remove.
 - V2 handoff has no coarse-nav entries; `todo.dispatch.reachbudget` should be
   retired; `fact.pathing.ongroundtest` corrected re Slippery already.
 
