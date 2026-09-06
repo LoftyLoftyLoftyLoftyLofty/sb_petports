@@ -178,7 +178,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-07a the per-tick move samples are opt-in"
+local BUILD_STAMP = "2026-09-07e the object-bounds lookup has a section"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -1011,7 +1011,16 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
   --  so its nearest graph cell can be that far away.
   local nearRadius = freeMover and ((PETPORTS_NAV_STRIDE_FREE or 4) + 1.5) or 2.5
 
-  local fromKey = fromOverride or petports_navNearestCell(here, freeMover, nearRadius)
+  --  "MORE" FROM THE NEAREST-CELL SEARCH MEANS ASK AGAIN NEXT TICK, 2026-09-07d:
+  --  it is bounded per call now (coarsenav 07q) and resumes where it stopped.
+  --  Returning false here without a log is deliberate -- the "no leg" line
+  --  below would otherwise print once per tick for the whole search.
+  local fromKey, fromMore = fromOverride, false
+  if fromKey == nil then
+    local key, _, _, more = petports_navNearestCell(here, freeMover, nearRadius)
+    fromKey, fromMore = key, more
+  end
+  if fromMore then return false end
 
   if fromKey == nil then
     local fx, fy = petports_navCell(here)
@@ -1026,7 +1035,9 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
   if stateData.navToFor == targetKey then
     toKey = stateData.navToKey
   else
-    toKey = petports_navNearestCell(target, freeMover, nearRadius + 0.5)
+    local key, _, _, more = petports_navNearestCell(target, freeMover, nearRadius + 0.5)
+    if more then return false end
+    toKey = key
 
     if toKey == nil then
       local tx, ty = petports_navCell(target)
@@ -6859,8 +6870,16 @@ local function petportsTaskUpdateInner(dt, stateData)
     --  ms after it was planned, its edge contradicted on a re-probe that
     --  said true after one tick. A real refusal persists; a fresh pather
     --  does not.
+    --  WALKERS ONLY, 2026-09-07b. SOAK 2026-09-05: 6,702 of 6,975 refusals
+    --  were free movers in water -- onGround false is their normal state,
+    --  and a sighted leg flown by string-pull may have no aStar at all, so
+    --  the shape this test looks for is what a healthy swimmer looks like
+    --  every tick. Every 0.5 s a good leg was failed, re-probed (true),
+    --  contradicted, and re-planned: 4,002 contradictions on |f1| profiles.
+    --  find()'s gate 1 is a walker's condition; a free mover's failed leg
+    --  is caught by the progress watchdog like any other stall.
     if finder ~= nil and finder.aStar == nil and not finder.hasPath
-       and stateData.navWaypoint ~= nil then
+       and stateData.navWaypoint ~= nil and not petports_freeMover() then
       stateData.navRefusedTimer = (stateData.navRefusedTimer or 0) + dt
 
       if stateData.navRefusedTimer >= 0.5 then
@@ -7951,8 +7970,55 @@ function petportsTaskAction.leavingState(stateData)
   end
 end
 
+--  SECTIONS FOR THE STATE-ENTRY WORK, 2026-09-07c. MEASURED 02:05 on
+--  coarsenav 07o: two ~0.4 s wallclock stalls, both in the FIRST update
+--  after freshPather (one starting a fish task with a 400-tile dive trace,
+--  one starting a leash), and no section above navTick to say which call.
+--  The candidates are the local resolvers below and petports_diveApproach;
+--  petports_navNearestCell and petports_navWaypoint are sectioned on the
+--  coarsenav side. Installed once, at the first update, so every script
+--  in the monstertype list has loaded by then whatever the order.
+--
+--  DEPTH-GUARDED: petports_profBegin keys on the name and tryCoarseLeg
+--  re-enters itself, so only the outermost call of a name is timed.
+local taskSectionsInstalled = false
+local taskSectionDepth = {}
+
+local function taskProfWrap(name, fn)
+  return function(...)
+    local depth = (taskSectionDepth[name] or 0) + 1
+    taskSectionDepth[name] = depth
+    if depth == 1 and petports_profBegin ~= nil then petports_profBegin(name) end
+    local a, b, c, d, e, f = fn(...)
+    if depth == 1 and petports_profEnd ~= nil then petports_profEnd(name) end
+    taskSectionDepth[name] = depth - 1
+    return a, b, c, d, e, f
+  end
+end
+
+local function installTaskSections()
+  if taskSectionsInstalled then return end
+  taskSectionsInstalled = true
+
+  tryCoarseLeg = taskProfWrap("coarseLeg", tryCoarseLeg)
+  tryVentRoute = taskProfWrap("ventRoute", tryVentRoute)
+  standableNear = taskProfWrap("standable", standableNear)
+  approachTargetFor = taskProfWrap("approachTarget", approachTargetFor)
+
+  if type(petports_diveApproach) == "function" then
+    petports_diveApproach = taskProfWrap("diveApproach", petports_diveApproach)
+  end
+
+  --  2026-09-07e: the one call left on approachTarget's path that had no
+  --  section of its own, after a 1,273 ms approachTarget with 2 ms standable.
+  if type(petports_habitatObjectBounds) == "function" then
+    petports_habitatObjectBounds = taskProfWrap("objectBounds", petports_habitatObjectBounds)
+  end
+end
+
 --  PROFILED, 2026-09-06: the whole update is one section and one tick.
 function petportsTaskAction.update(dt, stateData)
+  installTaskSections()
   if petports_profInstall ~= nil then petports_profInstall() end
   if petports_profTickBegin ~= nil then petports_profTickBegin() end
   if petports_profBegin ~= nil then petports_profBegin("update") end

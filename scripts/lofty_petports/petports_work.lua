@@ -46,8 +46,34 @@ function petports_claimsAll()
   return world.getProperty(CLAIM_KEY) or {}
 end
 
+--  ONE READ PER findWork, 2026-09-07h. MEASURED 01:20 on a seven-port islet:
+--  findWork mean 32 ms, max 164, port ticks to 185 ms and 106 slow ticks in
+--  80 s. Every generator loop asked petports_claimGet per object -- and
+--  claimGet was a whole-table world.getProperty, converted JSON to Lua on
+--  every call: harvestWork alone made 54 of them per beat per port. The
+--  same shape the coarse-nav index had before 07k, one level down.
+--
+--  THE MEMO IS A SNAPSHOT FOR THE DURATION OF ONE PORT TICK, opened and
+--  closed by the port's update (07i; 07h opened it around findWork only and
+--  crosshairRefresh, outside it, was the next 200 ms call). Outside that window nothing is cached, so units
+--  and the port's own take/release/refresh paths read the store as before.
+--  Inside it, a write by THIS context replaces the snapshot with the table
+--  it just wrote, which is the truth; a write by ANOTHER port during the
+--  same window is invisible until claimTake, which reads fresh and refuses
+--  -- the path that already handles two ports choosing the same target.
+local claimsMemo = nil
+
+function petports_claimsMemoBegin()
+  claimsMemo = petports_claimsAll()
+end
+
+function petports_claimsMemoEnd()
+  claimsMemo = nil
+end
+
 local function writeClaims(claims)
   world.setProperty(CLAIM_KEY, claims)
+  if claimsMemo ~= nil then claimsMemo = claims end
 end
 
 --  Drop everything this owner holds. Called by a petport at init.
@@ -91,6 +117,7 @@ function petports_claimsSweep()
 end
 
 function petports_claimGet(workId)
+  if claimsMemo ~= nil then return claimsMemo[workId] end
   return petports_claimsAll()[workId]
 end
 

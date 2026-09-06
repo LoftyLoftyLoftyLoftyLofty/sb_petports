@@ -50,7 +50,7 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-04 (death costs something now, and it took four tries)
+### What is built, as of 2026-09-06 (every frame-crossing call has a name, and the 30 s hitch is the engine's)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
@@ -66,6 +66,23 @@ and flyers route across the base by leg chains over a surveyed cell graph
 and are measured (`fact.tooling.luaprofile`, `proc.tooling.profilefirst`).
 The living detail is `COARSENAV_SESSION_HANDOFF.md`; this doc holds the
 entries that outlive it.
+
+**2026-09-06 ADDENDUM: THE THIRD PERFORMANCE PASS.** The criterion moved
+to "no single call crosses a frame" (`fact.tooling.frameceiling`). Built
+and measured, one change per log: the network survey stride and a 4 ms
+turn budget (`arch.pathing.surveystride`); the claims memo and the
+three-tick port beat (`arch.dispatch.claimsmemo`, `arch.port.beatstages`);
+sections on the state-entry resolvers, a bounded resumable nearest-cell
+search and a yielding neighbour scan (`arch.pathing.boundedresolvers`); a
+stall detector on both entity kinds and the rule for reading it
+(`arch.tooling.stalldetector`). Two stalls it named were ours and are
+fixed -- a tile string into `world.objectSpaces` (`fact.tooling.
+stringentity`) and the unbounded resolvers above. The one it could not
+name was isolated by control to retail's `worldStorageInterval`
+(`fact.tooling.worldstorage`, `fact.tooling.configfiles`) and is not ours.
+The swimmer-refusal fix (taskAction 07b) is verified: zero contradictions
+across every log since. Stamps: coarsenav 07n-07s, taskAction 07b-07e,
+petport 07h-07k, habitat 07a, work.lua (unstamped). UNCOMMITTED.
 
 ---
 
@@ -5243,6 +5260,99 @@ ONE rebuild. The version is kept as the cheap first gate.
 **THE BUDGET DROPS THE HATCH, NEVER THE OUTLINE.** A truncated hatch draws a
 partial fill that reads as "coverage stops here", which is a worse lie than no
 fill at all.
+
+
+### The survey takes turns across the network, and its budget fits inside a frame
+`arch.pathing.surveystride` -- see also `arch.pathing.coarsenav`, `fact.tooling.frameceiling`, `fact.tooling.lockstep`
+
+Coarsenav 07n/07o, 2026-09-06. `NAV_SURVEY_CONCURRENT = 2`: a unit runs the
+survey half of `navTick` (top-up and sweep stepping) only on updates where
+`(updateCount + phase) % ceil(#self.petportsNetwork / CONCURRENT) == 0`,
+phase from `entity.id()`. `#self.petportsNetwork` is one rect per member
+port, pushed by the port, one unit per port -- the unit count with no new
+reads. Routing, legs and `navGraphFor` are never behind the gate; the
+index flush and the overlay draw stay per-tick. Network survey cost is flat
+at CONCURRENT x one unit's budget whatever the unit count; a rebuild takes
+proportionally longer in wall time, which is the trade.
+
+The per-turn budget is `NAV_TICK_BUDGET_MS = 4`, `NAV_STEPS_PER_TICK = 2`
+(was 10 / 4, tuned for survey speed on the laptop before the criterion
+moved). `strideSkip` and `budgetCut` in the survey counters show both
+firing. Not a store change.
+
+### The resolvers a unit runs on a state entry are bounded per tick and sectioned
+`arch.pathing.boundedresolvers` -- see also `arch.pathing.surveystride`, `arch.tooling.stalldetector`, `todo.pathing.graphbuildstart`
+
+Coarsenav 07p-07r and taskAction 07c-07e, 2026-09-06, each from a section
+that named it in the previous log:
+
+- `tryCoarseLeg`, `tryVentRoute`, `standableNear`, `approachTargetFor`,
+  `petports_diveApproach`, `petports_habitatObjectBounds` are wrapped at the
+  unit's first update by `taskProfWrap` (depth-guarded, because
+  `tryCoarseLeg` re-enters itself) and report as `coarseLeg`, `ventRoute`,
+  `standable`, `approachTarget`, `diveApproach`, `objectBounds`;
+  `petports_navNearestCell` and `petports_navWaypoint` join coarsenav's
+  `profWrap` block as `nearestCell` and `waypoint`.
+- `petports_navNearestCell` for a free mover was a 65x65 cell scan plus one
+  synchronous body sweep per sighted candidate with no cap (67 ms measured).
+  Now `NAV_NEAREST_SWEEPS = 6` per call; past that the sorted candidates and
+  a cursor park on `self` keyed by asking cell, mover class, radius and the
+  graph table, the fourth return is true for "more", and `tryCoarseLeg`
+  returns false WITHOUT logging and asks again next tick (taskAction 07d).
+  `nearestCut` counts it. Walkers never sweep and are unchanged.
+- `petports_navNeighbours` (up to 625 cells at radius 12, a tile query and
+  an anchor each, 66 ms measured in one resume) yields every
+  `NAV_NEIGHBOUR_CHUNK = 40` cells when `coroutine.running()` is non-nil, and
+  closes its own section across the yield so the profile does not count
+  wall time between resumes (07s fixed that artifact: 357 / 1074 / 2750 ms
+  reported, none real).
+
+### The claims table is read once per port tick
+`arch.dispatch.claimsmemo` -- see also `arch.dispatch.claims`, `fact.tooling.sparsejson`, `arch.port.beatstages`
+
+Petport 07h/07i and `petports_work.lua`, 2026-09-06. `petports_claimGet`
+was `world.getProperty("petports_claims")[workId]` -- the whole table
+converted JSON to Lua -- per object inside every generator loop
+(`harvestWork` alone: 54 per beat per port) and per drop in the crosshair
+scan every half second. `petports_claimsMemoBegin/End` now bracket the
+port's `update`; inside, `claimGet` reads a snapshot, a write by this
+context replaces the snapshot with the table it wrote, and `claimTake`
+still reads the store fresh so two ports choosing one target hit the
+existing REFUSED path. Message handlers run outside the window and read
+fresh. `findWork` mean 32 -> 10 ms; `crosshairRefresh` max 200 -> 19.
+
+### The port beat runs in three ticks, not one
+`arch.port.beatstages` -- see also `arch.dispatch.claimsmemo`, `fact.tooling.frameceiling`, `todo.port.censusshared`
+
+Petport 07j, 2026-09-06. `workUpdate` runs `refreshNetwork` on the beat
+tick, then on the next three port ticks: (1) `refreshBeacons` -- the
+container census, 54 ms max; (2) `refreshFarmables`, `refreshAnimals`,
+`publishUnitPosition`, `ensureResidency`; (3) `workBeatDispatch`, i.e.
+`dispatchWork` or `trackWork`. `self.beatStage` carries the stage. Dispatch
+lands two port ticks (~0.25 s) later than before; drop-triggered dispatch
+(`workTimer = 0` from the crosshair scan) still starts the beat at once.
+The worst port tick went from the sum of the phases (127 ms) to the largest
+one; the census itself is still over a frame and is the next structural
+item.
+
+### A stall between an entity's own ticks is logged, and that is how "ours" is told from "engine"
+`arch.tooling.stalldetector` -- see also `fact.tooling.worldstorage`, `fact.tooling.luaprofile`, `proc.tooling.profilefirst`
+
+Coarsenav 07s and petport 07k, 2026-09-06. Each unit records `os.clock` at
+the end of its tick and logs `PROFILE STALL <n> ms ... (clock <c>)` at the
+next tick's start if the gap exceeds `PROF_STALL_MS = 250`; ports log
+`PETPORT STALL` the same way from `update`, before anything socket-gated,
+so the line fires unsocketed. `os.clock` is process CPU time, so the number
+is for matching lines across entities, not for measuring the stall.
+
+**THE READING RULE.** Every entity on the thread logs the same stall, so
+the `clock` values identify the frame. Then look for an owner: the entity
+whose `tick max` / `slow tick` was long immediately before that clock. A
+stall WITH an owner is ours and the owner's sections name it (this is how
+`approachTarget 1273` was found). A stall with every entity reporting and
+no owner is engine time (this is how `worldStorageInterval` was isolated).
+A stall in ONE port's Lua would show as a slow tick on that port plus
+STALLs on the others -- never seven STALLs and zero slow ticks.
 
 ## DESIGN DECISIONS
 
@@ -10428,6 +10538,119 @@ slot is therefore not a `TechType` and not a tech context** -- it cannot host a
 tech script, and would not have helped even as a dependency, which it could not
 have been anyway.
 
+
+### The 30-second all-entity hitch is retail's per-world storage sync, and it is not ours
+`fact.tooling.worldstorage` -- see also `arch.tooling.stalldetector`, `fact.tooling.configfiles`, `proc.tooling.controlfirst`, `todo.pathing.freeradius`
+
+**MEASURED WITH A CONTROL, 2026-09-06.** Every entity on the world thread
+reports a 290-720 ms stall at the same instant, on a cadence of 30.3 s from
+world load, with no entity owning a long tick before it. It is present with
+all seven ports UNSOCKETED and no unit in the world (ports-only, 290-375 ms).
+Patching `universe_server.config:worldStorageInterval` from 30000 to 45000
+moved the cadence to 45.25 s and 90.48 s from warp-in; nothing else moved it.
+The observed period is interval + sync duration (30.3, 45.3), which says the
+deadline resets AFTER the flush, and the flush holds the world while dirty
+sectors and metadata are written.
+
+**OUR SHARE IS THE PROPERTY STORE.** Same world, same cadence: ports only
+~330 ms; seven units on an empty nav store ~370-485 ms; seven units with
+~3,100 cell shards ~510-720 ms. So the floor is the world's own tiles and
+objects and about 100-200 ms per 3k shards is ours. That share grows with
+coverage and with the free-mover radius ladder (the aquatic `|f1|` profile
+reached 30k edges in a two-hour soak). It is an optimisation target
+(`todo.pathing.freeradius`), not a defect.
+
+**WHAT THIS WAS NOT, each excluded in turn:** any petports 30 s timer
+(`HEALTH_INTERVAL` is the only real one and its unsocketed body is two
+lines; the rest are TTLs, which run nothing when they lapse); any pcall
+(audited, see `fact.tooling.stringentity`); `client.config:
+storageTriggerInterval` (the player-save trigger, same name, unrelated);
+`storage/starbound.config` keys (preserved on exit, not consulted);
+`worldserver.config` (per-world simulation, does not carry it). A player
+whose base makes the sync hurt can raise `worldStorageInterval` themselves
+at the cost of a longer unsaved window; petports must not ship that.
+
+### Four server-side config files, and which key lives where
+`fact.tooling.configfiles` -- see also `fact.tooling.worldstorage`, `fact.tooling.luaprofile`, `ref.tooling.osbaseline`
+
+Nothing in the assets says which file a key is read from. The retail
+baseline does: every `assets->json("/universe_server.config:<key>")` in
+`StarUniverseServer.cpp` is the authority. As found 2026-09-06:
+
+- `universe_server.config` (asset, patchable): the universe server --
+  `mainWakeupInterval` 100, `worldStorageInterval` 30000 (per-world sync),
+  `universeStorageInterval` 40000 (settings and temp-world index, small),
+  `clearBrokenWorldsInterval`, `connectionTimeout`, `queuedFlightWaitTime`.
+  Every 120 s the two storage intervals land in the same second.
+- `worldserver.config` (asset): one world's simulation -- liquid, wiring,
+  falling blocks, `fidelitySettings`. No storage key.
+- `client.config` (asset): rendering, interpolation, and the PLAYER save
+  trigger `storageTriggerInterval` 30000 -- same name as nothing on the
+  server side; a coincidence that cost an afternoon.
+- `storage/starbound.config` (root configuration, not an asset): user
+  knobs, `scriptProfilingEnabled`, `scriptInstructionLimit`, bans. Keys the
+  engine does not know are preserved across runs and silently ignored, so
+  "still in the file after quitting" does not mean "read". `logLevel` is
+  not read from here either; it is `RootLoader`'s baked default.
+
+**RULE: before patching a server behaviour, grep the baseline source for
+the key and read which file the call names.** Three wrong files were
+patched before the right one on 2026-09-06.
+
+### The world thread has 16.7 ms per frame, and one long script call freezes every entity
+`fact.tooling.frameceiling` -- see also `arch.pathing.surveystride`, `arch.port.beatstages`, `fact.tooling.lockstep`, `arch.tooling.stalldetector`
+
+Retail `WorldTimestep` is 1/60 s and the world server is one thread, so
+every entity update, every liquid and wiring tick and every Lua call share
+16.7 ms. A script call that runs past the frame does not slow "its" entity;
+it holds the frame, and the client shows every walking entity on screen
+pausing at once and resuming together. That is a different thing from one
+unit standing still while it plans, and the two must not be confused.
+
+**THE PASS CRITERION MOVED ON 2026-09-06 from "the survey is tolerable" to
+"no single call crosses a frame".** Measured on the way there: seven units
+at `NAV_TICK_BUDGET_MS = 10` each halved the server's update rate during a
+store rebuild (57 -> 30 unit updates per 5 s window); at 10 ms with
+`CONCURRENT = 2`, 157 of 233 unit profile windows still had a tick over
+16 ms and `navTick` owned it, because the budget is checked BETWEEN sweep
+steps and one step can be 20-90 ms. At 4 ms / 2 steps / stride 2, 43 of
+77. Port beats that stacked a 54 ms census on a 46 ms `findWork` in one
+tick were the same shape on the other side. Every per-tick cost in the mod
+is now bounded by design rather than tuned to a machine.
+
+### A tile string handed to an entity-id binding under pcall cost a frame and said nothing
+`fact.tooling.stringentity` -- see also `fact.tooling.mergedrefusal`, `proc.tooling.guardedcall`, `todo.tooling.pcalltry`
+
+**MEASURED 2026-09-06.** A unit on a replant task -- whose `task.target` is
+the tile string `"2498,1163"`, not an entity -- reported `approachTarget
+max=1273 ms` with 2 ms of it in the standable search. The only other call on
+that path was `petports_habitatObjectBounds(task.target)` ->
+`pcall(world.objectSpaces, "2498,1163")`. The conversion fails, the pcall
+swallows it, nothing logs, and the frame is gone. Refusing non-numeric ids
+before the binding (habitat 07a) removed the 1.2 s stall and its log line
+fired twice in the next run with no stall after it.
+
+Whether the cost is the engine's exception path or something specific to
+that binding was not determined and does not matter: **the call was wrong on
+its face, and the pcall converted a wrong call into an invisible one.** An
+audit of all ~260 pcalls in the tree (2026-09-06) found no other site with
+that shape -- every other `task.target` use sits in a branch where the
+target is an entity by construction, every `root.itemConfig` /
+`root.monsterParameters` in a loop is behind a per-name cache, and every
+`callScriptedEntity` is type-gated. About a third of them log nothing on
+failure, which is `todo.tooling.pcalltry`.
+
+### Entities socketed together tick in lockstep
+`fact.tooling.lockstep` -- see also `fact.tooling.frameceiling`, `todo.tooling.lockstepphase`
+
+Units and ports spawned within a few seconds of each other keep the same
+update phase for the life of the session: unit `PROFILE` lines print in
+pairs 1-6 ms apart and all seven ports' `PETPORT profile` lines land within
+8 ms. So a 40 ms resolver on one unit and a 40 ms one on another are not
+independent events; they share a frame whenever both fire. The survey
+stride (`arch.pathing.surveystride`) phases the survey by entity id; the
+task-side resolvers are not yet phased (`todo.tooling.lockstepphase`).
+
 ## DISPROVEN
 
 ### Sinker jumping underwater was never a liquid problem
@@ -12976,6 +13199,102 @@ claims, which means an expiry policy, a sweep, and a decision about whether a
 failure recorded by one port should bind a port whose unit is somewhere else
 entirely -- the same reachability argument that killed the distance veto in
 `arch.fishing.network`. Not a 1.0 change.
+
+
+### A pcall wrapper that logs the first failure per call site
+`todo.tooling.pcalltry` -- see also `fact.tooling.stringentity`, `fact.tooling.mergedrefusal`, `proc.tooling.guardedcall`
+
+OPENED 2026-09-06 from the pcall audit: about a third of ~260 pcalls log
+nothing on failure. A `petports_try(site, fn, ...)` that logs once per
+`site` string on the first `not ok` and then stays quiet would turn every
+one of them into a visible refusal at near-zero cost, and would have named
+the replant stall in its first log. Mechanical change; do it in one pass
+with an assertion on the count of sites converted.
+
+### Cap the free-mover radius ladder at 8
+`todo.pathing.freeradius` -- see also `fact.tooling.worldstorage`, `arch.pathing.coarsenav`, `todo.pathing.graphbuildstart`
+
+OPENED 2026-09-06. Free-mover cells carry ~80 edges at radius 12 and the
+aquatic `|f1|` profile reached 30k edges in the two-hour soak; the store's
+size is our share of the world storage sync (100-200 ms per 3k shards) and
+every index read. Radius 8 halves the free-mover stores at no routing cost
+worth the name (legs chain anyway). A store change: `petports_navWipe()`.
+A denser edge encoding is the larger follow-on.
+
+### Split the graph build's first step
+`todo.pathing.graphbuildstart` -- see also `arch.pathing.boundedresolvers`, `arch.pathing.coarsenav`
+
+OPENED 2026-09-06. `graphFor max=63 ms` once per rebuild: the start step
+reads the whole profile index AND the first `NAV_BUILD_CHUNK` (40) shards
+in one call. Return after the index read, chunk from the next update. The
+index read itself (~1000 entries converted) stays over a frame until the
+index is sharded; that is the second half.
+
+### Poison inside the ocean: a denied liquid enclosed by an allowed one
+`todo.pathing.poisonocean` -- see also `arch.pathing.mediummixed`, `arch.pathing.coarsenav`, `arch.pathing.mediumenforcement`
+
+OPENED 2026-09-06, Lofty's adversarial case, to be done BEFORE amphibious
+routing. A player can build a poisoned pocket (background tiles, poison
+inserted) inside open ocean water; it is the deliberate mechanism for a
+selective membrane that only units carrying a poison block module pass.
+Two gaps against it: `petports_bodyFitsAlong` checks solids along a
+segment but not medium, so a swept edge between two allowed cells crossing
+the pocket records TRUE; and the string-pull's line test is a solid test,
+so a swimmer takes the straight line through the pocket and stalls. Both
+fixes gate on a non-empty deny list in the profile string (`|lpoison|`),
+so `|l|` units pay nothing; a targeted wipe of `|l<x>|` profiles rather
+than a full one if it can be done.
+
+### One census for the network instead of one per port
+`todo.port.censusshared` -- see also `arch.port.beatstages`, `arch.network.registry`
+
+OPENED 2026-09-06 (the coarse-nav doc's "cross-port shared scan", now
+with a number). `refreshBeacons` reads `containerItems` on every container
+in coverage every 5 s per port, and seven ports share most of their
+containers: 54 ms max per port, the tallest thing left on the port side
+after 07j. Same shape for the replant-intent reconcile at load (five
+ports derived the same intent). One port scans, publishes through the
+registry, the rest read.
+
+### The sinker should jump at fish, and the port should not send it after fish it cannot reach
+`todo.fishing.sinkerjump` -- see also `todo.locomotion.sinker`, `todo.fishing.medium`, `arch.dispatch.eligibility`
+
+OPENED 2026-09-06 (Lofty: "don't let me forget"). In the two-hour soak
+174 fish tasks failed "no standable position near fish target" -- the
+sinker chasing fish it has no column for -- and it still caught a couple.
+Two parts: give the sinker a jump at a fish within reach of a standable
+column; and have dispatch skip a sinker for fish with no column, since
+each attempt is a claim cycle the rest of the network paid for.
+
+### Amphibious long-range motion needs the mode boundary as a hop in the route
+`todo.pathing.amphibiousbridge` -- see also `arch.pathing.mediummixed`, `arch.pathing.coarsenav`, `todo.pathing.poisonocean`
+
+OPENED 2026-09-06 (after poisonocean). The amphibious unit surveys two
+disjoint graphs (`|f0|` land, `|f1|` swim; the swim one grew 6k -> 30k
+edges in the soak) with no edge between them, so land-mode routing to a
+water target logs `coarse nav has no leg` (4,807 in the soak) and the dive
+only engages at dispatch when the target itself is wet. Needed: a dive pair
+(board -> hole) as a bridging edge from an `f0` cell to an `f1` cell, and
+an exit as the reverse, so a route can cross the mode boundary mid-leg.
+"Combine beach-entry code with leg building", made concrete.
+
+### Phase the per-unit resolvers by entity id
+`todo.tooling.lockstepphase` -- see also `fact.tooling.lockstep`, `arch.pathing.surveystride`
+
+OPENED 2026-09-06. The survey is phased; `graphFor` / `freeMover` /
+`nearestCell` on a state entry are not, and units in lockstep put two 40 ms
+resolvers in one frame. The same stride idea applied to state-entry work:
+a unit that enters a state on a "busy" frame defers its first resolve one
+update. Measure first; after 07q/07r these may already fit.
+
+### Measure the lures
+`todo.fishing.luremeasure` -- see also `arch.fishing.lure`
+
+OPENED 2026-09-06. Read and judged innocent (one `liquidAt` + `entityExists`
+per tick, a `lineTileCollision` per patrol check, a bounded teleport
+search), never measured. An `os.clock` guard on the lure projectile's
+`update` logging any tick over 5 ms closes it. "Confident from reading" is
+the thing this doc distrusts.
 
 ## PROCESS
 

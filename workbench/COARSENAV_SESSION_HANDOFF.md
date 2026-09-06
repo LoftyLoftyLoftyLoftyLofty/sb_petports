@@ -1,4 +1,4 @@
-# COARSE NAV -- SESSION HANDOFF (as of coarsenav 07m / taskAction 07a / petport 07g)
+# COARSE NAV -- SESSION HANDOFF (as of coarsenav 07s / taskAction 07e / petport 07k / habitat 07a)
 
 Read this before proposing anything. MEASURED means read out of a
 starbound.log or an engine `.luaprofile`; FACT means read out of retail 1.4.4
@@ -7,9 +7,12 @@ OpenStarbound or fork binding. The OpenStarbound repo's first commit is
 unmodified retail source and may be READ for facts (StarLuaRoot.cpp was).
 
 Builds in play:
-`petports_coarsenav.lua` **2026-09-07m**, `petportsTaskAction.lua`
-**2026-09-07b**, `petports_flyapproach.lua` **2026-09-06b**,
-`petports_contract.lua` **2026-09-06a**, `petports_petport.lua` **2026-09-07g**.
+`petports_coarsenav.lua` **2026-09-07s**, `petportsTaskAction.lua`
+**2026-09-07e**, `petports_flyapproach.lua` **2026-09-06b**,
+`petports_contract.lua` **2026-09-06a**, `petports_petport.lua` **2026-09-07k**,
+`petports_habitat.lua` **2026-09-07a** (its first stamp), `petports_work.lua`
+(claims memo, unstamped). ALL UNCOMMITTED as of 2026-09-06; see the third
+pass below for what each one was measured against.
 **SOAK TEST, 2026-09-05 22:21 -> 00:25 (2 h, 1.2 M lines), on these builds:**
 zero LuaInstructionLimitReached; 14 unit ticks over 200 ms in two hours
 (one of 1,689 ms at 22:23:09, in the task action OUTSIDE navTick --
@@ -21,8 +24,11 @@ a small unit count (Lofty). ONE REAL DEFECT FOUND IN IT: 6,702 of 6,975
 their normal state); each good leg was failed at 0.5 s, re-probed (true),
 contradicted and re-planned -- 4,002 contradictions on |f1| profiles, and
 the false edges growing in the aquatic stores. taskAction 07b makes the
-refusal detector walker-only; UNTESTED as written. Expect the aquatic false
-counts in `petports_navDumpStore` to stop growing and the zigzag to go. Five of the 14 big unit ticks were `candidates`
+refusal detector walker-only. **VERIFIED 2026-09-06: zero refusals, zero
+contradictions, zero re-probes across 67 coarse-first routes and 125 legs in
+the first four minutes, and in every log since.** The aquatic false counts in
+`petports_navDumpStore` were not re-read (the dump must run from a unit's
+context: `/entityeval <unitId> petports_navDumpStore()`). Five of the 14 big unit ticks were `candidates`
 at ~220 ms with the survey idle: the graph rebuild's FIRST step (read the
 profile index, build the key list) is still one call.
 
@@ -34,10 +40,14 @@ port ticks ~3.5% of the world thread, the 2 s planet lockup found and
 removed (07m). No LuaInstructionLimitReached since 07f. This is the starting
 point for the actual feature work, not the end of anything.
 
-**THE TEST MACHINE IS AN HP PROBOOK 440 G5.** Every budget below is tuned so
-the survey is tolerable there. That is the pass criterion; a server has
-headroom, and a future network budget should expose these constants rather
-than a future session loosening them against a faster box.
+**THE TEST MACHINE IS AN HP PROBOOK 440 G5.** The budgets below were tuned so
+the survey was tolerable there. **THE CRITERION MOVED ON 2026-09-06: no
+single script call may cross a 16.7 ms frame, on any machine**, because a
+call that does freezes every walking entity on screen at once (the world
+thread is one thread at 1/60 s). Every per-tick cost is now bounded by
+construction -- stride, turn budget, resumable searches, yielding scans,
+staged beats -- rather than tuned. A faster box makes the survey finish
+sooner; it does not change what is allowed per call.
 
 ---
 
@@ -217,6 +227,52 @@ line, or an engine `.luaprofile`. In the order found:
   100-1000x more than the wrapper (measured by the probe timings and absent
   from the engine profile).
 
+
+## THIRD PERFORMANCE PASS (07n..07s, taskAction 07b..07e, petport 07h..07k, habitat 07a) -- WHAT WAS FOUND
+
+2026-09-06, one change per log, every fix from a number in the previous
+log. The V2 entries that outlive this are `fact.tooling.frameceiling`,
+`fact.tooling.worldstorage`, `fact.tooling.configfiles`,
+`fact.tooling.stringentity`, `fact.tooling.lockstep`,
+`arch.pathing.surveystride`, `arch.pathing.boundedresolvers`,
+`arch.dispatch.claimsmemo`, `arch.port.beatstages`,
+`arch.tooling.stalldetector`.
+
+**Symptom, in Lofty's words:** "a noticeable pause in the motion of walking
+entities which affects all of them at the same time" -- distinct from one
+unit pausing to plan. That is a frame overrun on the world thread, and the
+whole pass is a hunt for calls over 16.7 ms.
+
+| stamp | measured before | change | measured after |
+|---|---|---|---|
+| coarsenav 07n | six `navWipe()` calls: unit update rate 57 -> 30 per 5 s window, 82% of unit time in `navTick` -> `sweepStep` -> `probeStep` | survey stride: `NAV_SURVEY_CONCURRENT = 2`, turn on `(count+phase) % ceil(ports/2)`, ports = `#self.petportsNetwork` | update rate 48-52, no unit tick over 100 ms, `strideSkip` firing |
+| petport 07h | `findWork` mean 32 ms max 164, 106 slow ticks in 80 s; `petports_claimGet` = whole-table `getProperty` per object per generator | claims memo around `findWork` | `findWork` mean 14 |
+| petport 07i | `crosshairRefresh` max 200 (same read per drop per 0.5 s) | memo around the whole port `update` | `crosshairRefresh` max 19, slow ticks 148 -> 73 |
+| petport 07j | worst tick 127 = census 54 + `findWork` 46 in one beat tick | beat in three ticks | worst 79, ticks >30 ms 73 -> 32; "more often, shorter" (expected) |
+| coarsenav 07o | 208 of 233 unit windows had a tick >16 ms, `navTick` owned 157 (budget checked between steps; a step can be 20-90 ms) | `NAV_TICK_BUDGET_MS` 10 -> 4, `NAV_STEPS_PER_TICK` 4 -> 2 | 43 of 77; "enormous improvement, one or two small hitches" |
+| coarsenav 07p, taskAction 07c | two ~0.4 s wallclock stalls in the first update after `freshPather`, no section above `navTick` | sections: `coarseLeg`, `ventRoute`, `standable`, `approachTarget`, `diveApproach`, `nearestCell`, `waypoint` | next log names `nearestCell 67` and `graphFor 63` |
+| coarsenav 07q, taskAction 07d | `nearestCell` 67 ms: free mover, radius 32, unbounded body sweeps | `NAV_NEAREST_SWEEPS = 6`, cursor on `self`, "more" -> `tryCoarseLeg` returns false silently | `nearestCut` counter; not isolated in a later log |
+| coarsenav 07r | `neighbours` 66 ms in one resume (625 cells, anchor each) | yield every 40 cells inside a coroutine | -- |
+| coarsenav 07s, petport 07k | a 0.5 s gap no section owned | STALL detector on both entity kinds; `neighbours` section closed across the yield (it had reported 2750 ms of wall time) | first STALL log: one 1.4 s stall WITH an owner, two without |
+| habitat 07a, taskAction 07e | `approachTarget 1273` with `standable 6`: `pcall(world.objectSpaces, "2498,1163")` on a replant target | refuse non-numeric ids, log once per target; `objectBounds` section | `HABITAT objectPoints ... refusing` x2, no stall after |
+| (no change) | all-entity stalls every 30.3 s, no owner, present ports-only | control: patch `universe_server.config:worldStorageInterval` 30000 -> 45000 | cadence 45.25 / 90.48 s: engine, not ours |
+
+**READ THE STALL LINES THIS WAY** (`arch.tooling.stalldetector`): same
+`clock` on every entity = one frame; the entity with the long `tick max` or
+`slow tick` just before it owns it; no owner = engine. A pcall audit of the
+whole tree (~260 sites) found no second instance of the replant shape.
+
+**THINGS THAT WERE SAID AND WALKED BACK IN THIS PASS, so the next session
+does not repeat them:** "the unsocketed baseline falsifies serialisation
+cost" (it predated the detector and had nothing moving on screen); "the
+store size is a minority share" (true, but the before/after was small enough
+that it should not have carried weight until the ports-only control); and
+`storageTriggerInterval` / `logLevel` in `starbound.config` as the knobs
+(preserved, ignored). Lofty's "unsocketed should still hiccup if it's world
+storage" was the test that settled it; do the control before the argument.
+
+---
+
 ## FISHING NOTE (not a bug)
 
 Vanilla `fishingspawner.config`: rarity thresholds ascending, lower is rarer
@@ -246,13 +302,19 @@ is deep enough. Rares have shallow variants, which is why they appear.
 
 ## OPEN, NOT SCHEDULED
 
-- **Swimmer in open water** -- untested. Expect a rim of nodes along the
-  coverage edge; `petports_bodyFitsAlong` does not check medium mid-segment.
-- **Amphibious** -- combine beach-entry code with leg building (Lofty).
+- **Poison inside the ocean** (`todo.pathing.poisonocean`) -- NEXT, before
+  amphibious. `petports_bodyFitsAlong` does not check medium mid-segment and
+  the string-pull's line test is a solid test; both gate on a non-empty
+  `|l<x>|` deny list so `|l|` units pay nothing. Swimmer in open water is
+  otherwise verified by the 07b soak (no rim seen).
+- **Amphibious** (`todo.pathing.amphibiousbridge`) -- the mode boundary as a
+  hop in the route: dive pair as a bridging edge f0 -> f1, exit as the
+  reverse. Two disjoint graphs today; 4,807 `no leg` lines in the soak.
 - **openDoors** -- profile carries the flag; drop `Dynamic` from the three
   solid sets for openers; engine-side pathOptions name for doors unread.
-- **Network budget** for tens of units: cap concurrent sweeps per port, tune
-  against `setProperty`/s. The constants above are what it would expose.
+- **Network budget** -- BUILT as the survey stride (07n) and the 4 ms turn
+  (07o); `arch.pathing.surveystride`. What remains is phasing the
+  state-entry resolvers the same way (`todo.tooling.lockstepphase`).
 - **TTL semantics**: `NAV_SWEEP_TTL` counts world time while unloaded, so a
   restart after 15 min wipes the mesh. Options: hours-long TTL plus the
   contradiction path, or age by loaded time.
@@ -268,15 +330,16 @@ is deep enough. Rares have shallow variants, which is why they appear.
   a change signature (task id, fuel, cargo count, stats) would make idle
   free.
 - Cross-port shared scanning (see second pass above).
-- **Section the task action outside navTick**: tryCoarseLeg /
-  petports_navNearestCell (free mover: sight sweeps to graph cells out to
-  32 tiles) and the direct search, so a 1.7 s outlier gets a name.
-- **Chunk the graph build's start** (index read + key list) like the rest of
-  it; and/or **cap the free-mover ladder at radius 8**, which halves the
-  free-mover stores and every read of them.
-- Network budget for tens of units: the per-update caps above are what it
-  would expose; six ports x seven units is ~35% of the world thread on the
-  laptop with everything idle-surveying.
+- Section the task action outside navTick -- DONE 07p/07c
+  (`arch.pathing.boundedresolvers`); the 1.7 s outlier's family was
+  `nearestCell` and `neighbours`, both bounded now.
+- **Chunk the graph build's start** -- still open, 63 ms once per rebuild
+  (`todo.pathing.graphbuildstart`); **cap the free-mover ladder at 8** --
+  still open, now also the store's share of the world storage sync
+  (`todo.pathing.freeradius`).
+- Network budget -- DONE 07n/07o, see above.
+- **The census** (`refreshBeacons`, 54 ms max) is the tallest thing left on
+  the port side (`todo.port.censusshared`).
 - Pickup is not distance-checked; hop-count BFS routing; coarse levels are a
   rejection filter only.
 - V2 handoff has no coarse-nav entries; `todo.dispatch.reachbudget` should be
@@ -292,4 +355,11 @@ is deep enough. Rares have shallow variants, which is why they appear.
 Log lines: `NAV surveying`, `NAV sweep of ... COMPLETE`, `NAV pass at radius`,
 `TOO LONG`, `UNIT coarse first`, `UNIT coarse leg from`, `reached coarse leg
 ... chaining`, `would not walk`, `re-probe says`, `CONTRADICTED`, `refused by
-the pather ... onGround ...`, `PROFILE`, `PETPORT slow tick`.
+the pather ... onGround ...`, `PROFILE`, `PETPORT slow tick`, `PROFILE STALL`
+/ `PETPORT STALL ... (clock N)` (07s/07k: match `clock` across entities, then
+look for an owner), `HABITAT objectPoints asked about a non-entity target`.
+Survey counters worth reading: `strideSkip`, `budgetCut`, `stepCap`,
+`nearestCut`. Sections added this pass: `coarseLeg`, `ventRoute`,
+`standable`, `approachTarget`, `diveApproach`, `objectBounds`,
+`nearestCell`, `waypoint`. Log files that end in a run of NUL bytes are a
+hard stop mid-write; `tr -d '\000'` recovers what was flushed.

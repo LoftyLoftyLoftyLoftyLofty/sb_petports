@@ -61,7 +61,7 @@
 --  are unprobeable and time-varying and nobody's fault -- are allowed to
 --  produce optimistic-wrong answers. They fail in the cheap direction.
 
-local COARSENAV_BUILD_STAMP = "2026-09-07m the COMPLETE line no longer reads every shard in the store"
+local COARSENAV_BUILD_STAMP = "2026-09-07s a stall between ticks is logged"
 
 local navStamped = false
 
@@ -850,6 +850,8 @@ end
 --  -- up to four validStandingPosition calls per candidate cell.
 --
 --  THE SOURCE CELL IS EXCLUDED. A self-edge answers a question nobody asks.
+local NAV_NEIGHBOUR_CHUNK = 40
+
 function petports_navNeighbours(cx, cy, freeMover, radius)
 	--  THE RADIUS IS THE CALLER'S. A sweep passes the rung of the ladder it is
 	--  on; anything else gets the ceiling.
@@ -866,10 +868,37 @@ function petports_navNeighbours(cx, cy, freeMover, radius)
 	local found = {}
 	local solid = 0
 
+	--  YIELDS FROM INSIDE A SWEEP, 2026-09-07r. MEASURED 02:14 on 07p:
+	--  neighbours max 66 ms in one call, inside a sweepStep of 76, and
+	--  20-40 ms in three more windows. This scan is the first thing the
+	--  sweep coroutine does and it never yielded: up to (2r+1)^2 = 625 cells
+	--  at radius 12, each a navCellSolid tile query and a petports_navAnchor
+	--  (a footing scan or a body fit whenever the 30 s cache is cold), in ONE
+	--  resume -- which is why the per-turn budget, checked between resumes,
+	--  could not cut it. Every NAV_NEIGHBOUR_CHUNK cells inspected it now
+	--  yields IF it is running inside a coroutine (coroutine.running() is
+	--  nil on the main thread in Lua 5.1), so the sweep spreads its scan
+	--  over resumes like its probes. petports_navSelfTest calls this from
+	--  the main thread and is unchanged.
+	local inspected = 0
+	local inCoroutine = coroutine.running() ~= nil
+
 	for dx = -reach, reach do
 		for dy = -reach, reach do
 			if dx ~= 0 or dy ~= 0 then
 				local nx, ny = cx + dx, cy + dy
+
+				inspected = inspected + 1
+				if inCoroutine and inspected % NAV_NEIGHBOUR_CHUNK == 0 then
+					--  THE SECTION IS CLOSED ACROSS THE YIELD, 2026-09-07s. The
+					--  profWrap around this function opens "neighbours" on entry and
+					--  closes it on return, so with a yield in the middle it counted
+					--  wall time across resumes: 357, 1074 and 2750 ms in the first
+					--  log on 07r, none of it real (tick max was 57).
+					petports_profEnd("neighbours")
+					coroutine.yield()
+					petports_profBegin("neighbours")
+				end
 
 				--  SOLID FIRST, ANCHOR SECOND. The cheap test gates the dear
 				--  one; see navCellSolid for why that ordering is most of the
@@ -2331,6 +2360,58 @@ end
 --  arm's reach; the graph cell for it is the nearest wall node with a clear
 --  body-wide line to it, out to the probe distance. The last leg ends on
 --  that wall node and the direct search covers the sighted remainder.
+--  BOUNDED PER CALL AND RESUMABLE, 2026-09-07q. MEASURED 02:12 on 07p, the
+--  first log with this call sectioned: nearestCell max 67 ms inside a
+--  coarseLeg of 71, in the tick of a 0.39 s wallclock stall. For a free
+--  mover the radius is NAV_MAX_DISTANCE, so this was a 65x65 cell scan and
+--  then one body sweep (~1 ms, synchronous) per sighted candidate,
+--  nearest-first, with NO cap: behind a wall or in a tunnel that is dozens
+--  of sweeps in one call. Now at most NAV_NEAREST_SWEEPS sweeps per call;
+--  past that the sorted candidate list and the cursor are kept on self,
+--  keyed by the asking cell, mover class and radius, and the FOURTH return
+--  is true for "more" -- the caller (tryCoarseLeg) returns false without
+--  logging and asks again next tick, where this resumes. A new query, or a
+--  graph swap, throws the cursor away. Walkers never sweep and are unchanged.
+local NAV_NEAREST_SWEEPS = 6
+
+local function navNearestFrom(candidates, startAt, position, freeMover, radius, resumeKey, fine)
+	local swept = 0
+
+	for i = startAt, #candidates do
+		local c = candidates[i]
+		local anchor = petports_navAnchor(c.cx, c.cy, freeMover)
+
+		if anchor ~= nil then
+			local distance = world.magnitude(anchor, position)
+
+			if distance <= radius then
+				if not freeMover then
+					self.petportsNavNearestResume = nil
+					return c.key, anchor, distance
+				end
+
+				if swept >= NAV_NEAREST_SWEEPS then
+					self.petportsNavNearestResume = {
+						key = resumeKey, fine = fine, candidates = candidates, at = i
+					}
+					petports_profCount("nearestCut")
+					return nil, nil, nil, true
+				end
+
+				swept = swept + 1
+
+				if petports_bodyFitsAlong(position, anchor) == true then
+					self.petportsNavNearestResume = nil
+					return c.key, anchor, distance
+				end
+			end
+		end
+	end
+
+	self.petportsNavNearestResume = nil
+	return nil
+end
+
 function petports_navNearestCell(position, freeMover, radius)
 	radius = radius or 2.5
 
@@ -2341,6 +2422,15 @@ function petports_navNearestCell(position, freeMover, radius)
 	local px, py = petports_navCell(position)
 
 	local reach = math.ceil(radius / navStride())
+
+	local resumeKey = petports_navCellKey(px, py) .. "|" .. tostring(freeMover)
+		.. "|" .. tostring(radius)
+	local resume = self.petportsNavNearestResume
+
+	if resume ~= nil and resume.key == resumeKey and resume.fine == fine then
+		return navNearestFrom(resume.candidates, resume.at, position, freeMover,
+			radius, resumeKey, fine)
+	end
 
 	--  NEAREST-FIRST, STOP AT THE FIRST THAT QUALIFIES. 2026-09-06: the
 	--  free-mover version swept the body to EVERY graph cell within 32
@@ -2372,21 +2462,7 @@ function petports_navNearestCell(position, freeMover, radius)
 		return a.key < b.key
 	end)
 
-	for _, c in ipairs(candidates) do
-		local anchor = petports_navAnchor(c.cx, c.cy, freeMover)
-
-		if anchor ~= nil then
-			local distance = world.magnitude(anchor, position)
-
-			if distance <= radius
-			   and (not freeMover
-			        or petports_bodyFitsAlong(position, anchor) == true) then
-				return c.key, anchor, distance
-			end
-		end
-	end
-
-	return nil
+	return navNearestFrom(candidates, 1, position, freeMover, radius, resumeKey, fine)
 end
 
 --  What is in the store, for a log line. Counted rather than dumped: a full
@@ -2717,7 +2793,19 @@ end
 --  many milliseconds have been spent and the remaining sweeps resume next
 --  tick, in rotating order so a starved one goes first. Without a clock the
 --  budget is ignored. Tuned for the laptop: this is the pass criterion.
-local NAV_TICK_BUDGET_MS = 10.0
+--  10 -> 4 AND STEPS 4 -> 2, 2026-09-07o. THE CRITERION MOVED. The engine's
+--  world timestep is 1/60 s (retail WorldTimestep), so everything on the
+--  world thread shares 16.7 ms a frame, and a script call that crosses it
+--  freezes every walking entity on screen until it returns -- the "everything
+--  halts for a fraction of a second" hitch, as opposed to one unit pausing
+--  to plan. MEASURED 01:53 on 07n/07j with seven units: 157 of 233 unit
+--  profile windows had a tick over 16 ms and navTick was the tick in 157 of
+--  208 of them. The budget is checked BETWEEN steps, so a step begun at 9 ms
+--  that resolves a 20 ms body sweep runs the tick to ~30, and CONCURRENT = 2
+--  allows two such units in one frame plus a port beat. At 4 ms and two
+--  steps the overrun is one step's worth from a smaller base; the survey is
+--  slower in wall time, which is the accepted trade (see NAV_SURVEY_CONCURRENT).
+local NAV_TICK_BUDGET_MS = 4.0
 
 --  AND AT MOST THIS MANY SWEEPS PER UPDATE, 2026-09-07d. The engine caps
 --  the Lua instructions one update may execute (scriptInstructionLimit in
@@ -2726,7 +2814,7 @@ local NAV_TICK_BUDGET_MS = 10.0
 --  A time budget cannot see instructions, and one sweep resume can resolve
 --  several body sweeps in a row; a count cap can. The rotation below means
 --  every sweep still gets stepped within two updates.
-local NAV_STEPS_PER_TICK = 4
+local NAV_STEPS_PER_TICK = 2
 
 local function navTickClock()
 	if type(os) == "table" and type(os.clock) == "function" then
@@ -3897,9 +3985,34 @@ function petports_profEnd(section)
 end
 
 --  Call once per update, at the very start and the very end.
+--  A STALL BETWEEN THIS UNIT'S OWN TICKS, 2026-09-07s. MEASURED 02:23 on
+--  07r: a 0.5 s wallclock gap in the log that no section owned -- the
+--  largest unit tick in the window was 57 ms and the largest port tick 79.
+--  Either several entities put their 40-80 ms ticks in the SAME frame
+--  (everything socketed together ticks in lockstep: unit profile lines
+--  print 1-6 ms apart, all seven ports within 8 ms), or the time is
+--  engine-side and no script sees it. This tells the two apart: every unit
+--  sees the same stall, so the lines identify the frame; the entity whose
+--  tick was longest just before it is the suspect, and if no entity had
+--  one, the engine did it. os.clock is process CPU time, so with the
+--  client thread busy the interval between two ticks reads longer than the
+--  wall clock; the threshold is generous for that reason and the number is
+--  for matching lines, not for measuring the stall.
+local PROF_STALL_MS = 250
+local profTickEndAt = nil
+
 function petports_profTickBegin()
 	if not PETPORTS_PROFILE then return end
 	profTickStart = profNow()
+
+	if profTickEndAt ~= nil and profTickStart ~= nil then
+		local gap = (profTickStart - profTickEndAt) * 1000
+
+		if gap >= PROF_STALL_MS then
+			sb.logInfo("PROFILE STALL %s ms of process time between my ticks (clock %s)",
+				tostring(math.floor(gap)), tostring(math.floor(profTickStart * 1000)))
+		end
+	end
 end
 
 function petports_profTickEnd()
@@ -3910,6 +4023,7 @@ function petports_profTickEnd()
 		local ms = (now - profTickStart) * 1000
 		if ms > profTickMax then profTickMax = ms end
 	end
+	profTickEndAt = now
 
 	local t = world.time()
 	profReportAt = profReportAt or (t + PROF_REPORT_INTERVAL)
@@ -3973,6 +4087,49 @@ function petports_profTickEnd()
 	for name in pairs(profWorldCounts) do profWorldCounts[name] = 0 end
 end
 
+--  A NETWORK SURVEY BUDGET, AS A STRIDE, 2026-09-07n. MEASURED after six
+--  petports_navWipe() calls on a seven-unit islet: every unit ran its own
+--  NAV_TICK_BUDGET_MS and NAV_STEPS_PER_TICK at once, so the network's
+--  survey cost was 10 ms x 7 per world update and the unit update rate
+--  halved (57 -> 30 per 5 s window, nominal 60) until the ladders closed.
+--  82% of unit time was navTick, and of that sweepStep -> probeStep: the
+--  probes themselves, not the graph build or the flush.
+--
+--  THE PER-UNIT CONSTANTS ARE NOT LOWERED. They are also the instruction-cap
+--  safety, and they are what one unit alone costs. Instead a unit takes a
+--  survey TURN only on every k-th update, k = ceil(ports / CONCURRENT),
+--  phased by entity id so the units interleave. Network survey cost is then
+--  flat at CONCURRENT x one unit's budget whatever the unit count; a
+--  rebuild takes proportionally longer in wall time, which is the trade.
+--  Routing, legs and navGraphFor are never behind this gate.
+--
+--  THE PORT COUNT IS #self.petportsNetwork: one rect per member port,
+--  pushed by the port, one unit per port. No new reads. A unit with no
+--  rects (not yet pushed) or a single-port network gets stride 1: today's
+--  behaviour. The top-up timer only counts dt on turns, so its intervals
+--  stretch by the same stride, which is consistent with the rest.
+local NAV_SURVEY_CONCURRENT = 2
+
+local function navSurveyTurn()
+	self.petportsNavUpdateCount = (self.petportsNavUpdateCount or 0) + 1
+
+	local rects = self.petportsNetwork
+	local ports = 1
+	if type(rects) == "table" and #rects > 0 then ports = #rects end
+
+	local stride = math.ceil(ports / NAV_SURVEY_CONCURRENT)
+	if stride <= 1 then return true end
+
+	--  entity.id() can be negative for some entity classes; the phase only
+	--  needs to differ between units, not to be positive.
+	local phase = math.abs(entity.id()) % stride
+
+	if (self.petportsNavUpdateCount + phase) % stride == 0 then return true end
+
+	petports_profCount("strideSkip")
+	return false
+end
+
 local function navTickInner(dt, ownerId)
 	navIndexTick()
 	--  BEFORE THE STEP, so the pair currently in flight is drawn even on the
@@ -3981,7 +4138,13 @@ local function navTickInner(dt, ownerId)
 	petports_navDebugDraw()
 	petports_profEnd("draw")
 
-	--  STEP EVERY RUNNING SWEEP, EVERY TICK. Only the SEARCH for new cells is
+	--  NOT THIS UNIT'S TURN: nothing below runs. Returns true when sweeps are
+	--  alive so the caller reads it as "surveying", which it still is.
+	if not navSurveyTurn() then
+		return petports_navSweepCount() > 0
+	end
+
+	--  STEP EVERY RUNNING SWEEP, EVERY TURN. Only the SEARCH for new cells is
 	--  on the interval below; stepping is one explore call per slot and must not
 	--  wait two seconds between resumes.
 	petports_navSweepStep()
@@ -4130,6 +4293,12 @@ petports_navReaches = profWrap("reaches", petports_navReaches)
 petports_navSweepStart = profWrap("sweepStart", petports_navSweepStart)
 petports_navSweepStep = profWrap("sweepStep", petports_navSweepStep)
 petports_navCandidates = profWrap("candidates", petports_navCandidates)
+--  THE ROUTING SIDE, 2026-09-07p: what the task action calls on a state
+--  entry, which was the only unsectioned part of a unit tick. MEASURED
+--  02:05 on 07o: two ~0.4 s wallclock stalls, both in the first update after
+--  freshPather, invisible to every section above.
+petports_navNearestCell = profWrap("nearestCell", petports_navNearestCell)
+petports_navWaypoint = profWrap("waypoint", petports_navWaypoint)
 
 --  Where the survey has got to. For a log line or an eval, not for logic.
 function petports_navProgress()

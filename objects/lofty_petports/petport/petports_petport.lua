@@ -1435,7 +1435,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-07g a service point is remembered for thirty seconds"
+local PETPORT_BUILD_STAMP = "2026-09-07k a stall between ticks is logged"
 
 --  PORT PROFILER, 2026-09-07b. MEASURED 21:00: six ports on a small islet,
 --  59 port ticks over 30 ms in 39 s totalling 3.7 s, worst 268 ms, while
@@ -14636,7 +14636,44 @@ crosshairClear = function()
 end
 
 
+--  THE BEAT IS THREE TICKS, NOT ONE, 2026-09-07j. MEASURED 01:41 with seven
+--  units on 07i: 73 port ticks over 30 ms in 160 s, median 36, worst 127,
+--  felt as a hitch every ~0.3 s across seven ports on random phase. The
+--  worst ticks were the container census (refreshBeacons, max 54 ms) and
+--  findWork (max 46) landing on the SAME tick, because every phase of the
+--  beat ran in one call. Now the beat runs its stages on consecutive port
+--  ticks -- 1: the container census; 2: the other refreshes and the
+--  publish; 3: dispatch or track -- so the worst tick is the largest single
+--  phase, not their sum. Dispatch is two port ticks later than before,
+--  about a quarter second, which no unit notices; drop-triggered dispatch
+--  (workTimer = 0 from the crosshair scan) still starts the beat at once.
+--  The census is only every third beat and stage 1 is a no-op otherwise.
+--  The sub-timers still count WORK_INTERVAL per beat, unchanged.
+local workBeatDispatch
+
 local function workUpdate(dt)
+  if self.beatStage ~= nil then
+    local stage = self.beatStage
+
+    if stage == 1 then
+      portProf("refreshBeacons", refreshBeacons, WORK_INTERVAL)
+      self.beatStage = 2
+      return
+    elseif stage == 2 then
+      portProf("refreshFarmables", refreshFarmables, WORK_INTERVAL)
+      portProf("refreshAnimals", refreshAnimals, WORK_INTERVAL)
+      portProf("publishUnitPosition", publishUnitPosition)
+      --  Cheap: loadUniqueEntity on an existing stagehand and out.
+      portProf("ensureResidency", ensureResidency)
+      self.beatStage = 3
+      return
+    end
+
+    self.beatStage = nil
+    workBeatDispatch()
+    return
+  end
+
   self.workTimer = self.workTimer - dt
   if self.workTimer > 0 then return end
   self.workTimer = WORK_INTERVAL
@@ -14676,15 +14713,16 @@ local function workUpdate(dt)
   --  tick earlier and the whole question stops arising.
   portProf("nibbleFromCargo", nibbleFromCargo)
 
+  --  refreshNetwork stays on the beat tick: refreshBeacons reads the rects
+  --  it publishes, and it is 1.6 ms a call (measured).
   portProf("refreshNetwork", refreshNetwork)
-  portProf("refreshBeacons", refreshBeacons, WORK_INTERVAL)
-  portProf("refreshFarmables", refreshFarmables, WORK_INTERVAL)
-  portProf("refreshAnimals", refreshAnimals, WORK_INTERVAL)
-  portProf("publishUnitPosition", publishUnitPosition)
 
-  --  Cheap: loadUniqueEntity on an existing stagehand and out.
-  portProf("ensureResidency", ensureResidency)
+  --  STAGES 1..3 RUN ON THE NEXT THREE TICKS; see the note above workUpdate.
+  self.beatStage = 1
+end
 
+--  Stage 3 of the beat: the part that chooses or follows work.
+workBeatDispatch = function()
   --  A HEARTBEAT, CHANGE-GATED ON WHAT IT ACTUALLY REPORTS.
   --
   --  Unit id and current task are both slow-moving, so at one line per tick
@@ -15234,6 +15272,7 @@ end
 --  the port's periodic scan. os.clock is available in this sandbox
 --  (measured); a tick over PETPORT_SLOW_TICK_MS prints its cost once.
 local PETPORT_SLOW_TICK_MS = 30
+local PETPORT_STALL_MS = 250
 
 function update(dt)
   local began = nil
@@ -15242,7 +15281,27 @@ function update(dt)
     if ok and type(t) == "number" then began = t end
   end
 
+  --  ONE CLAIMS READ PER PORT TICK, 2026-09-07i; see petports_claimsMemoBegin
+  --  in petports_work.lua. 07h opened this around findWork only, and the
+  --  next log showed crosshairRefresh at 200 ms a call for the same reason:
+  --  crosshairWanted and crosshairClaim each read the whole claims table per
+  --  drop, every half second, per port. Every claimGet reader in this file
+  --  is inside updateInner, so the window is the tick. Message handlers run
+  --  outside it and read the store fresh, as before.
+  --  THE SAME STALL LINE THE UNITS PRINT (coarsenav 07s), 2026-09-07k, so a
+  --  frame that stalled shows up from both kinds of entity and the one whose
+  --  own tick was long just before it is the suspect.
+  if began ~= nil and self.tickEndedAt ~= nil then
+    local gap = (began - self.tickEndedAt) * 1000
+    if gap >= PETPORT_STALL_MS then
+      sb.logInfo("PETPORT STALL %s ms of process time between my ticks (clock %s)",
+        tostring(math.floor(gap)), tostring(math.floor(began * 1000)))
+    end
+  end
+
+  petports_claimsMemoBegin()
   updateInner(dt)
+  petports_claimsMemoEnd()
 
   if began ~= nil then
     local ok, t = pcall(os.clock)
@@ -15251,6 +15310,7 @@ function update(dt)
       if ms >= PETPORT_SLOW_TICK_MS then
         sb.logInfo("PETPORT slow tick: %s ms", tostring(math.floor(ms)))
       end
+      self.tickEndedAt = t
     end
   end
 end

@@ -653,6 +653,23 @@ end
 function petports_habitatObjectPoints(entityId)
 	if entityId == nil then return nil end
 
+	--  A NUMBER OR NOTHING, 2026-09-07a. MEASURED 02:31: a unit on a replant
+	--  task -- whose target is the TILE STRING "2498,1163", not an entity --
+	--  spent 1,273 ms in approachTarget with 2 ms of it in the standable
+	--  search, and this was the only other call on that path: the entity-id
+	--  binding handed a string, its conversion failure swallowed by the pcall,
+	--  the whole world thread stalled for the frame (every entity logged the
+	--  same STALL). Whatever the engine spends on that failure, the call is
+	--  wrong on its face: a tile target has no object spaces to ask for.
+	if type(entityId) ~= "number" then
+		if self ~= nil and self.petportsObjectPointsWarned ~= entityId then
+			self.petportsObjectPointsWarned = entityId
+			sb.logInfo("HABITAT objectPoints asked about a non-entity target %s -- refusing",
+				tostring(entityId))
+		end
+		return nil
+	end
+
 	local ok, spaces = pcall(world.objectSpaces, entityId)
 	if not ok or type(spaces) ~= "table" or #spaces == 0 then return nil end
 
