@@ -1,0 +1,30 @@
+//  Shared chat-bubble ICON sheet. Five 16x16 cells.
+//
+//  x        deposit or action refused
+//  box      any item whose inventoryIcon is a drawable LIST rather than a path
+//  sword    generated melee weapon
+//  gun      generated ranged weapon
+//  blank    deliberately empty -- an unused icon slot
+//
+//  WHY box, sword AND gun EXIST
+//
+//  root.itemConfig returns inventoryIcon as EITHER a path string or a list of
+//  layered drawables. An animator part image is a single path, so the list case
+//  has no faithful rendering and needs a stand-in. Generated weapons are the
+//  overwhelming majority of that case, so they get the two specific icons and
+//  everything else falls through to the box.
+//
+//  SEPARATE SHEET FROM bubble.png ON PURPOSE. One .frames carries one
+//  frameGrid, and these are 16x16 while the backings are 64x32.
+//
+//  PLACEHOLDER ART.
+
+{
+	"frameGrid" : {
+		"size" : [16, 16],
+		"dimensions" : [5, 1],
+		"names" : [
+			[ "x", "box", "sword", "gun", "blank" ]
+		]
+	}
+}

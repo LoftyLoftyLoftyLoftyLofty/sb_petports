@@ -1,0 +1,37 @@
+//  Shared chat-bubble BACKING sheet. Four 64x32 cells.
+//
+//  one, two, three        the backing at one, two and three icon slots wide
+//  blank                  deliberately empty -- the "none" bubble state
+//
+//  WHY EVERY CELL IS THE SAME SIZE WHEN THE BUBBLES ARE NOT
+//
+//  A .frames file carries ONE frameGrid, so every frame is 64x32 whether the
+//  bubble drawn inside it is 26 wide or 62. Each backing is drawn CENTRED in
+//  its cell, which means the part can be "centered" : true with a single fixed
+//  offset and the backing grows symmetrically about the unit's centre line as
+//  slots are added. Sizing the cells to the art instead would need a per-state
+//  offset on the backing as well as on the icons, for no gain.
+//
+//  GEOMETRY, AND IT IS LOAD-BEARING -- the icon slot offsets in every chassis
+//  .animation are derived from these numbers, not chosen independently.
+//
+//    8 pixels to the tile.
+//    Icon cell 16px. Gap between icons 2px. Padding 4px. Border 1px.
+//    one   = 1*16          + 8 + 2 = 26 wide
+//    two   = 2*16 + 1*2    + 8 + 2 = 44 wide
+//    three = 3*16 + 2*2    + 8 + 2 = 62 wide
+//    Body 26 tall, tail 5 more. Body centre sits 3px above the cell centre,
+//    which is where the 0.375 tile lift on every icon offset comes from.
+//
+//  PLACEHOLDER. Flat fill, one border colour, no chassis variation. The shape
+//  and the measurements are the part worth keeping.
+
+{
+	"frameGrid" : {
+		"size" : [64, 32],
+		"dimensions" : [4, 1],
+		"names" : [
+			[ "one", "two", "three", "blank" ]
+		]
+	}
+}

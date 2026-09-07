@@ -102,7 +102,34 @@
           //  preserves phase.
           "spinflip" : { "frames" : 8, "cycle" : 0.80, "mode" : "loop" }
         }
-      }
+      },
+
+			//  CHAT BUBBLE -- a SEPARATE state type, for the same reason
+			//  "thinking" is one: it has to compose with whatever "movement"
+			//  is doing. A unit can be walking, falling or asleep while it is
+			//  saying it cannot reach its crate.
+			//
+			//  THE STATES ARE LAYOUTS, NOT CONTENT. Content arrives at runtime
+			//  through a part tag; these four states exist only to move the
+			//  icon slots so that one, two or three icons come out centred,
+			//  and to pick a backing wide enough to hold them.
+			//
+			//  Driven only by petports_bubble.lua. Nothing else may set it.
+			//
+			//  Every state is a single static frame -- there is no animation
+			//  here at all -- but "frames" and "cycle" are still declared
+			//  because a state missing them is not obviously a still image to
+			//  anyone reading this later.
+			"bubble" : {
+				"priority" : 2,
+				"default" : "none",
+				"states" : {
+					"none"  : { "frames" : 1, "cycle" : 1.00, "mode" : "loop" },
+					"one"   : { "frames" : 1, "cycle" : 1.00, "mode" : "loop" },
+					"two"   : { "frames" : 1, "cycle" : 1.00, "mode" : "loop" },
+					"three" : { "frames" : 1, "cycle" : 1.00, "mode" : "loop" }
+				}
+			}
     },
 
     "parts" : {
@@ -210,9 +237,127 @@
             "spinflip" : { "properties" : { "image" : "/monsters/lofty_petports/shared/spinner/spinner.png:spinflip.<frame>" } }
           }
         }
-      }
+      },
+
+			//  CHAT BUBBLE BACKING. Drawn above both body layers and above the
+			//  thinking spinner, always lit.
+			//
+			//  NOT a <partImage> reference, for the reason the spinner is not
+			//  one either: the sheet is identical on every chassis and forcing
+			//  each chassis spritesheet to carry a copy buys nothing.
+			//
+			//  Every cell in bubble.png is 64x32 with the backing drawn
+			//  centred inside it, so this part needs ONE fixed offset and the
+			//  bubble grows symmetrically as slots are added. See
+			//  bubble.frames for where the widths come from.
+			//
+			//  offset is in TILES and is TUNE-IN-GAME. [0, 3.0] puts the
+			//  tail just above a body whose metaBoundBox tops out at 0.9. A
+			//  taller chassis needs more, and moving it means moving the four
+			//  icon offsets by the same amount.
+			"bubbleback" : {
+				"properties" : {
+					"zLevel" : 4,
+					"centered" : true,
+					"fullbright" : true,
+					"transformationGroups" : ["bubble"],
+					"offset" : [0, 3.0]
+				},
+				"partStates" : {
+					"bubble" : {
+						"none"  : { "properties" : { "image" : "/monsters/lofty_petports/shared/spinner/spinner.png:blank" } },
+						"one"   : { "properties" : { "image" : "/monsters/lofty_petports/shared/bubble/bubble.png:one" } },
+						"two"   : { "properties" : { "image" : "/monsters/lofty_petports/shared/bubble/bubble.png:two" } },
+						"three" : { "properties" : { "image" : "/monsters/lofty_petports/shared/bubble/bubble.png:three" } }
+					}
+				}
+			},
+
+			//  THE THREE ICON SLOTS, in reading order.
+			//
+			//  The image is a TAG, not a path. petports_bubble.lua fills it in
+			//  per slot with animator.setPartTag, which scopes the tag to one
+			//  part -- so all three can share the name "icon" without
+			//  colliding.
+			//
+			//  The per-state offsets are the whole layout mechanism: n icons
+			//  live in slots 1..n and the offsets for that state centre them
+			//  on the unit. Slots above n are blanked by the script.
+			//
+			//  ALL FOUR BUBBLE PARTS BELONG TO THE "bubble" TRANSFORMATION
+			//  GROUP AND TO NOTHING ELSE. A part in two groups has them
+			//  applied in a fixed internal order rather than in the order the
+			//  Lua calls were made, so a second group here would silently
+			//  fight the un-flip. See petports_bubble.lua's header.
+			"bubbleicon1" : {
+				"properties" : {
+					"zLevel" : 5,
+					"centered" : true,
+					"fullbright" : true,
+					"transformationGroups" : ["bubble"],
+					"offset" : [0, 3.375],
+					"image" : "<icon>"
+				},
+				"partStates" : {
+					"bubble" : {
+						"none"  : { "properties" : { "image" : "/monsters/lofty_petports/shared/spinner/spinner.png:blank" } },
+						"one"   : { "properties" : { "offset" : [0.0, 3.375] } },
+						"two"   : { "properties" : { "offset" : [-1.125, 3.375] } },
+						"three" : { "properties" : { "offset" : [-2.25, 3.375] } }
+					}
+				}
+			},
+
+			"bubbleicon2" : {
+				"properties" : {
+					"zLevel" : 5,
+					"centered" : true,
+					"fullbright" : true,
+					"transformationGroups" : ["bubble"],
+					"offset" : [0, 3.375],
+					"image" : "<icon>"
+				},
+				"partStates" : {
+					"bubble" : {
+						"none"  : { "properties" : { "image" : "/monsters/lofty_petports/shared/spinner/spinner.png:blank" } },
+						"one"   : { "properties" : { "image" : "/monsters/lofty_petports/shared/spinner/spinner.png:blank" } },
+						"two"   : { "properties" : { "offset" : [1.125, 3.375] } },
+						"three" : { "properties" : { "offset" : [0.0, 3.375] } }
+					}
+				}
+			},
+
+			"bubbleicon3" : {
+				"properties" : {
+					"zLevel" : 5,
+					"centered" : true,
+					"fullbright" : true,
+					"transformationGroups" : ["bubble"],
+					"offset" : [0, 3.375],
+					"image" : "<icon>"
+				},
+				"partStates" : {
+					"bubble" : {
+						"none"  : { "properties" : { "image" : "/monsters/lofty_petports/shared/spinner/spinner.png:blank" } },
+						"one"   : { "properties" : { "image" : "/monsters/lofty_petports/shared/spinner/spinner.png:blank" } },
+						"two"   : { "properties" : { "image" : "/monsters/lofty_petports/shared/spinner/spinner.png:blank" } },
+						"three" : { "properties" : { "offset" : [2.25, 3.375] } }
+					}
+				}
+			}
     }
   },
+
+	//  Holds the four chat-bubble parts and nothing else. Scaled -1 on x by
+	//  petports_bubble.lua whenever the unit faces left, which cancels the
+	//  engine's own mirror so the icons keep their reading order and their
+	//  own handedness.
+	//
+	//  DELIBERATELY NOT "interpolated". A mirror has to snap; interpolating
+	//  one animates the bubble squashing through zero width on every turn.
+	"transformationGroups" : {
+		"bubble" : { }
+	},
 
   "effects" : {
     //  Referenced by knockoutEffect in the monstertype.

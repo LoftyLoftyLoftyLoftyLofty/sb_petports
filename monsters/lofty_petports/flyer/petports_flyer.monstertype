@@ -131,6 +131,13 @@
       "/monsters/lofty_petports/petports_contract.lua",
       "/monsters/lofty_petports/petports_placement.lua",
       "/monsters/lofty_petports/petports_think.lua",
+
+      //  CHAT BUBBLE render layer. Defines globals only; nothing
+      //  in it runs at load, so its position here carries no
+      //  ordering requirement. Listed next to petports_think.lua
+      //  because it is the same kind of thing: an indicator that
+      //  drives its own animation state type.
+      "/monsters/lofty_petports/petports_bubble.lua",
       "/monsters/lofty_petports/petportsSleepAction.lua",
       "/monsters/lofty_petports/petportsTaskAction.lua",
 
