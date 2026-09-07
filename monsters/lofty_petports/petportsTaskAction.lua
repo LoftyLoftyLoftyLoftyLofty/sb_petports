@@ -178,7 +178,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-07s a coarse leg is reached at a quarter tile"
+local BUILD_STAMP = "2026-09-07u the turn at a leg's end is measured against the body's heading"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -1071,6 +1071,14 @@ local NAV_LEG_ARRIVAL_FREE = 0.25  --  0.5 -> 0.25, 2026-09-07s (Lofty)
 --  Tight, because the whole point is to be ON the centreline.
 local NAV_LEG_STEP_ARRIVAL = 0.15
 
+--  Arrival at a leg the route flies through (turn below NAV_LEG_SHARP_TURN):
+--  a full tile, so the body never slows for it. Turn thresholds in degrees:
+--  a sharp turn arrives tight; a tight turn (more than 45 off the heading)
+--  brakes to land exactly on the point.
+local NAV_LEG_ARRIVAL_THROUGH = 1.0
+local NAV_LEG_SHARP_TURN = 75
+local NAV_LEG_BRAKE_TURN = 45
+
 --  WALK THE NEXT LEG OF A COARSE ROUTE, WHEN THERE IS ONE.
 --
 --  TRIED BEFORE VENTS, AND THAT ORDER MATTERS. A vent hop teleports a unit and
@@ -1189,6 +1197,7 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
   stateData.navLegTo = legCell
   stateData.navLegPrev = legPrev
   stateData.navLegHops = legHops
+  stateData.navLegNext = self.petportsNavLastRoute and self.petportsNavLastRoute.nextAnchor or nil
   stateData.navLegReach = reach
 
   --  EVERYTHING THE OLD TARGET LEFT BEHIND. The same reset tryVentRoute does
@@ -6843,7 +6852,9 @@ local function petportsTaskUpdateInner(dt, stateData)
     and (stateData.navLegArrived == true
       or world.magnitude(stateData.navWaypoint, mcontroller.position())
          < (petports_freeMover()
-            and (stateData.navLegStep and NAV_LEG_STEP_ARRIVAL or NAV_LEG_ARRIVAL_FREE)
+            and (stateData.navLegStep and NAV_LEG_STEP_ARRIVAL
+              or ((stateData.navLegTurn or 0) >= NAV_LEG_SHARP_TURN
+                and NAV_LEG_ARRIVAL_FREE or NAV_LEG_ARRIVAL_THROUGH))
             or ARRIVAL_DISTANCE))
     and (petports_freeMover() or mcontroller.onGround())
 
@@ -6887,7 +6898,10 @@ local function petportsTaskUpdateInner(dt, stateData)
     end
   end
 
-  if stateData.navWaypoint == nil then self.petportsLegWaypoint = nil end
+  if stateData.navWaypoint == nil then
+    self.petportsLegWaypoint = nil
+    self.petportsLegTightTurn = nil
+  end
 
   if not stateData.arrived then
     --  approachPoint OWNS the arrival test, and its return value is the answer.
@@ -6903,8 +6917,43 @@ local function petportsTaskUpdateInner(dt, stateData)
     --  free movers on a leg get NAV_LEG_ARRIVAL_FREE; everything else keeps
     --  ARRIVAL_DISTANCE. The turn toward the next waypoint then happens on
     --  the corridor's centreline, which is what a corner needs.
+    --  TIGHT ONLY FOR A SHARP TURN, 2026-09-07t (Lofty): a leg whose turn
+    --  at its end is NAV_LEG_SHARP_TURN or more arrives at the quarter tile;
+    --  a leg the route continues through more or less straight arrives at
+    --  NAV_LEG_ARRIVAL_THROUGH, so the body flies through the waypoint with
+    --  no visible stop. The free mover is told the same so it brakes only
+    --  where it must.
+    --  MEASURED IN FLIGHT, 2026-09-07u: the angle between the body's
+    --  velocity (its heading; the line to the waypoint if it is still) and
+    --  the route's direction out of the waypoint. Positive or negative
+    --  approach, overshoot, a turn still in progress -- all in the number.
+    local turn = 0
+    if stateData.navWaypoint ~= nil and stateData.navLegNext ~= nil then
+      local heading = mcontroller.velocity()
+      local hl = math.sqrt(heading[1] * heading[1] + heading[2] * heading[2])
+      if hl < 0.5 then
+        local here = mcontroller.position()
+        heading = { stateData.navWaypoint[1] - here[1], stateData.navWaypoint[2] - here[2] }
+        hl = math.sqrt(heading[1] * heading[1] + heading[2] * heading[2])
+      end
+      local out = {
+        stateData.navLegNext[1] - stateData.navWaypoint[1],
+        stateData.navLegNext[2] - stateData.navWaypoint[2]
+      }
+      local ol = math.sqrt(out[1] * out[1] + out[2] * out[2])
+      if hl > 0.001 and ol > 0.001 then
+        local cosine = (heading[1] * out[1] + heading[2] * out[2]) / (hl * ol)
+        if cosine > 1 then cosine = 1 elseif cosine < -1 then cosine = -1 end
+        turn = math.deg(math.acos(cosine))
+      end
+    end
+    stateData.navLegTurn = turn
+    local sharp = turn >= NAV_LEG_SHARP_TURN
+    self.petportsLegTightTurn = stateData.navWaypoint ~= nil and turn >= NAV_LEG_BRAKE_TURN
+
     local legArrival = (stateData.navWaypoint ~= nil and petports_freeMover())
-      and (stateData.navLegStep and NAV_LEG_STEP_ARRIVAL or NAV_LEG_ARRIVAL_FREE) or nil
+      and (stateData.navLegStep and NAV_LEG_STEP_ARRIVAL
+        or (sharp and NAV_LEG_ARRIVAL_FREE or NAV_LEG_ARRIVAL_THROUGH)) or nil
 
     if approachPoint(dt, approachTo, ARRIVAL_DISTANCE, false, legArrival) then
       --  ARRIVING AT A LEG IS NOT ARRIVING. Measured 2026-09-05 04:33:

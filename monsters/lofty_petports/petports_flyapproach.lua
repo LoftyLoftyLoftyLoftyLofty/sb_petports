@@ -82,7 +82,7 @@
 --  delegate, and stays one.
 local vanillaSetJumpState = setJumpState
 
-local BUILD_STAMP = "2026-09-07h the last tick of a pull lands on the point"
+local BUILD_STAMP = "2026-09-07i the last tick lands on the point only when the turn ahead is tight"
 local stampLogged = false
 
 --  DELETE ME ONCE THE ANSWER IS IN THE LOG.
@@ -647,7 +647,10 @@ local function steerDirectly(toTarget, length, running)
   local dt = script.updateDt and script.updateDt() or (1 / 12)
   local command
 
-  if length <= speed * dt then
+  --  ONLY FOR A TIGHT TURN AHEAD, 2026-09-07i (Lofty): the task action
+  --  sets petportsLegTightTurn when the held leg turns more than 45 degrees
+  --  at its end. A leg the route runs through is flown at speed, no stop.
+  if length <= speed * dt and self.petportsLegTightTurn == true then
     command = { toTarget[1] / dt, toTarget[2] / dt }
     if not flyCommandAllowed(command) then return end
     mcontroller.setVelocity(command)

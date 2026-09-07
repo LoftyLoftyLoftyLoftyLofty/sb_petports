@@ -61,7 +61,7 @@
 --  are unprobeable and time-varying and nobody's fault -- are allowed to
 --  produce optimistic-wrong answers. They fail in the cheap direction.
 
-local COARSENAV_BUILD_STAMP = "2026-09-09i a free mover is never handed a leg beyond its reach"
+local COARSENAV_BUILD_STAMP = "2026-09-09k a leg carries the anchor after its end; the turn is measured in flight"
 
 local navStamped = false
 
@@ -3665,6 +3665,23 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdva
 
 	self.petportsNavLastRoute.leg = path[chosenAt]
 	self.petportsNavLastRoute.waypoint = chosen
+
+	--  THE TURN AT THE END OF THE LEG, 2026-09-09j (Lofty): the angle in
+	--  degrees between the leg's direction and the route's direction out of
+	--  the waypoint, nil at the route's end. The executor arrives tightly and
+	--  brakes only where the turn is sharp, and flies through otherwise.
+	--  09k: the turn is no longer computed here from the PLANNED incoming
+	--  direction -- the body arrives from wherever it actually is, and a
+	--  planned 45 read as 135 in flight (Lofty, 21:05). The leg carries the
+	--  anchor AFTER its end and the executor measures the turn against its
+	--  own velocity every tick.
+	self.petportsNavLastRoute.turn = nil
+	self.petportsNavLastRoute.nextAnchor = nil
+	if chosenAt < #path then
+		local nx = tonumber(string.match(path[chosenAt + 1], "^(-?%d+),"))
+		local ny = tonumber(string.match(path[chosenAt + 1], ",(-?%d+)$"))
+		self.petportsNavLastRoute.nextAnchor = nx ~= nil and petports_navAnchor(nx, ny, freeMover) or nil
+	end
 
 	--  ALSO THE CHOSEN CELL AND HOW MANY HOPS THE LEG SPANS, so a caller that
 	--  fails to walk the leg can retry it one hop at a time and, when a single
