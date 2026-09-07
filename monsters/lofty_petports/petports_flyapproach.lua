@@ -82,7 +82,7 @@
 --  delegate, and stays one.
 local vanillaSetJumpState = setJumpState
 
-local BUILD_STAMP = "2026-09-07k a free mover string-pulls to any target its line is clear to"
+local BUILD_STAMP = "2026-09-07m a released string-pull keeps its speed"
 local stampLogged = false
 
 --  DELETE ME ONCE THE ANSWER IS IN THE LOG.
@@ -627,6 +627,35 @@ local function flyCommandAllowed(velocity)
   return true
 end
 
+--  A REFUSED DIAGONAL BECOMES ITS CLEAR AXIS, 2026-09-07l (Lofty, 15:27).
+--  MEASURED: ten seconds of the same down-left command refused by the guard
+--  at a poison corner, velocity zeroed each tick, nothing else ever
+--  proposed. The guard stops the body entering poison; this says what to do
+--  instead -- the horizontal component alone, then the vertical alone, the
+--  first the guard allows. The body goes round the corner in two straight
+--  moves, which is the 90-degree path a corner wants. Returns the command
+--  flown, or nil when none of the three is allowed.
+local function guardedFly(command)
+  if flyCommandAllowed(command) then
+    mcontroller.controlFly(command)
+    return command
+  end
+
+  local horizontal = { command[1], 0 }
+  local vertical = { 0, command[2] }
+  local first, second = horizontal, vertical
+  if math.abs(command[2]) > math.abs(command[1]) then first, second = vertical, horizontal end
+
+  for _, axis in ipairs({ first, second }) do
+    if math.abs(axis[1]) + math.abs(axis[2]) > 0.01 and flyCommandAllowed(axis) then
+      mcontroller.controlFly(axis)
+      return axis
+    end
+  end
+
+  return nil
+end
+
 local function steerDirectly(toTarget, length, running)
   --  SCALED, because the planner's copy is scaled too -- arch.module.metabolism.
   --  This is the blind-steer fallback, so there is no plan to disagree with,
@@ -679,9 +708,7 @@ local function steerDirectly(toTarget, length, running)
   end
 
   command = { toTarget[1] / length * speed, toTarget[2] / length * speed }
-  if not flyCommandAllowed(command) then return end
-
-  mcontroller.controlFly(command)
+  if guardedFly(command) == nil then return end
 
   mcontroller.controlFace(toTarget[1])
   setMovementState(running)
@@ -1371,9 +1398,7 @@ local function petportsFreeMoverInner(pather)
     local length = math.sqrt(delta[1] * delta[1] + delta[2] * delta[2])
     local command = length > 0.001
       and { delta[1] / length * speed, delta[2] / length * speed } or { 0, 0 }
-    if not flyCommandAllowed(command) then return "running" end
-
-    mcontroller.controlFly(delta)
+    guardedFly(command)
   end
 
   return "running"
@@ -1622,9 +1647,11 @@ function approachPoint(dt, targetPosition, stopDistance, running, arrival)
     --  plan the same far waypoint through the wall.
     self.petportsPullReleased = true
 
-    --  A STOP, NOT A SLIDE, 2026-09-07c: the body carries its velocity into
-    --  the corner it just saw otherwise. Free movers can hold still.
-    mcontroller.setVelocity({ 0, 0 })
+    --  KEEPS ITS SPEED, 2026-09-07m. 07c zeroed velocity here so the body
+    --  would not slide into the corner it had just seen; the body guard now
+    --  refuses any command into denied liquid and the axis fallback steers
+    --  round it, so the stop was a full brake with no purpose -- fifteen in
+    --  a hundred seconds, each a visible hiccup (MEASURED 15:51).
 
     petports_freshPather("string-pull released, line blocked")
   end

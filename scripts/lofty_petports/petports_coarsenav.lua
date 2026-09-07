@@ -61,7 +61,7 @@
 --  are unprobeable and time-varying and nobody's fault -- are allowed to
 --  produce optimistic-wrong answers. They fail in the cheap direction.
 
-local COARSENAV_BUILD_STAMP = "2026-09-09m the candidate scan walks out until it finds unswept work"
+local COARSENAV_BUILD_STAMP = "2026-09-09s a graph rebuild advances every tick, asked or not"
 
 local navStamped = false
 
@@ -376,6 +376,23 @@ local navBlockKey
 --  THIS STAYS THE COVERAGE MARGIN. NAV_COVERAGE_MARGIN wants the WIDEST reach
 --  a sweep will ever have, so that the boundary never carves anchored ground.
 PETPORTS_NAV_RADIUS = 12
+
+--  FOUR CELLS FOR A FREE MOVER, 2026-09-09r. MEASURED 14:42: 76,000 edges
+--  on 1,200 cells -- 63 a cell -- because in open water every cell within
+--  twelve is visible from every other. A free mover string-pulls, so a long
+--  clear line is found at execution from the short hops; the long edges
+--  were redundant and cost a minute of "still building" per rebuild and
+--  67 ms candidate walks. Eight tiles keeps every cell connected to its
+--  neighbourhood. Walkers keep 12: their edges are paths.
+PETPORTS_NAV_RADIUS_FREE = 4
+
+--  The full radius for the side being surveyed.
+local function navFullRadius()
+	if petports_freeMover ~= nil and petports_freeMover() then
+		return PETPORTS_NAV_RADIUS_FREE
+	end
+	return PETPORTS_NAV_RADIUS
+end
 --  4 -> 2, 2026-09-08x (Lofty): the first pass touches only the cells right
 --  beside a swept one, so the frontier moves in small, visible steps and a
 --  cell's nearest edges exist before anything wider is tried.
@@ -385,9 +402,9 @@ PETPORTS_NAV_RADIUS_STEP = 2
 --  The radius a cell should be swept at next, given the largest radius it
 --  has already been swept at. nil when it is done.
 local function navNextRadius(sweptRadius)
-	if (sweptRadius or 0) >= PETPORTS_NAV_RADIUS then return nil end
+	if (sweptRadius or 0) >= navFullRadius() then return nil end
 	if (sweptRadius or 0) <= 0 then return PETPORTS_NAV_RADIUS_START end
-	return math.min(sweptRadius + PETPORTS_NAV_RADIUS_STEP, PETPORTS_NAV_RADIUS)
+	return math.min(sweptRadius + PETPORTS_NAV_RADIUS_STEP, navFullRadius())
 end
 
 --  HOW FAR PAST NETWORK COVERAGE A SWEEP MAY BE STARTED, IN TILES.
@@ -850,15 +867,19 @@ local function navAnchorUncached(cx, cy, freeMover)
 				local okC, centreLevel = pcall(world.liquidAt, { point[1], point[2] })
 				local centreWet = okC and centreLevel ~= nil
 					and (centreLevel[2] or 0) >= (PETPORTS_SUBMERGED_FILL or 0.5)
-				local x0, y0 = math.floor(grown[1]), math.floor(grown[2])
-				local x1, y1 = math.floor(grown[3] - 0.01), math.floor(grown[4] - 0.01)
-				for ty = y0, y1 do
-					for tx = x0, x1 do
-						local okT, level = pcall(world.liquidAt, { tx + 0.5, ty + 0.5 })
-						local wet = okT and level ~= nil
-							and (level[2] or 0) >= (PETPORTS_SUBMERGED_FILL or 0.5)
-						if wet ~= centreWet then nearSurface = true end
-					end
+				--  FOUR SAMPLES, 2026-09-09p: the midpoints of the grown box's four
+				--  edges. Nine per anchor miss was 4,700-6,700 liquidAt a second
+				--  (MEASURED 14:30). A surface within half a tile of the body
+				--  crosses one of the four.
+				local midX, midY = (grown[1] + grown[3]) * 0.5, (grown[2] + grown[4]) * 0.5
+				for _, sample in ipairs({
+					{ grown[1] + 0.05, midY }, { grown[3] - 0.05, midY },
+					{ midX, grown[2] + 0.05 }, { midX, grown[4] - 0.05 }
+				}) do
+					local okT, level = pcall(world.liquidAt, sample)
+					local wet = okT and level ~= nil
+						and (level[2] or 0) >= (PETPORTS_SUBMERGED_FILL or 0.5)
+					if wet ~= centreWet then nearSurface = true end
 				end
 			end
 
@@ -1085,7 +1106,7 @@ local NAV_NEIGHBOUR_CHUNK = 40
 function petports_navNeighbours(cx, cy, freeMover, radius)
 	--  THE RADIUS IS THE CALLER'S. A sweep passes the rung of the ladder it is
 	--  on; anything else gets the ceiling.
-	radius = radius or PETPORTS_NAV_RADIUS
+	radius = radius or navFullRadius()
 
 	local origin = petports_navAnchor(cx, cy, freeMover)
 	if origin == nil then return {}, nil end
@@ -1805,26 +1826,33 @@ end
 --  side only; a walker does not route along a liquid wall.
 navSeedBesideWall = function(cx, cy, media)
 	if not petports_gravitySwitchable() and not petports_freeMover() then return end
+	petports_profBegin("seedWall")
 
 	local denied = false
 	for _, name in pairs(media) do
 		if name ~= "air" and petports_liquidNameDenied ~= nil
 		   and petports_liquidNameDenied(name) then denied = true end
 	end
-	if not denied then return end
+	if not denied then petports_profEnd("seedWall") return end
 
 	self.petportsNavSeeds = self.petportsNavSeeds or {}
 
-	navWithSide(true, function()
-		for ndy = -1, 1 do
-			for ndx = -1, 1 do
-				local nx, ny = cx + ndx, cy + ndy
-				if navInCoverage(nx, ny) and petports_navAnchor(nx, ny, true) ~= nil then
-					self.petportsNavSeeds[petports_navCellKey(nx, ny)] = world.time()
-				end
+	--  KEYS ONLY, 2026-09-09q. MEASURED 14:37: `flood max=61` -- each wall
+	--  found by the flood anchor-tested eight neighbours here, each miss ran
+	--  the poly, medium and surface tests and its own boundary note, which
+	--  on a wall seeded eight more, inside one tick. The candidate scan
+	--  anchor-tests what it considers anyway; a seed that cannot anchor is
+	--  refused at sweep start for the price of one miss, on the survey's
+	--  own budget.
+	for ndy = -1, 1 do
+		for ndx = -1, 1 do
+			local nx, ny = cx + ndx, cy + ndy
+			if navInCoverage(nx, ny) then
+				self.petportsNavSeeds[petports_navCellKey(nx, ny)] = world.time()
 			end
 		end
-	end)
+	end
+	petports_profEnd("seedWall")
 end
 
 local NAV_FLOOD_PER_TICK = 6
@@ -3100,7 +3128,10 @@ end
 --  build). Learned edges during a build go into both the old graph (via
 --  petports_navLearn) and the new one (the pending batch is folded in at
 --  the end), so nothing is lost across the swap.
-local NAV_BUILD_CHUNK = 40
+--  40 -> 12, 2026-09-09o. MEASURED 14:25: one build step was the whole of
+--  a 46 ms tick (graphFor inside nearestCell inside coarseLeg). Same work,
+--  three times as many ticks, a third the height.
+local NAV_BUILD_CHUNK = 12
 
 local function navGraphBuildStep(profile)
 	local build = self.petportsNavGraphBuild
@@ -3742,6 +3773,41 @@ end
 --  graph swap, throws the cursor away. Walkers never sweep and are unchanged.
 local NAV_NEAREST_SWEEPS = 6
 
+--  THE GRAPH'S CELLS BY BLOCK, built once per graph version and kept
+--  current by petports_navLearn. One string.match per cell, once.
+local function navGraphBlocks(graph)
+	if graph.blocks ~= nil then return graph.blocks end
+
+	local blocks = { map = {}, count = 0 }
+
+	for from in pairs(graph.fine) do
+		local fx, fy = string.match(from, "^(-?%d+),(-?%d+)$")
+		if fx ~= nil then
+			local key = math.floor(tonumber(fx) / NAV_BLOCK_CELLS) .. ","
+				.. math.floor(tonumber(fy) / NAV_BLOCK_CELLS)
+			if blocks.map[key] == nil then
+				blocks.map[key] = {}
+				blocks.count = blocks.count + 1
+			end
+			table.insert(blocks.map[key], from)
+		end
+	end
+
+	graph.blocks = blocks
+	return blocks
+end
+
+
+--  The colour for a swept radius: red at PETPORTS_NAV_RADIUS_START, green
+--  at PETPORTS_NAV_RADIUS, linearly between. An RGBA array, which the debug
+--  bindings take as a colour.
+local function navRadiusColour(radius)
+	local lo, hi = PETPORTS_NAV_RADIUS_START, navFullRadius()
+	local t = (radius - lo) / math.max(1, hi - lo)
+	if t < 0 then t = 0 elseif t > 1 then t = 1 end
+	return { math.floor(255 * (1 - t) + 0.5), math.floor(255 * t + 0.5), 0, 255 }
+end
+
 local function navNearestFrom(candidates, startAt, position, freeMover, radius, resumeKey, fine)
 	local swept = 0
 
@@ -3807,20 +3873,32 @@ function petports_navNearestCell(position, freeMover, radius)
 	--  are gathered by cell-centre distance (no world calls), sorted, and
 	--  the anchor and the sight sweep are computed in that order; the first
 	--  visible one is the answer, which is usually the first or second.
+	--  BLOCKS, NOT A SQUARE OF CELLS, 2026-09-09n. MEASURED 14:17: 42-83 ms
+	--  per call, eight calls in five seconds. A free mover's radius is raised
+	--  to NAV_MAX_DISTANCE, so this built its candidate list by testing every
+	--  key in a 65x65-cell square -- 4,225 string keys per call, on every
+	--  drift re-resolve -- before sweeping anything. The block index (08h)
+	--  holds only the graph's cells; the blocks in range are walked instead.
 	local candidates = {}
+	local blocks = navGraphBlocks(navGraphFor(profile))
+	local bx0 = math.floor((px - reach) / NAV_BLOCK_CELLS)
+	local bx1 = math.floor((px + reach) / NAV_BLOCK_CELLS)
+	local by0 = math.floor((py - reach) / NAV_BLOCK_CELLS)
+	local by1 = math.floor((py + reach) / NAV_BLOCK_CELLS)
 
-	for cx = px - reach, px + reach do
-		for cy = py - reach, py + reach do
-			local key = petports_navCellKey(cx, cy)
-
-			if fine[key] ~= nil then
-				local ox, oy = navCellOrigin(cx, cy)
-				local dx = ox + PETPORTS_NAV_CELL * 0.5 - position[1]
-				local dy = oy + PETPORTS_NAV_CELL * 0.5 - position[2]
-
-				table.insert(candidates, {
-					cx = cx, cy = cy, key = key, rough = dx * dx + dy * dy
-				})
+	for by = by0, by1 do
+		for bx = bx0, bx1 do
+			for _, key in ipairs(blocks.map[bx .. "," .. by] or {}) do
+				local cx = tonumber(string.match(key, "^(-?%d+),"))
+				local cy = tonumber(string.match(key, ",(-?%d+)$"))
+				if cx ~= nil and math.abs(cx - px) <= reach and math.abs(cy - py) <= reach then
+					local ox, oy = navCellOrigin(cx, cy)
+					local dx = ox + PETPORTS_NAV_CELL * 0.5 - position[1]
+					local dy = oy + PETPORTS_NAV_CELL * 0.5 - position[2]
+					table.insert(candidates, {
+						cx = cx, cy = cy, key = key, rough = dx * dx + dy * dy
+					})
+				end
 			end
 		end
 	end
@@ -4736,41 +4814,6 @@ local NAV_BOUNDS_DRAW_REFRESH = 4.0
 --  /entityeval PETPORTS_NAV_DRAW_EDGES = true.
 PETPORTS_NAV_DRAW_EDGES = false
 
---  THE GRAPH'S CELLS BY BLOCK, built once per graph version and kept
---  current by petports_navLearn. One string.match per cell, once.
-local function navGraphBlocks(graph)
-	if graph.blocks ~= nil then return graph.blocks end
-
-	local blocks = { map = {}, count = 0 }
-
-	for from in pairs(graph.fine) do
-		local fx, fy = string.match(from, "^(-?%d+),(-?%d+)$")
-		if fx ~= nil then
-			local key = math.floor(tonumber(fx) / NAV_BLOCK_CELLS) .. ","
-				.. math.floor(tonumber(fy) / NAV_BLOCK_CELLS)
-			if blocks.map[key] == nil then
-				blocks.map[key] = {}
-				blocks.count = blocks.count + 1
-			end
-			table.insert(blocks.map[key], from)
-		end
-	end
-
-	graph.blocks = blocks
-	return blocks
-end
-
-
---  The colour for a swept radius: red at PETPORTS_NAV_RADIUS_START, green
---  at PETPORTS_NAV_RADIUS, linearly between. An RGBA array, which the debug
---  bindings take as a colour.
-local function navRadiusColour(radius)
-	local lo, hi = PETPORTS_NAV_RADIUS_START, PETPORTS_NAV_RADIUS
-	local t = (radius - lo) / math.max(1, hi - lo)
-	if t < 0 then t = 0 elseif t > 1 then t = 1 end
-	return { math.floor(255 * (1 - t) + 0.5), math.floor(255 * t + 0.5), 0, 255 }
-end
-
 --  Cell key -> tile coordinates of its origin, or nil.
 local function navKeyOrigin(key)
 	local kx, ky = string.match(tostring(key), "^(-?%d+),(-?%d+)$")
@@ -5199,7 +5242,7 @@ local NAV_CANDIDATE_RINGS = 12
 
 --  How many from-cells one top-up may walk while looking for unswept work.
 --  A string.match and a table lookup each; six hundred is a few ms.
-local NAV_CANDIDATE_FROMS = 600
+local NAV_CANDIDATE_FROMS = 200  --  600 -> 200, 2026-09-09q: 59 ms in one top-up
 
 function petports_navCandidates(limit)
 	local here = mcontroller.position()
@@ -5260,7 +5303,7 @@ function petports_navCandidates(limit)
 	--  nothing, and no line said which of these four conditions refused the
 	--  seed. Now the overlay prints it every tick.
 	local seedAnchor = petports_navAnchor(seedX, seedY, freeMover)
-	local seedOk = mineRadius < PETPORTS_NAV_RADIUS and navInCoverage(seedX, seedY)
+	local seedOk = mineRadius < navFullRadius() and navInCoverage(seedX, seedY)
 		and grounded and seedAnchor ~= nil
 
 	self.petportsNavSurveyNote = {
@@ -5299,7 +5342,7 @@ function petports_navCandidates(limit)
 		--  BELOW THE CEILING IS A CANDIDATE, swept or not. A cell swept at 4
 		--  is still owed its 6.
 		local radius = navSweptRadiusIn(sweptCells, cellKey, now)
-		if radius >= PETPORTS_NAV_RADIUS then return end
+		if radius >= navFullRadius() then return end
 
 		local bx, by = string.match(cellKey, "^(-?%d+),(-?%d+)$")
 		if bx == nil then return end
@@ -5351,7 +5394,7 @@ function petports_navCandidates(limit)
 	if freeMover and self.petportsNavSeeds ~= nil then
 		for key, at in pairs(self.petportsNavSeeds) do
 			if (now - at) > NAV_ANCHOR_TTL * 4
-			   or navSweptRadiusIn(sweptCells, key, now) >= PETPORTS_NAV_RADIUS then
+			   or navSweptRadiusIn(sweptCells, key, now) >= navFullRadius() then
 				self.petportsNavSeeds[key] = nil
 			else
 				consider(key)
@@ -5375,12 +5418,16 @@ function petports_navCandidates(limit)
 	local ring = 0
 	local seenBlocks = 0
 
+	--  A RUNNING COUNT, 2026-09-09n: the rescan of `found` per block was
+	--  87 ms in one top-up (MEASURED 14:17).
+	local unswept, foundBefore = 0, 0
+
 	local function unsweptFound()
-		local n = 0
-		for _, entry in ipairs(found) do
-			if (entry.radius or 0) <= 0 then n = n + 1 end
+		for i = foundBefore + 1, #found do
+			if (found[i].radius or 0) <= 0 then unswept = unswept + 1 end
 		end
-		return n
+		foundBefore = #found
+		return unswept
 	end
 
 	while unsweptFound() < NAV_CANDIDATE_SCAN and scanned < NAV_CANDIDATE_FROMS
@@ -5932,7 +5979,7 @@ local function navTopUp(ownerId)
 			--  (petports_navStats, petports_navDumpStore) when wanted.
 			sb.logInfo("NAV survey COMPLETE for %s -- every known cell swept "
 				.. "to radius %s",
-				tostring(petports_navProfile()), sb.printJson(PETPORTS_NAV_RADIUS))
+				tostring(petports_navProfile()), sb.printJson(navFullRadius()))
 		end
 
 		return "idle"
@@ -6009,8 +6056,23 @@ end
 local function navTickInner(dt, ownerId)
 	navGenerationCheck()
 	navIndexTick()
+
+	--  THE REBUILD ADVANCES EVERY TICK, 2026-09-09s. MEASURED 14:42..14:46:
+	--  "graph still building" for four minutes, fifty-three tasks failed
+	--  with coarse nav having nothing, because a build step only ran when a
+	--  routing call asked for the graph -- a few times a second, not twelve.
+	--  navGraphFor steps the build at most once per tick; asking here makes
+	--  that once every tick.
+	if self.petportsNavGraphBuild ~= nil then
+		navGraphFor(petports_navProfile())
+	end
+
+	petports_profBegin("contradict")
 	navContradictTick()
+	petports_profEnd("contradict")
+	petports_profBegin("flood")
 	navBoundsFloodTick()
+	petports_profEnd("flood")
 	--  BEFORE THE STEP, so the pair currently in flight is drawn even on the
 	--  tick it resolves and clears itself.
 	petports_profBegin("draw")
@@ -6128,7 +6190,7 @@ function petports_navProgress()
 
 		local radius = navSweptRadiusIn(sweptCells, cellKey, now)
 		if radius > 0 then swept = swept + 1 end
-		if radius >= PETPORTS_NAV_RADIUS then full = full + 1 end
+		if radius >= navFullRadius() then full = full + 1 end
 	end
 
 	for from, tos in pairs(graph.fine) do
