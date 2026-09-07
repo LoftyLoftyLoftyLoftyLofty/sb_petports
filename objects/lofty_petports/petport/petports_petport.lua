@@ -233,8 +233,35 @@ PARTICIPATION_KEY = "petports_participation"
 --
 --  GLOBAL for the same reason petportEnabled is: its readers are the message
 --  handler in init(), findWork 7000 lines below it, and the pane mirror.
+--  ON petData.toggles, NOT ON THE PORT, AND THAT REVERSES WHAT THIS FILE SAYS
+--  ELSEWHERE.
+--
+--  Three comments still argue the other way -- the pane's "PORT-LEVEL CONTROLS"
+--  note, mirrorPaneState's reason for reporting participation on both branches,
+--  and petportMedicHeals, which contrasts itself against these very groups. The
+--  argument was that a port's contribution to the network means something with
+--  nothing socketed.
+--
+--  IT DOES NOT, FOR THESE THREE. Every consumer is a work generator, and no
+--  generator runs without a unit -- so the answer an empty port gave was never
+--  read by anything. What a player actually wants to say is "this PET does not
+--  haul", and carrying that to another port is the same argument the medic
+--  classes and farming activities already won.
+--
+--  petports_participate IS A DIFFERENT PARAMETER AND STAYS ON THE PORT. It
+--  decides network membership through petports_entriesCompatible, which is
+--  read from the registry with no unit involved. Nothing here touches it.
+--
+--  NO petData IS FALSE, not true. A port with nothing socketed participates in
+--  nothing, which is what the pane should paint and what dispatch would
+--  conclude anyway.
+--
+--  DEFAULTS ON WHEN THE TABLE EXISTS BUT THE KEY DOES NOT, matching the pane's
+--  settingValue and every other pet-owned setting store here.
 function petportParticipates(group)
-  local set = config.getParameter(PARTICIPATION_KEY, nil)
+  if self.petData == nil then return false end
+
+  local set = self.petData.toggles
   if type(set) ~= "table" then return true end
   return set[group] ~= false
 end
@@ -284,8 +311,24 @@ end
 
 --  Global for the same reason petportEnabled is: read from a message handler in
 --  init(), from crosshairRefresh 8000 lines below it, and from the pane mirror.
+--  ON petData.toggles NOW, WHICH PUTS IT BACK WHERE CROSSHAIRS_KEY SAYS IT
+--  CAME FROM.
+--
+--  That note records the move OFF petData and the reason: crosshairRefresh runs
+--  whether or not anything is socketed, so filing the switch on the pet made an
+--  empty port's markers unswitchable.
+--
+--  THE ANSWER IS THAT AN EMPTY PORT NOW SHOWS NONE. No petData is false, so
+--  there is nothing on screen to be unable to switch off. What is given up is
+--  the diagnostic that used to come with it -- reading a port's opinion about
+--  the drops in its coverage before socketing anything -- and that is the
+--  deliberate cost of the move rather than an oversight.
 function petportCrosshairs()
-  return config.getParameter(CROSSHAIRS_KEY, true) ~= false
+  if self.petData == nil then return false end
+
+  local toggles = self.petData.toggles
+  if type(toggles) ~= "table" then return true end
+  return toggles.crosshairs ~= false
 end
 
 --  Periodic flush of drifting state into the socketed item.
@@ -2108,7 +2151,19 @@ function init()
       --  reads as false here. That is deliberate: all four unit items ship a
       --  petName, so a tag defaulting on would label the entire fleet the moment
       --  this shipped and a player would have to visit every port to quiet it.
-      nametag = payload.nametag == true
+      nametag = payload.nametag == true,
+
+      --  THE FOUR THAT MOVED OFF THE PORT. All default ON, so all read
+      --  `~= false` -- see petportParticipates and petportCrosshairs for why
+      --  they are here rather than in object config parameters.
+      --
+      --  WRITTEN WHOLESALE LIKE THE REST OF THIS TABLE, which is what makes a
+      --  key the pane stops sending revert to participating rather than keep
+      --  its last value with nothing left to change it.
+      hauling = payload.hauling ~= false,
+      sorting = payload.sorting ~= false,
+      machines = payload.machines ~= false,
+      crosshairs = payload.crosshairs ~= false
     }
     self.dirty = true
     self.paneSignature = nil
@@ -2123,6 +2178,15 @@ function init()
     --  speech bubbles, so it needs the same immediate push as the nametag or
     --  the checkbox does nothing until the unit respawns.
     pushUnitBubbles()
+
+    --  ZEROED SO AN OPT-IN IS PROMPT, matching what petports_setParticipation
+    --  did when these lived on the port. A group ticked back on should be
+    --  looked at now rather than on whatever was left of the work timer.
+    self.workTimer = 0
+
+    --  AND THE MARKERS, for the reason petports_setCrosshairs gives: a
+    --  switch-on should show them now rather than on the next interval.
+    self.crosshairTimer = 0
 
     sb.logInfo("PETPORT %s toggles: %s", stationUniqueId(), sb.printJson(self.petData.toggles))
     return true
@@ -2183,8 +2247,16 @@ function init()
   message.setHandler("petports_setCrosshairs", simpleHandler(function(payload)
     if type(payload) ~= "table" then return false end
 
-    local on = payload.enabled == true
-    object.setConfigParameter(CROSSHAIRS_KEY, on)
+    --  WRITES petData NOW, NOT AN OBJECT PARAMETER. The switch moved onto the
+    --  pet; this handler survives only so the pane's existing top checkbox
+    --  keeps driving the same storage while it is still drawn. It goes when
+    --  that checkbox does.
+    if self.petData == nil then return false end
+
+    local on = payload.enabled ~= false
+    self.petData.toggles = self.petData.toggles or {}
+    self.petData.toggles.crosshairs = on
+    self.dirty = true
     self.paneSignature = nil
 
     --  ZEROED SO THE MARKERS APPEAR PROMPTLY on a switch-on, rather than on
@@ -2220,7 +2292,20 @@ function init()
       machines = payload.machines ~= false
     }
 
-    object.setConfigParameter(PARTICIPATION_KEY, set)
+    --  WRITES petData NOW. Same story as petports_setCrosshairs directly
+    --  above: the storage moved onto the pet and this handler is kept only
+    --  while the pane's top checkboxes are still drawn.
+    --
+    --  MERGED RATHER THAN WHOLESALE, unlike petports_setToggles. That handler
+    --  owns the whole table and rewrites it; this one knows about three keys
+    --  and must not erase nametag, carried or crosshairs on its way past.
+    if self.petData == nil then return false end
+
+    self.petData.toggles = self.petData.toggles or {}
+    for group, on in pairs(set) do
+      self.petData.toggles[group] = on
+    end
+    self.dirty = true
     self.paneSignature = nil
 
     --  ZEROED SO AN OPT-IN IS PROMPT, matching the enabled switch. A port that

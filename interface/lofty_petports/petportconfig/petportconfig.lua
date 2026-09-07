@@ -315,6 +315,29 @@ local SETTING_ROWS = {
 	{ key = "nametag", owner = "toggles", needs = nil, default = false,
 	  label = "petport.setting.nametag", tip = "petport.tip.nametag" },
 
+	--  ---- WHAT THIS UNIT IS WILLING TO DO -------------------------------
+	--
+	--  THESE FOUR WERE PORT CHECKBOXES ABOVE THE DIVIDER. They moved onto the
+	--  pet because what a player wants to say is "this PET does not haul",
+	--  and that should travel with the unit to another port -- the same
+	--  argument the medic classes and farming activities already won.
+	--
+	--  owner = "toggles" PUTS THEM ON petData.toggles beside `carried` and
+	--  `nametag`, which means they ride petports_setToggles and need no new
+	--  message. That table's own comment calls itself display-only; it is not
+	--  any more, and these are the reason.
+	--
+	--  ALL DEFAULT ON. A unit that shipped refusing to work would read as
+	--  broken, which is the opposite of the nametag argument directly above.
+	{ key = "hauling", owner = "toggles", needs = nil, default = true,
+	  label = "petport.setting.hauling", tip = "petport.tip.hauling" },
+	{ key = "sorting", owner = "toggles", needs = nil, default = true,
+	  label = "petport.setting.sorting", tip = "petport.tip.sorting" },
+	{ key = "machines", owner = "toggles", needs = nil, default = true,
+	  label = "petport.setting.machines", tip = "petport.tip.machines" },
+	{ key = "crosshairs", owner = "toggles", needs = nil, default = true,
+	  label = "petport.setting.crosshairs", tip = "petport.tip.crosshairs" },
+
 	{ sep = true, needs = "medic", label = "petport.setting.medicblock" },
 
 	{ key = "player", owner = "medic", needs = "medic",
