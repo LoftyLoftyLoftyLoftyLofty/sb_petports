@@ -294,8 +294,8 @@
       //  sqrt(0.64 + 0.36) = exactly 1.0, so the poly is inscribed in a unit
       //  circle and FLY_ARRIVAL in petports_flyapproach.lua is measured rather
       //  than guessed. CHANGE THIS POLY AND THAT CONSTANT MUST MOVE WITH IT.
-      "collisionPoly" :  [ [-0.8, -0.6], [-0.6, -0.8], [0.6, -0.8], [0.8, -0.6],
-                    [0.8, 0.6], [0.6, 0.8], [-0.6, 0.8], [-0.8, 0.6] ],
+      "collisionPoly" :  [ [-0.8, -0.4], [-0.4, -0.8], [0.4, -0.8], [0.8, -0.4],
+                    [0.8, 0.4], [0.4, 0.8], [-0.4, 0.8], [-0.8, 0.4] ],
       "mass" : 1.0,
 
       //  Inert for a flyer -- nothing on a Fly edge reads either, and

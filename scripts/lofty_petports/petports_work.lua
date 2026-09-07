@@ -95,6 +95,23 @@ end
 
 --  Drop anything past its expiry. Cheap enough to run on the same slow timer a
 --  petport already has.
+--  DROP EVERY CLAIM OF ONE TYPE. Added 2026-09-06 for the nav wipe: a
+--  survey claim (type "nav") outliving the store it was protecting keeps
+--  other units off cells that no longer exist for up to NAV_CLAIM_TTL.
+function petports_claimsClearType(workType)
+  if workType == nil then return 0 end
+  local claims = petports_claimsAll()
+  local dropped = 0
+  for workId, claim in pairs(claims) do
+    if claim.type == workType then
+      claims[workId] = nil
+      dropped = dropped + 1
+    end
+  end
+  if dropped > 0 then writeClaims(claims) end
+  return dropped
+end
+
 function petports_claimsSweep()
   local claims = petports_claimsAll()
   local now = world.time()

@@ -113,9 +113,10 @@ there is no pane yet that shows a player the contents of every network they
 stand in coverage of. Automatic cross-crate defragmentation is abandoned in
 favour of it (`dd.cargo.playerdefrag`).
 
-**LINE ENDINGS.** `petports_petport.lua` and `petports_contract.lua` are CRLF
-on disk; `petportsTaskAction.lua`, `petports_coarsenav.lua` and
-`petports_flyapproach.lua` are LF.
+**LINE ENDINGS.** `petports_petport.lua` is CRLF on disk (15,329 lines, no
+bare LF); `petports_contract.lua`, `petportsTaskAction.lua`,
+`petports_coarsenav.lua` and `petports_flyapproach.lua` are LF. The memory
+that contract.lua is CRLF is stale as of 2026-09-06.
 
 **THE KILL LIST LIVES IN `plan.drawio` NOW, NOT HERE.** Cross-crate
 consolidation came off it this session. Everything else stands: currency in

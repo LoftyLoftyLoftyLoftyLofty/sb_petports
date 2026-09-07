@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-09-06a the swim sweep is shared with coarse nav"
+local CONTRACT_BUILD_STAMP = "2026-09-07f the body's solid test is its collision poly, as the engine's is"
 
 local contractStamped = false
 
@@ -848,6 +848,12 @@ local PETPORTS_SUBMERGED_FILL = 0.9
 --  present rather than from the moment it is swimmable.
 local PETPORTS_HARMFUL_FILL = 0.1
 
+--  How far, beyond the body box, a denied liquid counts as forbidden. ZERO,
+--  2026-09-07e (Lofty): 0.5 was tried for the corner drift and closes a
+--  two-wide corridor for a 1.6 body, which the unit must be able to swim.
+--  The corner drift is answered by the brush back-off instead.
+PETPORTS_WALL_MARGIN = 0
+
 --  SHOULD THIS CHASSIS REFUSE TO STAND IN LIQUID?
 --
 --  True for an ordinary ground pet, false for an amphibious one. Free movers
@@ -1115,7 +1121,17 @@ end
 --  with the mode in play those two questions have different answers and the
 --  codebase cannot afford a second spelling of "is this thing flying" -- see
 --  arch.pathing.oneanchor for what the last duplicate predicate cost.
+--  THE SURVEY MAY OVERRIDE IT, 2026-09-07a, AND ONLY THE SURVEY. A
+--  gravity-switchable chassis has two stores (`|f0|` land, `|f1|` swim) and
+--  used to survey only the one for the mode it was in -- measured 35 `f0`
+--  cells against 12 `f1` for the otter, which is almost never wet. Coarse nav
+--  sets petportsNavSurveyFree around its own work (a sweep resume, a top-up)
+--  so that anchors, medium, avoidLiquid and the profile string all answer
+--  for the side being surveyed, and clears it before returning. Nothing
+--  outside that scope ever sees the override; routing asks the live mode.
+--  See dd.pathing.probeprofile.
 function petports_freeMover()
+  if self.petportsNavSurveyFree ~= nil then return self.petportsNavSurveyFree end
   if petports_swimMode() == PETPORTS_SWIM_MODE_AQUATIC then return true end
   return not mcontroller.baseParameters().gravityEnabled
 end
@@ -1177,6 +1193,15 @@ end
 --  Is this liquid one this chassis refuses to be in? Cached per id, because
 --  this is asked once per tile row per candidate position inside searches that
 --  already run eighty-one of them.
+--  BY NAME, FOR THE BOUNDARY STORE, 2026-09-07b. The shared store keys its
+--  buckets on liquid NAMES (dd.pathing.boundarystore), so the reader asks
+--  "is this name denied" rather than "is this id denied". Same set, same
+--  module unlocks.
+function petports_liquidNameDenied(name)
+  if name == nil then return false end
+  return avoidedLiquids()[string.lower(tostring(name))] == true
+end
+
 function petports_liquidDenied(liquidId)
   if liquidId == nil then return false end
 
@@ -1247,6 +1272,37 @@ function petports_mediumAt(position, bounds)
   --  all" would ground a flyer in rain. If a unit is later seen dragging through
   --  shallows, this is the line to revisit.
   local submerged, anySubmerged = true, false
+
+  --  FORBIDDEN IS TESTED UNDER THE WHOLE BODY, 2026-09-07c. MEASURED
+  --  16:55:19: `NAV probe 2517,1140 -> ... UNREACHABLE: the body would
+  --  cross tile 2517,1140` -- refused on its own origin. The anchor there
+  --  passed this function because only the centre column was sampled and
+  --  the poison was under the body's other half. A node half in a liquid
+  --  the chassis will not enter is a node it can never leave. The
+  --  swim/mixed/air classification below stays on the centre column, so
+  --  nothing else about this answer moves.
+  --  AT A MARGIN, 2026-09-07d. MEASURED on the maze: string-pull's line
+  --  test passed with the body box exactly clear of the poison, the flown
+  --  path drifted half a tile off the sampled line at the corners, the
+  --  body brushed the wall, the medium check fired. A wall is kept
+  --  PETPORTS_WALL_MARGIN further off than the body: anchors, probes and
+  --  the string-pull line all get that clearance from one place.
+  local margin = PETPORTS_WALL_MARGIN or 0
+  local leftCol = math.floor(position[1] + (bounds[1] or -0.5) - margin + 0.01)
+  local rightCol = math.floor(position[1] + (bounds[3] or 0.5) + margin - 0.01)
+  local wallBottom = math.floor(position[2] + (bounds[2] or -0.5) - margin + 0.01)
+  local wallTop = math.floor(position[2] + (bounds[4] or 0.5) + margin - 0.01)
+
+  for row = wallBottom, wallTop do
+    for col = leftCol, rightCol do
+      local side = world.liquidAt({ col + 0.5, row + 0.5 })
+      local sideFill = (side ~= nil) and (side[2] or 0) or 0
+
+      if sideFill >= PETPORTS_HARMFUL_FILL and petports_liquidDenied(side[1]) then
+        return "forbidden"
+      end
+    end
+  end
 
   for row = bottom, top do
     local level = world.liquidAt({ x, row + 0.5 })
@@ -2079,9 +2135,30 @@ local function wadeableBottom()
 	}, { "Null", "Block", "Slippery", "Dynamic", "Platform" })
 end
 
-local function bodyFitsAt(position)
+--  DOES THE BODY HIT A SOLID AT `position`? THE POLY, NOT THE BOX, 2026-09-07f.
+--
+--  Every solid test in this mod was world.rectTileCollision on
+--  mcontroller.boundBox() -- the AABB of the collision poly -- because
+--  vanilla's pathutil does it that way and the convention was inherited.
+--  The engine's physics has used the poly itself all along, so a corner the
+--  body can round was refused by every sweep, and the chamfered polys of
+--  2026-09-07s changed nothing about routing. world.polyCollision tests the
+--  actual shape. The box remains the fallback where the poly is not
+--  available (a script context without a movement controller).
+function petports_bodyHitsAt(position, collisionSet)
+	local okPoly, poly = pcall(mcontroller.collisionPoly)
+
+	if okPoly and type(poly) == "table" and #poly >= 3 then
+		local ok, hit = pcall(world.polyCollision, poly, position, collisionSet)
+		if ok then return hit == true end
+	end
+
 	local box = rect.translate(mcontroller.boundBox(), position)
-	return not world.rectTileCollision(box, PETPORTS_DIVE_SOLID_SET)
+	return world.rectTileCollision(box, collisionSet) == true
+end
+
+local function bodyFitsAt(position)
+	return not petports_bodyHitsAt(position, PETPORTS_DIVE_SOLID_SET)
 end
 
 --  TRACE UP FROM THE FISH TO THE SURFACE OF THE WATER IT IS ACTUALLY IN.
@@ -3681,10 +3758,50 @@ function petports_outOfMedium()
   local bounds = mcontroller.boundBox()
   local position = mcontroller.position()
 
+  local medium = petports_mediumAt(position, bounds)
+
+  --  A BRUSH AGAINST A DENIED LIQUID IS NOT BEACHED, 2026-09-07d. "Out of
+  --  medium" was written for a flyer in water and a swimmer in air: the
+  --  body is somewhere it cannot operate at all and only a flop or the
+  --  port's re-home gets it back. A swimmer whose margin touches poison is
+  --  in water, can move, and needs to move AWAY -- yielding the task there
+  --  ended in a teleport home every time. So a forbidden reading at the
+  --  margin is reported as a brush, with the direction away from the
+  --  nearest denied tile, and the task action backs the unit off.
+  if medium == "forbidden" then
+    local away = { 0, 0 }
+    local best = nil
+
+    for dy = -2, 2 do
+      for dx = -2, 2 do
+        local tile = { math.floor(position[1]) + dx, math.floor(position[2]) + dy }
+        local okLevel, level = pcall(world.liquidAt, { tile[1] + 0.5, tile[2] + 0.5 })
+        local fill = (okLevel and level ~= nil) and (level[2] or 0) or 0
+
+        if fill >= PETPORTS_HARMFUL_FILL and petports_liquidDenied(level[1]) then
+          local d = dx * dx + dy * dy
+          if best == nil or d < best then
+            best = d
+            away = { position[1] - (tile[1] + 0.5), position[2] - (tile[2] + 0.5) }
+          end
+        end
+      end
+    end
+
+    return {
+      checked = true,
+      out = false,
+      brush = true,
+      away = away,
+      medium = medium,
+      position = position
+    }
+  end
+
   return {
     checked = true,
     out = not petports_mediumAllows(position, bounds),
-    medium = petports_mediumAt(position, bounds),
+    medium = medium,
     position = position
   }
 end

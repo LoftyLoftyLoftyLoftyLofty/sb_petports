@@ -178,7 +178,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-07h a free mover that can see its target drops the hops"
+local BUILD_STAMP = "2026-09-07s a coarse leg is reached at a quarter tile"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -1049,6 +1049,28 @@ local COARSE_LOS_SET = { "Null", "Block", "Dynamic", "Slippery" }
 local SIGHT_LATCH_RANGE = 64
 local SIGHT_LATCH_INTERVAL = 0.5
 
+--  How long a coarse leg may sit with its plan refused before it is a leg
+--  that would not walk. One second: several refusals, well under the
+--  watchdog's five. See the refused-plan block in the moving state.
+local PLAN_REFUSED_LIMIT = 1.0
+
+--  How long a unit backs off after brushing denied liquid before it may be
+--  steered toward a target again. Half a second of flying straight away.
+local BRUSH_BACKOFF = 0.5
+
+--  How long after "graph still building" the coarse-first gate waits before
+--  asking again. Half a second; a chunked rebuild reads 40 shards a tick.
+local COARSE_RETRY_INTERVAL = 0.5
+
+--  How close a free mover must be to a coarse-leg waypoint to have reached
+--  it. Half a tile: tight enough that the turn happens on the centreline,
+--  loose enough that a body moving at flySpeed can register it in a tick.
+local NAV_LEG_ARRIVAL_FREE = 0.25  --  0.5 -> 0.25, 2026-09-07s (Lofty)
+
+--  How close a step onto the route (07q/07r) must get to the edge's start.
+--  Tight, because the whole point is to be ON the centreline.
+local NAV_LEG_STEP_ARRIVAL = 0.15
+
 --  WALK THE NEXT LEG OF A COARSE ROUTE, WHEN THERE IS ONE.
 --
 --  TRIED BEFORE VENTS, AND THAT ORDER MATTERS. A vent hop teleports a unit and
@@ -1137,7 +1159,14 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
       ARRIVAL_DISTANCE + 0.5)
 
   if waypoint == nil then
-    sb.logInfo("UNIT coarse nav has no leg from %s to %s", fromKey, toKey)
+    --  CHANGE-GATED ON THE PAIR: this resolves twice a second on a fish.
+    local pairKey = fromKey .. ">" .. toKey
+    if stateData.navNoLegFor ~= pairKey then
+      stateData.navNoLegFor = pairKey
+      local why = petports_navWhyNoRoute ~= nil
+        and petports_navWhyNoRoute(profile, fromKey, toKey) or "unknown"
+      sb.logInfo("UNIT coarse nav has no leg from %s to %s -- %s", fromKey, toKey, tostring(why))
+    end
     return false
   end
 
@@ -5311,6 +5340,42 @@ local function petportsTaskUpdateInner(dt, stateData)
   petports_swimModeTick()
 
   local beached = petports_outOfMedium()
+
+  --  A BRUSH, NOT A BEACHING, 2026-09-07m: back off along `away` for
+  --  BRUSH_BACKOFF seconds, release any string-pull and coarse leg so the
+  --  line that led here is not re-flown, and let the next tick re-route.
+  if beached.checked and beached.brush then
+    local away = beached.away or { 0, 0 }
+    local length = math.sqrt(away[1] * away[1] + away[2] * away[2])
+
+    if stateData.brushTimer == nil or stateData.brushTimer <= 0 then
+      sb.logInfo("UNIT BRUSH against denied liquid at %s -- backing off %s and "
+        .. "dropping the leg to %s", sb.printJson(beached.position),
+        sb.printJson(away), sb.printJson(stateData.navWaypoint))
+      stateData.navWaypoint = nil
+      stateData.navRemaining = nil
+      stateData.navLegArrived = nil
+      stateData.groundTarget = nil
+      stateData.coarseFirstFor = nil
+      self.petportsPullClear = false
+      freshPather("brushed denied liquid")
+    end
+
+    stateData.brushTimer = BRUSH_BACKOFF
+
+    if length > 0.001 then
+      local speed = petports_scaledSpeed(mcontroller.baseParameters().flySpeed or 5)
+      mcontroller.controlParameters({ flySpeed = speed })
+      mcontroller.controlFly({ away[1] / length * speed, away[2] / length * speed })
+    end
+
+    return false
+  end
+
+  if stateData.brushTimer ~= nil and stateData.brushTimer > 0 then
+    stateData.brushTimer = stateData.brushTimer - dt
+  end
+
   if beached.checked and beached.out then
     sb.logInfo("UNIT beached mid-task at %s (medium %s) -- yielding the task "
       .. "action so it can flop; the port re-homes if it cannot self-rescue",
@@ -6213,7 +6278,9 @@ local function petportsTaskUpdateInner(dt, stateData)
      and not stateData.arrived and petports_navNearestCell ~= nil then
     local routeKey = sb.printJson(routeTarget)
 
-    if stateData.coarseFirstFor ~= routeKey then
+    if stateData.coarseRetryTimer ~= nil and stateData.coarseRetryTimer > 0 then
+      stateData.coarseRetryTimer = stateData.coarseRetryTimer - dt
+    elseif stateData.coarseFirstFor ~= routeKey then
       stateData.coarseFirstFor = routeKey
 
       local here = mcontroller.position()
@@ -6240,6 +6307,19 @@ local function petportsTaskUpdateInner(dt, stateData)
         sb.logInfo("UNIT coarse first: target %s is %s (%s tiles) -- leg taken",
           routeKey, why, sb.printJson(math.floor(span * 10 + 0.5) / 10))
         return false
+      end
+
+      --  ASKED AGAIN ONCE THE GRAPH HAS BUILT, 2026-09-07k. The gate is keyed
+      --  on the target, so a static target that asked while this unit's
+      --  graph memo was still loading got "still building" once and never
+      --  asked again; the direct search ran instead. MEASURED 18:00 with the
+      --  overlay: "graph still building" beside a unit whose store had
+      --  hundreds of cells. Now a building answer un-keys the gate, and
+      --  the next test re-asks after COARSE_RETRY_INTERVAL.
+      if wanted and self.petportsNavLastRoute ~= nil
+         and self.petportsNavLastRoute.building == true then
+        stateData.coarseFirstFor = nil
+        stateData.coarseRetryTimer = COARSE_RETRY_INTERVAL
       end
     end
   end
@@ -6708,6 +6788,26 @@ local function petportsTaskUpdateInner(dt, stateData)
   --  approachPoint's own verdict on the waypoint counts too (navLegArrived,
   --  set below), so a ground-resolved arrival a hair outside the raw radius
   --  cannot leave a unit standing at a leg it will never "reach".
+  --  A RELEASED STRING-PULL ON A LEG RE-PICKS THE WAYPOINT, 2026-09-07n
+  --  (Lofty): the waypoint was the farthest route cell with a clear line;
+  --  the line stopped being clear as the body moved, and the engine A* got
+  --  the same far waypoint and planned it through the poison. Now the leg
+  --  is dropped and asked for again from where the body is, so the
+  --  waypoint the string-pull test judges (09c: from the body) is nearer.
+  if stateData.navWaypoint ~= nil and petports_freeMover()
+     and self.petportsPullReleased == true then
+    self.petportsPullReleased = nil
+    sb.logInfo("UNIT string-pull released on a coarse leg to %s -- re-picking "
+      .. "the waypoint from %s", sb.printJson(stateData.navWaypoint),
+      sb.printJson(mcontroller.position()))
+    stateData.navWaypoint = nil
+    stateData.navRemaining = nil
+    stateData.navLegArrived = nil
+    stateData.groundTarget = nil
+    stateData.coarseFirstFor = nil
+  end
+  self.petportsPullReleased = nil
+
   --  THE LATCH. A free mover holding a leg looks at the real target on a
   --  timer, and a clear line drops the leg and the hops behind it; the next
   --  tick resolves approachTo normally and string-pull flies the line. See
@@ -6742,12 +6842,16 @@ local function petportsTaskUpdateInner(dt, stateData)
   local legReached = stateData.navWaypoint ~= nil
     and (stateData.navLegArrived == true
       or world.magnitude(stateData.navWaypoint, mcontroller.position())
-         < ARRIVAL_DISTANCE)
+         < (petports_freeMover()
+            and (stateData.navLegStep and NAV_LEG_STEP_ARRIVAL or NAV_LEG_ARRIVAL_FREE)
+            or ARRIVAL_DISTANCE))
     and (petports_freeMover() or mcontroller.onGround())
 
   if stateData.navWaypoint ~= nil then
     if legReached then
       local remaining = stateData.navRemaining or 0
+      if not stateData.navLegStep then stateData.navStepFor = 0 end
+      stateData.navLegStep = nil
 
       stateData.navWaypoint = nil
       stateData.navRemaining = nil
@@ -6773,10 +6877,17 @@ local function petportsTaskUpdateInner(dt, stateData)
       end
     end
 
+    --  SHARED WITH THE FREE MOVER, 2026-09-07p, so it may string-pull to
+    --  the leg whatever the task type (flyapproach 07f). Cleared below when
+    --  no leg is held.
+    self.petportsLegWaypoint = stateData.navWaypoint
+
     if stateData.navWaypoint ~= nil then
       approachTo = stateData.navWaypoint
     end
   end
+
+  if stateData.navWaypoint == nil then self.petportsLegWaypoint = nil end
 
   if not stateData.arrived then
     --  approachPoint OWNS the arrival test, and its return value is the answer.
@@ -6788,7 +6899,14 @@ local function petportsTaskUpdateInner(dt, stateData)
     --  a unit standing exactly where it was sent never registers as arrived and
     --  times out instead. approachPoint resolves the target through
     --  findGroundPosition and does not have this problem.
-    if approachPoint(dt, approachTo, ARRIVAL_DISTANCE, false) then
+    --  A COARSE LEG IS REACHED AT ITS CENTRE, NOT A TILE OFF, 2026-09-07o:
+    --  free movers on a leg get NAV_LEG_ARRIVAL_FREE; everything else keeps
+    --  ARRIVAL_DISTANCE. The turn toward the next waypoint then happens on
+    --  the corridor's centreline, which is what a corner needs.
+    local legArrival = (stateData.navWaypoint ~= nil and petports_freeMover())
+      and (stateData.navLegStep and NAV_LEG_STEP_ARRIVAL or NAV_LEG_ARRIVAL_FREE) or nil
+
+    if approachPoint(dt, approachTo, ARRIVAL_DISTANCE, false, legArrival) then
       --  ARRIVING AT A LEG IS NOT ARRIVING. Measured 2026-09-05 04:33:
       --  approachPoint registered arrival at the waypoint [974.5,1052.8] a
       --  tick before the leg test did, `arrived` went true, and the pickup
@@ -7052,7 +7170,55 @@ local function petportsTaskUpdateInner(dt, stateData)
       stateData.navRefusedTimer = 0
     end
 
-    if finder ~= nil and not finder.hasPath
+    --  A REFUSED PLAN ON A COARSE LEG IS A LEG THAT WOULD NOT WALK,
+    --  2026-09-07i. The free mover's medium check can find a path and
+    --  decline to fly it (`PLAN REFUSED ... issuing no control`); the finder
+    --  then HAS a path, so the searching clock below never runs, the
+    --  re-probe/contradict path never fires, and the only thing that does is
+    --  the progress watchdog, which re-takes the same leg. MEASURED on
+    --  every maze stall since 2026-09-06 15:45: sixty identical refusals,
+    --  moved 0 in 10s, same leg again. Now a refused plan counts as
+    --  searching, and after PLAN_REFUSED_LIMIT of it the leg fails like any
+    --  other, is re-probed with the executor's own test, contradicted, and
+    --  the route re-asked without it.
+    local rejected = self.pather ~= nil and self.pather.petportsPlanRejected == true
+    local refused = stateData.navWaypoint ~= nil and rejected
+
+    if rejected then
+      stateData.planRefusedTimer = (stateData.planRefusedTimer or 0) + dt
+    else
+      stateData.planRefusedTimer = 0
+    end
+
+    --  NO LEG HELD AND THE ONLY LOCAL PLAN CROSSES DENIED LIQUID, 2026-09-07l.
+    --  MEASURED 18:29:47: the coarse route ended at the graph cell nearest
+    --  the drop, fifteen tiles short, and handed the rest to the engine A*,
+    --  which planned through the poison and was refused for ten seconds
+    --  until the watchdog. Nothing above can help -- the engine does not
+    --  know the liquid, and coarse nav has nothing closer -- so the unit
+    --  says so and fails NOW, retryable, so the port re-dispatches once the
+    --  graph reaches the target rather than the unit standing at the wall.
+    if rejected and not refused and petports_freeMover()
+       and stateData.planRefusedTimer >= PLAN_REFUSED_LIMIT then
+      local route = self.petportsNavLastRoute
+      local why = (route ~= nil and route.why) or "no coarse route asked"
+
+      report(stateData, "failed", string.format(
+        "the only local plan crosses a liquid this chassis will not enter, "
+        .. "and coarse nav has nothing closer (%s)", tostring(why)), nil, true)
+      return true
+    end
+
+    if refused and stateData.planRefusedTimer >= PLAN_REFUSED_LIMIT
+       and stateData.searchingTimer < SEARCH_LIMIT then
+      sb.logInfo("UNIT coarse leg to %s refused by the medium check for %s s -- "
+        .. "treating as a failed leg", sb.printJson(stateData.navWaypoint),
+        sb.printJson(stateData.planRefusedTimer))
+      stateData.searchingTimer = SEARCH_LIMIT
+      stateData.planRefusedTimer = 0
+    end
+
+    if finder ~= nil and (not finder.hasPath or refused)
        and (finder.aStar ~= nil or stateData.searchingTimer >= SEARCH_LIMIT) then
       stateData.searchingTimer = stateData.searchingTimer + dt
 
@@ -7112,14 +7278,87 @@ local function petportsTaskUpdateInner(dt, stateData)
               .. "re-probe says %s after %s tick(s) -- %s",
               tostring(legPrev), tostring(legTo), sb.printJson(SEARCH_LIMIT),
               tostring(verdict), sb.printJson(spins),
-              verdict == true and "PROBE AND WALK DISAGREE, contradicting anyway"
-                or "contradicted")
+              (verdict == true and petports_freeMover())
+                and "the edge is real; stepping onto its start first"
+                or (verdict == true and "PROBE AND WALK DISAGREE, contradicting anyway"
+                  or "contradicted"))
 
-            if legPrev ~= nil and legTo ~= nil and verdict ~= false then
-              petports_navContradict(petports_navProfile(), legPrev, legTo)
+            --  A TRUE EDGE IS NOT CONTRADICTED FOR A FREE MOVER, 2026-09-07q.
+            --  MEASURED 19:58:41..47: four good edges out of one maze corner
+            --  contradicted in eight seconds, one per refused leg -- the body
+            --  was a fraction off the route at a corner, the pull line from
+            --  where it stood brushed a wall tile the edge itself clears, the
+            --  engine A* got it and was refused, 07i failed the leg, and the
+            --  policy here deleted an edge the re-probe had just confirmed.
+            --  The corner became a dead end and every task since said "both
+            --  known, no path". The walk did not fail; the body was off the
+            --  edge. So: fly to the edge's start (the previous route cell's
+            --  anchor) and take the hop from there. Walkers keep the old
+            --  policy: their edge is a path, and a path that will not walk is
+            --  a probe that lied.
+            local stepped = false
+
+            --  TWICE AT MOST PER LEG, then the old policy: if the body is on
+            --  the edge's start and the hop still will not fly, the probe and
+            --  the executor disagree about the edge itself, and that IS a lie.
+            if verdict == true and petports_freeMover() and legPrev ~= nil
+               and (stateData.navStepFor or 0) < 2 then
+              local px = tonumber(string.match(legPrev, "^(-?%d+),"))
+              local py = tonumber(string.match(legPrev, ",(-?%d+)$"))
+              local start = px ~= nil and petports_navAnchor(px, py, true) or nil
+
+              if start ~= nil then
+                stateData.navStepFor = (stateData.navStepFor or 0) + 1
+                stateData.searchingTimer = 0
+                stateData.planRefusedTimer = 0
+
+                local gap = world.magnitude(mcontroller.position(), start)
+
+                if gap <= NAV_LEG_ARRIVAL_FREE then
+                  --  THE NUDGE, 2026-09-07r (Lofty). MEASURED 20:18: a two-tall
+                  --  corridor, the body 0.38 low of the centreline, its box in
+                  --  the poison row beneath; the edge true, its start 0.4 away,
+                  --  "reached" by the 0.5 radius without moving, six times a
+                  --  second. Half a tile onto the centreline is nothing to see
+                  --  and everything to the route.
+                  sb.logInfo("UNIT NUDGE %s onto the route at %s (%s tiles) and "
+                    .. "re-taking the leg", sb.printJson(mcontroller.position()),
+                    sb.printJson(start), sb.printJson(math.floor(gap * 100 + 0.5) / 100))
+                  mcontroller.setPosition(start)
+                  mcontroller.setVelocity({ 0, 0 })
+                  stateData.navWaypoint = nil
+                  stateData.navRemaining = nil
+                  stateData.navLegArrived = nil
+                  stateData.groundTarget = nil
+                  stateData.coarseFirstFor = nil
+                  if tryCoarseLeg(stateData, routeTarget, nil, legPrev) then
+                    stepped = true
+                  end
+                else
+                  stateData.navWaypoint = start
+                  stateData.navRemaining = (stateData.navRemaining or 0) + 1
+                  stateData.navLegTo = legPrev
+                  stateData.navLegFrom = legPrev
+                  stateData.navLegPrev = legPrev
+                  stateData.navLegHops = 0
+                  stateData.navLegArrived = nil
+                  stateData.navLegStep = true
+                  stateData.groundTarget = nil
+                  freshPather("stepping onto the route")
+                  stepped = true
+                end
+              end
             end
 
-            if tryCoarseLeg(stateData, routeTarget) then return false end
+            if not stepped then
+              if legPrev ~= nil and legTo ~= nil and verdict ~= false then
+                petports_navContradict(petports_navProfile(), legPrev, legTo)
+              end
+
+              if tryCoarseLeg(stateData, routeTarget) then return false end
+            else
+              return false
+            end
           end
         end
 

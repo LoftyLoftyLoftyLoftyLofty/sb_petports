@@ -82,7 +82,7 @@
 --  delegate, and stays one.
 local vanillaSetJumpState = setJumpState
 
-local BUILD_STAMP = "2026-09-07a flyPathClear is the one sight test, and the task action can ask it"
+local BUILD_STAMP = "2026-09-07h the last tick of a pull lands on the point"
 local stampLogged = false
 
 --  DELETE ME ONCE THE ANSWER IS IN THE LOG.
@@ -527,7 +527,10 @@ local FLY_SWEEP_SET = { "Null", "Block", "Dynamic" }
 --  line SHORTENS as the unit closes, so the check gets cheaper exactly as it
 --  starts mattering; a fifth of a second is short enough that a fish swimming
 --  behind terrain is noticed within a couple of body lengths.
-local STRING_PULL_RECHECK = 0.2
+--  0.2 -> 0.05, 2026-09-07c: at 9 tiles/s a fifth of a second is 1.8 tiles
+--  between checks, and a corner arrives inside that. Every tick now; one
+--  swept line per tick for the one unit that is pulling.
+local STRING_PULL_RECHECK = 0.05
 
 --  WHICH TASKS MAY ABANDON THE PATHFINDER FOR A STRAIGHT LINE.
 --
@@ -576,6 +579,35 @@ local STRING_PULL_TASKS = {
 --  handling and no obstacle test -- the CALLER owes all three. approachPoint's
 --  FLY_ARRIVAL check covers the first two; flyPathClear is the third, and
 --  neither caller issues this without having asked it first.
+--  THE BODY GUARD, 2026-09-07d. Every check before this is on a line the
+--  body does not fly: it accelerates, overshoots a cell anchor by the
+--  arrival radius, turns late. This is on the body: the box at where the
+--  body will be next tick under the command about to be issued. If that
+--  reads forbidden, the command is not issued and the body stops. Nothing
+--  can move INTO denied liquid, whatever planned the move. One
+--  petports_mediumAt per tick per moving free mover.
+local function flyCommandAllowed(velocity)
+  local dt = script.updateDt and script.updateDt() or (1 / 12)
+  local here = mcontroller.position()
+  local ahead = { here[1] + velocity[1] * dt, here[2] + velocity[2] * dt }
+  local medium = petports_mediumAt(ahead, mcontroller.boundBox())
+
+  if medium == "forbidden" then
+    if not self.petportsGuardNoted then
+      self.petportsGuardNoted = true
+      sb.logInfo("UNIT GUARD refused a fly command at %s toward %s: the body would "
+        .. "enter a liquid this chassis will not -- stopping", sb.printJson(here),
+        sb.printJson(ahead))
+    end
+    mcontroller.setVelocity({ 0, 0 })
+    mcontroller.controlFly({ 0, 0 })
+    return false
+  end
+
+  self.petportsGuardNoted = nil
+  return true
+end
+
 local function steerDirectly(toTarget, length, running)
   --  SCALED, because the planner's copy is scaled too -- arch.module.metabolism.
   --  This is the blind-steer fallback, so there is no plan to disagree with,
@@ -605,10 +637,29 @@ local function steerDirectly(toTarget, length, running)
   --  `speed`, and no reading of this function can be wrong about which.
   mcontroller.controlParameters({ flySpeed = speed })
 
-  mcontroller.controlFly({
-    toTarget[1] / length * speed,
-    toTarget[2] / length * speed
-  })
+  --  LAND ON THE POINT, 2026-09-07h (Lofty). controlFly at flySpeed moves
+  --  the body speed*dt a tick, whatever is left to go; near the target that
+  --  is an overshoot, then a correction, then an oscillation around a 0.25
+  --  arrival radius. When one tick at flySpeed would reach or pass the
+  --  target, the velocity is set to exactly what covers the remaining
+  --  distance in one tick, so the next position IS the point. The body
+  --  guard still judges the step.
+  local dt = script.updateDt and script.updateDt() or (1 / 12)
+  local command
+
+  if length <= speed * dt then
+    command = { toTarget[1] / dt, toTarget[2] / dt }
+    if not flyCommandAllowed(command) then return end
+    mcontroller.setVelocity(command)
+    mcontroller.controlFace(toTarget[1])
+    setMovementState(running)
+    return
+  end
+
+  command = { toTarget[1] / length * speed, toTarget[2] / length * speed }
+  if not flyCommandAllowed(command) then return end
+
+  mcontroller.controlFly(command)
 
   mcontroller.controlFace(toTarget[1])
   setMovementState(running)
@@ -627,12 +678,8 @@ local function flyPathClear(from, to)
     local x = from[1] + span[1] * t
     local y = from[2] + span[2] * t
 
-    local region = {
-      x + bounds[1], y + bounds[2],
-      x + bounds[3], y + bounds[4]
-    }
-
-    if world.rectTileCollision(region, FLY_SWEEP_SET) then return false end
+    --  THE POLY, 2026-09-07g: petports_bodyHitsAt, the engine's own shape.
+    if petports_bodyHitsAt({ x, y }, FLY_SWEEP_SET) then return false end
 
     --  MEDIUM, SAMPLED ALONG THE SHORTCUT. petports_mediumAllows is the same
     --  predicate the destination resolver uses, so a chassis cannot be offered
@@ -659,7 +706,19 @@ end
 --  never hit -- the whole point is that these targets move every tick.
 local function stringPullClear(here, targetPosition, dt)
   local task = self.petportsTask
-  if task == nil or not STRING_PULL_TASKS[task.type] then return false end
+  --  A COARSE-LEG WAYPOINT IS PULLED FOR ANY TASK, 2026-09-07f. MEASURED
+  --  19:48: the maze route went through, 22 hops each way, with a second
+  --  lost at every hop -- a non-fish task gets no string-pull, so each leg
+  --  went to the engine A*, whose first lattice step from the corridor
+  --  centre crossed the poison and was refused until 07i failed the leg
+  --  and the re-pick took the same waypoint. A leg waypoint is a route
+  --  cell whose line from the body the picker just verified clear; it is
+  --  the one target that should always be flown straight. The task-type
+  --  list still governs pulling to the task's OWN target.
+  local onLeg = self.petportsLegWaypoint ~= nil
+    and world.magnitude(self.petportsLegWaypoint, targetPosition) < 0.01
+
+  if not onLeg and (task == nil or not STRING_PULL_TASKS[task.type]) then return false end
 
   self.petportsPullTimer = (self.petportsPullTimer or 0) - (dt or 0)
 
@@ -1276,6 +1335,15 @@ local function petportsFreeMoverInner(pather)
       flySpeed = petports_scaledSpeed(mcontroller.baseParameters().flySpeed)
     })
 
+    --  THE GUARD, on the plan-following command as well. `delta` is a
+    --  direction the engine normalises to flySpeed; the guard is given it
+    --  at that speed so the predicted step is the real one.
+    local speed = petports_scaledSpeed(mcontroller.baseParameters().flySpeed)
+    local length = math.sqrt(delta[1] * delta[1] + delta[2] * delta[2])
+    local command = length > 0.001
+      and { delta[1] / length * speed, delta[2] / length * speed } or { 0, 0 }
+    if not flyCommandAllowed(command) then return "running" end
+
     mcontroller.controlFly(delta)
   end
 
@@ -1311,7 +1379,7 @@ function setJumpState()
   end
 end
 
-function approachPoint(dt, targetPosition, stopDistance, running)
+function approachPoint(dt, targetPosition, stopDistance, running, arrival)
   --  GROUND UNITS TAKE A PARALLEL COPY, NOT VANILLA'S.
   --
   --  This delegated to vanillaApproachPoint until 2026-08-27. It cannot any
@@ -1453,7 +1521,11 @@ function approachPoint(dt, targetPosition, stopDistance, running)
 
   --  ARRIVAL IS TESTED FIRST, WHICH IS THE WHOLE FIX. Vanilla tests it last,
   --  behind a gate a flyer can never open.
-  if targetDistance <= FLY_ARRIVAL then
+  --  `arrival` OVERRIDES FLY_ARRIVAL WHEN A CALLER GIVES ONE, 2026-09-07e --
+  --  the argument the header above asked for. A coarse-leg waypoint is the
+  --  corridor centreline at a corner, and arriving a tile short of it and
+  --  turning IS the corner cut (Lofty, 19:30). The leg passes a tight one.
+  if targetDistance <= (arrival or FLY_ARRIVAL) then
     --  STOP, EXPLICITLY. airFriction would bleed the velocity off on its own,
     --  but stateData.arrived LATCHES in petportsTaskAction and nothing calls
     --  back in here afterwards -- so whatever velocity is carried at this
@@ -1514,6 +1586,16 @@ function approachPoint(dt, targetPosition, stopDistance, running)
     sb.logInfo("UNIT STRING-PULL released at %s: the line to %s is no longer "
       .. "clear -- handing back to the pathfinder",
       sb.printJson(here), sb.printJson(targetPosition))
+
+    --  REPORTED, 2026-09-07b: the task action re-picks a nearer coarse
+    --  waypoint from the body when this happens on a leg, rather than
+    --  letting the engine A* -- which knows nothing of denied liquid --
+    --  plan the same far waypoint through the wall.
+    self.petportsPullReleased = true
+
+    --  A STOP, NOT A SLIDE, 2026-09-07c: the body carries its velocity into
+    --  the corner it just saw otherwise. Free movers can hold still.
+    mcontroller.setVelocity({ 0, 0 })
 
     petports_freshPather("string-pull released, line blocked")
   end
