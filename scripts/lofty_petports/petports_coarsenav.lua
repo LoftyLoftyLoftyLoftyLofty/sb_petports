@@ -61,7 +61,7 @@
 --  are unprobeable and time-varying and nobody's fault -- are allowed to
 --  produce optimistic-wrong answers. They fail in the cheap direction.
 
-local COARSENAV_BUILD_STAMP = "2026-09-09k a leg carries the anchor after its end; the turn is measured in flight"
+local COARSENAV_BUILD_STAMP = "2026-09-09m the candidate scan walks out until it finds unswept work"
 
 local navStamped = false
 
@@ -840,6 +840,28 @@ local function navAnchorUncached(cx, cy, freeMover)
 			--  edges between them are swept against the wall, and the maze is
 			--  shoreline. The body box itself must still be clean, which
 			--  petports_mediumAllows enforces below.
+			--  A CHANGE OF MEDIUM IS A SURFACE, 2026-09-09l (Lofty): a swimmer
+			--  under open water with air above it, a flyer over water -- the
+			--  boundary is the thing to hug and the solids test cannot see it.
+			--  Any tile in the grown box whose wetness differs from the tile
+			--  under the body's centre makes this cell near a surface. Nine
+			--  liquidAt calls on an anchor miss that had none.
+			if insideBody and not nearSurface then
+				local okC, centreLevel = pcall(world.liquidAt, { point[1], point[2] })
+				local centreWet = okC and centreLevel ~= nil
+					and (centreLevel[2] or 0) >= (PETPORTS_SUBMERGED_FILL or 0.5)
+				local x0, y0 = math.floor(grown[1]), math.floor(grown[2])
+				local x1, y1 = math.floor(grown[3] - 0.01), math.floor(grown[4] - 0.01)
+				for ty = y0, y1 do
+					for tx = x0, x1 do
+						local okT, level = pcall(world.liquidAt, { tx + 0.5, ty + 0.5 })
+						local wet = okT and level ~= nil
+							and (level[2] or 0) >= (PETPORTS_SUBMERGED_FILL or 0.5)
+						if wet ~= centreWet then nearSurface = true end
+					end
+				end
+			end
+
 			if insideBody and not nearSurface and navForbiddenCells ~= nil then
 				local walls = navForbiddenCells()
 				if next(walls) ~= nil then
@@ -5175,6 +5197,10 @@ local NAV_CANDIDATE_SCAN = 60
 --  corner of a huge graph does not scan the whole thing every top-up.
 local NAV_CANDIDATE_RINGS = 12
 
+--  How many from-cells one top-up may walk while looking for unswept work.
+--  A string.match and a table lookup each; six hundred is a few ms.
+local NAV_CANDIDATE_FROMS = 600
+
 function petports_navCandidates(limit)
 	local here = mcontroller.position()
 	local cx, cy = petports_navCell(here)
@@ -5333,14 +5359,32 @@ function petports_navCandidates(limit)
 		end
 	end
 
+	--  UNTIL IT FINDS UNSWEPT WORK, 2026-09-09m. MEASURED (Lofty, five
+	--  times): no cells at the coverage edge or the far shore, ever. 08h
+	--  stopped this walk after NAV_CANDIDATE_SCAN from-cells; a never-swept
+	--  cell only enters as the TARGET of a scanned from-cell, and around a
+	--  parked unit there are hundreds of swept cells closer than the
+	--  frontier, so the sixty were always the same interior cells being
+	--  re-swept at the next radius and the frontier was never reached. Now
+	--  the walk stops on candidates FOUND that are unswept (radius 0), keeps
+	--  going outward until it has NAV_CANDIDATE_SCAN of them, and is bounded
+	--  by NAV_CANDIDATE_FROMS from-cells and the ring limit instead.
 	local blocks = navGraphBlocks(graph)
 	local ubx, uby = math.floor(cx / NAV_BLOCK_CELLS), math.floor(cy / NAV_BLOCK_CELLS)
 	local scanned = 0
 	local ring = 0
 	local seenBlocks = 0
 
-	while scanned < NAV_CANDIDATE_SCAN and seenBlocks < blocks.count
-	      and ring <= NAV_CANDIDATE_RINGS do
+	local function unsweptFound()
+		local n = 0
+		for _, entry in ipairs(found) do
+			if (entry.radius or 0) <= 0 then n = n + 1 end
+		end
+		return n
+	end
+
+	while unsweptFound() < NAV_CANDIDATE_SCAN and scanned < NAV_CANDIDATE_FROMS
+	      and seenBlocks < blocks.count and ring <= NAV_CANDIDATE_RINGS do
 		for by = uby - ring, uby + ring do
 			for bx = ubx - ring, ubx + ring do
 				if math.abs(bx - ubx) == ring or math.abs(by - uby) == ring then

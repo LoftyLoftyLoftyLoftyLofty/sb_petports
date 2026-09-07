@@ -82,7 +82,7 @@
 --  delegate, and stays one.
 local vanillaSetJumpState = setJumpState
 
-local BUILD_STAMP = "2026-09-07i the last tick lands on the point only when the turn ahead is tight"
+local BUILD_STAMP = "2026-09-07k a free mover string-pulls to any target its line is clear to"
 local stampLogged = false
 
 --  DELETE ME ONCE THE ANSWER IS IN THE LOG.
@@ -593,11 +593,30 @@ local function flyCommandAllowed(velocity)
   local medium = petports_mediumAt(ahead, mcontroller.boundBox())
 
   if medium == "forbidden" then
-    if not self.petportsGuardNoted then
-      self.petportsGuardNoted = true
+    --  A BODY ALREADY TOUCHING DENIED LIQUID MAY MOVE AWAY FROM IT,
+    --  2026-09-07j. MEASURED 22:28: a unit parked with the bottom 0.36 of
+    --  its box in a one-tall poison strip; every command except straight up
+    --  predicted a box still in the strip, was refused, and the unit sat
+    --  with `spd 0` for minutes. If the body's own position reads forbidden
+    --  and the command has a component away from the nearest denied tile,
+    --  it goes.
+    if petports_mediumAt(here, mcontroller.boundBox()) == "forbidden" then
+      local away = petports_awayFromDenied(here)
+      if away[1] * velocity[1] + away[2] * velocity[2] > 0 then
+        self.petportsGuardNoted = nil
+        return true
+      end
+    end
+
+    --  SAID EVERY TWO SECONDS WHILE IT HOLDS, not once: a silent guard
+    --  read as a unit that had simply stopped.
+    local now = world.time()
+    if self.petportsGuardNoted == nil or (now - self.petportsGuardNoted) >= 2.0 then
+      self.petportsGuardNoted = now
       sb.logInfo("UNIT GUARD refused a fly command at %s toward %s: the body would "
-        .. "enter a liquid this chassis will not -- stopping", sb.printJson(here),
-        sb.printJson(ahead))
+        .. "enter a liquid this chassis will not -- stopping (medium here %s)",
+        sb.printJson(here), sb.printJson(ahead),
+        tostring(petports_mediumAt(here, mcontroller.boundBox())))
     end
     mcontroller.setVelocity({ 0, 0 })
     mcontroller.controlFly({ 0, 0 })
@@ -718,10 +737,17 @@ local function stringPullClear(here, targetPosition, dt)
   --  cell whose line from the body the picker just verified clear; it is
   --  the one target that should always be flown straight. The task-type
   --  list still governs pulling to the task's OWN target.
-  local onLeg = self.petportsLegWaypoint ~= nil
-    and world.magnitude(self.petportsLegWaypoint, targetPosition) < 0.01
-
-  if not onLeg and (task == nil or not STRING_PULL_TASKS[task.type]) then return false end
+  --  ANY TASK, 2026-09-07k (Lofty, 22:35). The list above dates from when
+  --  the line test was a solids ray and a straight line to a crate was
+  --  "often wrong". flyPathClear is the body poly and the medium at every
+  --  step now, and the coarse-first gate and the sight latch already treat
+  --  a clear line as "fly it" for every task -- so a collect task in sight
+  --  of its drop got no leg AND no pull, the engine A* planned it through
+  --  the poison, refused, re-asked, still in sight, forever. The executor
+  --  now agrees with the gate: a clear line is flown, whatever the task.
+  --  STRING_PULL_TASKS stays as the record of why moving targets needed it
+  --  first.
+  if task == nil then return false end
 
   self.petportsPullTimer = (self.petportsPullTimer or 0) - (dt or 0)
 
