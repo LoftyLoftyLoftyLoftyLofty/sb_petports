@@ -289,7 +289,18 @@ local SETTING_ROWS = {
 	--  `carried` CARRIED THE SAME MISMATCH AND NOBODY COULD SEE IT, because
 	--  nothing reads that setting yet. Fixed here rather than left to surface the
 	--  day the speech bubbles land.
-	{ key = "carried", owner = "toggles", needs = nil, default = false,
+	--  DEFAULTS ON, UNLIKE EVERY OTHER DISPLAY TOGGLE HERE, and the reason is
+	--  what the bubbles are FOR. A nametag is decoration; a bubble is how a
+	--  unit reports that it cannot deposit, or that storage is full. A fleet
+	--  that ships silent hides the one channel it has for asking for help,
+	--  and a player would have to visit every port to switch it on before
+	--  ever learning it existed.
+	--
+	--  settingValue reads an unset value as `row.default ~= false`, so this
+	--  needs nothing else on the pane side. petportBubbles() in the port reads
+	--  `~= false` to match -- see the note at the head of this list for what
+	--  happens when those two disagree.
+	{ key = "carried", owner = "toggles", needs = nil, default = true,
 	  label = "petport.setting.carried", tip = "petport.tip.carried" },
 
 	--  BESIDE `carried` BECAUSE THEY ARE THE SAME KIND OF THING: universal

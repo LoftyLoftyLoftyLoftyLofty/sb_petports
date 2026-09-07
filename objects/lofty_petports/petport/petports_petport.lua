@@ -2097,7 +2097,12 @@ function init()
     if self.petData == nil or type(payload) ~= "table" then return false end
 
     self.petData.toggles = {
-      carried = payload.carried == true,
+      --  `~= false`, NOT `== true`, AND THAT IS NOT A TIDY-UP. This toggle
+      --  defaults ON, so absent has to read on -- and the pane's settingValue
+      --  reads an unset value the same way. Reading it `== true` here would
+      --  paint a ticked box over a unit this port considers switched off,
+      --  which is the mismatch the pane's own note warns about.
+      carried = payload.carried ~= false,
 
       --  DEFAULTS OFF, like every display toggle on this tab, because absent
       --  reads as false here. That is deliberate: all four unit items ship a
@@ -2112,6 +2117,12 @@ function init()
     --  effect on a LIVE unit. `carried` is stored and read by nothing yet; this
     --  one has to reach the entity or the checkbox does nothing until respawn.
     pushPetName()
+
+    --  BOTH TOGGLES ON THIS TAB NOW HAVE A LIVE EFFECT. `carried` was the one
+    --  the comment above called stored-and-read-by-nothing; it drives the
+    --  speech bubbles, so it needs the same immediate push as the nametag or
+    --  the checkbox does nothing until the unit respawns.
+    pushUnitBubbles()
 
     sb.logInfo("PETPORT %s toggles: %s", stationUniqueId(), sb.printJson(self.petData.toggles))
     return true
@@ -4628,6 +4639,25 @@ end
 --  rather than looking broken. A display toggle has no such problem: nothing is
 --  broken by a quiet fleet, and every unit item ships a name, so defaulting on
 --  would label the whole base the moment this shipped.
+--  ARE SPEECH BUBBLES ON FOR THIS UNIT?
+--
+--  DEFAULTS ON WHEN ABSENT, unlike petportNametag directly below. The two
+--  toggles sit side by side in the pane and read their stored value in opposite
+--  directions, which looks like an inconsistency and is the whole point: a
+--  nametag is decoration and a bubble is how a unit says it is stuck. A fleet
+--  that shipped silent would hide its only channel for asking for help until a
+--  player found the checkbox.
+--
+--  NO petData IS NOT "OFF", it is "no unit" -- and false is the right answer
+--  for that for the same reason petportNametag gives.
+function petportBubbles()
+  if self.petData == nil then return false end
+
+  local toggles = self.petData.toggles
+  if type(toggles) ~= "table" then return true end
+  return toggles.carried ~= false
+end
+
 function petportNametag()
   if self.petData == nil then return false end
 
@@ -4843,6 +4873,48 @@ function pushUnitLight()
   --  whether or not the far end exists -- the same guard the other pushes use.
   world.callScriptedEntity(self.petId, "petports_setLightColor",
     color.r, color.g, color.b)
+end
+
+--  WHETHER A DEPLOYED UNIT MAY SPEAK.
+--
+--  ITS OWN PUSH RATHER THAN RIDING pushPetName, which is the same call
+--  pushUnitLight makes and for the same reason: that signature covers the name
+--  and the tag, so folding this in would re-push a unit's name every time a
+--  checkbox moved.
+--
+--  SIGNATURE-GATED FROM update WITH THE ENTITY ID IN IT -- arch.port.pushsignature,
+--  and this is its fourth instance. A respawn is not a mutation, so nothing
+--  firing only on a click would reach a unit that died and came back: it would
+--  speak or stay silent according to its spawn parameters until somebody opened
+--  the pane. That is the exact fault observed on nametags on 2026-09-01.
+--
+--  THE HANDLER CALLS IT TOO, so the checkbox takes effect on the frame it is
+--  clicked rather than on the next tick. The signature makes that free --
+--  whichever runs first writes it and the other returns immediately.
+function pushUnitBubbles()
+  if self.petId == nil or not world.entityExists(self.petId) then
+    --  Cleared so the next unit -- respawn or replacement -- is pushed to,
+    --  rather than matching a signature left behind by its predecessor.
+    self.pushedUnitBubbles = nil
+    return
+  end
+
+  local show = petportBubbles()
+
+  local signature = string.format("%s|%s", tostring(self.petId), tostring(show))
+
+  if signature == self.pushedUnitBubbles then return end
+  self.pushedUnitBubbles = signature
+
+  sb.logInfo("PETPORT %s pushing speech bubbles to unit %s: %s",
+    stationUniqueId(), sb.printJson(self.petId), tostring(show))
+
+  --  Defined in petports_bubble.lua rather than petports_contract.lua, because
+  --  it updates state private to that module and re-runs its publish. A bare
+  --  callScriptedEntity naming a function the target does not define returns
+  --  nil SILENTLY, so the log above fires whether or not the far end exists --
+  --  the same guard every other push here uses.
+  world.callScriptedEntity(self.petId, "petports_setUnitBubbles", show)
 end
 
 --  THE NAME OVER A DEPLOYED UNIT.
@@ -15260,6 +15332,11 @@ end
   --  has no colour until something tells it one, and the spawn parameters do
   --  not carry it.
   pushUnitLight()
+
+  --  AND THE FOURTH. A unit that respawned has no idea whether its port wants
+  --  it to speak, for the same reason it has no colour: the spawn parameters do
+  --  not carry either.
+  pushUnitBubbles()
 
   portProf("workUpdate", workUpdate, dt)
   portProfReport()

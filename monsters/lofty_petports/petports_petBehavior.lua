@@ -158,6 +158,16 @@ function petBehavior.performAction(action)
 end
 
 function petBehavior.run()
+  --  CHAT BUBBLE HEARTBEAT. Republishes whatever bubble is up to every player
+  --  in the world every ten calls, because localAnimator drawables that go
+  --  offscreen for long enough are dropped and the client has no way to ask for
+  --  them back.
+  --
+  --  NIL-GUARDED. petports_bubble.lua is listed in the monstertype scripts and
+  --  should always be here, but a guard costs nothing and a nil call in run
+  --  would take the whole behaviour down rather than just the bubble.
+  if petports_bubbleHeartbeat ~= nil then petports_bubbleHeartbeat() end
+
   if RUN_CADENCE_DEBUG then
     self.runCadenceCalls = (self.runCadenceCalls or 0) + 1
     self.runCadenceClock = (self.runCadenceClock or 0) + script.updateDt()

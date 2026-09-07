@@ -84,6 +84,76 @@
 --  trusted; unlike the think pump this logs on CHANGE only, not per tick.
 local BUBBLE_DEBUG = true
 
+--  DRAW THE BUBBLE ON THE MONSTER'S OWN ANIMATOR.
+--
+--  false because a monster's drawables are clamped to its monstervariant's
+--  render layer, so the bubble is drawn behind water and behind foreground
+--  tiles with no way to lift it -- there is no per-part render layer and zLevel
+--  only orders parts within the entity.
+--
+--  NOT DELETED. The stateType and the four parts are still in all five
+--  .animation files and still work, so the two can be put side by side before
+--  either is thrown away. Set this true to get the old behaviour back.
+local BUBBLE_MONSTER_PARTS = false
+
+--  Tell every player in the world what this unit is saying.
+--
+--  world.players() AND NOT world.playerQuery. There is no distance argument
+--  here on purpose. Range is a DRAWING decision, and the client already makes
+--  it -- BUBBLE_DRAW_RANGE in petports_coverageoverlay.lua. Culling on the
+--  sender as well would mean two ranges that have to agree, and the failure
+--  mode when they drift is a player standing well inside draw range seeing
+--  nothing, which looks like a broken bubble rather than a misconfigured one.
+--
+--  It also means a player already HOLDS the state before they are close enough
+--  to see it, so walking into range shows the bubble immediately instead of
+--  waiting for the unit's next content change.
+--
+--  ON CONTENT CHANGE ONLY. A bubble changes when the unit's situation changes,
+--  which is a task transition rather than a tick, so this is rare enough to
+--  send eagerly and far too rare to poll for.
+--
+--  REMAINING GAP: a player who enters the world AFTER the last change was sent
+--  is not told. Closing that needs the unit to notice the player set changing,
+--  which wants a host in petBehavior.run().
+local function publishBubble(icons)
+	local ok, players = pcall(world.players)
+	if not ok or players == nil then
+		if BUBBLE_DEBUG then
+			sb.logInfo("UNIT bubble world.players failed: %s", tostring(players))
+		end
+		return
+	end
+
+	--  REMEMBERED SO THE HEARTBEAT HAS SOMETHING TO RESEND. This is the last
+	--  thing that was SENT, which is not the same as the last thing that was
+	--  ASKED FOR -- a send that failed the pcall above never gets here, so the
+	--  heartbeat will not go on reasserting something no client ever saw.
+	self.petportsBubbleSent = icons
+
+	--  THE FLAG TRAVELS WITH THE CONTENT, AND THE CONTENT IS SENT EITHER WAY.
+	--
+	--  A unit with bubbles switched off still publishes what it would have
+	--  said. That is deliberate and it is what makes the checkbox feel instant:
+	--  every client already holds the current state of every unit in the world,
+	--  so ticking the box is a repaint on the next frame rather than a wait for
+	--  the unit's next content change.
+	--
+	--  Not sending at all would be cheaper on the wire and would make a player
+	--  switching a unit back on stare at nothing until something happened to
+	--  it.
+	local show = self.petportsBubbleEnabled ~= false
+
+	for _, id in ipairs(players) do
+		world.sendEntityMessage(id, "petports_bubbleShow", entity.id(), icons, show)
+	end
+
+	if BUBBLE_DEBUG then
+		sb.logInfo("UNIT bubble published %s icons to %s players",
+			tostring(icons and #icons or 0), tostring(#players))
+	end
+end
+
 local BUBBLE_STATE_TYPE = "bubble"
 local BUBBLE_OFF        = "none"
 
@@ -114,6 +184,70 @@ petports_bubbleIcon =
 	blank = BUBBLE_BLANK
 }
 
+
+
+--  THE PORT'S ANSWER TO "MAY THIS UNIT SPEAK".
+--
+--  Pushed by pushUnitBubbles in petports_petport.lua, signature-gated there and
+--  driven from its update, so a respawned unit is told again without anyone
+--  having to remember.
+--
+--  DEFAULTS ON. self.petportsBubbleEnabled is nil until the port speaks, and
+--  every read of it here is `~= false` -- so a unit that has not yet been told,
+--  or whose port is running an older script, speaks rather than falling silent.
+--  Matches petportBubbles() on the port and settingValue in the pane; all three
+--  read absent the same way on purpose.
+--
+--  REPUBLISHES IMMEDIATELY. The whole point of the flag riding with the content
+--  is that a client already holds this unit's state, so flipping the checkbox
+--  should repaint on the next frame. Waiting for the heartbeat would put up to
+--  ten seconds between the click and the bubble.
+function petports_setUnitBubbles(show)
+	local enabled = show ~= false
+	if enabled == (self.petportsBubbleEnabled ~= false) then return true end
+
+	self.petportsBubbleEnabled = enabled
+
+	sb.logInfo("UNIT bubble speech %s by its port",
+		enabled and "ENABLED" or "DISABLED")
+
+	--  ONLY IF THERE IS SOMETHING TO SAY. A silent unit has nothing to
+	--  republish and the clients have nothing of its to repaint.
+	if self.petportsBubbleSent ~= nil then
+		publishBubble(self.petportsBubbleSent)
+	end
+
+	return true
+end
+
+--  Republish the current bubble every ~10 seconds.
+--
+--  WHY THIS IS NOT REDUNDANT WITH SEND-ON-CHANGE. localAnimator drawables that
+--  stay offscreen long enough are dropped, so a client that was told once has
+--  no guarantee of still drawing anything after the unit leaves the screen and
+--  comes back. The client cannot ask -- a monster's scripts run on the master
+--  only, so world.callScriptedEntity from a client cannot reach one. The only
+--  direction available is push, so push periodically.
+--
+--  CALLED FROM petBehavior.run, WHICH IS 1 Hz. groundPet.querySurroundings
+--  calls run on querySurroundingsCooldown and all five monstertypes set that to
+--  1, so ten calls is ten seconds. Counting calls rather than accumulating
+--  script.updateDt() is deliberate: updateDt is the TICK delta, and run is not
+--  called per tick, so accumulating it here would measure the wrong thing.
+--
+--  SILENT WHEN THERE IS NOTHING UP. An idle fleet sends nothing at all.
+local BUBBLE_HEARTBEAT_CALLS = 10
+
+function petports_bubbleHeartbeat()
+	if self.petportsBubbleSent == nil then return end
+
+	self.petportsBubbleBeat = (self.petportsBubbleBeat or 0) + 1
+	if self.petportsBubbleBeat < BUBBLE_HEARTBEAT_CALLS then return end
+	self.petportsBubbleBeat = 0
+
+	publishBubble(self.petportsBubbleSent)
+end
+
 --  Set the bubble's contents. `icons` is a list of up to three asset paths in
 --  reading order, or nil / empty to hide the bubble entirely. Extra entries
 --  are DROPPED, loudly -- silently truncating a four-icon message would make
@@ -136,6 +270,16 @@ function petports_bubbleSet(icons)
 		sb.logError("UNIT bubble handed %s icons, only %s slots exist; dropping the rest",
 			tostring(n), tostring(#BUBBLE_SLOTS))
 		n = #BUBBLE_SLOTS
+	end
+
+	--  THE PLAYERS ARE TOLD FIRST AND UNCONDITIONALLY. Everything below this
+	--  is the monster-side draw, which is off by default and is not the thing
+	--  the player actually sees.
+	publishBubble(n > 0 and icons or nil)
+
+	if not BUBBLE_MONSTER_PARTS then
+		self.petportsBubbleState = n > 0 and BUBBLE_LAYOUT[n] or BUBBLE_OFF
+		return true
 	end
 
 	for i = 1, #BUBBLE_SLOTS do
@@ -399,6 +543,37 @@ function petports_bubbleSelfTest(itemName)
 		mid or petports_bubbleIcon.box,
 		petports_bubbleIcon.gun
 	})
+end
+
+--  Bench call for judging PADDING against real content:
+--
+--      petports_bubbleSelfTestItems("dirtmaterial", "coalore", "ironbar")
+--
+--  The placeholder icons in icons.png use 10 to 12 pixels of their 16x16 cell
+--  and sit 2 to 4 pixels in from each edge, so the bubble reads as having four
+--  times the gap between icons that bubble.frames actually specifies. Judging
+--  the padding against them measures the placeholders, not the layout.
+--
+--  Real inventory icons are not uniformly full-bleed either -- plenty are inset
+--  as well -- so the padding worth shipping is whatever looks right against the
+--  items units ACTUALLY carry. Pass three of those.
+--
+--  Anything that will not resolve to a single path falls back to the box and is
+--  named in the log, so a slot that looks wrong can be told apart from a slot
+--  that resolved to something unexpected.
+function petports_bubbleSelfTestItems(a, b, c)
+	local icons = {}
+	for _, name in ipairs({ a, b, c }) do
+		if name ~= nil then
+			local path = petports_bubbleItemIcon({ name = name, count = 1 })
+			if path == nil then
+				sb.logInfo("UNIT bubble bench: %s did not resolve, using the box", tostring(name))
+				path = petports_bubbleIcon.box
+			end
+			icons[#icons + 1] = path
+		end
+	end
+	petports_bubbleSet(icons)
 end
 
 --  Bench call for the layout states alone, with no item resolution involved:

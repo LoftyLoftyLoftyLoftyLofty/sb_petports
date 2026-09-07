@@ -542,6 +542,188 @@ local function rebuildIfStale()
 		dropped and "(HATCH DROPPED, over budget)" or "")
 end
 
+
+--------------------------------------------------------------------------------
+--  CHAT BUBBLES
+--------------------------------------------------------------------------------
+--
+--  2026-09-07c player-side bubble reader
+--
+--  A unit cannot draw its own bubble above the water overlay. Every drawable a
+--  monster produces is clamped to its monstervariant's render layer -- there is
+--  no per-part override, and zLevel only orders parts WITHIN that layer. So the
+--  bubble is drawn here instead, on the player, at the same "Overlay" layer the
+--  coverage boxes use, which is where engine chat text lives and why chat stays
+--  legible from inside a one-tile shaft.
+--
+--  THE UNIT PUSHES, THIS SCRIPT NEVER ASKS. A monster's scripts run on the
+--  master only, so world.callScriptedEntity from a client cannot reach one.
+--  Pull is not available; the unit sends on content change.
+--
+--  A DEAD OR DISTANT UNIT IS DROPPED HERE, NOT REMEMBERED. The sender cannot
+--  send a retraction it is not alive to send, so the reader treats its table as
+--  a cache to be validated rather than a record to be trusted.
+
+--  Pixels to the tile. bubble.frames is measured in pixels; drawable positions
+--  are in tiles.
+local BUBBLE_PPT = 8.0
+
+--  Straight out of bubble.frames. Changing the art means changing these and
+--  nothing else on this side.
+local BUBBLE_SHEET = "/monsters/lofty_petports/shared/bubble/bubble.png"
+local BUBBLE_FRAME = { "one", "two", "three" }
+local BUBBLE_PITCH = 18.0 / BUBBLE_PPT
+local BUBBLE_LIFT  = 3.0 / BUBBLE_PPT
+
+--  Height of the bubble's centre above the unit's own position, in tiles.
+--  TUNE-IN-GAME, and the only number here that is a taste judgement rather
+--  than a measurement.
+local BUBBLE_Y = 3.0
+
+--  Beyond this RADIUS a bubble is not drawn even if its unit is still sending.
+--  Stops a unit offscreen from contributing drawables nobody can read.
+--
+--  A RADIUS AND NOT A BOX. The first pass tested abs(dx) and abs(dy)
+--  separately, which admits a unit 84 tiles out on the diagonal.
+--
+--  25 SET BY EYE, 2026-09-07. This is an earshot, not a view frustum -- the
+--  question it answers is whether the player is close enough to be spoken to,
+--  which is a judgement rather than a measurement. 40 was tried first and read
+--  as too far, 20 as slightly too near.
+--
+--  Tightening it further only ever removes the furthest, because the sort below
+--  is nearest-first.
+local BUBBLE_DRAW_RANGE = 25.0
+
+--  Most bubbles drawn at once, nearest first.
+--
+--  Four drawables each, on the same list as the coverage overlay's segments.
+--  Twelve is far past the point where a player can read them, so this is a
+--  guard against a fifty-unit base rather than a limit anyone should meet in
+--  normal play.
+local BUBBLE_MAX_DRAWN = 12
+
+--  Slot x offsets by icon count, centred on the unit. Same derivation as the
+--  per-state offsets in the .animation files, from the same two numbers.
+local function bubbleSlotX(count)
+	if count == 1 then return { 0.0 } end
+	if count == 2 then return { -BUBBLE_PITCH / 2, BUBBLE_PITCH / 2 } end
+	return { -BUBBLE_PITCH, 0.0, BUBBLE_PITCH }
+end
+
+--  Collect what is currently worth drawing, dropping anything stale.
+--
+--  world.distance AND NOT A SUBTRACTION. Worlds wrap in x, so a plain
+--  subtraction sends the bubble of a unit near the seam across the whole map.
+--
+--  ENTRIES FOR UNITS THAT NO LONGER EXIST ARE DROPPED. What world.entityExists
+--  reports on a client for a unit that is merely far away is UNVERIFIED -- it
+--  may report false for an unloaded entity the same as for a dead one, or it
+--  may not. Either way there is nothing to draw, so the entry goes.
+--
+--  THE CONSEQUENCE OF THAT DEPENDS ON THE ANSWER AND IS NOT YET KNOWN. If a
+--  dropped entry can only come back when the unit's content next changes, then
+--  walking out of range and back leaves no bubble until something happens to
+--  the unit. Nothing re-announces on approach today.
+--
+--  SORTED AND CAPPED. pairs() order is nondeterministic, so capping an unsorted
+--  walk would keep a different arbitrary subset each frame and the bubbles
+--  would flicker. Nearest first, entity id as the tiebreak so two units at
+--  exactly equal range still order stably.
+local function bubblesToDraw(origin)
+	local out = {}
+	if self.petportsBubbles == nil then return out end
+
+	local cull = BUBBLE_DRAW_RANGE * BUBBLE_DRAW_RANGE
+
+	for id, held in pairs(self.petportsBubbles) do
+		if not world.entityExists(id) then
+			self.petportsBubbles[id] = nil
+
+		--  SWITCHED OFF IS SKIPPED, NOT FORGOTTEN. The entry stays so that
+		--  switching it back on repaints immediately; only a unit that has
+		--  stopped existing is dropped.
+		elseif type(held) == "table" and held.enabled
+		       and type(held.icons) == "table" and #held.icons > 0 then
+			local pos = world.entityPosition(id)
+			if pos ~= nil then
+				local delta = world.distance(pos, origin)
+				local d2 = delta[1] * delta[1] + delta[2] * delta[2]
+
+				if d2 <= cull then
+					out[#out + 1] =
+					{
+						id = id,
+						d2 = d2,
+						delta = delta,
+						icons = held.icons
+					}
+				end
+			end
+		end
+	end
+
+	table.sort(out, function(a, b)
+		if a.d2 ~= b.d2 then return a.d2 < b.d2 end
+		return a.id < b.id
+	end)
+
+	if #out > BUBBLE_MAX_DRAWN then
+		--  CHANGE-GATED. Standing in a crowd should say this once, not sixty
+		--  times a second.
+		if self.petportsBubbleDropped ~= #out then
+			self.petportsBubbleDropped = #out
+			sb.logInfo("PETPORTS bubbles over budget: %s in range, drawing the "
+				.. "nearest %s", tostring(#out), tostring(BUBBLE_MAX_DRAWN))
+		end
+
+		for i = #out, BUBBLE_MAX_DRAWN + 1, -1 do
+			out[i] = nil
+		end
+	elseif self.petportsBubbleDropped ~= nil then
+		self.petportsBubbleDropped = nil
+	end
+
+	return out
+end
+
+local function addBubble(entry)
+	local icons = entry.icons
+	local n = #icons
+	if n > #BUBBLE_FRAME then n = #BUBBLE_FRAME end
+
+	local base = { entry.delta[1], entry.delta[2] + BUBBLE_Y }
+
+	local backing = {
+		image = BUBBLE_SHEET .. ":" .. BUBBLE_FRAME[n],
+		position = base,
+		centered = true,
+		fullbright = true
+	}
+
+	if self.petportsOverlayLayer ~= nil then
+		localAnimator.addDrawable(backing, self.petportsOverlayLayer)
+	else
+		localAnimator.addDrawable(backing)
+	end
+
+	local xs = bubbleSlotX(n)
+	for i = 1, n do
+		local icon = {
+			image = icons[i],
+			position = { base[1] + xs[i], base[2] + BUBBLE_LIFT },
+			centered = true,
+			fullbright = true
+		}
+
+		if self.petportsOverlayLayer ~= nil then
+			localAnimator.addDrawable(icon, self.petportsOverlayLayer)
+		else
+			localAnimator.addDrawable(icon)
+		end
+	end
+end
+
 --------------------------------------------------------------------------------
 --  DRAWING
 --------------------------------------------------------------------------------
@@ -607,6 +789,38 @@ function init()
 	self.petportsOverlayProbed = false
 	self.petportsOverlayDrawing = false
 
+	--  CHAT BUBBLES. Keyed by unit entity id; the value is the icon path list,
+	--  or nil to take the bubble down.
+	--
+	--  Registered here rather than at file scope because message.setHandler
+	--  wants a live script context, and init is the only place this script is
+	--  guaranteed to have one.
+	self.petportsBubbles = {}
+
+	--  THE ENABLED FLAG IS TRACKED, NOT FILTERED ON ARRIVAL.
+	--
+	--  A unit with bubbles switched off still tells us what it would have said,
+	--  and we keep it. That is what makes the pane checkbox feel instant: the
+	--  state for every unit in the world is already here, so ticking the box
+	--  repaints on the next frame instead of waiting for that unit's next
+	--  content change.
+	--
+	--  `~= false` so a message from a unit running an older script -- no fifth
+	--  argument at all -- reads as enabled rather than silently going dark.
+	message.setHandler("petports_bubbleShow", function(_, _, unitId, icons, show)
+		if type(unitId) ~= "number" then return end
+
+		if type(icons) ~= "table" or #icons == 0 then
+			self.petportsBubbles[unitId] = nil
+		else
+			self.petportsBubbles[unitId] =
+			{
+				icons = icons,
+				enabled = show ~= false
+			}
+		end
+	end)
+
 	sb.logInfo("PETPORTS overlay build: %s", PETPORTS_OVERLAY_BUILD_STAMP)
 end
 
@@ -615,13 +829,27 @@ function update(dt)
 
 	if localAnimator == nil then return end
 
-	if not holdingPetport() then
+	--  THE PROBE MOVED ABOVE THE EARLY RETURN. Bubbles draw whether or not a
+	--  port is held, so the render layer has to be known in either case.
+	if not self.petportsOverlayProbed then
+		self.petportsOverlayProbed = true
+		probeRenderLayer()
+	end
+
+	local origin = entity.position()
+	local wantCoverage = holdingPetport()
+	local bubbles = bubblesToDraw(origin)
+
+	if not wantCoverage and #bubbles == 0 then
 		--  CLEARED ONCE ON THE FALLING EDGE, NOT EVERY TICK.
 		--
 		--  clearDrawables wipes the WHOLE list on the player's animator, which
 		--  is shared with anything else in this context that draws. We cannot
-		--  avoid clobbering a co-tenant while the overlay is up, but we can
-		--  avoid clobbering it for the 99% of play where no port is held.
+		--  avoid clobbering a co-tenant while we are drawing, but we can avoid
+		--  clobbering it for the play where we have nothing to say.
+		--
+		--  THE CONDITION IS NOW "NOTHING TO DRAW" RATHER THAN "NO PORT HELD",
+		--  because a bubble is a reason to keep drawing on its own.
 		if self.petportsOverlayDrawing then
 			localAnimator.clearDrawables()
 			self.petportsOverlayDrawing = false
@@ -629,21 +857,22 @@ function update(dt)
 		return
 	end
 
-	if not self.petportsOverlayProbed then
-		self.petportsOverlayProbed = true
-		probeRenderLayer()
-	end
-
-	rebuildIfStale()
+	if wantCoverage then rebuildIfStale() end
 
 	--  Drawables are retained between script ticks -- documented -- so a script
 	--  that adds without clearing grows its list without bound.
 	localAnimator.clearDrawables()
 
-	local origin = entity.position()
+	if wantCoverage and self.petportsOverlaySegments ~= nil then
+		for _, segment in ipairs(self.petportsOverlaySegments) do
+			addSegment(segment.a, segment.b, segment.colour, origin)
+		end
+	end
 
-	for _, segment in ipairs(self.petportsOverlaySegments) do
-		addSegment(segment.a, segment.b, segment.colour, origin)
+	--  BUBBLES LAST, so they sit over the coverage hatching rather than under
+	--  it when both are up.
+	for _, entry in ipairs(bubbles) do
+		addBubble(entry)
 	end
 
 	self.petportsOverlayDrawing = true
