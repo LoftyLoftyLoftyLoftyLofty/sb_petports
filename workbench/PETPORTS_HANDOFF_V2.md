@@ -50,85 +50,82 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-06 (tracked targets and the sight latch verified; the shape of open-medium routing decided)
+### What is built, as of 2026-09-07 (the poison maze is navigated; the free mover is one predicate end to end; the amphibious side crashes on a dry target and is unmeasured)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-**MOVING TARGETS ARE TRACKED AT ONE LAYER, BUILT AND VERIFIED.**
-`arch.pathing.trackedtarget`: one table says which tasks aim at an entity; the
-live position, the drift re-resolve, the coverage exit and the on-arrival
-chase read it. Verified on a medic intercepting a patient that moved ~30
-tiles (19 re-aims, dosed at 0.64), on fish (`arrived` at 30 tiles, un-latched
-and re-aimed), and on animals including a modded flying moth. Medic carries
-`target`, not `patient`. Coarsenav 07t fixed the placeholder graph's missing
-level table on the way.
+**READ THIS FIRST: THE SESSION OF 2026-09-06/07 WAS A SLOG AND THE TREE IS
+HOT.** Thirty-odd builds in a day, every one against a log, and at the end a
+two-hour soak in which swimmers navigated a poison maze both ways, chained
+legs without stopping, caught fish through it, and hairpinned. Then a drop on
+amphibious-walkable ground on the far side of the base crashed the game. That
+crash has NO log in this doc and is the first thing next session measures.
+Retire the churn; do not build on this tree until that log has been read.
 
-**THE SIGHT LATCH IS BUILT AND VERIFIED.** `arch.pathing.sightlatch`: a free
-mover holding a coarse leg looks at the real target twice a second with the
-body-swept, medium-sampled line test, and a clear line drops the leg and
-every hop behind it; the coarse-first gate uses the same test and sight
-overrides "far" for free movers. Verified in the faraway-fish log: three
-latches, the largest at 47 tiles with 9 hops dropped -- a unit on a 12-hop
-shoreline route to a target in plain view across open water. Every
-free-mover `coarse first` line reads "no clear line"; "far" appears only on
-walkers.
+**WHAT WORKS, MEASURED (swimmers and flyers):**
+- `arch.pathing.trackedtarget` -- medic, animal, fish tracked at one layer.
+- `arch.pathing.sightlatch` -- a free mover in sight of its target drops the
+  hops; verified 47 tiles / 9 hops.
+- `arch.pathing.boundarycells` -- liquid boundaries in one shared store,
+  denied liquid as walls in the probe, the boundary floods along itself and
+  through denied pockets, walls seed the survey beside them. The maze's
+  corridors anchor because a denied wall is a surface (08e).
+- `arch.pathing.storegeneration` -- every store entry carries a generation;
+  a wipe is a generation bump nothing old can survive. This was the session's
+  central discovery: the index-driven wipe never wiped everything, and every
+  poison fix built before it was fighting a stale TRUE edge through the
+  pocket. See `fact.tooling.propertiesunlistable`.
+- `arch.pathing.onepredicate` -- the coarse probe, the waypoint picker, the
+  coarse-first gate, the sight latch and the string-pull all ask
+  `petports_flyPathClear`: collision POLY (not the box, `fact.pathing.polycollision`), medium at every step. Free movers string-pull to ANY
+  target whose line is clear (flyapproach 07k).
+- `arch.pathing.executorguards` -- the body guard (no fly command may put the
+  body in denied liquid; a body already in it may only move away), the brush
+  back-off, the nudge onto a real edge's start, the never-beyond-reach
+  waypoint, turn-aware arrival and braking measured against velocity.
+- The survey candidate scan is spatial AND walks out until it finds unswept
+  work (09m); the earlier 08h version stranded the frontier for a whole
+  evening (`dead.pathing.scanslice`).
+- The live overlay (`arch.tooling.liveoverlay`): the unit's own graph, walls,
+  boundary records, last route and verdict text, every tick from memory.
 
-**THE POISON MAZE IS MEASURED AND NOT FIXABLE WITH WHAT EXISTS.** A swimmer
-sent at a fish behind a poison pocket: the engine A* routes through the
-poison, the medium check refuses the plan (`edge 17 of 36 ends at
-[2509,1130.8], which is a liquid this chassis will not enter`), the next
-tick plans the same route, eight identical refusals in four seconds until
-the watchdog. The engine cannot see forbidden liquid and the coarse graph
-does not know where the poison is. That is `todo.pathing.boundarycells`.
+**WHAT IS BROKEN OR UNKNOWN:**
+- The amphibious chassis on a dry target: the game died. Unmeasured. Suspects
+  in order: walker-side code paths that this session changed under the free
+  mover's assumptions (probe with `gravityEnabled = true`, the poly test in
+  the walker anchor, `navWithSide` around a walker survey, the turn/arrival
+  code with a walker's `mcontroller.velocity()`), or the two-sided survey
+  spending the whole instruction budget. `todo.pathing.amphibiouscrash`.
+- `PETPORTS_NAV_VERBOSE = true` IS ON IN THE FILE (09f). Turn it off before
+  any release; it multiplies the log by ten.
+- Six-hour TTL on FALSE edges: a wrongly contradicted edge stays gone for six
+  hours; only a wipe restores it (`todo.pathing.falsettl`).
+- Terrain changes: a placed block invalidates nothing until the sweep TTL
+  (`todo.pathing.terrainchange`, the plan is written there).
+- The turn-aware arrival/braking is cosmetic and Lofty has said to scrap it
+  if it acts up.
+- Every free-mover fix this session assumed the aquatic body; the flyer got
+  them by inheritance and was not tested in a maze.
 
-**THE SHAPE OF OPEN-MEDIUM ROUTING WAS DECIDED THIS SESSION, IN WORDS, AND IS
-RECORDED AS DECISIONS.** In order: `dd.pathing.arteryfirst` (highways over
-mesh growth; radial lookout rejected), `dd.pathing.highwaynode`
-(player-placed, unwired, probed by units, coverage 32 and residency),
-`dd.pathing.boundarystore` (one shared store for liquid boundaries, keyed on
-liquid and body, never per profile), `dd.pathing.railsanchor` (rails are
-creepable edges for free movers), `dd.pathing.probeprofile` (the probe
-carries the profile it probes; surrogate entities rejected). Build order:
-boundary cells, then the amphibious bridge as adjacency to them, then
-highway nodes. The tracked-target work and the latch are done ahead of all
-of that.
+**THE OBSERVATION TO CARRY FORWARD (Lofty, session end):** building
+water/land connectivity through coarse cells has built, by accident, all the
+blocking infrastructure a universal flyer chassis needed. `dd.locomotion.
+universalflyer` records it as intent.
 
----
+**DESIGN DECIDED THIS SESSION, NOT BUILT:** `dd.pathing.arteryfirst`,
+`dd.pathing.highwaynode`, `dd.pathing.railsanchor`, `dd.cargo.playerdefrag`.
+`dd.pathing.boundarystore` and `dd.pathing.probeprofile` ARE built.
 
-**STILL OPEN.** The flying-unit partially-submerged check
-(`fact.locomotion.buoyancy`, the `/entityeval` at 0 vs 0.25 has never been run).
-`PLAN DROP`'s second refusal, decided mid-fall from a position the unit is about
-to leave. Eleven tags cited in `.lua` comments with no entry anywhere, which
-nothing checks. `petports_luacheck.py` is still absent. Every drift re-resolve
-re-runs the coarse-first test (`todo.pathing.retestrate`). The amphibious
-chassis has no long-distance route across a mode boundary
-(`todo.pathing.amphibiousbridge`, now stated as boundary-cell adjacency).
+**LINE ENDINGS.** `petports_petport.lua` CRLF; contract, taskAction,
+coarsenav, flyapproach LF. Amphibious and sinker `.monstertype` are CRLF.
 
-**THE PLAYER-FACING NETWORK PANE IS THE NEXT DESIGN, AND IT DECIDES A DEAD
-END.** Delivering to a player is one more `TRACKED_TARGETS` row on the unit
-side and is BLOCKED on the port side: there is no request mechanism, because
-there is no pane yet that shows a player the contents of every network they
-stand in coverage of. Automatic cross-crate defragmentation is abandoned in
-favour of it (`dd.cargo.playerdefrag`).
-
-**LINE ENDINGS.** `petports_petport.lua` is CRLF on disk (15,329 lines, no
-bare LF); `petports_contract.lua`, `petportsTaskAction.lua`,
-`petports_coarsenav.lua` and `petports_flyapproach.lua` are LF. The memory
-that contract.lua is CRLF is stale as of 2026-09-06.
-
-**THE KILL LIST LIVES IN `plan.drawio` NOW, NOT HERE.** Cross-crate
-consolidation came off it this session. Everything else stands: currency in
-restock beacons, filter search bars, sinker platform sliding, sinker fishing,
-the run-animation blink. The chart's whole FINDABLE column is still red -- 17
-modules and 12 species, and no `treasure/`, `dungeons/` or `biomes/`
-directory exists in the repo at all.
-
-**STAMPS AT SESSION END:** coarsenav 07t, taskAction 07h, petport 07l,
-flyapproach 07a, habitat 07a, contract 06a. The tracked-target builds were
-committed after their verification log; 07h and flyapproach 07a are after
-that commit.
+**STAMPS AT SESSION END:** coarsenav 09m, taskAction 07u, flyapproach 07k,
+contract 07g, petport 07l, habitat 07a. All five `.monstertype` files
+changed (collision poly chamfer 0.4). `petports_localorder.py` added to
+tools -- run it on coarsenav before every build; four of this session's
+crashes were a local used above its definition.
 
 
 ## ARCHITECTURE
@@ -252,6 +249,121 @@ correct, and is where `todo.pathing.boundarycells` takes over.
 
 **WALKERS ARE UNCHANGED.** Their gate keeps far-or-blind with the ray; a
 walker's straight line is not a route.
+
+### Liquid boundaries live in one shared store, and denied liquid is a wall and a surface
+`arch.pathing.boundarycells` -- see also `dd.pathing.boundarystore`, `todo.pathing.poisonocean`, `arch.pathing.storegeneration`, `todo.pathing.amphibiousbridge`
+
+**BUILT 2026-09-06/07 (coarsenav 07u..09m). VERIFIED: the poison maze is
+navigated both ways, 22 hops, by a swimmer that denies poison.**
+
+**THE STORE.** `petports_navbounds` -> `:<bucket>` (index) ->
+`:<bucket>:<cell>` (record); bucket = sorted liquid names + body dims,
+e.g. `poison+water|b1.60,1.60`. A record is geometry only: medium per tile
+of the 2x2 window, top wet row, per-column fit, generation. Discovery rides
+on the anchor-cache miss (four `liquidAt` per cell per 30 s) and FLOODS: a
+found boundary queues its eight neighbours (six sampled per tick); an
+interior window that is entirely one denied liquid queues its neighbours
+too, so a pocket's shell is found from any side. All-water windows stop the
+flood.
+
+**THE READERS.** A profile reads the buckets whose liquids it denies into a
+tile set (`navForbiddenCells`, 30 s memo, own writes visible at once). The
+free-mover probe walks the body box along the segment against it; the
+walker probe checks every A* node. A newly found denied record queues a
+contradiction pass over existing free-mover edges that cross its tiles
+(scan phase 300 keys/tick, test phase 2 ms/tick, cached anchors only --
+the unbudgeted version hit the instruction limit). A denied tile in the
+grown box makes a cell NEAR A SURFACE, so corridors bounded by poison
+anchor; a change of wetness in the grown box does the same for the water's
+surface (09l). Walls seed survey candidates beside them (08i).
+
+**THE TILE, NOT THE CELL.** Cells overlap; a cell-level wall refused an
+edge running along the row AWAY from the pocket because its origin shared a
+window with the shell (07z). The wall is the denied tile and the test is the
+body box.
+
+**WHAT IT DOES NOT DO.** Interpret a boundary for a gravity-switchable
+chassis (a bridge) -- `todo.pathing.amphibiousbridge`. Nothing walker-side
+has been measured against it.
+
+### Every store entry carries its generation, and a wipe is a generation nothing old can survive
+`arch.pathing.storegeneration` -- see also `fact.tooling.propertiesunlistable`, `arch.pathing.boundarycells`, `dead.pathing.indexwipe`
+
+**BUILT 2026-09-06 (coarsenav 08v/08y).** `petports_navgen` is a world
+property; every edge entry, index entry and boundary record is written with
+`g = generation`; every read drops an entry from another generation,
+including the flush's read-then-merge, so a stale shard cannot be carried
+forward. `petports_navWipe` clears what the manifest and indices can
+enumerate, clears the wiping unit's own profiles by name, drops nav claims,
+bumps the generation, and drops the wiper's memos; every other unit sees the
+bump at its next tick (`navGenerationCheck`, run FIRST in the nav tick and
+at the top of every flush) and drops its own. A unit's remembered index
+entries are re-asserted on flush (08n, for the read-merge-write race between
+units) -- which is why the check must run before the flush: 08u.
+
+**WHY.** MEASURED 2026-09-06 17:24..18:29: the maze's stale TRUE edge through
+the poison survived four wipes. The wipe walked the indices; the indices did
+not list every shard; the flush merged new verdicts into the surviving old
+shard. Every poison fix built before this was correct and could not reach
+that edge.
+
+### One predicate: the probe, the picker, the gate, the latch and the pull ask the same question
+`arch.pathing.onepredicate` -- see also `arch.pathing.oneanchor`, `arch.pathing.sightlatch`, `fact.pathing.polycollision`
+
+**BUILT ACROSS 2026-09-06/07.** `petports_flyPathClear(from, to)`: the
+collision poly (`world.polyCollision`, `fact.pathing.polycollision`) swept
+at 0.8-tile steps, `petports_mediumAllows` at every step (denied liquid
+under any column the body covers, 07c; margin zero, 07e -- a 0.5 margin
+closed a two-wide corridor and was rolled back). The coarse free-mover probe
+(08k), the string-pull waypoint picker judged FROM THE BODY (09c), the
+coarse-first gate and the sight latch (07h), the string-pull itself,
+re-checked every tick (07c). A free mover string-pulls to ANY target whose
+line is clear (flyapproach 07k): the task-type list dated from a solids-ray
+line test and left collect tasks in sight of a drop with no leg and no pull.
+Every stall of the maze session was two of these places disagreeing; there
+is one place now.
+
+### The executor's guards: a free mover cannot be flown into denied liquid, and gets itself unstuck
+`arch.pathing.executorguards` -- see also `arch.pathing.onepredicate`, `todo.pathing.amphibiouscrash`
+
+**BUILT 2026-09-07 (flyapproach 07d..07k, taskAction 07i..07u, coarsenav
+09e/09i/09k).** In order of encounter:
+- Body guard: every fly command predicts the box one tick ahead; forbidden
+  means no command and zero velocity. A body ALREADY in denied liquid may
+  move away (07j); the guard logs every two seconds while it holds.
+- Brush: a forbidden reading at the body is a brush, not a beaching; back off
+  along `petports_awayFromDenied`, drop the leg, re-route (07m). Beached is
+  still a flyer in water or a swimmer in air.
+- Refused plan on a leg after 1 s = leg would not walk (07i); with no leg,
+  fail now, retryable, with the why-line (07l).
+- A leg that would not walk whose edge re-probes TRUE is not contradicted:
+  the body is nudged onto the edge's start if within 0.25, flown there if
+  further, two tries then the old policy (07q/07r). Before this, four good
+  edges out of one corner were deleted in eight seconds and a one-way trap
+  formed; contradictions are two-way for free movers now (09g).
+- A free mover is never handed a leg beyond its reach (09i); a first hop it
+  cannot see from the body becomes a step onto its own cell's anchor (09e).
+- Arrival at a leg is 0.25 for a sharp turn (>= 75 degrees, measured against
+  the body's velocity each tick) and 1.0 otherwise; the last tick lands
+  exactly on the point only when the turn ahead exceeds 45 (07t/07u,
+  flyapproach 07i). Cosmetic; scrap if it misbehaves.
+- The collision poly of all five chassis is chamfered 0.4 (was 0.2), same
+  width and height.
+
+### The live overlay draws the unit's own memory every tick
+`arch.tooling.liveoverlay` -- see also `arch.pathing.coarsenav`
+
+**BUILT 2026-09-06 (coarsenav 08s..09b).** With `petports_navDebugToggle()`
+on a unit: swept cells coloured by last radius (magenta while fresh, red at
+r2 through green at r12, dark magenta never swept), green lines to every
+sweep in flight, red points for the wall set, cyan/yellow points for
+boundary tiles (own records the tick they are written; the store every
+4 s), the last route as a white polyline with the held waypoint magenta, and
+three text lines: the survey verdict (seed cell, coverage, grounded, anchor,
+candidates, started, refused, refusal), the graph line (cells, edges, walls,
+own bounds, sweeps, or MISSING), the route verdict or why-line. Graph edge
+lines are off (`PETPORTS_NAV_DRAW_EDGES`). Range 32. `petports_navBoundsProbe
+(x, y)` prints one cell's tiles, store, index, walls and overlay state.
 
 ### Restock beacons — BUILT, and the design that survived contact
 `arch.beacon.restock`
@@ -7209,6 +7321,16 @@ component whose only edges in are bridges, and it is surveyed by a unit that
 is swimming past it. That unit has to be able to learn walker edges while
 wet, which this is.
 
+### A universal flyer chassis is now within reach of the infrastructure
+`dd.locomotion.universalflyer` -- see also `arch.pathing.boundarycells`, `todo.pathing.amphibiousbridge`, `arch.locomotion.swimmode`
+
+**OBSERVED 2026-09-07 (Lofty), NOT DECIDED IN DETAIL.** Building node
+connectivity between water and not-water through coarse cells -- boundary
+cells, per-profile interpretation, the two-sided survey, the one predicate
+-- has built, as a side effect, everything that was blocking a chassis that
+flies AND swims. Recorded as intent; the amphibious bridge is the first
+consumer and the universal flyer the second.
+
 ## DESIGN INTENT -- PLANNED
 
 ### The drone is always running
@@ -10873,7 +10995,52 @@ under any parameters a script chooses; what is bound to the entity's live
 mode is the start gate and the mover. `fact.pathing.canpathfind` stands as
 written -- it is about the gate.
 
+### Starbound's Lua has table.unpack and no global unpack
+`fact.tooling.tableunpack`
+
+MEASURED 2026-09-06 14:03: every unit's `update()` threw on `unpack`. The
+runtime is 5.3-shaped there whatever else is true of it; use `table.unpack`.
+
+### mcontroller.boundBox() is the AABB; world.polyCollision tests the actual shape
+`fact.pathing.polycollision` -- see also `arch.pathing.onepredicate`
+
+`mcontroller.boundBox()` is the axis-aligned box of the collision poly, so
+every `rectTileCollision` on it is conservative at corners. `mcontroller.
+collisionPoly()` returns the local poly and `world.polyCollision(poly,
+position, collisionSet)` tests it against tiles -- what the engine's physics
+does. Vanilla `pathutil.lua` uses the box throughout, which is how the mod
+inherited it. `petports_bodyHitsAt` is the poly test with a box fallback.
+
+### World properties cannot be enumerated
+`fact.tooling.propertiesunlistable` -- see also `arch.pathing.storegeneration`, `dead.pathing.indexwipe`
+
+There is no binding that lists `world.getProperty` keys by prefix. Any store
+that shards into many properties can only be enumerated through an index it
+maintains itself, and an index maintained by read-merge-write from several
+units loses entries. Consequence: nothing keyed on enumeration can be
+trusted to clear a store; a generation stamp on every entry can.
+
 ## DISPROVEN
+
+### A wipe that walks the store's indices does not wipe the store
+`dead.pathing.indexwipe` -- see also `arch.pathing.storegeneration`, `fact.tooling.propertiesunlistable`
+
+MEASURED 2026-09-06: 331 properties wiped one time, 178 the next, on the
+same store; a shard whose index entry had been lost survived four wipes and
+resurrected a stale TRUE edge through a poison pocket at every re-sweep,
+because the flush merges into the existing shard. Replaced by the
+generation stamp.
+
+### A candidate scan bounded by from-cells scanned strands the frontier
+`dead.pathing.scanslice` -- see also `arch.pathing.coarsenav`
+
+08h (2026-09-06) stopped the spatial candidate walk after sixty from-cells.
+A never-swept cell only enters as the target of a scanned from-cell, and
+around a parked unit there were hundreds of swept cells closer than the
+frontier, so the sixty were always interior cells being re-swept at the next
+radius and the coverage edge and the far shore were never reached -- for a
+whole evening, and reported five times before it was found. 09m stops on
+unswept candidates FOUND, bounded by 600 from-cells and the ring limit.
 
 ### Sinker jumping underwater was never a liquid problem
 `dead.locomotion.sinkerjump` -- see also `arch.pathing.climbsteer`, `arch.pathing.solvelaunch`, `fact.pathing.airauthority`, `dead.pathing.waterdrag`
@@ -13477,6 +13644,10 @@ index is sharded; that is the second half.
 ### Poison inside the ocean: a denied liquid enclosed by an allowed one
 `todo.pathing.poisonocean` -- see also `arch.pathing.mediummixed`, `arch.pathing.coarsenav`, `arch.pathing.mediumenforcement`, `todo.pathing.boundarycells`, `dd.pathing.boundarystore`
 
+**RESOLVED 2026-09-07 BY `arch.pathing.boundarycells`, `arch.pathing.
+onepredicate` and `arch.pathing.executorguards`.** A swimmer that denies
+poison navigates a poison maze both ways and hairpins in it.
+
 **MEASURED 2026-09-06 AND RESTATED.** A swimmer sent at a fish behind a
 poison pocket: the engine A* routes through the poison, the medium check
 refuses the plan (`PLAN REFUSED ... edge 17 of 36 ends at [2509,1130.8],
@@ -13535,8 +13706,47 @@ chasing at `CHASE_RETARGET_INTERVAL` would pay it twice a second, and
 distance (re-test only when the target has moved more than a leg's reach
 from the last tested point) or by time. Measure a walker chase first.
 
+### The amphibious chassis crashes the game on a dry target
+`todo.pathing.amphibiouscrash` -- see also `arch.pathing.executorguards`, `arch.pathing.boundarycells`, `dd.pathing.probeprofile`
+
+OPENED 2026-09-07, session end, NO LOG. A drop on amphibious-walkable ground
+on the far side of the base: the game "freaked out and died". FIRST THING
+NEXT SESSION: reproduce with the log open, read the last hundred lines
+before the death. Suspects, in order: the walker probe now run with
+`gravityEnabled = true` on a swimming otter; the poly test in the walker
+anchor; `navWithSide` around a walker survey; the turn/arrival code reading
+`mcontroller.velocity()` on a walker; the two-sided survey exhausting the
+instruction budget; the body guard or brush code reached by a walker (they
+are gated on `petports_freeMover()`, but the otter's mode flips). Do not
+build anything else on this tree until this is read.
+
+### Terrain changes invalidate nothing until the sweep TTL
+`todo.pathing.terrainchange` -- see also `arch.pathing.coarsenav`, `arch.pathing.boundarycells`, `todo.pathing.falsettl`
+
+OPENED 2026-09-07 (Lofty: "a single block being placed should not break
+the cache for nine hours"). The engine reports no tile changes. The plan,
+sized to what exists: (1) a contradicted edge re-sweeps its cell at radius
+2 immediately rather than in six hours -- the placed block usually breaks a
+cluster and one contradiction fixes one edge; (2) a slow third tier in the
+candidate order, "swept longest ago, near the unit", so the survey rolls
+over wherever the unit works; (3) a brush against liquid the store did not
+know re-samples that cell and its neighbours at once. Three places the
+existing survey is asked to look again sooner; no new pass.
+
+### FALSE edges have the same six-hour TTL as TRUE ones
+`todo.pathing.falsettl` -- see also `todo.pathing.terrainchange`, `arch.pathing.executorguards`
+
+OPENED 2026-09-07. A wrongly contradicted edge stays gone for `NAV_SWEEP_TTL`
+(six hours); only a wipe restores it. The design note says false should
+expire sooner than true and the sweep does not distinguish them. Measured
+consequence: a one-way trap that took a wipe to clear (09g made
+contradictions two-way, which removes the trap but not the six hours).
+
 ### Liquid boundary cells: a third cell kind, in the shared store
 `todo.pathing.boundarycells` -- see also `dd.pathing.boundarystore`, `todo.pathing.poisonocean`, `todo.pathing.amphibiousbridge`, `dd.pathing.probeprofile`, `arch.locomotion.dive`
+
+**RESOLVED 2026-09-07 BY `arch.pathing.boundarycells`** -- steps 1 to 3
+built and verified on the maze. Step 4 is `todo.pathing.amphibiousbridge`.
 
 OPENED 2026-09-06. THE NEXT BUILD, in this order: (1) the probe carries its
 profile (`dd.pathing.probeprofile`), so a gravity-switchable unit surveys

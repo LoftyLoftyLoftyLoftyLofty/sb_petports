@@ -1,4 +1,4 @@
-# COARSE NAV -- SESSION HANDOFF (as of coarsenav 07t / taskAction 07h / petport 07l / flyapproach 07a / habitat 07a)
+# COARSE NAV -- SESSION HANDOFF (as of coarsenav 09m / taskAction 07u / petport 07l / flyapproach 07k / contract 07g / habitat 07a)
 
 Read this before proposing anything. MEASURED means read out of a
 starbound.log or an engine `.luaprofile`; FACT means read out of retail 1.4.4
@@ -7,8 +7,9 @@ OpenStarbound or fork binding. The OpenStarbound repo's first commit is
 unmodified retail source and may be READ for facts (StarLuaRoot.cpp was).
 
 Builds in play:
-`petports_coarsenav.lua` **2026-09-07t**, `petportsTaskAction.lua`
-**2026-09-07h**, `petports_flyapproach.lua` **2026-09-07a**,
+`petports_coarsenav.lua` **2026-09-09m**, `petportsTaskAction.lua`
+**2026-09-07u**, `petports_flyapproach.lua` **2026-09-07k**, `petports_contract.lua`
+**2026-09-07g**,
 `petports_contract.lua` **2026-09-06a**, `petports_petport.lua` **2026-09-07l**,
 `petports_habitat.lua` **2026-09-07a** (its first stamp), `petports_work.lua`
 (claims memo, unstamped). Committed 2026-09-06 after the tracked-target
@@ -20,6 +21,21 @@ taskAction 07f/07g, petport 07l). Nav-relevant residue: coarsenav 07t
 (below), and every drift re-resolve re-runs the coarse-first test
 (`todo.pathing.retestrate`) -- 19 `coarse nav has no leg` lines for a 19
 re-aim medic intercept, one `coarseLeg` at 22 ms.
+**2026-09-06/07, THE MAZE SESSION -- READ V2 STATUS FIRST.** Thirty-odd
+builds against a poison maze. Built and verified for swimmers: the shared
+boundary store (`arch.pathing.boundarycells`), generation-stamped store and
+wipe (`arch.pathing.storegeneration` -- the index-walking wipe never wiped;
+`dead.pathing.indexwipe`), one sight predicate everywhere (`arch.pathing.
+onepredicate`, collision poly not box), the executor guards (`arch.pathing.
+executorguards`), a live overlay from unit memory (`arch.tooling.liveoverlay`),
+and the candidate scan that actually reaches the frontier (09m; 08h stranded
+it all evening, `dead.pathing.scanslice`). PETPORTS_NAV_VERBOSE IS ON IN THE
+FILE. The amphibious chassis crashed the game on a dry target at session end
+with no log -- `todo.pathing.amphibiouscrash` is the first thing next
+session, and nothing is to be built on this tree before it is read. Next
+after that: `todo.pathing.terrainchange`, `todo.pathing.falsettl`, then
+`todo.pathing.amphibiousbridge`.
+
 **2026-09-06, LATER: THE SIGHT LATCH (taskAction 07h, flyapproach 07a) AND
 THE DESIGN OF WHAT COMES NEXT.** There was no latch: the coarse-first test
 ran once per target and the chain took every hop. Now a free mover holding
