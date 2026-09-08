@@ -211,16 +211,14 @@ local TAB_WIDGETS = { "tabDetails", "tabSettings", "tabStats" }
 --  FARMING LEFT THIS LIST ON 2026-08-30. It became a module and its four
 --  activities are rows in the settings list, stored on petData -- see
 --  SETTING_ROWS. Three port groups remain.
-local GROUPS = { "hauling", "sorting", "machines" }
+--  GROUPS AND GROUP_WIDGET ARE GONE with the four checkboxes that used them.
+--  Participation is a pet setting now and rides the ordinary settings list, so
+--  there is no widget map to keep -- see the rows near "hauling" below.
 
 --  Widget name per group. Derived rather than tabulated would mean
 --  "group" .. "hauling" and a capitalisation rule; two of these are wanted as
 --  strings anyway, for the tooltip lookup.
-local GROUP_WIDGET = {
-	hauling = "groupHauling",
-	sorting = "groupSorting",
-	machines = "groupMachines"
-}
+
 
 --  THE SETTINGS LIST, DESCRIBED RATHER THAN DRAWN.
 --
@@ -903,6 +901,19 @@ end
 local portraitMode = nil
 local portraitResolved = false
 
+--  WHAT A BLANK PORTRAIT SAYS INSTEAD OF NOTHING.
+--
+--  8pt to match the tooltip title, which is the only other text this pane draws
+--  on a canvas.
+--
+--  NO COLOUR CONSTANT. drawText's colour argument is a Maybe, so it is simply
+--  omitted and the string carries its own -- see petport.preview.away, which
+--  opens with a ^#969ca4; escape. Text can be recoloured mid-string anyway, so
+--  a Lua constant could only ever set the part before the first escape, and it
+--  puts a presentation choice somewhere a translator editing the string cannot
+--  see it.
+local PORTRAIT_AWAY_SIZE = 8
+
 --  REDRAWN EVERY POLL WHILE A UNIT EXISTS, deliberately unlike mechassembly's,
 --  which is static and gated. This one is a LIVE view -- the unit is animating
 --  out in the world and the portrait should be too -- so the redraw is the
@@ -930,10 +941,22 @@ local function paintPreview(petId)
 				ok and "no drawables" or tostring(result))
 		end
 
-		--  RESOLVED EITHER WAY. A failure here is about the BINDING, not about
-		--  this particular unit, so retrying it twelve times a second forever
-		--  would be twelve log lines a second saying the same thing.
-		portraitResolved = true
+		--  RESOLVED ONLY IF THE ENTITY WAS THERE TO ANSWER.
+		--
+		--  This used to latch unconditionally, reasoning that a failed probe is
+		--  about the BINDING rather than about this unit. That holds for a mode
+		--  the engine does not support and is FALSE for an entity the client
+		--  has not been sent -- and a unit far enough from the player is
+		--  exactly that. Latching on it meant opening the pane while the pet
+		--  was away left portraitMode nil for the pane's whole lifetime, so the
+		--  portrait stayed blank after the unit came back.
+		--
+		--  world.entityExists IS THE CLIENT'S ANSWER HERE, which is the right
+		--  authority: the port's own entityExists is server-side and says yes
+		--  in exactly the case that breaks this.
+		if world.entityExists(petId) then
+			portraitResolved = true
+		end
 		if portraitMode == nil then
 			dbg("entityPortrait unavailable -- portrait stays blank")
 		end
@@ -942,7 +965,28 @@ local function paintPreview(petId)
 		if ok and type(result) == "table" then drawables = result end
 	end
 
-	if drawables == nil then return end
+	--  AN ID BUT NO PICTURE MEANS THE UNIT IS OUT OF THE CLIENT'S RANGE.
+	--
+	--  The port only sends petId for a unit it can see existing, so reaching
+	--  here with one is not a broken portrait -- it is a unit too far away to
+	--  be replicated to this client. Saying so is the difference between "my
+	--  pet preview is broken" and "my pet is off working".
+	--
+	--  DRAWN ON THE CANVAS RATHER THAN AS A WIDGET, so it needs no declaration
+	--  and cannot be left on screen by a repaint that returns early -- clear()
+	--  has already run above.
+	if drawables == nil or #drawables == 0 then
+		local size = widget.getSize("petPreview")
+
+		canvas:drawText(petports_stringOr("petport.preview.away"), {
+			position = { size[1] * 0.5, size[2] * 0.5 },
+			horizontalAnchor = "mid",
+			verticalAnchor = "mid",
+			wrapWidth = size[1]
+		}, PORTRAIT_AWAY_SIZE)
+
+		return
+	end
 
 	local size = widget.getSize("petPreview")
 	local centre = { size[1] * 0.5, size[2] * 0.5 }
@@ -2031,16 +2075,7 @@ local function refresh(force)
 	--  toggle has to be able to move the box back, and it can only do that if
 	--  every repaint asserts the port's value over whatever the click left.
 	widget.setChecked("portEnabled", state.enabled ~= false)
-	widget.setChecked("portCrosshairs", state.crosshairs ~= false)
 	widget.setText("portNetworkLabel", "id: " .. tostring(state.network or "--"))
-
-	--  ABSENT MEANS PARTICIPATING, matching the port's own reader. A mirror from
-	--  a port that predates this field must not paint four empty boxes and tell
-	--  the player their unit has been opted out of everything.
-	local participation = state.participation or {}
-	for _, group in ipairs(GROUPS) do
-		widget.setChecked(GROUP_WIDGET[group], participation[group] ~= false)
-	end
 
 	if not hasUnit then
 		showEmpty()
@@ -2878,16 +2913,6 @@ end
 --  fixed checkbox that used to live on this tab is now a row like any other and
 --  settingsRowClicked sends its message.
 
---  CLAIM MARKERS. A PORT SETTING, so it sits in the port band and writes its
---  own message rather than riding along with the pet toggles.
---
---  Fire and forget, like the other two in that band: the port rewrites the
---  mirror and the next poll repaints this from what it actually stored, so a
---  refused toggle moves the box back on its own.
-function portCrosshairsToggled()
-	tell("petports_setCrosshairs", { enabled = widget.getChecked("portCrosshairs") })
-end
-
 function portEnabledToggled()
 	tell("petports_setPortEnabled", { enabled = widget.getChecked("portEnabled") })
 end
@@ -3134,14 +3159,6 @@ end
 --  and Enter is not a way out of the field. The instrumentation is gone because
 --  it was a dozen log lines per typed number once the answer was in.
 function settingsFieldChanged()
-end
-
-function groupToggled()
-	local set = {}
-	for _, group in ipairs(GROUPS) do
-		set[group] = widget.getChecked(GROUP_WIDGET[group])
-	end
-	tell("petports_setParticipation", set)
 end
 
 --  ---------------------------------------------------------------------------

@@ -192,7 +192,6 @@ DOOR_POLL = 0.0
 --  BY GROUP, NOT BY TASK. There are fourteen work generators and nobody thinks
 --  in generators. Four boxes is what a player can hold in their head, and the
 --  grouping is by what they SEE happening rather than by dispatch structure.
-PARTICIPATION_KEY = "petports_participation"
 
 --  THE FOUR GROUPS, AND WHICH GENERATORS EACH ONE GATES.
 --
@@ -272,15 +271,6 @@ function petportParticipates(group)
   return set[group] ~= false
 end
 
---  THE WHOLE SET, FOR THE MIRROR. Built from the same reader so the pane cannot
---  disagree with dispatch about what is switched on.
-function petportParticipation()
-  return {
-    hauling = petportParticipates("hauling"),
-    sorting = petportParticipates("sorting"),
-    machines = petportParticipates("machines")
-  }
-end
 
 --  THE PORT'S OWN OFF SWITCH.
 --
@@ -299,7 +289,6 @@ ENABLED_KEY = "petports_enabled"
 --
 --  ABSENT MEANS ON, matching the enabled switch and matching what every
 --  existing world already does.
-CROSSHAIRS_KEY = "petports_crosshairs"
 
 --  GLOBAL BECAUSE ITS READERS ARE SCATTERED -- the message handler in init(),
 --  the lifecycle block in update(), and the pane mirror -- and the first of
@@ -2241,85 +2230,6 @@ function init()
 
     sb.logInfo("PETPORT %s port %s by player", stationUniqueId(),
       enabled and "ENABLED" or "DISABLED")
-    return true
-  end))
-
-  --  CLAIM CROSSHAIRS. Same storage and same defaulting as the enabled switch.
-  --
-  --  NOTHING IS RETIRED FROM IN HERE. crosshairRefresh clears the markers on its
-  --  next pass, so this writes the flag and the display follows -- one place
-  --  that decides whether a marker should exist, which also covers a world
-  --  loading with a port already switched off.
-  message.setHandler("petports_setCrosshairs", simpleHandler(function(payload)
-    if type(payload) ~= "table" then return false end
-
-    --  WRITES petData NOW, NOT AN OBJECT PARAMETER. The switch moved onto the
-    --  pet; this handler survives only so the pane's existing top checkbox
-    --  keeps driving the same storage while it is still drawn. It goes when
-    --  that checkbox does.
-    if self.petData == nil then return false end
-
-    local on = payload.enabled ~= false
-    self.petData.toggles = self.petData.toggles or {}
-    self.petData.toggles.crosshairs = on
-    self.dirty = true
-    self.paneSignature = nil
-
-    --  ZEROED SO THE MARKERS APPEAR PROMPTLY on a switch-on, rather than on
-    --  whatever was left of CROSSHAIR_INTERVAL.
-    self.crosshairTimer = 0
-
-    sb.logInfo("PETPORT %s crosshairs %s by player", stationUniqueId(),
-      on and "ON" or "OFF")
-    return true
-  end))
-
-  --  PARTICIPATION. Same storage and same defaulting as the enabled switch, and
-  --  the same division of labour: this writes, dispatch reads.
-  --
-  --  WRITTEN WHOLESALE, so a group the pane stops sending is a group that
-  --  reverts to participating rather than one that silently keeps its last
-  --  value with nothing left to change it.
-  --
-  --  A TASK ALREADY UNDER WAY IS LEFT ALONE, DELIBERATELY. These gate DISPATCH;
-  --  cancelling in flight would strand a claim and drop a unit mid-errand,
-  --  possibly holding cargo, to save it a few seconds of walking. The unit
-  --  finishes and is simply not given another of that kind.
-  message.setHandler("petports_setParticipation", simpleHandler(function(payload)
-    if type(payload) ~= "table" then return false end
-
-    --  NO farming KEY. It moved to the farming MODULE on 2026-08-30 and is
-    --  stored on petData, not here -- see FARMING_CLASSES. A stored value from
-    --  before that is simply never read again; nothing merges it forward,
-    --  because the port-level switch no longer means anything.
-    local set = {
-      hauling = payload.hauling ~= false,
-      sorting = payload.sorting ~= false,
-      machines = payload.machines ~= false
-    }
-
-    --  WRITES petData NOW. Same story as petports_setCrosshairs directly
-    --  above: the storage moved onto the pet and this handler is kept only
-    --  while the pane's top checkboxes are still drawn.
-    --
-    --  MERGED RATHER THAN WHOLESALE, unlike petports_setToggles. That handler
-    --  owns the whole table and rewrites it; this one knows about three keys
-    --  and must not erase nametag, carried or crosshairs on its way past.
-    if self.petData == nil then return false end
-
-    self.petData.toggles = self.petData.toggles or {}
-    for group, on in pairs(set) do
-      self.petData.toggles[group] = on
-    end
-    self.dirty = true
-    self.paneSignature = nil
-
-    --  ZEROED SO AN OPT-IN IS PROMPT, matching the enabled switch. A port that
-    --  has just been given a loop back should look for work now rather than on
-    --  whatever was left of its work timer.
-    self.workTimer = 0
-
-    sb.logInfo("PETPORT %s participation: %s", stationUniqueId(), sb.printJson(set))
     return true
   end))
 
@@ -5225,13 +5135,6 @@ function mirrorPaneState(dt)
   --  its config default and shows ON for a port that is off.
   local enabled = petportEnabled()
 
-  --  PORT-LEVEL, SO IT IS ON BOTH BRANCHES for the same reason `enabled` is:
-  --  which loops a port takes part in means something with nothing socketed,
-  --  and an empty port that omitted it would have the pane paint all four boxes
-  --  from their config defaults and show ticked for groups that are off.
-  local participation = petportParticipation()
-  local crosshairs = petportCrosshairs()
-
   --  EMPTY IF EITHER SAYS SO. `socketed` closes the window described above;
   --  petData still matters because a socketed item that is not a valid pet
   --  never produces one.
@@ -5240,15 +5143,11 @@ function mirrorPaneState(dt)
     state = {
       hasUnit = false,
       enabled = enabled,
-      participation = participation,
-      crosshairs = crosshairs
     }
   else
     state = {
       hasUnit = true,
       enabled = enabled,
-      participation = participation,
-      crosshairs = crosshairs,
       petName = self.petData.petName or paneSpecies() or "Utility Unit",
 
       --  THE RAW FIELD AS WELL AS THE RESOLVED ONE, and they are different
