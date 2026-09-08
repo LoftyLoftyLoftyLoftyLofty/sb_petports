@@ -199,7 +199,13 @@ PARTICIPATION_KEY = "petports_participation"
 --      hauling    collection
 --      sorting    restockFetch, restockDeliver, tidy, compact
 --      farming    replant, water, harvest, animal, withdraw, withdrawWater
---      machines   drain, fuel
+--      machines   upcycle, drain, fuel
+--
+--  `upcycle` WAS MISSING FROM THIS LIST AND FROM THE GATE. It is the DELIVERY
+--  leg -- carrying surplus INTO a machine -- where drain and fuel are the two
+--  collection legs, and it is not a rung of its own: depositWork calls it, and
+--  depositWork must stay ungated. The gate is inside upcyclerWork itself; see
+--  the note there.
 --
 --  THE LINE BETWEEN THE FIRST TWO IS INGRESS. `hauling` is how a thing ENTERS
 --  the network -- loose items picked up off the ground -- and `sorting` is
@@ -7762,6 +7768,33 @@ end
 local function upcyclerWork()
   if self.petData == nil then return nil end
   if self.petData.cargo == nil or #self.petData.cargo == 0 then return nil end
+
+  --  THE `machines` GATE LIVES HERE AND NOT IN findWork, AND THAT IS THE ONLY
+  --  PLACE IT CAN LIVE.
+  --
+  --  MEASURED 2026-09-07: a unit holding an item an upcycler wanted delivered
+  --  it with the Machines box unticked. The group map above this file listed
+  --  `machines` as gating drain and fuel -- the two COLLECTION legs -- and the
+  --  DELIVERY leg was in no group at all, because it is not a rung of its own.
+  --  It is reached from the top of depositWork, and depositWork is ungated on
+  --  purpose: gating the unload path deadlocks a unit that is holding cargo.
+  --
+  --  So the gate cannot go at the call site without taking ordinary storage
+  --  down with it, and it cannot go in findWork because nothing there names
+  --  this generator. Inside it, every caller present and future is covered.
+  --
+  --  IT MIRRORS doMachines IN FULL, oblivious included. depositWork is not
+  --  gated on oblivious either, so an oblivious unit carrying surplus fed
+  --  machines by the same route -- one hole, two ways in.
+  --
+  --  DECLINING IS SAFE HERE IN A WAY IT IS NOT FOR DEPOSIT. The load falls
+  --  through to the crates below and the unit unloads normally. What it costs
+  --  is the batch-floor waiver: with machines off AND storage full, there is no
+  --  longer anywhere for a load to go, and the unit holds it while drops decay.
+  --  That is the player's instruction rather than a fault, but it is the one
+  --  state this switch can produce that looks like a stuck unit.
+  if petportOblivious() then return nil end
+  if not petportParticipates("machines") then return nil end
 
   local candidates = {}
   local declined = {}
