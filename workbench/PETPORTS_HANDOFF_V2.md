@@ -50,72 +50,89 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-07 evening (speech bubbles carry cargo end to end; participation moved onto the pet; the amphibious crash is still unmeasured)
+### What is built, as of 2026-09-08 (the defragmentation module, end to end)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-**THE AMPHIBIOUS DRY-TARGET CRASH WAS NOT LOOKED AT.** It was flagged at the
-start of this session as the mandatory first task and deliberately deferred;
-`todo.pathing.amphibiouscrash` still has no log. Nothing this session touched
-pathing, so the suspects listed there are unchanged. It is still the first
-thing next session measures.
+**THE AMPHIBIOUS DRY-TARGET CRASH IS STILL UNMEASURED.** Third session running.
+`todo.pathing.amphibiouscrash` has no log, nothing this session went near
+pathing, and the suspects listed there are unchanged. It has now been nominated
+as the mandatory first task twice and deferred twice.
 
-**`PETPORTS_NAV_VERBOSE = true` IS STILL ON IN THE FILE.** Unchanged from last
-session. Turn it off before any release.
+**`PETPORTS_NAV_VERBOSE = true` IS STILL ON**, at `petports_coarsenav.lua:221`.
+Unchanged for three sessions. Turn it off before any release.
 
-**WHAT WAS BUILT, MEASURED:**
-- `arch.bubble.rendering` -- a bubble over a unit's head, drawn on the PLAYER
-  at the `Overlay` layer, because a monster's drawables are clamped to its
-  monstervariant's render layer and water drew over them
-  (`fact.unit.renderlayer`).
-- `arch.bubble.protocol` -- the port decides what is said, the unit publishes
-  it, the client draws it. Priority is resolved on the port because the port is
-  the only sender. Tokens carry the whole item descriptor
-  (`fact.item.generatedicon`).
-- `arch.bubble.iconfit` -- icons fitted to a 16px slot by their VISIBLE pixels
-  and assembled from layered `inventoryIcon` lists, scaled by a drawable
-  transform rather than an image directive.
-- `arch.port.petsettings` -- the four participation checkboxes moved off the
-  port and onto `petData.toggles`, and the pane's four top boxes were deleted.
-- `fact.dispatch.upcyclegate` -- the `machines` group never gated the DELIVERY
-  leg. A unit with Machines unticked still fed upcyclers. Fixed.
+**THE SIX COMMITS THAT WERE UNFILED AT THE LAST STATUS ARE NOW DESCRIBED.**
+`822a7f8`/`0526a1f` are the bubble build (`arch.bubble.rendering`,
+`arch.bubble.protocol`, `arch.bubble.iconfit`); `f09df32` is the participation
+move (`arch.port.petsettings`); `e323fcb` is `fact.dispatch.upcyclegate`;
+`e4c322c` is swimmer path tuning, covered by `arch.pathing.sightlatch`;
+`1c8b924` is the out-of-range preview string, which is pane text and has no
+entry and needs none.
 
-**WHAT WORKS FROM LAST SESSION, UNTOUCHED:** all coarse-nav work --
-`arch.pathing.trackedtarget`, `arch.pathing.sightlatch`,
-`arch.pathing.boundarycells`, `arch.pathing.storegeneration`,
-`arch.pathing.onepredicate`, `arch.pathing.executorguards`,
-`arch.tooling.liveoverlay`. Nothing this session went near them.
+**WHAT WAS BUILT THIS SESSION, IN GAME, AND VERIFIED AT EVERY STEP:** the
+DEFRAGMENTATION MODULE. Seven builds, each with its own log before the next
+began.
 
-**WHAT IS BUILT BUT NOT FINISHED:** the bubble says exactly one thing --
-what a unit is carrying. Every alert on the agreed list is unbuilt and filed
-at `todo.bubble.alerts`; the remaining states at `todo.bubble.states`.
+- `arch.cargo.spread` -- the scan records WHERE each item lives, not just how
+  much of it the network holds.
+- `arch.filter.breadth` -- how much of the manifest a filter admits, in
+  subgroups, as the specificity measure the destination ladder ranks on.
+- `arch.cargo.defrag` -- the destination ladder, the pull leg, and the deposit
+  preference that carries the load home.
+- `arch.cargo.fridge` -- perishables prefer cold crates and everything else
+  prefers warm ones.
+- `dd.module.defraggates` -- `sorting` retired; `restock` is its own switch and
+  tidy, compact, defrag and chill moved behind the module.
+- `dd.cargo.migration` -- the network self-corrects rather than tidying once.
+- `dd.cargo.defragorder` -- longest job first, which reverses what was proposed.
+- `dd.filter.perishable` -- the manifest says what rots, so modders get
+  refrigeration with no code.
+- `fact.item.instanceicon` -- an instance icon override was invisible to the
+  bubble, which is why modded moth fluff drew as vanilla cotton. Fixed.
+- `fact.filter.itemrules` -- the deposit pane cannot write an item rule, which
+  made the first destination ladder's top tier unreachable.
+
+**THE TOGGLE STORE DROPPED EVERY NEW KEY FOR MOST OF THE SESSION.** Builds 2a
+through 5b shipped five checkboxes that painted correctly and changed nothing --
+`fact.port.togglewhitelist`. Everything tested between them ran with all five ON
+because absent reads as participating, which is why the behaviour looked right.
+Fixed in 08n and re-tested.
+
+**THE PANE WAS FINISHED AFTERWARDS.** The `defrag` task had no caption and would
+have rendered as a bare identifier; all twenty captions then moved out of
+`petportconfig.lua` into the string table, which was the largest remaining
+exception to `arch.pane.stringtable`.
+
+**WHAT IS BUILT BUT NOT WRITTEN UP FOR PLAYERS.** `SORTING_FOR_MODDERS.md` says
+nothing about `"perishable"`, which is a manifest flag a third party is meant to
+use. Filed at `todo.filter.perishabledocs`.
 
 **WHAT IS KNOWN AND UNRESOLVED:**
-- Units stutter-step: velocity hits zero for ~0.3 s between every task, four
-  times per work cycle. MEASURED and CORRECT -- no preemption, every task
-  reports done -- but it looks broken. `todo.dispatch.turnaround`.
-- The 30 s world stall is still there, measured five times this session at
-  323-382 ms, dead regular at 30.2-30.3 s. It is `WorldStorage::sync()` and
-  predates everything here. The 45000 patch test still has no result.
-- `crosshairRefresh` is the largest port-side cost at ~150 ms per 10 s window.
-  Not frame-breaking, unrelated to this session, unfiled.
+- `DEFRAG_DEBUG` is `true` and joins the release-preflight flag sweep.
+  `DEFRAG_PLAN_CAP` at 16 is NOT a debug value -- it caps work --
+  `todo.cargo.defragcap`.
+- A defrag destination flipped between two crates on consecutive passes with
+  both declaring 220 and holding none of the item, which means the room test
+  alternated. Probably a nearly-full 24-slot crate meeting the bare-descriptor
+  approximation `crateHasRoom` documents. NOT DIAGNOSED -- `todo.cargo.roomflip`.
+- The defrag module has NO ART. `petports_module_defrag.png` does not exist and
+  the item renders as a placeholder box.
+- `workUpdate` peaked at 66 ms this session and at 112 ms before any of this
+  work. Not ours and not new, but it is the number the census cursor will have
+  to answer to -- `todo.dispatch.scancursor`.
+- The 30 s world stall is unchanged and still `WorldStorage::sync()`. The 45000
+  patch test still has no result.
+- Units still stutter-step between tasks (`todo.dispatch.turnaround`).
 
-**LINE ENDINGS.** `petports_petport.lua` CRLF; everything else this session
-touched is LF. `petports_bubble.lua` went mixed mid-session and was
-re-indented back to tabs -- check it if a patch anchor ever misses.
+**WHAT WORKS FROM LAST SESSION, UNTOUCHED:** all coarse-nav work, and the
+bubbles apart from the icon read named above.
 
-**THE TWO COMMITS SINCE THE LAST STATUS ARE LAST SESSION'S, NOT THIS ONE'S.**
-`d0d8cd7` (sight latch breaking on paths with denied liquids) and `2b7b662`
-(velocity and hairpin turn physics) both landed before this session started and
-are already described above under what works from last session --
-`arch.pathing.sightlatch` and the turn-aware arrival noted in
-`arch.pathing.executorguards`. Nothing in this session is committed yet.
-
-**STAMPS AT SESSION END:** petport 07l (unstamped changes since), bubble
-2026-09-07a. `petports_bubble.lua` and the bubble half of
-`petports_coverageoverlay.lua` are new this session.
+**LINE ENDINGS.** `.gitattributes` specifies LF for everything, and
+`petports_petport.lua` and this document are both CRLF in the working copy --
+stale checkouts rather than a rule. `todo.tooling.crlfstale`.
 
 ## ARCHITECTURE
 
@@ -601,7 +618,16 @@ only if you already know the trick reads as broken.
 either cycle detection during traversal or a hard hop limit.
 
 ### Tidying and auto-disperse — built
-`arch.cargo.tidying`
+`arch.cargo.tidying` -- see also `arch.cargo.defrag`, `dd.cargo.migration`
+
+**AMENDED 2026-09-08: TIDYING IS NOW ONE OF THREE, AND IT IS THE NARROWEST.**
+It moves what a crate REJECTS. Compaction reshapes what is already in the
+right one, and defragmentation moves what a crate merely TOLERATES -- see
+`dd.cargo.migration` for why that third case is not a misfit and cannot be
+reached from here. All three now sit behind the defragmentation module
+(`dd.module.defraggates`), and `tidyWork` skips nothing it used to: defrag
+skips any stack that is a misfit in its own crate, so the two partition the
+work rather than contending over it.
 
 `tidyWork` walks every deposit beacon, asks `petports_filterMisfits` what does
 not belong in it, and dispatches a `tidy` task to pull one misfit stack out. The
@@ -3288,6 +3314,19 @@ caches as `false` so an unmeasurable path is not retried sixty times a second.
 ### One string table for every pane
 `arch.pane.stringtable` -- see also `arch.pane.hoverlayer`, `todo.pane.tooltipstrings`
 
+**AMENDED 2026-09-08: THE PETPORT'S TASK CAPTIONS MOVED IN.** `TASK_LABELS` was
+a Lua table of twenty player-facing captions in `petportconfig.lua` -- the
+largest remaining exception to this rule -- and is now `petport.task.<type>`,
+keyed on the port's internal task type verbatim. Adding a twenty-first for
+`defrag` is what made moving it cheaper than growing it.
+
+**IT IS THE ONE PLACE A MISSING KEY MUST NOT LAND ON "--".** Every other string
+here falls back to the dash, which is unmistakable in testing. A task caption
+falls back to the RAW TYPE instead, so a task added to dispatch without a caption
+names itself rather than going blank -- which is a diagnosis rather than a
+failure. The read site therefore uses `petports_string` and not
+`petports_stringOr`.
+
 EVERY VISIBLE STRING LIVES IN ONE ASSET,
 `/interface/lofty_petports/shared/petports_strings.config`, resolved by
 `/scripts/lofty_petports/petports_strings.lua`.
@@ -5653,6 +5692,156 @@ no owner is engine time (this is how `worldStorageInterval` was isolated).
 A stall in ONE port's Lua would show as a slow tick on that port plus
 STALLs on the others -- never seven STALLs and zero slow ticks.
 
+### The scan records where each item lives, not just how much there is
+`arch.cargo.spread` -- see also `arch.dispatch.census`, `arch.cargo.defrag`
+
+**BUILT 2026-09-08 (petport 08a), AND IT IS THE WHOLE FOUNDATION.** `spread` is
+`name -> containerId -> { count, slots }`, built in `scanContainers` in the SAME
+BRANCH that tallies the census, so the two cannot disagree about what counts as
+network stock: deposit crates only, the deciding beacon's slot never counted,
+summed by name across differing parameters.
+
+**IT RIDES THE SCAN BECAUSE THE WORK TICK CANNOT AFFORD IT.** `tidyWork` already
+calls `world.containerItems` per beacon per work tick, which the backlog records
+as a known cost; "which crates hold this name" is a strictly bigger question and
+paying for it there would be worse. The loop already holds every deposit crate's
+contents.
+
+**THE BEACON RECORD GREW WITH IT.** `capacity` from the `containerSize` call
+that already decided the object was a container, `breadth` per
+`arch.filter.breadth`, and `aging` per `arch.cargo.fridge`. All three are
+properties of a CRATE rather than of an item, so they are read once per scan and
+compared as numbers thereafter -- which is what makes the destination ladder and
+the migration gate affordable at all.
+
+**`slots` IS NOT A COMPACTION PREDICTOR FOR A POLYMORPHIC NAME.** Three
+rewardbags with three parameter blocks occupy three slots that cannot merge, and
+`fragmentation()` correctly reports that crate as already compact. Reading the
+slot count as "compaction has not run here" is wrong for exactly the items where
+it looks most wrong.
+
+### How much of the manifest a filter admits, and why that is the ranking key
+`arch.filter.breadth` -- see also `fact.filter.itemrules`, `arch.cargo.defrag`, `arch.filter.matchers`
+
+**BUILT 2026-09-08 (filters, petport 08h).** `petports_filterBreadth(filter)`
+counts the subgroups a filter admits: `base = "accept"` scores the manifest
+total (220 today) whatever deny rules sit under it, and `base = "deny"` sums the
+admitted subgroups of its accept rules, with `except` counted only for subgroups
+that actually exist.
+
+**IT REPLACED "DOES A RULE NAME THIS ITEM", WHICH COULD NEVER FIRE.** See
+`fact.filter.itemrules`. It was also the wrong question: a subgroup can be as
+fine as a single item name -- eight in the manifest are -- so naming an item IS
+a group rule on a deposit beacon.
+
+**A CRATE FILTERED FOR FISHING GEAR ADMITS 1 OF 220; AN UNCONFIGURED ONE ADMITS
+220.** That is a 220-to-1 statement of intent, and it is what a player means by
+building a crate for a thing.
+
+**DENY RULES UNDER AN ACCEPT BASE ARE NOT COUNTED.** A crate that takes anything
+except ores has still said nothing about fishing gear, and scoring the carve-outs
+would let a filter look specialised by denying things it was never going to see.
+
+**A LIVE NUMBER, NEVER STORED ON THE BEACON.** `except` lists are exclusions, so
+a subgroup added by a mod falls inside every existing rule and every filter's
+breadth changes with it. Cached per scan, derived from the manifest, dropped
+with it in `petports_filterResetCache`.
+
+**NETWORK-INVARIANT, WHICH THE LADDER REQUIRES.** Every port derives it from the
+same manifest with no reference to who is asking.
+
+### Defragmentation -- one ladder, one pull leg, and a deposit that aims
+`arch.cargo.defrag` -- see also `arch.cargo.spread`, `arch.filter.breadth`, `arch.cargo.fridge`, `dd.cargo.migration`, `dd.cargo.defragorder`, `arch.cargo.tidying`
+
+**BUILT AND VERIFIED IN GAME 2026-09-08 (petport 08a..08m).** Gated by the
+defragmentation module and three of its four checkboxes.
+
+**THE DESTINATION LADDER, AND EVERY KEY IS NETWORK-INVARIANT:**
+
+    1. crates whose filter ACCEPTS the item
+    2. narrowest DECLARATION first          arch.filter.breadth
+    3. temperature                          arch.cargo.fridge, perishables only
+    4. most already held
+    5. smallest capacity
+    6. id
+
+Anchor full -> the rest by breadth, then temperature, then DISTANCE TO THE
+ANCHOR -- never to the last one tried, or the clump walks across the base one
+full crate at a time.
+
+**IT CANNOT OSCILLATE.** `held` dominates once anything has moved and a crate
+that wins on it only gains, so a winner cannot flip back. Ids decide only
+between crates tied on everything above, and two crates tied at held zero have
+nothing to argue about. Which matters because entity ids are NOT stable across a
+world load.
+
+**TWO LEGS, AND ONLY ONE IS A TASK.** `defragWork` withdraws one slot from the
+smallest holding through `withdrawMisfit` -- the same call tidy, drain and fuel
+use -- and stops. The put is not a leg: `defragPreferredTargets` reorders
+`depositWork`'s target list so the ordinary deposit aims at the crate the ladder
+chose.
+
+**THE PUT IS INSIDE depositWork AND NOT A RUNG ABOVE IT.** `upcyclerWork` is
+called from the TOP of `depositWork` rather than from `findWork`, so a rung
+above would have intercepted cargo before the machine was asked -- and a
+module-equipped unit would have filed surplus into a crate instead of feeding an
+upcycler the player gave a threshold to.
+
+**IT REORDERS AND NEVER SHORTENS.** Every crate `depositWork` would have
+considered is still there, in nearest-first order behind the preferred ones, so
+an unreachable or full destination costs nothing. A unit that cannot put its
+load down is blocked from every other job.
+
+**MIXED CARGO VOTES.** Each carried stack names its home and the crate named by
+the most of them goes first, so a fishing treasure pool's three stacks can
+become one trip. Ties keep the incoming index, because `table.sort` is not
+stable.
+
+**IT DOES NOT ENGAGE FOR AN ITEM NOTHING HOLDS YET** unless a crate NAMES it.
+With no copy anywhere there is no fragmentation to prevent and every accepting
+crate is equally correct, so preferring one would send units across the base for
+no gain.
+
+**THREE GUARDS AGAINST THE LIVELOCK**, in cost order: the destination is checked
+for room and reach before a source is chosen (`restockFetchWork`'s "check both
+ends"); the source is checked separately; and a circuit breaker fires if a
+pulled load's home turns out to be the crate it was just taken from, backing the
+name off. The third exists because the first two are predictions and the state
+can change between dispatch and arrival. MEASURED: zero breaker fires across
+nine dispatches.
+
+**MEASURED COST.** `g.defrag` 2-14 ms, first pass worst. Nine dispatches, nine
+`done`, no failures.
+
+### Perishables prefer cold crates and everything else prefers warm ones
+`arch.cargo.fridge` -- see also `dd.filter.perishable`, `arch.cargo.defrag`, `arch.filter.breadth`
+
+**BUILT 2026-09-08 (petport 08k..08m).** `aging` is
+`world.getObjectParameter(id, "itemAgeMultiplier", 1.0)` read at scan time --
+1.0 is an ordinary container, 0.0 a refrigerator, above 1.0 rots food faster
+than a shelf.
+
+**ONE SIGNED SORT KEY, NOT TWO BRANCHES.** A perishable sorts the multiplier
+ascending, everything else descending. The above-1.0 case falls out with no
+special case: worse than a shelf for food, better than a fridge for ore.
+
+**BELOW BREADTH, ABOVE HELD, AND BOTH PLACEMENTS ARE ARGUED.** A filter is an
+instruction the player typed and a temperature is a property inferred from an
+object, so the inference must not overrule the statement -- a crate declared for
+produce beats an undeclared fridge. But rotting is a LOSS, since `rotting.lua`
+replaces the stack with `rottedItem`, where being in the wrong crate is an
+inconvenience -- so where an item already lives must not keep it somewhere it
+will spoil.
+
+**NON-PERISHABLES ARE STEERED AWAY BECAUSE FRIDGE SPACE IS THE SCARCE KIND**, and
+the migration gate runs in both directions: ore already in a fridge is evicted
+to a warmer crate. A general fridge would otherwise silently become the ore
+shelf.
+
+**A CRATE THAT CANNOT BE MEASURED IS AN ORDINARY CONTAINER.** Every read
+defaults to 1.0 on any failure. Reading a failure as cold would send every
+perishable in the network toward it and rot the lot.
+
 ## DESIGN DECISIONS
 
 ### The port band splits by what the player SEES, not by what the code owns
@@ -6949,7 +7138,14 @@ its head while it works", which describes `showCargo`. Wired that way because
 key is a save-compat break. Worth untangling; filed at `todo.bubble.keyname`.
 
 ### Four participation groups, and two generators belong to none
-`dd.port.participationgroups` -- see also `arch.port.switches`
+`dd.port.participationgroups` -- see also `arch.port.switches`, `dd.module.defraggates`
+
+**SUPERSEDED IN PART 2026-09-08. `sorting` NO LONGER EXISTS.** It gated four
+generators that did not belong together and has been replaced by `restock`
+plus four switches behind the defragmentation module -- see
+`dd.module.defraggates`. Everything below about ids being frozen, labels
+being free, and an absent key reading as participating is unchanged and is
+why retiring the key was a save-compat break worth taking while unpublished.
 
 Fourteen work generators, four checkboxes. Nobody thinks in generators, and nine
 or fourteen boxes do not fit the band. Grouped by what a player SEES happening:
@@ -7512,6 +7708,138 @@ cells, per-profile interpretation, the two-sided survey, the one predicate
 -- has built, as a side effect, everything that was blocking a chassis that
 flies AND swims. Recorded as intent; the amphibious bridge is the first
 consumer and the universal flyer the second.
+
+### The module gates the housekeeping and `sorting` is retired
+`dd.module.defraggates` -- see also `dd.port.participationgroups`, `arch.cargo.defrag`, `arch.port.petsettings`
+
+**DECIDED AND BUILT 2026-09-08.** `sorting` gated restocking, tidying and
+compaction together. It is gone, replaced by:
+
+    restock   restockFetch, restockDeliver     no module, default on
+    tidy      tidyWork                         defrag module
+    compact   compactWork                      defrag module
+    defrag    defragWork                       defrag module
+    chill     the fridge preference            defrag module
+
+**RESTOCKING STAYS OFF THE MODULE.** Lofty: it is the second half of the deposit
+beacon and has to work out of the box. A player who asked for 2000 hazard blocks
+asked for something by name; gating that behind a module they may not own reads
+as the mod being broken. It keeps a switch for the player who wants one pet to
+ignore requests.
+
+**DEPOSIT GETS NO SWITCH AT ALL**, and the reasoning is Lofty's: "that would
+only be giving them a gun to shoot themselves in the foot with." Putting down
+what you are already holding is finishing rather than starting.
+
+**THE OTHER FOUR ARE ONE JOB AT WIDENING SCOPE** -- within a slot, within a
+crate, across the network -- plus refrigeration, which is orthogonal and sits
+last. Each keeps its own box because wanting one without the others is
+reasonable.
+
+**THE FIRST DESIGN PUT REFRIGERATION OUTSIDE THE MODULE and that was reversed.**
+Ingress-general sounded right and produces an unobservable rule: whether food
+goes in the fridge would depend on whether a module happened to be socketed, and
+what a player sees is "sometimes the food goes in the fridge". Behind the module
+it is one sentence of documentation and always true.
+
+**NO LEGACY ADOPTION.** A unit carrying `sorting = false` gets restocking back
+on. `arch.port.petsettings` took the same call for the same reason: the mod is
+unpublished and a migration path would be carried forever.
+
+### Defragmentation migrates, it does not merely consolidate
+`dd.cargo.migration` -- see also `arch.cargo.defrag`, `arch.cargo.fridge`, `arch.cargo.tidying`
+
+**DECIDED 2026-09-08 AFTER THE FIRST VERSION WENT QUIET.** A name qualified only
+when held in more than one crate, so once everything had been gathered the
+generator stopped forever -- with empty specialised crates sitting beside a
+general shelf holding all of it. MEASURED: `spread: nothing held in more than
+one crate` while exactly that was true on screen.
+
+**SO THE TRIGGER IS "SOME OF IT IS NOT IN ITS DESTINATION"**, which is three
+conditions: SCATTERED (more than one crate), MISPLACED (every holder is broader
+than a crate that would take it), and WRONG TEMPERATURE (perishable with
+somewhere colder, or non-perishable in a fridge with somewhere warmer).
+
+**TIDYING CANNOT COVER THIS AND IT IS WORTH SAYING WHY.** A general shelf
+ACCEPTS fishing gear, so the gear is not a MISFIT -- it is in a worse home than
+one that now exists, which is a third thing.
+
+**LOFTY ASKED FOR IT EXPLICITLY:** "we want the network to self correct
+dynamically while defrag modules are socketed." Adding a crate declared for
+something migrates that something into it.
+
+**THE GATE IS TWO STAGES AND THE SECOND ONE IS NOT OPTIONAL.** An integer
+compare against the network's narrowest crate, then a filter check against only
+the crates that are actually narrower, memoised per scan. Stage one ALONE admits
+everything: with one fishing crate present, money and copper ore both read as
+misplaced. Combined with `DEFRAG_PLAN_CAP` and a stable sort that STARVES -- the
+top of the list would be occupied forever by names with no better home while
+anything below the cap was never reached. Caught in a dry run before it shipped.
+
+### Longest job first, because this queue never drains
+`dd.cargo.defragorder` -- see also `arch.cargo.defrag`, `dd.dispatch.tidyscore`
+
+**DECIDED 2026-09-08, AND IT REVERSES WHAT WAS PROPOSED.** The order is total
+slots descending, then crates descending, then name.
+
+**SHORTEST-JOB-FIRST WAS THE PROPOSAL AND IT IS ONLY RIGHT FOR A QUEUE THAT
+DRAINS.** Defragmentation is the last rung above draining, so it runs in
+whatever gaps hauling and farming leave, and on a live base new cheap
+fragmentation keeps arriving -- so a three-trip pile would be deferred behind
+one-trip jobs indefinitely. Lofty: "I think we want the expensive trips done
+first actually." That pile is exactly the one a player would not clear by hand,
+which is the reason the module exists.
+
+**SLOTS, NEVER COUNTS, BECAUSE THE SLOT IS THE UNIT OF WORK.** `withdrawMisfit`
+takes one slot per trip, so 6542 money in one stack is ONE trip and 75
+rewardbags across three slots is THREE. An ordering argued from counts puts the
+money first and is wrong by a factor of three.
+
+**TOTAL SLOTS RATHER THAN SOURCE SLOTS**, because the exact number needs the
+destination and that is a comparator run per name. Total slots is in the spread
+map already and orders identically wherever the difference could matter.
+
+**SOURCES WITHIN A NAME ARE SMALLEST-HOLDING-FIRST**, which is NOT what tidying
+does. `arch.cargo.valueorder` ranks by unit price because it is choosing which
+SLOT to reclaim; this is choosing which LOCATION to eliminate. Emptying the
+crate with two stragglers removes a container the player would otherwise have to
+open, where moving four hundred out of a crate that keeps three hundred removes
+nothing. Effort of interaction, not volume -- which is `entropy.txt`'s actual
+claim and the same one `dd.dispatch.tidyscore` rests on.
+
+**A MISFIT IN ITS OWN CRATE IS TIDYING'S**, and skipping it here is what makes
+the two generators partition the work rather than contend over one stack with
+two workIds, two claims and two trips.
+
+### The manifest says what rots, so a mod needs no code
+`dd.filter.perishable` -- see also `arch.cargo.fridge`, `arch.filter.matchers`, `ref.filter.vocabulary`
+
+**DECIDED 2026-09-08 AFTER A HARDCODED VERSION SHIPPED WRONG.** `"perishable" :
+true` is a per-subgroup flag -- the second after `unclassified` -- carried today
+by `produce`, `food`, `drink` and `ingredient`.
+
+**THE FIRST VERSION WAS A LUA TABLE OF THREE CATEGORY NAMES**, and it was wrong
+on arrival: it missed `cookingIngredient`, which `ref.item.produce` records as
+where a lot of raw produce hides. A hardcoded list covers vanilla by luck, and a
+Lua local is not an asset so nobody can patch it.
+
+**THROUGH subgroupMatches, SO A MOD GETS ALL FIVE MATCHERS** -- tags, item
+lists, suffixes and nameParts as well as categories. A category list could only
+ever have matched categories.
+
+**ON THE SUBGROUPS, NEVER ON THE GROUP.** Marking `consumable` whole would sweep
+in anything filed there later -- medicine, stims, bandages -- which do not rot
+and would take fridge space food needs.
+
+**INGREDIENTS ARE FLAGGED THOUGH ONLY SOME OF THEM ROT.** Lofty: "rice can live
+in the fridge too with the rest of the food." A sack of rice in a fridge slot is
+a cheaper mistake than produce rotting on a shelf.
+
+**THE INSTANCE FIELD IS THE SAFETY NET AND IT IS EXACT.** `timeToRot` is what
+`rotting.lua` actually reads, so a descriptor carrying it rots however it is
+filed -- which covers modded food the manifest has never heard of.
+`itemAgingScripts` was the obvious config test and is WRONG: vanilla uses one to
+cool molten metal.
 
 ## DESIGN INTENT -- PLANNED
 
@@ -11311,6 +11639,85 @@ maintains itself, and an index maintained by read-merge-write from several
 units loses entries. Consequence: nothing keyed on enumeration can be
 trusted to clear a store; a generation stamp on every entry can.
 
+### The deposit beacon pane cannot write an item rule, and one never fires
+`fact.filter.itemrules` -- see also `arch.filter.breadth`, `arch.beacon.restock`
+
+**MEASURED 2026-09-08.** `beaconconfig.lua` builds rules in exactly one place
+and in exactly one shape:
+
+    table.insert(self.state.filter.rules, { action = "accept", group = groupId })
+
+There is no site that writes `item =`. So any code testing `rule.item` against a
+deposit filter is dead, and the first defragmentation ladder's top tier was
+unreachable for that reason -- every plan row in every log read "accepts it,
+holds most", including on a network with a crate filtered for fishing gear.
+
+**THE RESTOCK BEACON IS THE OPPOSITE AND THAT IS NOT AN INCONSISTENCY.** A quota
+must name a literal item because "restock Floran furniture" and "restock
+furniture" overlap and the beacon has to know which it is counting. A deposit
+filter has no such problem, and a subgroup can be as fine as one item name.
+
+### An instance icon override is invisible to root.itemConfig's config
+`fact.item.instanceicon` -- see also `fact.item.generatedicon`, `arch.bubble.protocol`
+
+**MEASURED 2026-09-08.** `root.itemConfig(descriptor)` returns the BASE asset
+config and the descriptor's parameters SEPARATELY, unmerged. The engine merges
+them only at instantiation, where `instanceValue` checks parameters and falls
+back to config. So `cfg.config.inventoryIcon` cannot see a per-instance
+override.
+
+**THE SYMPTOM WAS A MODDED MOTH'S RENAMED, RETEXTURED COTTON FIBRE DRAWING AS
+VANILLA COTTON FIBRE** in a speech bubble. The item is base `cottonfibre`
+carrying parameter overrides.
+
+**IT IS fact.item.generatedicon FROM THE OTHER DIRECTION.** There an icon is
+BUILT from parameters; here it is NAMED by them. Both are icons that are not in
+the base config, which is why `arch.bubble.protocol` sends the whole descriptor
+-- the plumbing was already right and only the final read was wrong.
+
+**A RELATIVE OVERRIDE RESOLVES AGAINST THE BASE ITEM'S DIRECTORY**, which is the
+only directory `root.itemConfig` offers. Absolute paths, which such overrides
+normally carry, resolve correctly.
+
+**CONSEQUENCE BEYOND THE ICON.** If the override keeps the base NAME, then the
+census, the spread map, filters and the whole defragmentation ladder treat the
+two items as one, because every one of them keys on name. That is
+`fact.item.descriptorroom` arriving from a new direction, and it is a filter-design
+question rather than a bug.
+
+### A store rebuilt from a literal silently discards what it does not name
+`fact.port.togglewhitelist` -- see also `arch.port.petsettings`, `dd.module.defraggates`
+
+**MEASURED 2026-09-08, AND IT HAD BEEN TRUE FOR SIX BUILDS.**
+`petports_setToggles` rebuilt `petData.toggles` from a hardcoded table literal of
+seven keys and dropped everything else in the payload. When `sorting` was split
+into `restock` plus four module switches, the pane grew five rows and sent them
+correctly; the port named none of them and threw all five away.
+
+**IT FAILS IN THE QUIETEST DIRECTION THERE IS.** A dropped key does not error,
+does not log, and is then ABSENT -- and absent reads as PARTICIPATING. So five
+checkboxes painted from the pane's own state, wrote nothing, and left the
+behaviour they gate switched permanently on. Every test between builds 2a and 5b
+ran with all five on regardless of what the boxes showed, which is why the
+behaviour looked correct throughout.
+
+**THE EVIDENCE WAS IN THE LOG ALL ALONG.** The pet's own writeback prints
+`petData`, and it read `"toggles":{...,"sorting":true,...}` with no `restock`,
+`tidy`, `compact`, `defrag` or `chill` -- a retired key present and its five
+replacements absent. One grep, once anyone thought to look at what was STORED
+rather than at what was SENT.
+
+**THE FIX IS A DECLARED TABLE, NOT FIVE MORE LINES IN THE LITERAL.**
+`PET_TOGGLES` maps every key to what ABSENT means for it, and the handler walks
+it -- so the default also decides the read direction (`~= false` for on,
+`== true` for off) and the polarity trap `arch.port.petsettings` records cannot
+be got wrong per key. Wholesale rewriting is still the rule; the table is what
+makes it safe rather than a literal.
+
+**THE GENERAL SHAPE: A WHITELIST THAT MUST TRACK ANOTHER FILE WILL DRIFT, AND
+DRIFT SILENTLY WHEN ITS DEFAULT IS PERMISSIVE.** The pane and the port agreed by
+hand and nothing compared them.
+
 ## DISPROVEN
 
 ### A wipe that walks the store's indices does not wipe the store
@@ -12853,6 +13260,11 @@ the hop against `MAX_REPEAT_HOPS`. Both are labelled in the log
 
 **DONE 2026-08-30.** The upcycler is migrated and all four panes are on the shared string table. `Replace Me` is gone. Kept rather than deleted because `todo.art.runninglights` names it.
 
+**AMENDED 2026-09-08.** The petport pane held one more exception than this
+entry knew about -- twenty task captions in a Lua table rather than in its
+config -- and it is migrated. See `arch.pane.stringtable`. The upcycler's 14
+config literals below are untouched and are still the open half.
+
 MOST OF THIS ENTRY IS CLOSED. Tooltip behaviour is verified across all four
 panes, the upcycler's dead `createTooltip` is deleted, and three of four panes
 are on the shared string table.
@@ -14244,6 +14656,76 @@ It is the report-to-dispatch turnaround, inherent to one-task-at-a-time dispatch
 Three of the four tasks fire back to back at the machine, so the pauses cluster
 and read as one long hesitation.
 
+### `DEFRAG_PLAN_CAP` is not a debug value and must not ride the flag sweep
+`todo.cargo.defragcap` -- see also `todo.upcycler.checkstatelog`, `arch.cargo.defrag`
+
+OPENED 2026-09-08. `DEFRAG_DEBUG` joins the release-preflight pass with every
+other flag -- `todo.upcycler.checkstatelog` records that debug gating is done as
+ONE sweep rather than stream by stream, and the flag list lives in the STATUS
+inventory. Nothing special is needed for it.
+
+**`DEFRAG_PLAN_CAP` IS THE ONE THAT MUST NOT BE SWEPT WITH IT.** It caps WORK as
+well as logging: `defragWork` walks that many names looking for the first
+actionable one, so lowering it to quieten a log silently stops the fleet
+defragmenting anything ranked below it, and raising it to read a log buys a
+comparator run per name per work tick. It is 16, chosen against a twelve-name
+network, and it has never been measured on a large base.
+
+`SPREAD_REPORT_CAP` at 12 IS purely a log value and goes with the flags.
+
+### `"perishable"` is a modder-facing flag with no modder-facing documentation
+`todo.filter.perishabledocs` -- see also `dd.filter.perishable`, `proc.filter.modders`
+
+OPENED 2026-09-08. `SORTING_FOR_MODDERS.md` documents the five matchers and
+`unclassified` and says nothing about `"perishable"`, which is the second
+per-subgroup behaviour flag and the one that buys automatic refrigeration. A
+flag a third party is meant to use and cannot discover is a flag nobody uses.
+
+### The container scan is one shot and a large base will feel it
+`todo.dispatch.scancursor` -- see also `arch.cargo.spread`, `fact.tooling.frameceiling`
+
+OPENED 2026-09-08 (Lofty: "for big bases we're gonna need coroutine yield batch
+for census"). `refreshBeacons` walks every container in every network rect in
+one update. `workUpdate` peaked at 66 ms this session and 112 ms before this
+work, against a 16.7 ms frame.
+
+THE SHAPE IS A CURSOR AND A BUDGET, NOT A COROUTINE, matching what the survey
+and the boundary contradiction pass already do -- 10 ms and 4 sweep steps there,
+300 keys then 2 ms there. Keep a rect and entity cursor between ticks.
+
+**PUBLISH ONLY WHEN A FULL PASS COMPLETES.** A half-built spread map would show
+a name in one crate that is actually in three, and every consumer would act on
+it -- the destination ladder, the migration gate and the deposit preference all
+read it as complete.
+
+### Stale CRLF in a repo that specifies LF
+`todo.tooling.crlfstale` -- see also `proc.tooling.assertshape`
+
+OPENED 2026-09-08. `.gitattributes` sets `* text=auto eol=lf` with no exception,
+and `todo.tooling.crlfdrift` is marked closed by it -- but `petports_petport.lua`
+and this document are still CRLF in the working copy, which is a stale checkout
+rather than a rule. The STATUS note reading "petports_petport.lua CRLF" reads as
+a convention and is not one. Converting is a one-line change and was deliberately
+not bundled with a feature build.
+
+### A defrag destination flipped between two crates on consecutive passes
+`todo.cargo.roomflip` -- see also `arch.cargo.defrag`, `arch.cargo.spread`
+
+OPENED 2026-09-08, NOT DIAGNOSED. Three consecutive plans sent one item to crate
+49, then 90, then 49, with both crates declaring 220 subgroups and holding none
+of it. Every key above the room test was equal, so `crateHasRoom` must have
+alternated.
+
+THE LEADING SUSPECT IS THE APPROXIMATION `crateHasRoom` ALREADY DOCUMENTS: the
+plan asks with a bare `{ name, count = 1 }` descriptor while the dispatch asks
+with the real stack, so a nearly-full crate can answer yes to one and no to the
+other -- and 49 is a 24-slot crate against a 112-item stack. That does not by
+itself explain alternation, which needs something moving in and out of 49.
+
+IT COSTS NOTHING TODAY: the plan is a log line, and the dispatch re-asks with the
+real descriptor before a unit moves. It becomes real if a unit is ever seen
+walking to a crate that then refuses the load.
+
 ## PROCESS
 
 ### Profile before proposing; the log before the fix
@@ -15034,3 +15516,108 @@ unrelated subsystems that produce independent log lines are one change each. Two
 changes on the same code path are one change even if they are one line apart.
 Ask what a single log could and could not attribute.
 
+### A checker that reads comments is a checker that reads prose as code
+`proc.tooling.checkerprose` -- see also `proc.tooling.assertshape`, `proc.tooling.halfedit`
+
+**FOUR TIMES IN ONE SESSION, 2026-09-08, AND EVERY ONE WAS THE CHECKER RATHER
+THAN THE FILE.**
+
+- a "no dispatch machinery in the planner" check matched the word `workIds` in a
+  comment explaining why defrag and tidy must not contend
+- `petports_localorder.py` read `preferred (` inside a log string as a call
+- it then read `crate(s)` inside a format string the same way
+- a "no conditional inside a `table.concat` constructor" check matched the
+  EXAMPLE INSIDE THE COMMENT THAT EXPLAINED THE BUG IT WAS ADDED FOR
+
+**THE RULE: ANY CHECK THAT ASKS WHAT THE CODE DOES MUST STRIP COMMENTS FIRST.**
+It is two lines and it should be the default in these scripts rather than
+remembered per check.
+
+**THE OTHER HALF IS THE LOG STRINGS.** `petports_localorder.py` cannot tell a
+call from a word followed by a bracket, and its findings are read by counting
+them -- 28 is the known baseline. A new finding is either a real fault or a
+sentence, and the cheap answer is to word log strings so they do not fire, which
+keeps the count meaningful. A checker whose count creeps upward is a checker
+that stops being read, which `proc.tooling.paneheck` already records.
+
+**AND A RED CHECK IS STILL A QUESTION.** Every one of these was investigated
+before anything was changed, and in all four the assertion was wrong. The cost
+of getting that backwards is a working file edited into a broken one to please a
+broken test.
+
+### Report every check, fail once at the end
+`proc.tooling.reportchecks` -- see also `proc.tooling.assertshape`, `proc.tooling.checkerprose`, `proc.tooling.batchedits`
+
+**CHANGED MID-SESSION 2026-09-08 AND IT PAID FOR ITSELF THE SAME DAY.** The edit
+scripts asserted, so the first failure aborted with one message and no picture of
+anything else -- and `proc.tooling.batchedits` means an abort writes nothing, so
+each round trip surfaced exactly one problem.
+
+**MEASURED COST OF THE OLD SHAPE.** Four rounds on one pane edit, each revealing
+a single assertion, three of which turned out to be faults in the assertions
+rather than in the file.
+
+**THE NEW SHAPE PRINTS A LINE PER CHECK AND WRITES ONLY IF ALL PASS.** On its
+first real use it reported a non-unique anchor AND the four consequences that
+followed from it in one run -- an insert that would have gone into the upcycler's
+strings instead of the petport's, with nothing written.
+
+**IT COMPOSES WITH THE RULE ABOVE IT.** Per-edit match counts still abort,
+because a bad anchor means the file is not in the state the script thinks it is
+and every later edit is meaningless. What became reporting is the POST-CONDITIONS,
+which are independent questions about a finished result.
+
+### Replay a comparator before shipping it, on data from the last log
+`proc.tooling.dryrun` -- see also `proc.tooling.controlfirst`, `proc.tooling.instrument`
+
+**THIS SESSION IT CAUGHT A STARVATION THAT WOULD HAVE SHIPPED**, and cost
+minutes. The migration gate was replayed in Python against the spread map from
+the previous run, and the table showed money and copper ore both reading as
+misplaced -- which with a capped, stably-sorted candidate list means the top of
+the list is occupied forever by names with no better home and nothing below the
+cap is ever reached. No log would have shown it: every task that did run would
+have reported done.
+
+**IT IS CHEAPER THAN A CONTROL AND WEAKER THAN ONE.** `proc.tooling.controlfirst`
+is about constructing the nearest case that SUCCEEDS in the game; this is about
+running the new decision function over data the game already produced, before
+the build exists. It cannot find anything about the engine and it is very good
+at finding an ordering that does not converge.
+
+**THE HARNESS IS AS LIKELY TO BE WRONG AS THE CODE.** The first refrigeration
+replay routed a tomato into a crate filtered for fishing gear, because the
+harness did not model `petports_filterAccepts`. The table is only worth reading
+once it reproduces behaviour already observed in a log -- which is what makes
+the previous session's log the right input rather than invented data.
+
+### One build, one log, held for seven consecutive builds
+`proc.cargo.defragsession` -- see also `proc.tooling.onechange`
+
+**RECORDED BECAUSE IT WORKED AND BECAUSE THE SPLIT POINTS WERE NOT OBVIOUS.**
+The defragmentation module was delivered as seven builds, each tested in game
+before the next was written:
+
+    1   the spread map, read by nothing, one log line
+    2a  the module, the toggles, findWork rewired, no new work
+    2b  the pane rows
+    3   the destination comparator, computed and LOGGED, dispatching nothing
+    4a  the deposit preference, no new task type
+    4b  the pull leg
+    5   refrigeration
+
+**BUILD 3 IS THE ONE WORTH COPYING.** A comparator that only logs costs one
+build and makes the ranking readable against a real network before anything acts
+on it. Its output was checked row by row against the spread map -- twelve rows,
+all correct, including the one item whose destination ran opposite to every
+other. Two ordering faults were found and fixed while nothing could move.
+
+**THE SPLITS THAT MATTERED WERE THE ONES THAT PRODUCED A DIFFERENT LOG**, not
+the ones that were smaller. 2a and 2b are the same feature and were split
+because one is read in a log and the other is read on screen -- which is
+`proc.tooling.onechange`'s own test, applied to a build rather than to a fix.
+
+**FOUR CORRECTIONS LANDED MID-FEATURE AND NONE OF THEM WAS A REGRESSION**,
+because each arrived on a build whose log was already understood: the breadth
+ladder replacing a dead test, migration replacing consolidation, an exact gate
+replacing an optimistic one, and a `table.concat` crash. A stacked build would
+have made all four ambiguous.

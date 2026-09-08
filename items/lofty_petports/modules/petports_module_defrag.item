@@ -1,0 +1,71 @@
+//  PETPORTS -- DEFRAGMENTATION MODULE
+//
+//  THE FIRST MODULE THAT UNLOCKS WORK THE PORT USED TO DO FOR FREE.
+//
+//  Oblivious suppresses dispatch, medic and farming each ADD a task. This one
+//  takes three generators that already existed and shipped ungated -- tidy,
+//  compact and defrag -- and puts them behind something the player has to go
+//  and find. That is deliberate, and it is the whole argument for the module
+//  existing rather than the behaviour simply being on:
+//
+//    Fragmentation is the player's problem to care about or to ignore. A pet
+//    that can be TOLD to fix it is worth something; a pet that always did it
+//    quietly was worth nothing anyone could point at.
+//
+//  THREE BOXES UNDER ONE MODULE, and they are three halves of one job:
+//
+//      tidy       move what is in the wrong crate
+//      compact    merge what is split inside one crate
+//      defrag     gather what is spread across several
+//
+//  Each keeps its own checkbox for the reason dd.bubble.cargotoggle gives --
+//  wanting one without the others is a reasonable thing to want, and a player
+//  who likes their stragglers where they are should be able to say so. They
+//  live on petData.toggles and are read through petportParticipates, so they
+//  travel with the pet to another port exactly as the medic classes and the
+//  farming activities do.
+//
+//  RESTOCKING IS NOT HERE, AND IT USED TO SHARE A BOX WITH TIDYING. It is the
+//  second half of the deposit beacon -- a crate the player named an item and an
+//  amount for -- and gating a thing somebody explicitly asked for behind a
+//  module they may not own reads as the mod being broken. It kept its own
+//  switch, ungated and defaulted on.
+//
+//  IT NEEDS NO petports_moduleEffects. Nothing about this changes the unit: it
+//  changes what the PORT is willing to dispatch, which is the same channel
+//  Oblivious and Medic use and nothing else.
+//
+//  BOTH HALVES COUNT TOWARD MAXWELL. Tidying and defragmenting are the two
+//  directions of one goal -- reducing the work a player has to do to find
+//  something -- and the achievement counts them together.
+
+{
+	"itemName" : "petports_module_defrag",
+	"price" : 1000,
+	"rarity" : "Rare",
+
+	//  Shared with the other modules, so the categories.config.patch label and
+	//  the petports_filtergroups.config subgroup that already exist cover this
+	//  item too. A new category would need both added or it sorts to Unsorted.
+	"category" : "petports_module",
+
+	//  ART PENDING. The file does not exist yet; a missing icon renders as a
+	//  placeholder box rather than failing the load, so this is testable
+	//  without it.
+	"inventoryIcon" : "petports_module_defrag.png",
+
+	"description" : "Equip a pet with this module and it will ^green;tidy, compact and consolidate^reset; the storage in its network, gathering scattered stacks of the same item into one place.",
+	"shortdescription" : "Defragmentation Module",
+
+	//  petports_no_upcycling KEEPS IT OUT OF THE CONVERTER, or a unit hauling
+	//  surplus to an upcycler turns the player's modules into treats.
+	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],
+
+	//  MAXSTACK 1 IS A REQUIREMENT. The pane moves modules with
+	//  player.swapSlotItem(), which returns the whole cursor stack; it refuses a
+	//  stack rather than trusting this field, so a stackable module would be
+	//  refused forever and look broken.
+	"maxStack" : 1,
+
+	"petports_moduleFlags" : [ "defrag" ]
+}

@@ -93,6 +93,11 @@ local petportsItemFacts = {}
 --  for why nothing here ever needs dropping.
 local petportsItemPrices = {}
 
+--  name -> does it rot. Negative results memoised too: the answer is a pure
+--  function of the manifest and the item, so a miss costs the same walk
+--  every time it is repeated.
+local petportsPerishableNames = {}
+
 --  Parsed manifest, and an id -> group index built alongside it.
 local petportsManifest = nil
 local petportsGroupsById = nil
@@ -734,6 +739,238 @@ function petports_restockMisfits(requests, items, exemptSlot)
 	return misfits
 end
 
+--  HOW MUCH OF THE MANIFEST DOES THIS FILTER ADMIT, IN SUBGROUPS?
+--
+--  A SPECIFICITY MEASURE, AND THE POINT IS TO RANK CRATES BY HOW MUCH THEY
+--  DECLARED. A crate saying "fishing gear only" admits 1 subgroup of 220; a
+--  crate with base accept and no rules admits all 220. That is a 220-to-1
+--  statement of intent, and defragmentation gathers into the crate that said
+--  the most about the item.
+--
+--  IT REPLACES "DOES A RULE NAME THIS ITEM". That test looked for `rule.item`,
+--  which the DEPOSIT pane never writes -- it emits `{action = "accept", group =
+--  <id>}` and nothing else, so the test could never fire and the whole
+--  specificity tier was unreachable. It was also the wrong question: a subgroup
+--  can be as fine as one item name -- `pets/pod`, `valuables/gem`, eight of
+--  them in the manifest today -- so naming an item IS a group rule here. The
+--  restock beacon needs literal item names because "restock Floran furniture"
+--  and "restock furniture" overlap and a quota has to know which; a deposit
+--  filter has no such problem.
+--
+--  COUNTED IN SUBGROUPS RATHER THAN IN ITEMS. Items are unbounded, unknowable
+--  without walking every asset, and change when a mod is installed. Subgroups
+--  are the unit the manifest is authored in and the unit the pane presents, so
+--  they are what a player is actually choosing between.
+--
+--  A LIVE NUMBER, NOT A STORED ONE, and that is deliberate. `except` lists are
+--  EXCLUSIONS, so a subgroup added by a later update or another mod falls
+--  inside every existing rule automatically -- see the manifest header. A
+--  breadth cached into a beacon's parameters would go stale the moment someone
+--  installed a mod, and would then be wrong in the direction that makes a broad
+--  crate look specialised.
+--
+--  NETWORK-INVARIANT, which the destination ladder requires. Every port derives
+--  it from the same manifest with no reference to who is asking, so two ports
+--  cannot disagree about which crate an item belongs in and ferry it back and
+--  forth.
+--
+--  LAST MATCH WINS IS NOT CONSULTED HERE, and that is correct. This asks how
+--  much the filter DESCRIBES, not what it concludes about one item --
+--  petports_filterAccepts already answered that, and only accepting crates are
+--  ever ranked. A filter that accepts a group and then denies one subgroup of
+--  it has described that group either way.
+
+--  Total subgroups the manifest defines. The score for "accepts everything".
+local petportsSubgroupTotal = nil
+
+local function subgroupTotal()
+	if petportsSubgroupTotal ~= nil then return petportsSubgroupTotal end
+
+	local total = 0
+
+	for _, group in ipairs(petports_filterGroups()) do
+		total = total + #petports_filterSubgroups(group)
+	end
+
+	--  A MANIFEST THAT WOULD NOT LOAD SCORES 1, NOT 0.
+	--
+	--  petports_filterManifest fails loud and EMPTY -- no groups -- which would
+	--  make every filter score zero and read as maximally specific, so the
+	--  narrowest-first ranking would become arbitrary rather than merely
+	--  unavailable. One is the honest floor: nothing can be distinguished, so
+	--  nothing is preferred, and the keys below breadth decide.
+	if total < 1 then total = 1 end
+
+	petportsSubgroupTotal = total
+	return total
+end
+
+function petports_filterBreadth(filter)
+	--  ABSENT MEANS ACCEPT EVERYTHING, matching petports_filterAccepts. An
+	--  unconfigured beacon has declared nothing and must score the maximum, or
+	--  a fresh beacon would outrank every crate a player had actually set up.
+	if type(filter) ~= "table" then return subgroupTotal() end
+
+	--  A BASE OF ACCEPT IS A DECLARATION OF EVERYTHING. Deny rules below it
+	--  carve pieces out, and they are not counted: a crate that takes anything
+	--  except ores has still said nothing about fishing gear. Scoring the
+	--  carve-outs would let a player make a crate look specialised by denying
+	--  things it was never going to see.
+	if filter.base ~= "deny" then return subgroupTotal() end
+
+	if type(filter.rules) ~= "table" then
+		--  base deny, no rules: accepts nothing. It is not a candidate, so this
+		--  is unreachable from the ladder -- answered anyway, and answered as
+		--  narrow rather than as zero, for the same reason the floor above
+		--  exists.
+		return 1
+	end
+
+	local admitted = 0
+
+	for _, rule in ipairs(filter.rules) do
+		if type(rule) == "table" and rule.action ~= "deny" then
+			if rule.item ~= nil then
+				--  A LITERAL ITEM RULE IS AS NARROW AS IT GETS. Nothing in the
+				--  deposit pane writes one today; the restock beacon's storage
+				--  shape does, and a hand-edited or modded filter may.
+				admitted = admitted + 1
+			elseif rule.group ~= nil then
+				local group = petports_filterGroup(rule.group)
+
+				if group ~= nil then
+					local excluded = 0
+
+					if type(rule.except) == "table" then
+						--  COUNTED AGAINST THE GROUP'S OWN SUBGROUPS, so an
+						--  `except` naming a subgroup that no longer exists --
+						--  a mod removed, a manifest edited -- cannot push the
+						--  count below zero and make a crate look narrower than
+						--  it is.
+						local subgroups = petports_filterSubgroups(group)
+						local known = {}
+
+						for _, subgroup in ipairs(subgroups) do
+							known[subgroup.id] = true
+						end
+
+						for _, id in ipairs(rule.except) do
+							if known[id] then excluded = excluded + 1 end
+						end
+
+						admitted = admitted + #subgroups - excluded
+					else
+						admitted = admitted + #petports_filterSubgroups(group)
+					end
+				end
+			end
+		end
+	end
+
+	--  TWO ACCEPT RULES NAMING THE SAME GROUP DOUBLE-COUNT, and that is
+	--  accepted rather than deduplicated. It is a filter a player would have to
+	--  build deliberately, it makes that crate score BROADER than it is, and
+	--  broader only ever loses -- so the failure is a crate that is not
+	--  preferred, never one that wrongly is.
+	if admitted < 1 then admitted = 1 end
+
+	return admitted
+end
+
+--  DOES THIS ITEM ROT?
+--
+--  TWO TESTS, ORed, AND THEY COVER DIFFERENT WINDOWS.
+--
+--  THE INSTANCE FIELD IS EXACT. /scripts/items/rotting.lua does nothing at all
+--  unless the item carries `timeToRot` -- it decrements that field and replaces
+--  the stack with `rottedItem` at zero. So a descriptor carrying it rots
+--  whatever it is filed as, and an item that has been ageing answers here with
+--  no config read at all.
+--
+--  THE MANIFEST IS THE FAST PATH AND THE SAFETY NET FOR A FRESH ITEM. Whether
+--  the engine seeds `timeToRot` at creation or on the first ageing tick has not
+--  been measured, so a just-harvested tomato may not carry it yet.
+--
+--  itemAgingScripts WAS THE OBVIOUS CONFIG TEST AND IS WRONG. Ageing scripts
+--  are not a food mechanism -- vanilla uses one to cool molten metal -- so an
+--  item declaring one is not thereby perishable.
+--
+--  IT ASKS THE MANIFEST, NOT A LIST IN THIS FILE, AND THAT IS THE WHOLE POINT.
+--  The first version tested three hardcoded category names. It covered vanilla
+--  by luck, could not be patched -- a Lua local is not an asset -- and had
+--  already MISSED `cookingIngredient`, which the manifest carries and which
+--  ref.filter.produce records as where a lot of raw produce hides.
+--
+--  A subgroup declares `"perishable" : true` and everything else follows: a mod
+--  patching in its own perishable subgroup gets refrigeration with no code and
+--  no cooperation from us, and gets ALL FIVE MATCHERS rather than categories
+--  alone -- so an item identified by a tag, a name list, a suffix or a name part
+--  works exactly as well as one identified by its category.
+--
+--  BEING WRONG COSTS A SLOT, IN ONE DIRECTION ONLY. A false positive puts a
+--  non-perishable in a fridge; a false negative leaves food on a shelf, which is
+--  where it would have been anyway. Neither loses an item.
+
+--  Every subgroup flagged perishable, across every group. Built with the
+--  manifest and dropped with it.
+local petportsPerishableSubgroups = nil
+
+local function perishableSubgroups()
+	if petportsPerishableSubgroups ~= nil then return petportsPerishableSubgroups end
+
+	local out = {}
+
+	for _, group in ipairs(petports_filterGroups()) do
+		for _, subgroup in ipairs(petports_filterSubgroups(group)) do
+			if subgroup.perishable == true then
+				table.insert(out, subgroup)
+			end
+		end
+	end
+
+	petportsPerishableSubgroups = out
+	return out
+end
+
+--  Takes a DESCRIPTOR, not a name, because half the answer is on the instance.
+--  A bare name still works and simply skips the instance test.
+--
+--  MEMOISED BY NAME for the category half only. The instance half is a field
+--  test on a table the caller already holds and cannot be cached against a name
+--  -- two stacks of one item can differ on it.
+function petports_itemPerishable(descriptor)
+	local name = descriptor
+
+	if type(descriptor) == "table" then
+		name = descriptor.name
+
+		if type(descriptor.parameters) == "table"
+		   and descriptor.parameters.timeToRot ~= nil then
+			return true
+		end
+	end
+
+	if type(name) ~= "string" then return false end
+
+	local held = petportsPerishableNames[name]
+	if held ~= nil then return held end
+
+	local facts = petports_itemFacts(name)
+	local rots = false
+
+	if facts ~= nil then
+		for _, subgroup in ipairs(perishableSubgroups()) do
+			if subgroupMatches(subgroup, facts, name) then
+				rots = true
+				break
+			end
+		end
+	end
+
+	petportsPerishableNames[name] = rots
+	return rots
+end
+
 --  Drops memoised item facts. Only useful if item definitions can change under
 --  a running session; kept because a stale category is invisible and would be
 --  diagnosed as a filter bug.
@@ -742,4 +979,17 @@ function petports_filterResetCache()
 	petportsItemPrices = {}
 	petportsManifest = nil
 	petportsGroupsById = nil
+
+	--  DERIVED FROM THE MANIFEST, SO IT DIES WITH IT. Left behind, a reload
+	--  would score every filter against the previous manifest's subgroup
+	--  count -- invisible, and wrong in whichever direction the manifest
+	--  changed.
+	petportsSubgroupTotal = nil
+
+	--  DERIVED FROM THE MANIFEST TOO, so both die with it. A subgroup gaining
+	--  or losing "perishable" under a running session would otherwise be
+	--  invisible -- and proc.tooling.gatereset is emphatic that where a cached
+	--  value is CLEARED is the half that goes wrong.
+	petportsPerishableSubgroups = nil
+	petportsPerishableNames = {}
 end

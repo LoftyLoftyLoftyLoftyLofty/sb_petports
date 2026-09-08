@@ -196,9 +196,39 @@ DOOR_POLL = 0.0
 --  THE FOUR GROUPS, AND WHICH GENERATORS EACH ONE GATES.
 --
 --      hauling    collection
---      sorting    restockFetch, restockDeliver, tidy, compact
+--      restock    restockFetch, restockDeliver
+--      tidy       tidy          -- defrag module
+--      compact    compact       -- defrag module
+--      defrag     defrag        -- defrag module
 --      farming    replant, water, harvest, animal, withdraw, withdrawWater
 --      machines   upcycle, drain, fuel
+--
+--  `sorting` IS RETIRED, AND IT GATED FOUR THINGS THAT DO NOT BELONG
+--  TOGETHER. It covered restocking, tidying and compaction under one box.
+--  Restocking is a thing the PLAYER ASKED FOR BY NAME -- a request crate
+--  naming an item and an amount -- and the other two are the network's own
+--  housekeeping. Those are not one preference.
+--
+--  RESTOCKING STAYS OFF THE MODULE, AND DEPOSIT STAYS OFF EVERYTHING.
+--  Restocking is the second half of the deposit beacon and has to work out
+--  of the box; it gets a switch of its own, defaulted on, for a player who
+--  wants one pet not to honour requests. Deposit gets no switch at all --
+--  putting down what you are already holding is finishing rather than
+--  starting, and a box that lets a player stop it is a box that lets them
+--  deadlock their own fleet.
+--
+--  THE OTHER THREE MOVE BEHIND THE DEFRAGMENTATION MODULE, and they are
+--  three halves of one job: tidy moves what is in the wrong crate, compact
+--  merges what is split inside one crate, defrag gathers what is spread
+--  across several. Each keeps its own box under the module for the reason
+--  dd.bubble.cargotoggle gives -- wanting one without the others is a
+--  reasonable thing to want.
+--
+--  NO LEGACY ADOPTION FOR THE RETIRED KEY. A unit whose petData carries
+--  `sorting = false` gets restocking back on and, with a module, tidying
+--  and compaction too. arch.port.petsettings took the same call for the same
+--  reason: the mod is unpublished, and a migration path would have to be
+--  carried forever to save a re-tick.
 --
 --  `upcycle` WAS MISSING FROM THIS LIST AND FROM THE GATE. It is the DELIVERY
 --  leg -- carrying surplus INTO a machine -- where drain and fuel are the two
@@ -263,6 +293,35 @@ DOOR_POLL = 0.0
 --
 --  DEFAULTS ON WHEN THE TABLE EXISTS BUT THE KEY DOES NOT, matching the pane's
 --  settingValue and every other pet-owned setting store here.
+--  EVERY PER-PET TOGGLE, AND WHAT ABSENT MEANS FOR IT.
+--
+--  ONE TABLE, AND petports_setToggles BUILDS THE STORED SET BY WALKING IT. The
+--  pane owns the rows and the labels; this owns the KEYS and their DEFAULTS. A
+--  toggle that is not here is a toggle the port throws away.
+--
+--  THE VALUE IS WHAT ABSENT MEANS, and it must match the pane's `default` on
+--  the same row. Work toggles default ON, because a unit that shipped refusing
+--  to work reads as broken. Display toggles default OFF, because a fleet that
+--  labelled itself the moment it shipped reads as noise.
+--
+--  IDS ARE FROZEN AND LABELS ARE FREE -- dd.port.participationgroups. `hauling`
+--  reads "Item Pickup" in the pane and must stay `hauling` here, because a
+--  stored setting names it.
+PET_TOGGLES =
+{
+  carried = true,
+  showCargo = true,
+  nametag = false,
+  crosshairs = true,
+  hauling = true,
+  restock = true,
+  machines = true,
+  tidy = true,
+  compact = true,
+  defrag = true,
+  chill = true
+}
+
 function petportParticipates(group)
   if self.petData == nil then return false end
 
@@ -1473,7 +1532,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-07l a medic task carries target, not patient"
+local PETPORT_BUILD_STAMP = "2026-09-08n every toggle the pane sends is actually stored"
 
 --  PORT PROFILER, 2026-09-07b. MEASURED 21:00: six ports on a small islet,
 --  59 port ticks over 30 ms in 39 s totalling 3.7 s, worst 268 ms, while
@@ -2134,37 +2193,40 @@ function init()
   message.setHandler("petports_setToggles", simpleHandler(function(payload)
     if self.petData == nil or type(payload) ~= "table" then return false end
 
-    self.petData.toggles = {
-      --  `~= false`, NOT `== true`, AND THAT IS NOT A TIDY-UP. This toggle
-      --  defaults ON, so absent has to read on -- and the pane's settingValue
-      --  reads an unset value the same way. Reading it `== true` here would
-      --  paint a ticked box over a unit this port considers switched off,
-      --  which is the mismatch the pane's own note warns about.
-      carried = payload.carried ~= false,
+    --  BUILT FROM PET_TOGGLES, NEVER FROM A LITERAL.
+    --
+    --  THIS WAS A LITERAL OF SEVEN KEYS AND IT SILENTLY ATE FIVE. When
+    --  `sorting` was split into `restock` plus four module switches the pane
+    --  grew five rows and sent them; this handler rebuilt the table from its own
+    --  hardcoded list and discarded everything it did not name. The keys stayed
+    --  ABSENT, absent reads as PARTICIPATING, and so all five boxes painted
+    --  correctly, wrote nothing, and changed nothing.
+    --
+    --  IT FAILED IN THE QUIETEST POSSIBLE DIRECTION. A dropped key does not
+    --  error, does not log, and defaults ON. MEASURED 2026-09-08 from the pet's
+    --  own writeback: toggles still held `sorting` after it was retired and held
+    --  none of its five replacements.
+    --
+    --  WHOLESALE IS STILL THE RULE, and the table is what makes that safe rather
+    --  than a literal here: a key the pane stops sending reverts to its DEFAULT
+    --  instead of keeping a last value nothing can change. What changed is that
+    --  adding a toggle is one entry in one place.
+    local set = {}
 
-      --  DEFAULTS OFF, like every display toggle on this tab, because absent
-      --  reads as false here. That is deliberate: all four unit items ship a
-      --  petName, so a tag defaulting on would label the entire fleet the moment
-      --  this shipped and a player would have to visit every port to quiet it.
-      nametag = payload.nametag == true,
+    for key, default in pairs(PET_TOGGLES) do
+      --  THE DEFAULT DECIDES THE DIRECTION OF THE READ, which is the polarity
+      --  trap arch.port.petsettings records. A toggle defaulting ON must read
+      --  `~= false` so absent means on; one defaulting OFF must read `== true`.
+      --  Backwards, it paints a ticked box over a unit the port considers off.
+      if default then
+        set[key] = payload[key] ~= false
+      else
+        set[key] = payload[key] == true
+      end
+    end
 
-      --  THE FOUR THAT MOVED OFF THE PORT. All default ON, so all read
-      --  `~= false` -- see petportParticipates and petportCrosshairs for why
-      --  they are here rather than in object config parameters.
-      --
-      --  WRITTEN WHOLESALE LIKE THE REST OF THIS TABLE, which is what makes a
-      --  key the pane stops sending revert to participating rather than keep
-      --  its last value with nothing left to change it.
-      hauling = payload.hauling ~= false,
-      sorting = payload.sorting ~= false,
-      machines = payload.machines ~= false,
-      crosshairs = payload.crosshairs ~= false,
+    self.petData.toggles = set
 
-      --  THE CARGO BUBBLE, SEPARATE FROM `carried`. That one is the master
-      --  switch; this decides whether one particular thing gets said. Defaults
-      --  on -- see petportBubbleCargo.
-      showCargo = payload.showCargo ~= false
-    }
     self.dirty = true
     self.paneSignature = nil
 
@@ -2626,6 +2688,15 @@ function init()
     --  the container call happens on the port.
     if report.outcome == "done" and self.task ~= nil
        and self.task.type == "tidy" and self.task.id == report.id then
+      withdrawMisfit(self.task.target, self.task.item, self.task.count,
+        self.task.id, self.task.slot)
+    end
+
+    --  Arrived at a crate holding a scattered stack. Same shape again -- and
+    --  deliberately the same CALL, because a second withdraw path would be a
+    --  second place for the crate-moved-under-us guard to be forgotten.
+    if report.outcome == "done" and self.task ~= nil
+       and self.task.type == "defrag" and self.task.id == report.id then
       withdrawMisfit(self.task.target, self.task.item, self.task.count,
         self.task.id, self.task.slot)
     end
@@ -3324,6 +3395,34 @@ local function scanContainers()
   local censusStacks = 0
   local machines = {}
 
+  --  THE SPREAD: WHICH CRATES HOLD EACH NAME, AND HOW MUCH EACH ONE HAS.
+  --
+  --  name -> containerId -> { count, slots }. The census answers HOW MUCH
+  --  the network holds; this answers WHERE, which is the question
+  --  defragmentation asks and the census cannot.
+  --
+  --  GATHERED HERE FOR THE REASON THE CENSUS GIVES ABOVE, and it is a
+  --  stronger argument this time. tidyWork already calls
+  --  world.containerItems per beacon per work tick, which the backlog
+  --  records as a known cost; asking a bigger question on that tick would
+  --  be worse. This loop is already holding every deposit crate's contents,
+  --  so recording where a name lives is arithmetic on data in hand.
+  --
+  --  SAME EXCLUSIONS AS THE CENSUS, and they must stay the same: deposit
+  --  crates only, the deciding beacon's own slot never counted. A source
+  --  defrag could see but the census could not would be stock that exists
+  --  for one generator and not the other.
+  --
+  --  SUMMED BY NAME ACROSS DIFFERING PARAMETERS, again matching the census
+  --  and for the same reason: a filter rule is a pure function of a name, so
+  --  a count that decides where a filter sends something has to be too.
+  --
+  --  slots RIDES ALONG FOR ONE INTEGER. It is not needed to choose a
+  --  destination -- capacity and count decide that -- but it is what makes
+  --  the report below legible, and it is the number that says whether
+  --  compaction should have run on a crate before anything defragments it.
+  local spread = {}
+
   for _, rect in ipairs(rects) do
     local ids = world.entityQuery({ rect[1], rect[2] }, { rect[3], rect[4] }, {
       includedTypes = { "object" }
@@ -3481,6 +3580,55 @@ local function scanContainers()
                   filter = filter,
                   requests = requests,
 
+                  --  HOW MANY SLOTS THIS CRATE HAS. From the containerSize
+                  --  call that already decided this was a container at all,
+                  --  so it costs nothing.
+                  --
+                  --  IT IS A DESTINATION RANKING KEY. Among crates whose
+                  --  filter names an item outright, the SMALLEST wins: an
+                  --  explicit filter on a small box is a deliberate
+                  --  declaration of specialised storage, where the same
+                  --  filter on a large one is likelier to be a general shelf
+                  --  that happens to accept it.
+                  capacity = size,
+
+                  --  HOW MUCH OF THE MANIFEST THIS CRATE'S FILTER ADMITS,
+                  --  in subgroups. The specificity measure the destination
+                  --  ladder ranks on -- 1 for a crate declared for fishing
+                  --  gear, 220 for one that accepts anything.
+                  --
+                  --  CACHED HERE BECAUSE IT IS A PROPERTY OF THE FILTER AND
+                  --  NOT OF AN ITEM. The migration gate asks it once per
+                  --  crate and then compares integers per name; computing it
+                  --  per name per candidate is the cost that made migration
+                  --  look unaffordable.
+                  --
+                  --  RECOMPUTED EVERY SCAN, NOT STORED ON THE BEACON. It is
+                  --  a live number: `except` lists are exclusions, so a
+                  --  subgroup added by a mod falls inside every existing
+                  --  rule and every filter's breadth changes with it.
+                  breadth = petports_filterBreadth(filter),
+
+                  --  HOW FAST ITEMS AGE IN THIS CRATE. 1.0 is an ordinary
+                  --  container, 0.0 is a refrigerator, and anything above
+                  --  1.0 rots food FASTER than leaving it on a shelf.
+                  --
+                  --  READ HERE FOR THE REASON capacity AND breadth ARE. It
+                  --  is a property of the crate, wanted once per scan rather
+                  --  than once per item per candidate.
+                  --
+                  --  DEFAULTS TO 1.0 ON ANY FAILURE, which is the ordinary
+                  --  container. A crate we cannot ask about must not read as
+                  --  a fridge: that would send every perishable in the
+                  --  network toward it and rot the lot.
+                  aging = (function()
+                    local okAge, value = pcall(world.getObjectParameter, id,
+                      "itemAgeMultiplier", 1.0)
+
+                    if okAge and type(value) == "number" then return value end
+                    return 1.0
+                  end)(),
+
                   --  MAY PETS EAT FROM THIS CRATE? dd.fuel.selffeed. Read here
                   --  because this loop is already holding the beacon item and
                   --  its parameters, and a second pass to fetch one boolean
@@ -3524,6 +3672,26 @@ local function scanContainers()
                         census[tallied.name] = (census[tallied.name] or 0)
                           + (tallied.count or 0)
                         censusStacks = censusStacks + 1
+
+                        --  THE SAME STACK, RECORDED BY PLACE AS WELL AS BY
+                        --  AMOUNT. One branch, so the two can never disagree
+                        --  about what counts as network stock.
+                        local where = spread[tallied.name]
+
+                        if where == nil then
+                          where = {}
+                          spread[tallied.name] = where
+                        end
+
+                        local held = where[id]
+
+                        if held == nil then
+                          held = { count = 0, slots = 0 }
+                          where[id] = held
+                        end
+
+                        held.count = held.count + (tallied.count or 0)
+                        held.slots = held.slots + 1
                       end
                     end
                   end
@@ -3541,7 +3709,7 @@ local function scanContainers()
     end
   end
 
-  return found, containers, census, censusStacks, machines
+  return found, containers, census, censusStacks, machines, spread
 end
 
 --  THE CENSUS READOUT. REPORTS, DECIDES NOTHING.
@@ -3607,17 +3775,901 @@ local function reportCensus(census, censusStacks, machines)
   sb.logInfo("PETPORT %s census: %s", stationUniqueId(), report)
 end
 
+--  WHERE EVERY FRAGMENTED NAME LIVES.
+--
+--  ON WHILE DEFRAGMENTATION IS BEING BUILT, and meant to come off after.
+--  The logging discipline says what is not safe to silence is anything on
+--  the path currently being built -- and nothing consumes the spread map
+--  yet, so this line is the only evidence the map is right at all.
+DEFRAG_DEBUG = true
+
+--  HOW MANY FRAGMENTED NAMES THE SPREAD LINE PRINTS.
+--
+--  A badly fragmented base has hundreds, and one log line holding all of them
+--  is unreadable and drowns everything around it. The count and the crate
+--  total are always printed in full, so the line says what it left out.
+--
+--  12 IS A GUESS AND IS MEANT TO BE RAISED WHILE READING A LOG. It is not a
+--  measurement and nothing depends on it.
+SPREAD_REPORT_CAP = 12
+
+--  FRAGMENTED NAMES ONLY -- TWO CRATES OR MORE.
+--
+--  A name in one crate is not a defragmentation problem, and printing the
+--  whole map would be the census again with extra words. What is worth
+--  seeing is exactly the set defragWork will later have to choose from.
+--
+--  GATED ON TOPOLOGY, NOT ON AMOUNTS -- WHICH NAMES, IN WHICH CRATES.
+--
+--  The first version signed the whole report, counts included, which is what
+--  the census beside it does. The census gets away with it because it is one
+--  line of totals. This is one entry per name per crate, so on the kind of
+--  base this feature exists for -- the reason it is being built at all is a
+--  base gone badly fragmented -- every stack a unit moved would reprint every
+--  fragmented name in the network, per port, every scan.
+--
+--  A COUNT TICKING FROM 226 TO 290 IS NOT AN EVENT. What defragmentation acts
+--  on is WHERE a name lives, so the signature is the name and its crate ids.
+--  The counts are printed and not signed: they are accurate at the moment the
+--  line prints, and they simply do not force a line of their own.
+--
+--  WHAT THAT COSTS is that a count drifting under an unchanged topology is
+--  invisible here. That is the right trade while nothing consumes the map --
+--  the question this build answers is whether the map knows where things are
+--  -- and the moment a generator reads it, the generator logs its own inputs
+--  per proc.tooling.logging.
+--
+--  SORTED, NOT WALKED IN pairs ORDER. Two scans of an unchanged network must
+--  produce the same signature or the gate fires on nothing but table order and
+--  the line repeats forever -- proc.tooling.gatereset, in the too-loose
+--  direction.
+local function reportSpread(spread)
+  if not DEFRAG_DEBUG then return end
+
+  local names = {}
+
+  for name, where in pairs(spread) do
+    local ids = {}
+    for id in pairs(where) do table.insert(ids, id) end
+
+    if #ids > 1 then
+      table.sort(ids)
+      table.insert(names, { name = name, ids = ids })
+    end
+  end
+
+  --  WORST FIRST, so the cap below keeps the names worth looking at. Crate
+  --  count descending, then name, which is stable across scans -- an unstable
+  --  order here would churn the signature on its own.
+  table.sort(names, function(a, b)
+    if #a.ids ~= #b.ids then return #a.ids > #b.ids end
+    return a.name < b.name
+  end)
+
+  --  THE SIGNATURE IS BUILT FROM EVERY NAME, THE LINE FROM THE FIRST FEW.
+  --
+  --  Signing only the printed ones would go silent on a change past the cap,
+  --  which is the failure that makes a capped log worse than no log.
+  local signature = {}
+  local lines = {}
+  local crates = 0
+
+  for index, entry in ipairs(names) do
+    crates = crates + #entry.ids
+
+    table.insert(signature, entry.name .. "@"
+      .. table.concat(entry.ids, ","))
+
+    if index <= SPREAD_REPORT_CAP then
+      local parts = {}
+
+      for _, id in ipairs(entry.ids) do
+        local held = spread[entry.name][id]
+
+        --  THE SLOT COUNT IS PRINTED BESIDE THE AMOUNT because a crate holding
+        --  one name across several slots is compaction's job, and compaction
+        --  runs above defragmentation in findWork precisely so a crate is
+        --  merged before it is emptied. Seeing both numbers is how that
+        --  ordering gets checked once there is something to check.
+        table.insert(parts, string.format("%s=%s/%ss", tostring(id),
+          tostring(held.count), tostring(held.slots)))
+      end
+
+      table.insert(lines, string.format("%s across %s: %s", tostring(entry.name),
+        tostring(#entry.ids), table.concat(parts, ",")))
+    end
+  end
+
+  --  "NOTHING IS FRAGMENTED" IS A RESULT AND IS SAID OUT LOUD.
+  --
+  --  proc.tooling.emptyvsno: an empty collection is not the same as a
+  --  negative answer, and silence here would be indistinguishable from the
+  --  map never being built.
+  if #names == 0 then
+    if self.spreadReport == "" then return end
+    self.spreadReport = ""
+
+    sb.logInfo("PETPORT %s spread: nothing held in more than one crate",
+      stationUniqueId())
+    return
+  end
+
+  local joined = table.concat(signature, " ")
+  if joined == self.spreadReport then return end
+  self.spreadReport = joined
+
+  --  THE TOTALS COME FIRST AND ARE NEVER CAPPED, so a line that is cut short
+  --  still says how much was cut. A capped log that hides its own cap is the
+  --  same failure as a suppressed one.
+  local shown = #lines
+
+  sb.logInfo("PETPORT %s spread: %s name(s) fragmented across %s crate slot(s)"
+    .. "%s || %s",
+    stationUniqueId(), tostring(#names), tostring(crates),
+    shown < #names and (", worst " .. tostring(shown) .. " shown") or "",
+    table.concat(lines, " || "))
+end
+
+--  ---------------------------------------------------------------------------
+--  DEFRAGMENTATION -- WHERE SHOULD ONE ITEM LIVE?
+--  ---------------------------------------------------------------------------
+--
+--  The spread map says an item is in five crates. This decides WHICH ONE it
+--  should all end up in, and which crates it should come out of.
+--
+--  NOTHING DISPATCHES FROM HERE. Build 3 computes and logs; the legs are
+--  build 4 and will call the same functions, which is the point of them being
+--  functions rather than a block inside a generator.
+
+--  filterNamesItem WAS HERE AND WAS ANSWERING THE WRONG QUESTION.
+--
+--  It asked whether a rule NAMED the item, looking for `rule.item`. The
+--  deposit pane never writes one -- beaconconfig.lua builds exactly
+--  `{ action = "accept", group = <id> }` and nothing else -- so the test
+--  could not fire, and the specificity tier of the ladder below was
+--  unreachable. MEASURED: every row of every defrag plan logged read
+--  "accepts it, holds most", including on a network with a crate filtered
+--  specifically for fishing gear.
+--
+--  IT WAS ALSO THE WRONG QUESTION. A subgroup can be as fine as a single
+--  item name -- eight in the manifest are -- so naming an item IS a group
+--  rule on a deposit beacon. What distinguishes a crate is not the FIELD its
+--  rule uses but how much of the manifest that rule admits, and
+--  petports_filterBreadth measures exactly that.
+
+--  WILL THIS CRATE TAKE ANY OF THIS ITEM?
+--
+--  nil MEANS THE ENGINE WILL NOT ANSWER, AND IT IS READ AS NO -- the same
+--  reading tidyWork takes and for the same reason. Defragmentation is optional
+--  housekeeping, so guessing wrong costs a unit out of the working pool, and
+--  waiting costs nothing. depositWork reads nil as YES because it is holding
+--  cargo it must place; that asymmetry is deliberate.
+--
+--  ASKED WITH A BARE DESCRIPTOR, WHICH IS AN APPROXIMATION AND ONLY HERE. A
+--  real stack may carry parameters that stop it merging into an existing one,
+--  so `room for one` can be true where `room for this actual stack` is false.
+--  Build 4 asks with the descriptor it is about to move, read off the source
+--  slot. This is close enough to rank crates and is NOT close enough to
+--  dispatch on.
+local function crateHasRoom(id, name)
+  if world.containerItemsCanFit == nil then return false end
+
+  local ok, fits = pcall(world.containerItemsCanFit, id, { name = name, count = 1 })
+  if not ok or type(fits) ~= "number" then return false end
+
+  return fits > 0
+end
+
+--  WHERE SHOULD EVERY COPY OF `name` END UP?
+--
+--  `where` is spread[name] -- containerId -> { count, slots }. `crates` is the
+--  deposit beacon records to choose among. Returns the winning record, a short
+--  reason for the log, and the count it already holds; or nil and a reason.
+--
+--  THE LADDER, AND EVERY KEY IN IT IS NETWORK-INVARIANT.
+--
+--    1. crates whose filter ACCEPTS the item -- everything else is excluded
+--    2. narrowest DECLARATION first, in subgroups admitted; then most already
+--       held; then smallest capacity; then id. The winner is the ANCHOR.
+--    3. anchor full -> the rest by DISTANCE TO THE ANCHOR, so a second pile
+--       forms beside the first rather than across the base
+--
+--  BREADTH LEADS, AND IT REPLACED A NAMERS/OTHERS SPLIT. A crate filtered for
+--  fishing gear admits 1 subgroup of 220; a crate with base accept and no
+--  rules admits all 220. That is a 220-to-1 statement of intent and it should
+--  beat any amount of already-held stock -- which is the whole complaint that
+--  produced this: a new fishing crate losing to the general shelf the gear
+--  happened to already be in.
+--
+--  HELD SITS BELOW IT rather than above, so an EMPTY specialised crate wins.
+--  A player who builds a crate for a thing means it to fill up.
+--
+--  TEMPERATURE SITS BETWEEN BREADTH AND HELD, AND ONLY FOR REFRIGERATION.
+--
+--  ONE SIGNED KEY RATHER THAN TWO BRANCHES: a perishable sorts ageing
+--  multiplier ASCENDING, so cold wins; everything else sorts it DESCENDING,
+--  so cold loses. A multiplier above 1.0 falls out of the same comparison
+--  with no special case -- it is worse than a shelf for food and better than
+--  a fridge for ore, which is exactly what it is.
+--
+--  NON-PERISHABLES ARE STEERED AWAY BECAUSE FRIDGE SPACE IS THE SCARCE KIND.
+--  A general fridge would otherwise become the ore shelf. A player who wants
+--  ore in there says so in the beacon's filter, and breadth outranks this.
+--
+--  BELOW BREADTH, DELIBERATELY. A filter is an instruction the player typed;
+--  a temperature is a property inferred from an object, and an inference must
+--  not overrule a statement. So a crate declared for produce beats an
+--  undeclared fridge, and two equally-declared crates are separated by which
+--  one keeps the food alive.
+--
+--  ABOVE HELD, ALSO DELIBERATELY, and this is the preservation argument:
+--  rotting is a LOSS -- rotting.lua replaces the stack with rottedItem -- 
+--  where being in the wrong crate is an inconvenience. Where an item already
+--  lives must not keep it somewhere it will spoil.
+--
+--  CAPACITY IS A TIEBREAK NOW AND WAS PRIMARY. It was standing in for
+--  specialisation -- a small box with a filter is probably a dedicated shelf
+--  -- and the manifest lets specialisation be measured directly, so the proxy
+--  steps down. It still decides between two equally-declared crates holding
+--  equal amounts, where the smaller is likelier to be the dedicated one.
+--
+--  THERE IS NO SEPARATE "MERELY ACCEPTS IT" TIER ANY MORE. An accept-anything
+--  crate is simply the broadest possible declaration and sorts last on the
+--  first key, which is what the tier was expressing by hand.
+--
+--  NOTHING HERE MAY DEPEND ON WHICH PORT IS ASKING, and that is the property
+--  the whole ladder was built around. `nearest to the unit` was in an early
+--  draft and came out: petports_beaconsFor sorts from entity.position(), so on
+--  a multi-port base two ports would pick different destinations for one item
+--  and ferry it back and forth forever, with every task reporting done. That
+--  is the drain/deposit livelock shape, guaranteed rather than incidental.
+--  Capacity, held count, distance BETWEEN TWO CRATES and id are all absolute.
+--
+--  IT CANNOT OSCILLATE EITHER. `held` dominates once anything has moved, and a
+--  crate that wins on held only ever gains -- so the winner cannot flip back.
+--  Ids decide only between crates tied on capacity AND held, and two crates
+--  tied on held zero have nothing to argue about; the first move breaks that
+--  tie permanently. Which matters because entity ids are not promised to be
+--  stable across a world load.
+local function defragDestination(name, where, crates, perishable)
+  local ranked = {}
+
+  --  RESOLVED ONCE PER LOOKUP, NOT PER CANDIDATE. The caller may already
+  --  know -- defragPreferredTargets is holding the descriptor -- and a name
+  --  alone is enough for the category half.
+  if perishable == nil then perishable = petports_itemPerishable(name) end
+
+  --  SWITCHED OFF MAKES EVERY CRATE THE SAME TEMPERATURE, which removes the
+  --  key rather than inverting it -- the sort then behaves exactly as it did
+  --  before refrigeration existed.
+  local chill = petportParticipates("chill")
+
+  for _, crate in ipairs(crates) do
+    if world.entityExists(crate.id)
+       and petports_filterAccepts(crate.filter, name) then
+      local held = where[crate.id]
+
+      table.insert(ranked,
+      {
+        crate = crate,
+        held = held ~= nil and held.count or 0,
+
+        --  OFF THE RECORD, COMPUTED ONCE PER SCAN. Falls back to computing
+        --  it for a record written before the field existed, so a port that
+        --  has not rescanned yet ranks correctly rather than treating every
+        --  crate as equally broad.
+        breadth = crate.breadth or petports_filterBreadth(crate.filter)
+      })
+    end
+  end
+
+  if #ranked == 0 then return nil, "no crate accepts it" end
+
+  table.sort(ranked, function(a, b)
+    if a.breadth ~= b.breadth then return a.breadth < b.breadth end
+
+    if chill then
+      local aa = a.crate.aging or 1.0
+      local ba = b.crate.aging or 1.0
+
+      if aa ~= ba then
+        if perishable then return aa < ba end
+        return aa > ba
+      end
+    end
+
+    if a.held ~= b.held then return a.held > b.held end
+
+    local ca = a.crate.capacity or 0
+    local cb = b.crate.capacity or 0
+    if ca ~= cb then return ca < cb end
+
+    return a.crate.id < b.crate.id
+  end)
+
+  local anchor = ranked[1]
+
+  --  THE REASON NAMES THE KEY THAT DECIDED IT, and the breadth is printed
+  --  beside it by the callers -- proc.tooling.logging wants the inputs, and
+  --  "declared 1 of 220" is the input that explains the choice.
+  if crateHasRoom(anchor.crate.id, name) then
+    return anchor.crate, "declared narrowest", anchor.held, anchor.breadth
+  end
+
+  --  THE ANCHOR IS FULL, SO THE PILE GROWS BESIDE IT.
+  --
+  --  DISTANCE TO THE ANCHOR, NEVER TO THE LAST ONE TRIED. Chaining would let
+  --  the clump walk across the base one full crate at a time, which is the
+  --  exact outcome this key exists to prevent.
+  --
+  --  BREADTH STILL LEADS HERE. A second fishing crate beside the full one
+  --  beats a general shelf beside it, and only then does distance decide --
+  --  otherwise the fallback would undo the ranking it is falling back from.
+  local rest = {}
+  for index = 2, #ranked do table.insert(rest, ranked[index]) end
+
+  table.sort(rest, function(a, b)
+    if a.breadth ~= b.breadth then return a.breadth < b.breadth end
+
+    --  TEMPERATURE BEFORE DISTANCE, matching the anchor sort. A second
+    --  fridge across the base beats a shelf next door for food; otherwise
+    --  the fallback would undo the ranking it is falling back from.
+    if chill then
+      local aa = a.crate.aging or 1.0
+      local ba = b.crate.aging or 1.0
+
+      if aa ~= ba then
+        if perishable then return aa < ba end
+        return aa > ba
+      end
+    end
+
+    local da = world.magnitude(anchor.crate.position, a.crate.position)
+    local db = world.magnitude(anchor.crate.position, b.crate.position)
+
+    if da ~= db then return da < db end
+    return a.crate.id < b.crate.id
+  end)
+
+  for _, entry in ipairs(rest) do
+    if crateHasRoom(entry.crate.id, name) then
+      return entry.crate, "nearest the full one", entry.held, entry.breadth
+    end
+  end
+
+  --  NO "word(" IN THIS STRING. petports_localorder.py reads `crate(s)`
+  --  inside a literal as a call to the `crate` local in defragSources --
+  --  a false positive, and a checker whose count creeps upward is a
+  --  checker that stops being read. Second time this session; the cheap
+  --  answer is to word log strings so they do not fire.
+  return nil, string.format("all %s crates that accept it are full",
+    tostring(#ranked))
+end
+
+--  WHICH CRATES SHOULD IT COME OUT OF, AND IN WHAT ORDER?
+--
+--  SMALLEST HOLDING FIRST, WHICH IS NOT WHAT TIDYING DOES. tidyWork ranks by
+--  unit price because it is choosing which SLOT to reclaim, and
+--  arch.cargo.valueorder is explicit that the two must not be described as one
+--  rule. This is choosing which LOCATION to eliminate: emptying the crate with
+--  two stragglers removes a container the player would otherwise have to open,
+--  where moving four hundred out of a crate that keeps three hundred removes
+--  nothing. Effort of interaction, not volume.
+--
+--  A MISFIT IN ITS OWN CRATE IS TIDYING'S, NOT THIS. If the source crate's own
+--  filter rejects the item, tidyWork already owns that stack and has its own
+--  destination rule -- so skipping it here is what makes the two generators
+--  PARTITION the work instead of contending over one stack with two workIds,
+--  two claims and two trips.
+--
+--  RESTOCK CRATES CANNOT APPEAR HERE AT ALL, structurally rather than by a
+--  rule: the spread map is built from deposit crates only, so a request crate
+--  is never a source and never a destination. That is the same protection that
+--  stops two quotas trading forever.
+local function defragSources(name, where, destinationId, byId)
+  local sources = {}
+  local misfiled = 0
+
+  for id, held in pairs(where) do
+    if id ~= destinationId and (held.count or 0) > 0 then
+      local crate = byId[id]
+
+      if crate ~= nil then
+        if petports_filterAccepts(crate.filter, name) then
+          table.insert(sources,
+          {
+            crate = crate,
+            count = held.count or 0,
+            slots = held.slots or 0
+          })
+        else
+          misfiled = misfiled + 1
+        end
+      end
+    end
+  end
+
+  table.sort(sources, function(a, b)
+    if a.count ~= b.count then return a.count < b.count end
+    return a.crate.id < b.crate.id
+  end)
+
+  return sources, misfiled
+end
+
+--  WHICH FRAGMENTED NAME IS WORTH DOING FIRST?
+--
+--  SORTS IN PLACE. Both readers -- the plan report and defragWork -- must walk
+--  the same order or the log describes work the generator is not doing.
+--
+--  MOST SLOTS FIRST, WHICH IS LONGEST-JOB-FIRST AND IS DELIBERATE.
+--
+--  The obvious rule is the cheap job first: more names resolved per trip. That
+--  is right for a queue that DRAINS and wrong for this one. Defragmentation is
+--  the last rung above draining, so it runs in whatever gaps hauling and
+--  farming leave, and on a live base new cheap fragmentation keeps arriving --
+--  so shortest-job-first would defer a three-trip pile behind one-trip jobs
+--  indefinitely. That pile is exactly the one a player would not clear by
+--  hand, and it is the reason the module exists.
+--
+--  SLOTS, NOT ITEMS, BECAUSE THE SLOT IS THE UNIT OF WORK. withdrawMisfit
+--  takes one slot per trip, so 6542 money in one stack is ONE trip and 75
+--  rewardbags across three slots is THREE. An ordering argued from counts
+--  would put the money first and be wrong by a factor of three.
+--
+--  IT IS TOTAL SLOTS RATHER THAN SOURCE SLOTS, which is trips plus whatever
+--  the destination already holds. The exact number needs the destination, and
+--  that is a comparator run per name; total slots is in the spread map
+--  already, costs nothing, and orders identically wherever the difference
+--  could matter.
+--
+--  THEN MOST CRATES, so two names costing the same work are separated by how
+--  many places they are scattered across -- more containers eliminated for the
+--  same trips.
+--
+--  THAT KEY EARNED ITS KEEP WHEN MIGRATION LANDED. A MISPLACED name sitting in
+--  one crate costs the same trips as a SCATTERED name sitting in two, so slots
+--  no longer separates them -- and consolidating two piles into one should
+--  beat relocating one pile, because it removes a container a player would
+--  otherwise have to open. It already did, with no change.
+--
+--  THEN NAME, which is a tiebreak and not a priority: it exists so
+--  two scans of an unchanged network agree, and on a network where every name
+--  sits in exactly two crates in one slot each it will decide everything,
+--  correctly, because those names ARE equivalent.
+local function defragOrder(names)
+  table.sort(names, function(a, b)
+    if a.slots ~= b.slots then return a.slots > b.slots end
+    if a.crates ~= b.crates then return a.crates > b.crates end
+    return a.name < b.name
+  end)
+
+  return names
+end
+
+--  IS THERE A BETTER-TEMPERATURE CRATE THAT WOULD ACTUALLY TAKE THIS ITEM?
+--
+--  The refrigeration half of the migration gate, and it is needed for exactly
+--  the reason the breadth half was: a tomato in a general shelf beside a
+--  general fridge is not SCATTERED and both crates declare the same amount,
+--  so nothing else here would ever look at it. Fridges would fill from new
+--  deposits only and everything already stored would rot where it sat.
+--
+--  IT RUNS IN BOTH DIRECTIONS. A perishable wants somewhere colder; a
+--  non-perishable in a fridge wants somewhere warmer, so a fridge that
+--  collected ore before the module was socketed is emptied of it rather than
+--  holding it forever. Same comparison, sign flipped.
+--
+--  MEMOISED PER SCAN like its breadth cousin, and keyed on the name plus the
+--  direction -- the two questions have different answers for one item and a
+--  shared key would return whichever was asked first.
+local function defragBetterTempExists(name, current, deposits, perishable)
+  local version = self.beaconVersion or 0
+
+  if self.defragTempVersion ~= version then
+    self.defragTempVersion = version
+    self.defragTemp = {}
+  end
+
+  local key = tostring(name) .. (perishable and "|cold" or "|warm")
+  local held = self.defragTemp[key]
+  if held ~= nil then return held end
+
+  local better = false
+
+  for _, crate in ipairs(deposits) do
+    local aging = crate.aging or 1.0
+    local wanted = perishable and (aging < current) or (aging > current)
+
+    if wanted and petports_filterAccepts(crate.filter, name) then
+      better = true
+      break
+    end
+  end
+
+  self.defragTemp[key] = better
+  return better
+end
+
+--  IS THERE A NARROWER CRATE THAT WOULD ACTUALLY TAKE THIS ITEM?
+--
+--  The second half of the migration gate. `closest` is the narrowest crate
+--  currently holding the item, so anything at or above it is not an
+--  improvement and is skipped without asking the filter.
+--
+--  MEMOISED FOR THE LIFE OF ONE SCAN, keyed on beaconVersion exactly as
+--  defragHomeFor is. This runs per name per work tick and the answer cannot
+--  change until the beacons are rescanned; without the memo a large network
+--  would re-walk every filter for every name several times a second.
+--
+--  ROOM IS NOT ASKED ABOUT HERE. A narrower crate that is full still means
+--  the item is misplaced -- the destination ladder falls back to the next
+--  narrowest and may land on where it already is, which costs one comparator
+--  run and no trip. Asking the engine about room per name per crate would
+--  cost far more than the runs it saves.
+local function defragBetterHomeExists(name, closest, deposits)
+  local version = self.beaconVersion or 0
+
+  if self.defragBetterVersion ~= version then
+    self.defragBetterVersion = version
+    self.defragBetter = {}
+  end
+
+  --  STORED AS true/false RATHER THAN LEFT nil ON A NEGATIVE.
+  --  proc.tooling.emptyvsno: the negative is the common answer here and is
+  --  exactly what must not be recomputed.
+  local held = self.defragBetter[name]
+  if held ~= nil then return held end
+
+  local better = false
+
+  for _, crate in ipairs(deposits) do
+    local breadth = crate.breadth or petports_filterBreadth(crate.filter)
+
+    if breadth < closest and petports_filterAccepts(crate.filter, name) then
+      better = true
+      break
+    end
+  end
+
+  self.defragBetter[name] = better
+  return better
+end
+
+--  The names worth looking at, ordered, and the crate lookup both readers want.
+--
+--  ONE BUILDER FOR THE REPORT AND THE GENERATOR. They differ only in what they
+--  do with the answer, and two copies of "which names need work" is two things
+--  that can disagree about what the log is describing.
+--
+--  TWO REASONS A NAME QUALIFIES, AND THE SECOND WAS MISSING.
+--
+--  SCATTERED -- held in more than one crate. This was the whole test, and it
+--  made defragmentation a one-off: once everything had been consolidated the
+--  generator went permanently quiet, with empty specialised crates sitting
+--  beside a general shelf holding all of it. MEASURED 2026-09-08: `spread:
+--  nothing held in more than one crate` while exactly that was true on
+--  screen.
+--
+--  MISPLACED -- every crate holding it is BROADER than some crate in the
+--  network. Adding a crate declared for fishing gear should pull the fishing
+--  gear out of the shelf that merely tolerates it, and nothing did: tidyWork
+--  cannot, because the shelf ACCEPTS that gear and it is therefore not a
+--  misfit. It is in a worse home than one that now exists, which is a third
+--  thing and belongs here.
+--
+--  THE SECOND TEST SUBSUMES THE FIRST WHENEVER SPECIFICITY DIFFERS, and both
+--  are kept because they do not always: two accept-anything crates holding
+--  one item between them are equally broad and still worth consolidating.
+--
+--  IT IS A GATE AND NOT AN ANSWER. Passing it means a better home MIGHT
+--  exist; only defragDestination knows, and it is expensive. This costs one
+--  integer compare per name against a network minimum computed once, and on a
+--  network where every crate accepts everything it rejects every name at once
+--  -- correctly, because no migration is possible there.
+local function defragCandidates(spread, crates)
+  local chill = petportParticipates("chill")
+  local byId = {}
+  local deposits = {}
+
+  --  THE NARROWEST DECLARATION ANYWHERE IN THE NETWORK.
+  --
+  --  Deposit crates only, matching the spread map, so a restock beacon's
+  --  quota cannot make every deposit crate look broad and trigger a migration
+  --  toward a crate defragmentation is not allowed to touch.
+  local narrowest = nil
+
+  for _, crate in ipairs(crates) do
+    if crate.behavior == "deposit" then
+      table.insert(deposits, crate)
+      byId[crate.id] = crate
+
+      local breadth = crate.breadth or petports_filterBreadth(crate.filter)
+      if narrowest == nil or breadth < narrowest then narrowest = breadth end
+    end
+  end
+
+  local names = {}
+
+  for name, where in pairs(spread or {}) do
+    local count, slots = 0, 0
+
+    --  THE NARROWEST CRATE CURRENTLY HOLDING IT. If even that one is broader
+    --  than the narrowest crate in the network, something better may exist.
+    --
+    --  A HOLDER NOT IN byId IS SKIPPED FOR THIS TEST, not treated as broad. A
+    --  crate that has left coverage since the scan should not manufacture a
+    --  migration; defragSources drops it from the sources anyway.
+    local closest = nil
+
+    --  THE BEST TEMPERATURE IT CURRENTLY ENJOYS, which is the COLDEST crate
+    --  holding it for a perishable and the WARMEST for anything else. Both
+    --  are tracked because the item's kind is not known until below.
+    local coldest, warmest = nil, nil
+
+    for id, held in pairs(where) do
+      count = count + 1
+      slots = slots + (held.slots or 0)
+
+      local crate = byId[id]
+
+      if crate ~= nil then
+        local breadth = crate.breadth or petports_filterBreadth(crate.filter)
+        if closest == nil or breadth < closest then closest = breadth end
+
+        local aging = crate.aging or 1.0
+        if coldest == nil or aging < coldest then coldest = aging end
+        if warmest == nil or aging > warmest then warmest = aging end
+      end
+    end
+
+    local scattered = count > 1
+
+    --  STAGE ONE: AN INTEGER COMPARE, AND IT IS ONLY A HINT.
+    --
+    --  "something narrower exists somewhere" is not "something narrower
+    --  would take THIS". With one crate declared for fishing gear, every
+    --  name in the network sits in a crate broader than the narrowest one --
+    --  money and copper ore included -- so this alone admits everything.
+    --
+    --  THAT IS NOT MERELY WASTEFUL, IT STARVES. The candidate list is capped
+    --  and sorted, and a name admitted here that can never be actioned never
+    --  stops being a candidate -- so the top of the list would be occupied
+    --  forever by names with no better home and the gear ranked below the
+    --  cap would never be reached. Caught in a dry run before this shipped.
+    local misplaced = narrowest ~= nil and closest ~= nil and closest > narrowest
+
+    --  STAGE TWO: DOES A NARROWER CRATE ACTUALLY ACCEPT IT?
+    --
+    --  Paid only by names that clear stage one, and only against crates that
+    --  are genuinely narrower -- a handful on any real base. Passing this
+    --  means a better home exists, so the comparator run that follows is
+    --  work rather than a rejection.
+    if misplaced then
+      misplaced = defragBetterHomeExists(name, closest, deposits)
+    end
+
+    --  THE TEMPERATURE CONDITION, SAME TWO STAGES.
+    --
+    --  Stage one is a float compare against what it already enjoys, and it
+    --  rejects everything on a network with no fridge in it. Stage two asks
+    --  the filters, and only for survivors.
+    --
+    --  SKIPPED ENTIRELY WHEN THE BOX IS OFF, so a player who does not want
+    --  this pays nothing for it -- not even the perishability lookup.
+    local chilled = false
+
+    if chill and coldest ~= nil then
+      local perishable = petports_itemPerishable(name)
+      local current = perishable and coldest or warmest
+
+      if perishable and current > 0 then
+        chilled = defragBetterTempExists(name, current, deposits, true)
+      elseif not perishable and current < 1.0 then
+        --  IN A FRIDGE AND SHOULD NOT BE. Only fires below 1.0, so ore on an
+        --  ordinary shelf is left alone rather than chased toward whatever
+        --  the warmest crate in the network happens to be.
+        chilled = defragBetterTempExists(name, current, deposits, false)
+      end
+    end
+
+    --  BUILT BY INSERTION, NEVER BY A CONSTRUCTOR HOLDING CONDITIONALS.
+    --
+    --  The first version concatenated a constructor whose entries were each
+    --  `cond and "word" or nil`. That THREW. The idiom yields nil when cond
+    --  is false, and a constructor holding nil leaves a HOLE rather than a
+    --  shorter list -- fact.tooling.jsonhole -- so table.concat walked 1..#t
+    --  straight into it. A row that was misplaced but not scattered killed
+    --  the port's update on the first tick a fridge existed: "invalid value
+    --  (nil) at index 1 in table for 'concat'".
+    --
+    --  BOTH HALVES WERE ALREADY WRITTEN DOWN -- the hole and the and/or
+    --  idiom are each an engine-facts entry -- which is what makes this worth
+    --  a comment rather than a silent fix.
+    local reasons = {}
+
+    if scattered then table.insert(reasons, "scattered") end
+    if misplaced then table.insert(reasons, "misplaced") end
+    if chilled then table.insert(reasons, "wrong temperature") end
+
+    local why = table.concat(reasons, "+")
+
+    if scattered or misplaced or chilled then
+      table.insert(names,
+      {
+        name = name,
+        crates = count,
+        slots = slots,
+
+        --  CARRIED FOR THE LOG. "1 crate, misplaced" and "3 crates,
+        --  scattered" are different jobs and read identically without it.
+        why = why
+      })
+    end
+  end
+
+  return defragOrder(names), deposits, byId
+end
+
+--  HOW MANY FRAGMENTED NAMES ARE PLANNED PER PASS.
+--
+--  WORST FIRST, so the cap keeps the names worth acting on, and the set is
+--  stable rather than rotating -- the top few get worked until they stop being
+--  fragmented and the next few move up, which converges.
+--
+--  IT BOUNDS A REAL COST. Planning one name walks every deposit crate through
+--  petports_filterAccepts and asks containerItemsCanFit at least once. A base
+--  with ninety fragmented names and thirty crates would pay that ninety times
+--  every scan to act on one of them.
+--
+--  RAISED TO 64 FOR VERIFICATION 2026-09-08d AND BROUGHT BACK TO 16 IN 08g,
+--  now that it caps WORK as well as logging -- defragWork walks this list
+--  looking for the first actionable name and pays a comparator run per name
+--  it rejects. The verification network had twelve fragmented names and
+--  still fits entirely.
+--
+--  A NAME PAST THE CAP IS NOT STRANDED. The order is stable and the names
+--  above it stop being fragmented as they are worked, so the list advances.
+--
+--  THE ORIGINAL NOTE, KEPT:
+--
+--  At 6 the log showed only the first six names, and every name in the test
+--  network is spread across exactly two crates -- so the primary key was tied
+--  everywhere and the ALPHABETICAL TIEBREAK was silently deciding the whole
+--  order. That is fine as a stable tiebreak and is not defensible as a work
+--  priority, and the order cannot be judged against a list that is cut off
+--  before the interesting rows.
+--
+--  THE LINE GETS LONG AT THIS VALUE, deliberately -- this build is for
+--  reading the whole plan against the whole network once. Nothing dispatches,
+--  so the only cost is the scan and the log.
+DEFRAG_PLAN_CAP = 16
+
+--  PLAN THE WORST FEW AND SAY WHAT WAS DECIDED.
+--
+--  GATED ON THE MODULE AND THE BOX, so a port without the module is silent --
+--  the same condition build 4's generator will run under, so what this prints
+--  is what that would have acted on.
+--
+--  CHANGE-GATED ON THE DECISIONS, NOT ON THE AMOUNTS, for the reason
+--  reportSpread gives: counts churn every time a unit moves a stack and the
+--  decision does not.
+--
+--  THE FIRST VERSION SIGNED THE PRINTED LINE, WHICH IS NOT THAT. MEASURED
+--  2026-09-08: a twelve-row plan reprinted in full because one unit deposited
+--  twenty money, moving `has 28340` to `has 28360`. Eleven of the twelve rows
+--  were byte-identical and every decision was unchanged.
+--
+--  SO THE SIGNATURE IS BUILT SEPARATELY FROM THE LINE, and carries only what
+--  a change in would mean a different job: the item, the crate it is going
+--  to, the crates it is coming out of, and how many trips that is. Held
+--  counts and source counts are PRINTED and not SIGNED -- they are context
+--  for a human reading the line, not part of the decision.
+--
+--  A NO-TARGET ROW SIGNS ITS REASON, because "no crate accepts it" becoming
+--  "all full" is a different state and is worth a line.
+local function reportDefragPlan(spread, crates)
+  if not DEFRAG_DEBUG then return end
+  if not petportDefrag() then return end
+  if not petportParticipates("defrag") then return end
+
+  local names, deposits, byId = defragCandidates(spread, crates)
+
+  local lines = {}
+  local signature = {}
+
+  for index, entry in ipairs(names) do
+    if index > DEFRAG_PLAN_CAP then break end
+
+    local where = spread[entry.name]
+    local target, why, held, breadth = defragDestination(entry.name, where, deposits)
+
+    if target == nil then
+      table.insert(signature, entry.name .. ">none:" .. tostring(why))
+
+      table.insert(lines, string.format("%s: NO TARGET (%s)",
+        tostring(entry.name), tostring(why)))
+    else
+      local sources, misfiled = defragSources(entry.name, where, target.id, byId)
+
+      --  SLOTS AS WELL AS COUNTS, because the SLOT is the unit of work and
+      --  the count is not. withdrawMisfit takes one slot per trip, so a
+      --  stack of 6542 money is ONE trip and 75 rewardbags across three
+      --  slots is THREE. Any ordering worth arguing for has to be argued
+      --  from trips, and they were not in this line.
+      local from = {}
+      local ids = {}
+      local trips = 0
+
+      --  sources IS ALREADY SORTED, smallest holding first, so the id list
+      --  below is stable without sorting it again -- and it is the ORDER the
+      --  sources would be worked in, so a reordering IS a decision change and
+      --  should print.
+      for _, source in ipairs(sources) do
+        trips = trips + (source.slots or 0)
+        table.insert(ids, tostring(source.crate.id))
+        table.insert(from, string.format("%s=%s/%ss", tostring(source.crate.id),
+          tostring(source.count), tostring(source.slots)))
+      end
+
+      table.insert(signature, string.format("%s>%s<%s=%s", entry.name,
+        tostring(target.id), table.concat(ids, ","), tostring(trips)))
+
+      --  THE INPUTS, NOT JUST THE VERDICT. proc.tooling.logging: a rejection
+      --  or a choice that names neither the thing nor the values it was
+      --  measured against cannot be acted on. Capacity and held are the two
+      --  keys that decided it, so both are printed beside the reason.
+      table.insert(lines, string.format(
+        "%s %s -> %s [%s, declares %s, cap %s, has %s] from %s, %s trip(s)%s",
+        tostring(entry.name), tostring(entry.why),
+        tostring(target.id), tostring(why),
+        tostring(breadth), tostring(target.capacity), tostring(held),
+        #from == 0 and "nowhere" or table.concat(from, ","), tostring(trips),
+        misfiled > 0 and (" (" .. tostring(misfiled) .. " misfiled, tidy's)") or ""))
+    end
+  end
+
+  if #lines == 0 then
+    if self.defragPlan == "" then return end
+    self.defragPlan = ""
+
+    --  "NOTHING TO PLAN" NOW MEANS SOMETHING NARROWER than it used to, and
+    --  the wording matters because the old sentence was true for a network
+    --  with empty specialised crates and everything in the shelf beside them.
+    --  It is now: nothing is scattered AND nothing is anywhere broader than
+    --  it could be.
+    sb.logInfo("PETPORT %s defrag: everything is already where it belongs",
+      stationUniqueId())
+    return
+  end
+
+  local joined = table.concat(signature, " ")
+  if joined == self.defragPlan then return end
+  self.defragPlan = joined
+
+  local report = table.concat(lines, " || ")
+
+  sb.logInfo("PETPORT %s defrag plan (%s of %s name(s)): %s",
+    stationUniqueId(), tostring(#lines), tostring(#names), report)
+end
+
 local function refreshBeacons(dt)
   self.beaconTimer = (self.beaconTimer or 0) - dt
   if self.beaconTimer > 0 then return end
   self.beaconTimer = BEACON_INTERVAL
 
-  local found, containers, census, censusStacks, machines = scanContainers()
+  local found, containers, census, censusStacks, machines, spread =
+    scanContainers()
 
   self.beacons = found
   self.beaconVersion = (self.beaconVersion or 0) + 1
   self.census = census
   self.machines = machines
+
+  --  NOT READ BY ANYTHING YET. Defragmentation is the consumer and is not
+  --  built; this build exists to prove the map is right before a generator
+  --  depends on it.
+  self.spread = spread
 
   --  Change-gated on the SIGNATURE, not the count. Two chests swapping roles
   --  keeps the count identical and is exactly the event worth seeing; and at
@@ -3656,6 +4708,8 @@ local function refreshBeacons(dt)
   end
 
   reportCensus(census, censusStacks, machines)
+  reportSpread(spread)
+  reportDefragPlan(spread, found)
 end
 
 --  Beacons matching a behaviour, nearest first. The deposit task will want the
@@ -4355,6 +5409,19 @@ OBLIVIOUS_FLAG = "oblivious"
 --  a worse outcome than one that never runs.
 MEDIC_FLAG = "medic"
 
+--  THE DEFRAGMENTATION FLAG.
+--
+--  IT UNLOCKS THREE GENERATORS RATHER THAN ADDING ONE, which is what makes
+--  it unlike every module before it. Oblivious suppresses, medic and farming
+--  each add a task; this one takes work the port already did for free and
+--  puts it behind a thing the player has to find.
+--
+--  THAT IS THE POINT AND NOT A SIDE EFFECT. Fragmentation is the player's
+--  problem to care about or ignore -- dd.filter.fragmentation -- and a pet
+--  that can be TOLD to fix it is worth something, where a pet that always
+--  did it quietly was worth nothing anyone could point at.
+DEFRAG_FLAG = "defrag"
+
 --  CAMOUFLAGE. Read by the UNIT, not by this file -- it changes the unit's
 --  damage team, which needs monster.* callbacks the port does not have. Named
 --  here anyway so the one place flags are spelled stays one place.
@@ -4699,6 +5766,21 @@ end
 function petportFarming()
   for _, flag in ipairs(petportModuleFlags()) do
     if flag == FARMING_FLAG then return true end
+  end
+  return false
+end
+
+--  DOES THE SOCKETED UNIT CARRY A DEFRAGMENTATION MODULE?
+--
+--  THE MODULE IS THE OUTER GATE AND THE THREE BOXES ARE THE INNER ONE, which
+--  is the farming shape exactly: petportFarming asks whether the capability
+--  exists at all, petportFarmingDoes asks whether this pet has been told to
+--  use it. Without the module the boxes are unreachable and their stored
+--  values are never read, so a unit that had tidying switched off keeps that
+--  preference across losing and regaining the module.
+function petportDefrag()
+  for _, flag in ipairs(petportModuleFlags()) do
+    if flag == DEFRAG_FLAG then return true end
   end
   return false
 end
@@ -7986,6 +9068,197 @@ local function upcyclerWork()
   return nil
 end
 
+--  ---------------------------------------------------------------------------
+--  DEFRAGMENTATION -- WHICH CRATE SHOULD THIS LOAD GO IN?
+--  ---------------------------------------------------------------------------
+--
+--  Reorders depositWork's target list so the crate an item BELONGS in is tried
+--  before the crate that happens to be nearest. Same ladder the plan reports,
+--  through the same defragDestination, so what the log said it would do is
+--  what this does.
+--
+--  A REORDER AND NOT A FILTER. Every crate depositWork would have considered
+--  is still in the list and still in its original relative order behind the
+--  preferred ones -- so an unreachable or full destination costs nothing, the
+--  loop simply falls through to the next candidate. depositWork must never be
+--  able to come back empty because of this: a unit that cannot put its load
+--  down is blocked from every other job including the ones that would clear
+--  it, which is the deadlock dd.port.participationgroups exists to describe.
+--
+--  IT DOES NOT ENGAGE FOR AN ITEM NOTHING HOLDS YET, and that is deliberate.
+--  With no copy of an item anywhere there is no fragmentation to prevent and
+--  every accepting crate is equally correct -- so preferring one would send
+--  units across the base to whichever crate sorted first, for no gain. A crate
+--  that NAMES the item is different: the player typed that name, and walking
+--  to it is honouring an instruction rather than guessing.
+
+--  Cached per name for the life of one beacon scan.
+--
+--  KEYED ON beaconVersion, WHICH refreshBeacons ALREADY INCREMENTS. depositWork
+--  runs on every work tick that a unit holds cargo, and defragDestination walks
+--  every deposit crate through petports_filterAccepts and asks the engine about
+--  room -- affordable once per scan, not once per tick. Tying the key to the
+--  version means the memo cannot outlive the data it was computed from, with
+--  nothing to invalidate by hand.
+local function defragHomeFor(name, targets, descriptor)
+  local version = self.beaconVersion or 0
+
+  if self.defragHomeVersion ~= version then
+    self.defragHomeVersion = version
+    self.defragHomes = {}
+  end
+
+  --  KEYED ON THE NAME ALONE, NOT ON THE DESCRIPTOR. Two stacks sharing a
+  --  name can differ on `timeToRot` -- one aged, one fresh -- and they still
+  --  want the same crate, because the category half of the test already
+  --  agreed they are food. The instance test only ever ADDS a positive.
+  local held = self.defragHomes[name]
+
+  --  A MISS AND A CACHED "NO HOME" ARE DIFFERENT, so the negative is stored as
+  --  false rather than left nil -- proc.tooling.emptyvsno. Without it every
+  --  novel item re-walks every crate on every tick, which is precisely the
+  --  cost the memo exists to remove.
+  if held ~= nil then
+    if held == false then return nil end
+    return held
+  end
+
+  local where = (self.spread or {})[name] or {}
+
+  --  THE DESCRIPTOR, WHERE THERE IS ONE. A carried stack may hold timeToRot
+  --  when its base config says nothing about food, and this is the one
+  --  caller that has the instance in hand.
+  local target, why, has = defragDestination(name, where, targets,
+    petports_itemPerishable(descriptor or name))
+
+  --  THE ITEM MUST ALREADY LIVE SOMEWHERE, OR THE CRATE MUST NAME IT.
+  --
+  --  `why` carries which rung of the ladder answered. The two "names it" rungs
+  --  are a player instruction and are always honoured. "accepts it, holds most"
+  --  with nothing held is the degenerate case -- no crate holds any, so the
+  --  ladder fell through to lowest id, which is a stable answer to a question
+  --  nobody asked.
+  if target == nil or (has or 0) <= 0 and why == "accepts it, holds most" then
+    self.defragHomes[name] = false
+    return nil
+  end
+
+  self.defragHomes[name] = target.id
+  return target.id
+end
+
+--  Put the crates this load belongs in at the front of the list.
+--
+--  VOTES, BECAUSE CARGO CAN BE MIXED. A fishing treasure pool hands a unit
+--  three unrelated stacks, and if two of them belong in one crate that is one
+--  trip rather than two. So each carried stack names its home and the crate
+--  named by the most of them goes first.
+--
+--  STABLE, AND THE FALLBACK ORDER IS PRESERVED EXACTLY. Ties keep their
+--  incoming index, which is petports_beaconsFor's nearest-first ordering -- so
+--  a load with no home at all produces the list depositWork would have built
+--  on its own, in the same order, and this build changes nothing for it.
+--  table.sort is NOT stable, which is why the index is a sort key rather than
+--  an assumption.
+local function defragPreferredTargets(targets)
+  if not petportDefrag() then return targets end
+  if not petportParticipates("defrag") then return targets end
+  if self.petData == nil or type(self.petData.cargo) ~= "table" then return targets end
+
+  local votes = {}
+  local voted = 0
+
+  for _, stack in ipairs(self.petData.cargo) do
+    if type(stack.name) == "string" then
+      local home = defragHomeFor(stack.name, targets, stack)
+
+      --  THE CIRCUIT BREAKER.
+      --
+      --  If defragWork pulled this name out of a crate and the home it is
+      --  now being carried to is THAT SAME CRATE, the trip accomplishes
+      --  nothing and the next pass will make it again. Every task reports
+      --  done, no counter moves, and the log looks like a busy fleet --
+      --  proc.tooling.session's repeating pair of successes, which is
+      --  invisible to the reject machinery and to the failure counters
+      --  alike.
+      --
+      --  IT FIRES ON THE OUTCOME, WHICH IS WHY IT EXISTS. defragWork already
+      --  checks the destination for room and reach before dispatching; this
+      --  catches the case those cannot, where the answer changed between the
+      --  dispatch and the arrival.
+      --
+      --  THE RECORD IS CONSUMED EITHER WAY, so one pull can trip this at
+      --  most once and an ordinary successful gather leaves nothing behind.
+      local pulled = (self.defragPulled or {})[stack.name]
+
+      if pulled ~= nil then
+        self.defragPulled[stack.name] = nil
+
+        if home ~= nil and home == pulled.from then
+          sb.logError("PETPORT %s defrag pulled %s out of crate %s and is "
+            .. "about to put it back -- backing off; the destination it was "
+            .. "dispatched toward stopped being the answer between dispatch "
+            .. "and arrival",
+            stationUniqueId(), tostring(stack.name), sb.printJson(home))
+
+          noteFailure(pulled.workId, "defrag would return it to its source")
+          home = nil
+        end
+      end
+
+      if home ~= nil then
+        votes[home] = (votes[home] or 0) + 1
+        voted = voted + 1
+      end
+    end
+  end
+
+  --  NOTHING TO SAY, SO SAY NOTHING. Returning the original table rather than a
+  --  reordered copy of it means the common case costs one walk of the cargo.
+  if voted == 0 then return targets end
+
+  local ranked = {}
+  for index, beacon in ipairs(targets) do
+    table.insert(ranked, { beacon = beacon, index = index, votes = votes[beacon.id] or 0 })
+  end
+
+  table.sort(ranked, function(a, b)
+    if a.votes ~= b.votes then return a.votes > b.votes end
+    return a.index < b.index
+  end)
+
+  local out = {}
+  for _, entry in ipairs(ranked) do table.insert(out, entry.beacon) end
+
+  --  CHANGE-GATED ON THE DECISION. The winner and its vote count, not the
+  --  cargo -- a unit hauling the same item to the same crate all day says this
+  --  once.
+  if DEFRAG_DEBUG and ranked[1] ~= nil and ranked[1].votes > 0 then
+    local said = string.format("%s|%s|%s", tostring(ranked[1].beacon.id),
+      tostring(ranked[1].votes), tostring(ranked[1].index))
+
+    if said ~= self.defragPreferSaid then
+      self.defragPreferSaid = said
+
+      --  THE INPUTS, NOT THE VERDICT. The incoming index is what says whether
+      --  this changed anything: index 1 means the preferred crate was already
+      --  the nearest and the walk is no longer than it was.
+      --  NO WORD IMMEDIATELY BEFORE AN OPEN PAREN IN THIS STRING.
+      --  petports_localorder.py reads `preferred (` inside a literal as a
+      --  CALL to a local defined further down, which is a false positive --
+      --  and a checker whose count creeps upward is a checker that stops
+      --  being read. Cheaper to word the line so it does not fire.
+      sb.logInfo("PETPORT %s defrag deposit: crate %s wins with %s of %s "
+        .. "stack(s), was %s of %s by distance",
+        stationUniqueId(), tostring(ranked[1].beacon.id),
+        tostring(ranked[1].votes), tostring(#self.petData.cargo),
+        tostring(ranked[1].index), tostring(#targets))
+    end
+  end
+
+  return out
+end
+
 local function depositWork()
   if self.petData == nil then return nil end
   if self.petData.cargo == nil or #self.petData.cargo == 0 then return nil end
@@ -7998,6 +9271,12 @@ local function depositWork()
   if dispatchable(upcycle) ~= nil then return upcycle end
 
   local targets = petports_beaconsFor("deposit")
+
+  --  DEFRAGMENTATION REORDERS THIS, IT DOES NOT SHORTEN IT. Below the
+  --  upcycler hand-off above, so a machine the player gave a threshold to
+  --  still gets first refusal on over-quota cargo.
+  targets = defragPreferredTargets(targets)
+
   if #targets == 0 then
     --  Change-gated by the reject machinery upstream; a unit with cargo and no
     --  beacon anywhere is a state the player needs to see, not a per-second
@@ -13660,6 +14939,192 @@ local function compactWork()
   return nil, "no crate has stacks worth merging"
 end
 
+--  ---------------------------------------------------------------------------
+--  DEFRAGMENT: PULL A SCATTERED STACK TOWARD WHERE ITS KIND LIVES
+--  ---------------------------------------------------------------------------
+--
+--  BELOW COMPACTION AND ABOVE DRAINING. Compaction first because merging a
+--  crate's split stacks before emptying it turns three trips into one plus
+--  one; draining last because it is the only irreversible work in the mod.
+--
+--  IT MANUFACTURES CARGO AND THEN HANDS OFF, exactly as drainWork does. The
+--  withdraw puts one slot's stack on the unit and stops; the next findWork
+--  sees cargo, depositWork runs, and defragPreferredTargets aims it at the
+--  crate this generator already decided on. ONE path to the destination, not
+--  two, and no second task type.
+--
+--  ONLY WITH EMPTY HANDS. A unit already carrying something has a delivery to
+--  finish and depositWork will route it.
+--
+--  ONE SLOT PER TRIP, the standing design. A crate holding one name across
+--  three slots is three sequential trips rather than three tasks -- and
+--  compaction above will usually have merged them into one first, unless the
+--  stacks carry different parameters and genuinely cannot merge.
+local function defragWork()
+  if self.petData == nil then return nil end
+  if self.petData.cargo ~= nil and #self.petData.cargo > 0 then return nil end
+
+  local names, deposits, byId = defragCandidates(self.spread, self.beacons or {})
+
+  if #names == 0 then return nil, "everything is already where it belongs" end
+  if #deposits == 0 then return nil, "no deposit beacon to gather into" end
+
+  local homeless, full, unreachable = 0, 0, 0
+
+  for index, entry in ipairs(names) do
+    if index > DEFRAG_PLAN_CAP then break end
+
+    local where = self.spread[entry.name]
+    local target = defragDestination(entry.name, where, deposits)
+
+    if target == nil then
+      homeless = homeless + 1
+    else
+      --  THE DESTINATION IS CHECKED FOR REACH BEFORE THE SOURCE IS EVEN
+      --  CHOSEN. restockFetchWork's header calls this the third instance of
+      --  one bug and the general form is exact: any generator whose
+      --  DESTINATION differs from its SOURCE must validate BOTH, because
+      --  checking only the source produces work that completes and
+      --  accomplishes nothing -- a pull whose load cannot be delivered goes
+      --  back to ordinary storage and gets pulled again.
+      --
+      --  servicePointNear asks the UNIT, so this is per-chassis for free.
+      local reachable = servicePointNear("crate " .. tostring(target.id),
+        target.id, target.position, 4) ~= nil
+
+      if not reachable then
+        unreachable = unreachable + 1
+      else
+        local sources = defragSources(entry.name, where, target.id, byId)
+
+        for _, pick in ipairs(sources) do
+          local crate = pick.crate
+
+          --  NETWORK-EXCLUSIVE, NO PORT SUFFIX. A take is one stack for one
+          --  unit, so a per-port key would send every port after the same
+          --  stack and all but the first would arrive to find it gone, having
+          --  burned a trip. tidy, restock, compact, drain and fuel all key
+          --  this way.
+          local workId = "defrag:" .. tostring(crate.id)
+            .. ":" .. tostring(entry.name)
+
+          local failure = self.workFailures[workId]
+          local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
+
+          if not backedOff and claimFree(workId) then
+            --  THE REAL DESCRIPTOR, READ NOW. The spread map is up to a scan
+            --  old and carries a NAME and a count; withdrawMisfit needs a
+            --  SLOT, and the room test needs the actual stack because
+            --  parameters decide whether it tops up an existing one or needs a
+            --  free slot. One containerItems call, on the chosen source only.
+            local ok, items = pcall(world.containerItems, crate.id)
+            local slot, stack = nil, nil
+
+            if ok and type(items) == "table" then
+              --  SLOT ORDER, so two scans of an unchanged crate agree. pairs
+              --  is the only way to see every item, and its order is not.
+              local keys = {}
+              for key in pairs(items) do table.insert(keys, key) end
+              table.sort(keys)
+
+              for _, key in ipairs(keys) do
+                local held = items[key]
+
+                --  THE DECIDING BEACON IS NOT INVENTORY, the same exemption
+                --  the census and eviction both make -- without it a crate
+                --  would haul away its own configuration.
+                if key ~= crate.beaconSlot and type(held) == "table"
+                   and held.name == entry.name then
+                  slot, stack = key, held
+                  break
+                end
+              end
+            end
+
+            if slot ~= nil then
+              --  ROOM FOR THIS STACK, NOT FOR ONE OF IT. defragDestination
+              --  asks with a bare descriptor because it is ranking; this is
+              --  dispatching, and the difference is a parameterised stack that
+              --  cannot merge into the pile already there.
+              --
+              --  nil IS READ AS NO. Defragmentation is optional housekeeping,
+              --  so guessing wrong costs a unit out of the working pool and
+              --  waiting costs nothing.
+              local fits = world.containerItemsCanFit ~= nil
+                and world.containerItemsCanFit(target.id, stack) or nil
+
+              if fits == nil or fits <= 0 then
+                full = full + 1
+              else
+                --  AND THE SOURCE MUST BE REACHABLE TOO, which is a separate
+                --  question from the destination and is asked second because
+                --  it is the expensive one and sources are iterated.
+                local stand, standWhy = servicePointNear(
+                  "crate " .. tostring(crate.id), crate.id, crate.position, 4)
+
+                if stand == nil then
+                  unreachable = unreachable + 1
+
+                  if self.defragSkip ~= crate.id then
+                    self.defragSkip = crate.id
+                    sb.logInfo("PETPORT %s defrag source %s SKIPPED: %s of %s",
+                      stationUniqueId(), sb.printJson(crate.id),
+                      tostring(standWhy), sb.printJson(crate.position))
+                  end
+                else
+                  --  REMEMBERED FOR THE CIRCUIT BREAKER. If this load comes
+                  --  straight back to the crate it was taken from, the name
+                  --  backs off -- see the deposit path. That is the guard for
+                  --  the failure the two checks above cannot see, because it
+                  --  fires on the OUTCOME rather than on a prediction.
+                  self.defragPulled = self.defragPulled or {}
+                  self.defragPulled[entry.name] =
+                    { from = crate.id, workId = workId }
+
+                  sb.logInfo("PETPORT %s defrag: taking %s x%s from %s "
+                    .. "(slot %s, has %s) toward %s -- %s of %s crate(s), "
+                    .. "%s slot(s) total",
+                    stationUniqueId(), tostring(entry.name),
+                    sb.printJson(stack.count or 1), sb.printJson(crate.id),
+                    sb.printJson(slot), sb.printJson(pick.count),
+                    sb.printJson(target.id), sb.printJson(index),
+                    sb.printJson(entry.crates), sb.printJson(entry.slots))
+
+                  return {
+                    id = workId,
+                    --  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
+                    mediumVerified = true,
+
+                    --  A TYPE petportsTaskAction HAS NEVER HEARD OF, which is
+                    --  how tidy and compact already work: dispatch falls
+                    --  through to the generic walk-and-stand path and the port
+                    --  does the container work on the arrival report.
+                    type = "defrag",
+                    target = crate.id,
+                    item = entry.name,
+                    count = stack.count or 1,
+                    slot = slot,
+                    position = stand,
+                    containerPosition = crate.position,
+                    port = stationUniqueId(),
+                    dwell = 0
+                  }
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  return nil, string.format(
+    "%s name(s) misplaced or scattered, none actionable: %s with nowhere to "
+    .. "gather into, "
+    .. "%s with the destination full, %s with a crate this unit cannot reach",
+    #names, homeless, full, unreachable)
+end
+
 local function findWork()
   --  PARTICIPATION, READ ONCE. Four config reads rather than fourteen, and
   --  every branch below reasons about the same snapshot -- a set that changed
@@ -13691,7 +15156,19 @@ local function findWork()
   local oblivious = petportOblivious()
 
   local doHauling = not oblivious and petportParticipates("hauling")
-  local doSorting = not oblivious and petportParticipates("sorting")
+
+  --  RESTOCKING IS ITS OWN SWITCH AND NEEDS NO MODULE. It is the second half
+  --  of the deposit beacon.
+  local doRestock = not oblivious and petportParticipates("restock")
+
+  --  TIDY, COMPACT AND DEFRAG SPLIT INTO THREE, GATED BY THE MODULE AND THEN
+  --  BY A BOX EACH -- the same two-level shape farming uses directly below.
+  local defrag = not oblivious and petportDefrag()
+
+  local doTidy = defrag and petportParticipates("tidy")
+  local doCompact = defrag and petportParticipates("compact")
+  local doDefrag = defrag and petportParticipates("defrag")
+
   --  FARMING SPLITS INTO FOUR, GATED BY THE MODULE RATHER THAN BY THE PORT.
   local farming = not oblivious and petportFarming()
 
@@ -13800,7 +15277,7 @@ local function findWork()
   --  looking wrong -- which is precisely what replantWork's header records
   --  happening when it was written on the wrong side of this line.
   local restock
-  if doSorting then restock = portProf("g.restock", restockDeliverWork) end
+  if doRestock then restock = portProf("g.restock", restockDeliverWork) end
   if dispatchable(restock) ~= nil then return restock end
 
   local drop, noDrop = portProf("g.deposit", depositWork)
@@ -13957,7 +15434,7 @@ local function findWork()
   --  player who asked for 2000 hazard blocks asked for something, where tidying
   --  is the network's own housekeeping and nobody requested it.
   local stock, noStock
-  if doSorting then stock, noStock = portProf("g.restockFetch", restockFetchWork) end
+  if doRestock then stock, noStock = portProf("g.restockFetch", restockFetchWork) end
   if dispatchable(stock) ~= nil then return stock end
 
   --  FUEL SITS ABOVE TIDYING because it UNBLOCKS something. A machine whose
@@ -13973,15 +15450,38 @@ local function findWork()
   --  timer is running, and every other job represents something that either
   --  perishes or is already half done.
   local tidy, noTidy
-  if doSorting then tidy, noTidy = portProf("g.tidy", tidyWork) end
+  if doTidy then tidy, noTidy = portProf("g.tidy", tidyWork) end
   if dispatchable(tidy) ~= nil then return tidy end
 
-  --  THE VERY BOTTOM. Tidying moves something that is in the wrong box;
-  --  compaction reshapes something that is already in the right one. If there
-  --  is any other job in the network at all, it outranks this.
+  --  BELOW TIDYING, AND ABOVE DEFRAGMENTATION WHEN THAT LANDS. Tidying moves
+  --  something that is in the wrong box; compaction reshapes something that
+  --  is already in the right one.
+  --
+  --  IT GOES ABOVE DEFRAGMENTATION TO SAVE TRIPS, and that is the whole
+  --  argument. A crate holding one name across three slots costs three defrag
+  --  trips to empty and one compaction trip plus one defrag trip to empty --
+  --  so merging first wins at three slots, ties at two, and never loses at
+  --  one, because fragmentation() declines an unsplit crate and nothing
+  --  dispatches.
+  --
+  --  IT DOES NOT HELP FOR A POLYMORPHIC NAME, and that is not a fault. Stacks
+  --  carrying different parameters cannot merge, fragmentation() buckets by
+  --  parameters and correctly reports such a crate as already compact, and
+  --  defragmentation then pays a trip per bucket. A rewardbag crate is the
+  --  live example.
   local squash, noSquash
-  if doSorting then squash, noSquash = portProf("g.compact", compactWork) end
+  if doCompact then squash, noSquash = portProf("g.compact", compactWork) end
   if dispatchable(squash) ~= nil then return squash end
+
+  --  BELOW COMPACTION, ABOVE DRAINING. Compaction reshapes a crate; this
+  --  empties one -- and merging a crate's split stacks before emptying it
+  --  turns three trips into two, which is the whole reason for the order.
+  --
+  --  ABOVE DRAINING because draining destroys things and this only moves
+  --  them.
+  local gather, noGather
+  if doDefrag then gather, noGather = portProf("g.defrag", defragWork) end
+  if dispatchable(gather) ~= nil then return gather end
 
   --  BELOW THE VERY BOTTOM. Draining is the only IRREVERSIBLE work in the mod:
   --  everything above moves things, and this one feeds them to a machine that
@@ -14021,7 +15521,16 @@ local function findWork()
   --  most likely answer once these boxes exist and the easiest to forget.
   local off = {}
   if not doHauling then table.insert(off, "hauling") end
-  if not doSorting then table.insert(off, "sorting") end
+  if not doRestock then table.insert(off, "restock") end
+
+  if not defrag then
+    table.insert(off, petportDefrag() and "defrag module (port off)"
+      or "tidy/compact/defrag (no module)")
+  else
+    if not doTidy then table.insert(off, "tidy") end
+    if not doCompact then table.insert(off, "compact") end
+    if not doDefrag then table.insert(off, "defrag") end
+  end
   --  FARMING REPORTS ITS OWN REASON, because "does not participate in farming"
   --  is now three different situations: no module, the module with this activity
   --  unticked, or the port switched off entirely. A player chasing a still pet
@@ -14080,6 +15589,7 @@ local function findWork()
       .. "; " .. tostring(noFuel or "no fuel to collect")
       .. "; " .. tostring(noTidy or "no tidying work")
       .. "; " .. tostring(noSquash or "no compaction work")
+      .. "; " .. tostring(noGather or "no gathering work")
       .. "; " .. tostring(noDrain or "no draining work"))
   end
 

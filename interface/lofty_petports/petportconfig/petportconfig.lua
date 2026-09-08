@@ -64,7 +64,7 @@ local DEBUG = true
 --  Bump on every change to this file. A pane has no visible version and a stale
 --  copy is indistinguishable from an unfixed one -- which cost a cycle on the
 --  upcycler before the stamp existed.
-local PANE_BUILD_STAMP = "2026-09-03u a family clash refuses too"
+local PANE_BUILD_STAMP = "2026-09-08e task captions come from the string table"
 
 local PANE_STATE_KEY = "petports_paneState"
 
@@ -131,67 +131,25 @@ local STATS_ROW_CLEAR = "/interface/lofty_petports/shared/row_180_clear.png"
 --  it reads unmistakably as "separator, art pending" rather than as a stat
 --  that failed to resolve. Real art replaces both of these later.
 local STATS_SEPARATOR_TEXT = string.rep("-", 50)
-local STATS_SEPARATOR_COLOR = { 184, 148, 64 }
-
---  WHAT THE TASK LABEL SAYS, KEYED ON THE PORT'S INTERNAL TASK TYPE.
+local STATS_SEPARATOR_COLOR = { 184, --  THE TASK LABELS LIVED HERE AND ARE NOW IN THE STRING TABLE.
 --
---  The mirror carries `self.task.type` verbatim -- a dispatch identifier, not
---  copy. "drain" is meaningful to findWork and to nobody else.
+--  arch.pane.stringtable: every visible string lives in one asset. Twenty
+--  player-facing captions in a Lua table in this file were the largest
+--  remaining exception in this pane, and adding a twenty-first for `defrag` is
+--  what made it worth moving rather than growing.
 --
---  TRANSLATED IN THE PANE, NOT AT THE SOURCE. The type is what the port logs,
---  what work ids are built from, and what every dispatch branch compares
---  against; renaming it there would be renaming an identifier to fix a caption.
---  This is a display concern and it lives with the display.
+--  `petport.task.<type>`, keyed on the port's internal task type verbatim. The
+--  type is a dispatch identifier -- what findWork compares against and what
+--  work ids are built from -- so it is translated at the display and never at
+--  the source. The reasoning for individual captions moved with them.
 --
---  PHRASED AS WHAT THE UNIT IS DOING, present tense, because the label sits
---  under a portrait of the unit doing it. "Ready" rather than "Idle" -- idle
---  reads as a fault when a player is waiting for work to happen.
---
---  TWO TYPES ARE OVERLOADED AND THEIR LABELS HAVE TO STAY GENERIC.
---  `withdraw` covers seed withdrawal, water withdrawal, restock fetch AND the
---  medic's fetch leg -- medicWork returns a `withdraw` task under a
---  `medicfetch:` id, so the type says nothing about which of the four it is;
---  `deposit` covers ordinary deposit and restock delivery. Naming either one
---  specifically would be wrong most of the time. Splitting them needs a subtype
---  on the task, which is a change to dispatch rather than to this table.
-local TASK_LABELS = {
-	idle = "Ready",
+--  petports_string AND NOT petports_stringOr AT THE READ SITE, deliberately.
+--  stringOr lands on "--" for a missing key, which is the right failure for a
+--  label that has nowhere else to go; here the RAW TYPE is a better failure,
+--  because a task added to dispatch without a caption then reads as an
+--  untranslated identifier and names itself.
 
-	collect = "Collecting Items",
-	deposit = "Storing Items",
-	tidy = "Tidying Storage",
-	compact = "Compacting Stacks",
-	withdraw = "Fetching Supplies",
-
-	harvest = "Harvesting Crops",
-	replant = "Replanting",
-	water = "Watering Crops",
-	animal = "Tending Livestock",
-	trap = "Emptying Traps",
-
-	drain = "Emptying Upcycler",
-	fuel = "Collecting Treats",
-	upcycle = "Loading Upcycler",
-
-	--  `fuel` AND `fuelfetch` ARE BOTH ABOUT TREATS AND ARE NOT THE SAME JOB.
-	--  `fuel` is work -- pulling treats out of an upcycler's output slot for
-	--  storage. `fuelfetch` is the unit going to a feeder crate to EAT, which
-	--  is the only task on this list it performs for itself, so the label says
-	--  so rather than reusing the word "treats" a second time.
-	fuelfetch = "Refuelling",
-
-	fish = "Fishing",
-
-	--  SINGULAR, because a dose goes to one patient and the label sits under
-	--  one unit. "Patients" would read as a queue the pane cannot show.
-	medic = "Treating a Patient",
-
-	["return"] = "Returning to Port",
-
-	--  Not player-facing work: the fallback drop task that DIAG_FALLBACK gates,
-	--  which is false. Named anyway so that if it ever does dispatch, the pane
-	--  says something rather than showing a bare identifier.
-	diag = "Running Diagnostics"
+ostics"
 }
 
 --  Severity tints for the diagnostic row, sharing the crosshair vocabulary on
@@ -329,8 +287,16 @@ local SETTING_ROWS = {
 	--  broken, which is the opposite of the nametag argument directly above.
 	{ key = "hauling", owner = "toggles", needs = nil, default = true,
 	  label = "petport.setting.hauling", tip = "petport.tip.hauling" },
-	{ key = "sorting", owner = "toggles", needs = nil, default = true,
-	  label = "petport.setting.sorting", tip = "petport.tip.sorting" },
+	--  RESTOCKING, WHICH IS WHAT IS LEFT OF `sorting` ON THIS SIDE OF THE
+	--  MODULE. That key gated restocking, tidying and compaction together;
+	--  the other two moved behind the defragmentation module block below.
+	--
+	--  NO `needs`, BECAUSE IT IS NOT A MODULE FEATURE. A restock beacon is the
+	--  second half of the deposit beacon and has to work out of the box. The
+	--  box exists so one pet in a fleet can be told not to honour requests,
+	--  which is a preference rather than a capability.
+	{ key = "restock", owner = "toggles", needs = nil, default = true,
+	  label = "petport.setting.restock", tip = "petport.tip.restock" },
 	{ key = "machines", owner = "toggles", needs = nil, default = true,
 	  label = "petport.setting.machines", tip = "petport.tip.machines" },
 	{ key = "crosshairs", owner = "toggles", needs = nil, default = true,
@@ -389,6 +355,47 @@ local SETTING_ROWS = {
 	--  THEY SHOWED UNCONDITIONALLY FOR TWO BUILDS. That was so the textbox could
 	--  be proven to construct inside a list row at all, with no module in the
 	--  world to gate on.
+	--  THE DEFRAGMENTATION MODULE, AND IT UNLOCKS RATHER THAN ADDS.
+	--
+	--  Medic and farming each bring a task that did not exist. This module
+	--  gates three generators that used to run ungated under `sorting`, which
+	--  is why its rows read as things the pet WILL DO rather than as things it
+	--  is ALLOWED to do -- the distinction the player sees is that these three
+	--  disappear entirely without the module rather than greying out.
+	--
+	--  THREE BOXES BECAUSE WANTING ONE WITHOUT THE OTHERS IS REASONABLE. A
+	--  player who likes their stragglers where they are can keep tidying and
+	--  merging without having the network gather anything.
+	--
+	--  ALL DEFAULT ON, so socketing the module starts the work immediately
+	--  rather than looking broken until three boxes are ticked -- the same
+	--  argument the farming activities and the medic classes both made.
+	{ kind = "sep", needs = "defrag", label = "petport.setting.defragblock" },
+
+	--  IN LADDER ORDER, WHICH IS ALSO INCREASING SCOPE: within a slot, within
+	--  a crate, across the network. findWork runs them in exactly this
+	--  sequence, and a player reading the boxes top to bottom is reading the
+	--  order the work actually happens in.
+	{ key = "tidy", owner = "toggles", needs = "defrag", default = true,
+	  label = "petport.setting.defragtidy", tip = "petport.tip.defragtidy" },
+	{ key = "compact", owner = "toggles", needs = "defrag", default = true,
+	  label = "petport.setting.defragcompact", tip = "petport.tip.defragcompact" },
+	{ key = "defrag", owner = "toggles", needs = "defrag", default = true,
+	  label = "petport.setting.defragspread", tip = "petport.tip.defragspread" },
+
+	--  LAST IN THE BLOCK, AND NOT A SCOPE. The three above are one job at
+	--  widening scope -- within a slot, within a crate, across the network. This
+	--  one is orthogonal: it ranks crates by a PROPERTY of the container rather
+	--  than by where a thing already is.
+	--
+	--  UNDER THE MODULE RATHER THAN BESIDE `restock`, which reverses an earlier
+	--  intention to make it ingress-general. "Sometimes the food goes in the
+	--  fridge" is what a player would observe from a behaviour that depended on
+	--  whether a module happened to be socketed; "the defragmentation module
+	--  handles food storage" is one sentence of documentation and always true.
+	{ key = "chill", owner = "toggles", needs = "defrag", default = true,
+	  label = "petport.setting.defragchill", tip = "petport.tip.defragchill" },
+
 	{ kind = "sep", needs = "rgblight", label = "petport.setting.rgbblock" },
 
 	{ kind = "rgb", key = "r", owner = "light", needs = "rgblight",
@@ -2119,11 +2126,12 @@ local function refresh(force)
 	paintCargo(state.cargo)
 
 	--  UNMAPPED FALLS BACK TO THE RAW TYPE, deliberately. A task type added to
-	--  dispatch without a line in TASK_LABELS then reads as an untranslated
+	--  dispatch without a line in petport.task then reads as an untranslated
 	--  identifier -- odd-looking and traceable -- rather than as blank, which
 	--  would read as a unit with nothing to do.
 	local task = state.task
-	widget.setText("taskLabel", task and (TASK_LABELS[task] or task) or "")
+	widget.setText("taskLabel",
+		task and (petports_string("petport.task." .. task) or task) or "")
 	paintDiagnostics(state.diagnostics)
 
 	paintModules(state)

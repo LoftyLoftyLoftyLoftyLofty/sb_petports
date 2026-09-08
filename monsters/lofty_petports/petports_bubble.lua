@@ -1,6 +1,6 @@
 --  PETPORTS -- CHAT BUBBLE, RENDER LAYER
 --
---  2026-09-07a bubble render layer, bench only
+--  2026-09-08a an instance icon override beats the base config
 --
 --  A bubble over a unit's head holding up to three 16x16 icons, read left to
 --  right. "I am carrying dirt", "I cannot deposit into a crate", "I am fishing".
@@ -483,6 +483,14 @@ end
 --
 --  SHARED BY BOTH SHAPES. A layered icon's images need exactly the treatment a
 --  single path gets, and writing it twice is how the two drift.
+--
+--  A PARAMETER OVERRIDE RESOLVES AGAINST THE BASE ITEM'S DIRECTORY, which is
+--  the only directory root.itemConfig offers and is therefore the best answer
+--  available rather than the right one. A mod overriding inventoryIcon with a
+--  RELATIVE path pointing into its own assets would miss; an absolute path,
+--  which is what such overrides normally carry, resolves correctly. If a
+--  missing-asset box ever shows up for a retextured item, this is where to
+--  look first.
 local function absolutePath(image, directory)
 	if type(image) ~= "string" then return image end
 	if image:sub(1, 1) == "/" then return image end
@@ -507,8 +515,39 @@ function petports_bubbleItemIcon(descriptor)
 		return nil
 	end
 
+	--  THE INSTANCE FIRST, THE BASE CONFIG SECOND.
+	--
+	--  root.itemConfig HANDS BACK THE BASE ASSET CONFIG AND THE PARAMETERS
+	--  SEPARATELY, unmerged. The engine merges them only at instantiation --
+	--  Item::instanceValue checks parameters and falls back to config -- so a
+	--  per-instance inventoryIcon override is invisible to a plain
+	--  cfg.config read.
+	--
+	--  MEASURED 2026-09-08: a modded giant moth drops a renamed, retextured
+	--  cotton fibre, and the bubble drew vanilla cotton fibre. The item is
+	--  base cottonfibre carrying parameter overrides, and this line only ever
+	--  looked at the base.
+	--
+	--  THE DESCRIPTOR WE WERE HANDED, NOT cfg.parameters. Both should carry
+	--  the same table, and the argument is the one the caller actually meant
+	--  -- reading it back out of the return value adds a way for the two to
+	--  differ with nothing gained.
+	--
+	--  IT IS THE SAME CLASS AS fact.item.generatedicon, arrived at from the
+	--  other direction: there the icon is BUILT from parameters, here it is
+	--  NAMED by them. Both are icons that are not in the base config, which is
+	--  why arch.bubble.protocol sends the whole descriptor -- the plumbing was
+	--  already right and only this read was wrong.
+	--
+	--  A LAYER LIST IS AS VALID HERE AS A PATH. The list branch below handles
+	--  whichever this turns out to be, so an override may be either shape.
 	local icon = nil
-	if cfg.config ~= nil then icon = cfg.config.inventoryIcon end
+
+	if type(descriptor) == "table" and type(descriptor.parameters) == "table" then
+		icon = descriptor.parameters.inventoryIcon
+	end
+
+	if icon == nil and cfg.config ~= nil then icon = cfg.config.inventoryIcon end
 
 	--  A LAYER LIST IS AN ICON TOO, NOT A FAILURE.
 	--
