@@ -1,0 +1,129 @@
+//  PETPORTS -- HELP TOOLTIP CARRIER
+//
+//  AN ITEM THAT EXISTS TO BE A TOOLTIP. It is never crafted, never dropped,
+//  never held and never enters an inventory: the only thing that ever puts it
+//  anywhere is widget.setItemSlotItem, into the `helpSlot` of a settings row.
+//
+//  ---- WHY AN ITEM AT ALL ------------------------------------------------
+//
+//  fact.pane.notooltips: a ContainerPane does not forward createTooltip to its
+//  script, so this pane hand-draws its hover text on two canvases
+//  (arch.pane.hoverlayer). That layer reads a widget's rect with
+//  widget.getPosition and matches the cursor against it, which works for every
+//  widget declared at pane level and CANNOT work for a widget inside a list
+//  row: a row member's position is relative to a list that scrolls, and
+//  nothing exposes a scrollArea's offset.
+//
+//  The one kind of tooltip a ContainerPane still produces is the one
+//  ItemSlotWidget draws for itself, from the item it is holding. So a row that
+//  wants help holds an item, and the item carries the words.
+//
+//  ---- WHY THE WORDS ARE NOT IN THIS FILE --------------------------------
+//
+//  They are per row -- twenty-odd of them -- and they already live in
+//  petports_strings.config under petport.tip.*, beside every other string in
+//  the mod (arch.pane.stringtable). The row builder resolves its own key and
+//  passes `shortdescription` and `description` as DESCRIPTOR PARAMETERS.
+//
+//  That works because of fact.item.instanceicon read forwards: the engine
+//  merges parameters over config at INSTANTIATION, where instanceValue checks
+//  parameters and falls back to the asset. The slot instantiates, so the
+//  overrides are what the tooltip sees. (That fact was measured as a hazard --
+//  root.itemConfig does NOT merge them -- and this is the same mechanism used
+//  deliberately rather than tripped over.)
+//
+//  The strings below are therefore FALLBACKS ONLY. Seeing either of them in
+//  game means the row builder did not write its parameters, which is worth
+//  saying rather than showing a blank box.
+//
+//  TWO PARAMETERS DO NOT REACH THE TOOLTIP DIRECTLY AND GO THROUGH THE BUILD
+//  SCRIPT INSTEAD -- `helpIcon` and `helpSubtitle`. Parameter merging can only
+//  overwrite fields the item already has; `config.tooltipFields` is how a
+//  descriptor addresses a tooltip WIDGET, and only a build script can write it.
+//  See petports_buildhelptooltip.lua.
+//
+//  ---- THE TOOLTIP LAYOUT IS OURS ----------------------------------------
+//
+//  THE DEFAULT WAS TRIED FIRST AND IT IS THE WRONG SHAPE. It is a tall object
+//  tooltip with a rarity line, a price line and a money icon, all of which are
+//  furniture on a help mark, and its icon frame scaled the art. Every other
+//  item this mod ships still takes the default; this one does not, because it
+//  is the only item that is a piece of interface.
+//
+//  `tooltipKind` NAMES A FILE. The engine resolves it into
+//  /interface/tooltips/<kind>.tooltip -- so this string and that filename are
+//  one interface, and a mismatch is a missing asset rather than a fallback.
+//  What is in the file, and which widget names the engine will fill, is
+//  documented there.
+//
+//  COLOUR CODES RENDER IN AN ITEM DESCRIPTION -- confirmed in game, not
+//  assumed. Six of the tip bodies carry `^green;`, so this mattered.
+//
+//  ---- MEASURED: THE SLOT FITS ART TO ITSELF -----------------------------
+//
+//  OBSERVED IN GAME 2026-09-08. ItemSlotWidget does NOT draw an inventory icon
+//  at natural size; it fits the art to the slot the way the inventory does, so
+//  the 9px mark on its 16px canvas came out scaled to 16 and soft. That is
+//  fact.tooling.imageregion holding for this widget too, which was the open
+//  question this build existed to answer.
+//
+//  THE TOOLTIP'S COPY OF THE ICON IS UNAFFECTED, because a tooltip layout
+//  states minSize and maxSize and the layout wins there. This is a row-slot
+//  problem only, and the art is where it gets solved -- see CORNERS in
+//  petports_helpicon.py for the pin, or simply ship a 16px mark.
+//
+//  ---- SAFETY ------------------------------------------------------------
+//
+//  price 0 and rarity Common keep the tooltip's own furniture as quiet as it
+//  can be made without a layout file. petports_no_upcycling is stated even
+//  though this can never reach a container, because the cost of stating it is
+//  nothing and the cost of being wrong is a player's modules becoming treats.
+
+{
+	"itemName" : "petports_helptooltip",
+	"price" : 0,
+
+	//  THE FALLBACK RARITY, AND IT IS OVERWRITTEN ON MOST ROWS.
+	//
+	//  An itemslot draws its item's rarity as a border, so this is visible in
+	//  the settings row whether or not anything wants it to be. A row owned by
+	//  a module gets that module's rarity written over this by the build
+	//  script; the rows that belong to the unit rather than to a module keep
+	//  Common, which is the quietest frame available.
+	//
+	//  THE TOOLTIP NEVER SHOWS IT. petports_help.tooltip declares no
+	//  rarityLabel -- see its note on omission being the lever.
+	"rarity" : "Common",
+
+	//  SHARED WITH THE MODULES so the categories.config.patch label and the
+	//  petports_filtergroups.config subgroup that already exist cover it. A new
+	//  category would need both adding or this sorts to Unsorted.
+	"category" : "petports_module",
+
+	"inventoryIcon" : "petports_helptooltip.png",
+
+	//  SEE THE HEADER. The file is /interface/tooltips/petports_help.tooltip
+	//  and this string is what points at it.
+	"tooltipKind" : "petports_help",
+
+	//  THE SECOND HALF OF THE TOOLTIP, AND IT IS WHAT KEEPS THE ROW'S QUESTION
+	//  MARK. The layout says where things go; the builder says WHAT goes in
+	//  objectImage and the subtitle, per row, from descriptor parameters --
+	//  without touching inventoryIcon, which the row's own slot draws. Its
+	//  header has the reasoning and the vanilla precedents. It also writes
+	//  `rarity`, which is an item field rather than a tooltip one and exists
+	//  purely for the border the row's slot draws.
+	"builder" : "/items/buildscripts/petports_buildhelptooltip.lua",
+
+	"description" : "^red;This help text failed to load.^reset;",
+	"shortdescription" : "Help",
+
+	"itemTags" : [ "petports", "petports_no_upcycling" ],
+
+	//  MAXSTACK 1, AND THE SLOT NEVER SHOWS A COUNT BECAUSE OF IT.
+	//  fact.pane.itemslotbutton: an itemslot DOES draw a stack number and
+	//  hides a count of one, exactly as an inventory slot does. A count beside
+	//  a question mark would be nonsense, so the descriptor is always count 1
+	//  and this backs that up.
+	"maxStack" : 1
+}

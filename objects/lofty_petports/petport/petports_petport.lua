@@ -1532,7 +1532,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-08n every toggle the pane sends is actually stored"
+local PETPORT_BUILD_STAMP = "2026-09-08o cargo bubbles no longer ride on the alert toggle"
 
 --  PORT PROFILER, 2026-09-07b. MEASURED 21:00: six ports on a small islet,
 --  59 port ticks over 30 ms in 39 s totalling 3.7 s, worst 268 ms, while
@@ -5755,6 +5755,25 @@ function petportBubbleCargo()
   return toggles.showCargo ~= false
 end
 
+--  MAY THIS UNIT DRAW A BUBBLE AT ALL?
+--
+--  THE CHANNEL, NOT A CATEGORY. petportBubbles and petportBubbleCargo each
+--  answer for one KIND of bubble; this answers whether the unit should be
+--  listening at all, and it is the only thing pushUnitBubbles should ask.
+--
+--  ANY CATEGORY OPENS IT. It was petportBubbles alone, which made that
+--  checkbox a master switch over cargo as well -- so turning off the alerts
+--  silenced the running commentary too, and the two settings were never
+--  independent the way both their own comments claimed. Observed 2026-09-08.
+--
+--  EACH RUNG STILL GATES ITSELF. bubbleSpec asks petportBubbleCargo for the
+--  cargo rung and the alert rungs will ask petportBubbles as they land, so
+--  this being open is permission rather than instruction: with every category
+--  off, bubbleSpec returns nil and nothing is published regardless.
+function petportBubbleChannel()
+  return petportBubbles() or petportBubbleCargo()
+end
+
 function petportNametag()
   if self.petData == nil then return false end
 
@@ -6011,7 +6030,9 @@ function pushUnitBubbles()
     return
   end
 
-  local show = petportBubbles()
+  --  THE CHANNEL, NOT petportBubbles. See petportBubbleChannel: asking the
+  --  alert category here is what made it a master switch over cargo.
+  local show = petportBubbleChannel()
 
   local signature = string.format("%s|%s", tostring(self.petId), tostring(show))
 
@@ -6047,6 +6068,11 @@ end
 --  one as they land, and each is a condition this file already detects. The
 --  states -- working, health, sleeping -- go below it and get their own
 --  checkboxes for the reason petportBubbleCargo gives.
+--
+--  EVERY RUNG GATES ITSELF, AND NOTHING GATES THE LADDER. The cargo rung asks
+--  petportBubbleCargo; an alert rung asks petportBubbles. Neither may gate the
+--  other, which is exactly what pushUnitBubbles used to do by pushing the
+--  alert category as the channel flag.
 local function bubbleSpec()
   --  ---- states -------------------------------------------------------------
 

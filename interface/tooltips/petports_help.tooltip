@@ -1,0 +1,94 @@
+//  PETPORTS -- THE SETTINGS-ROW HELP TOOLTIP
+//
+//  THIS PATH IS THE INTERFACE, AND IT IS THE ONE THING HERE THAT CANNOT MOVE.
+//  An item names a layout with `tooltipKind`, and the engine resolves that
+//  string into /interface/tooltips/<kind>.tooltip. petports_helptooltip.item
+//  declares "petports_help", so this file is petports_help.tooltip and a typo
+//  in either is a missing asset rather than a fallback.
+//
+//  ---- WHAT FILLS THESE WIDGETS -----------------------------------------
+//
+//  NOTHING SCRIPTED. A tooltip has no script; the engine builds it from the
+//  item and populates BY WIDGET NAME, touching only the names it finds. That
+//  is why the vanilla layouts differ so freely -- bow.tooltip declares damage
+//  labels, armor.tooltip declares a status list, and base.tooltip declares
+//  neither.
+//
+//  SO OMISSION IS THE LEVER. Every vanilla layout carries moneyIcon,
+//  priceLabel and rarityLabel; this one declares none of the three, which is
+//  how a help mark stops claiming to be worth 0 pixels of currency and stops
+//  announcing that it is Common. They are not hidden, they do not exist.
+//
+//  descriptionLabel  <- the descriptor's `description` parameter, per row
+//  objectImage       <- the item's icon drawables
+//  the title         <- the descriptor's `shortdescription`, stamped into the
+//                       header by the engine at a fixed offset. That is why
+//                       HEADER_H is 25 in petports_tooltipart.py and is not a
+//                       free number.
+//
+//  ---- GEOMETRY ---------------------------------------------------------
+//
+//  150 x 131, and the art is generated: see petports_tooltipart.py, which
+//  owns WIDTH, HEADER_H, BODY_H and FOOTER_H and explains why the width is
+//  150 rather than the 100 this was first sketched at. Short version: the
+//  tip bodies were written and measured against the pane's own 150px box at a
+//  140px wrap, the longest is 163 characters, and at 100 wide the same string
+//  wants ten to fourteen lines in a column half as readable.
+//
+//  POSITIONS ARE FROM THE BOTTOM-LEFT OF THE WHOLE TOOLTIP, not of the band
+//  they sit in -- read codex.tooltip, where rarityLabel at y=23 is inside a
+//  34-tall footer and objectImage at y=100 is up in the body.
+//
+//      y   0..  4   footer
+//      y   4..106   body
+//      y 106..131   header, with the title in it
+//
+//  THE FOUR NUMBERS THAT MOVE WITH THE ART. If WIDTH or BODY_H changes in the
+//  generator, these change here in the same edit and nothing else does:
+//
+//      descriptionLabel.position   y is the body's top minus 6 of pad
+//      descriptionLabel.wrapWidth  WIDTH - 28 - 6
+//      objectImage.position        y is the text top minus half the icon
+//
+//  ---- THE ICON ---------------------------------------------------------
+//
+//  minSize AND maxSize BOTH STATED, AND EQUAL. That is the whole vanilla
+//  convention -- every layout above does it -- and here it is also the fix
+//  for the thing that made the default tooltip unusable: the icon was being
+//  scaled to whatever the layout felt like. Inside a tooltip the layout says.
+//  It does NOT fix the row's own slot, which sizes art its own way.
+//
+//  24, NOT 16. The source icons are 16px inventory art, so this is a clean 2x
+//  minus a little. It occupies x 6..30 and the text starts at x=34, so the two
+//  columns do not touch -- they overlapped by two pixels in the first draft,
+//  which is the kind of thing centred positioning hides until it is drawn.
+
+{
+	"background" : {
+		"type" : "background",
+		"fileHeader" : "/interface/tooltips/petports_helptooltip_header.png",
+		"fileBody" : "/interface/tooltips/petports_helptooltip_body.png",
+		"fileFooter" : "/interface/tooltips/petports_helptooltip_footer.png"
+	},
+
+	//  CENTRED, so this is the icon's MIDDLE. y=88 puts its top edge on 100,
+	//  which is the text's top edge, so the two columns start on the same line.
+	"objectImage" : {
+		"type" : "image",
+		"position" : [ 18, 88 ],
+		"file" : "",
+		"centered" : true,
+		"maxSize" : [ 24, 24 ],
+		"minSize" : [ 24, 24 ]
+	},
+
+	//  y=100 is the body's top (106) less 6 of pad. wrapWidth is WIDTH less the
+	//  x here less 6 of right pad.
+	"descriptionLabel" : {
+		"type" : "label",
+		"position" : [ 34, 100 ],
+		"hAnchor" : "left",
+		"vAnchor" : "top",
+		"wrapWidth" : 110
+	}
+}

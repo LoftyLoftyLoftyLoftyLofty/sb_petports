@@ -64,7 +64,7 @@ local DEBUG = true
 --  Bump on every change to this file. A pane has no visible version and a stale
 --  copy is indistinguishable from an unfixed one -- which cost a cycle on the
 --  upcycler before the stamp existed.
-local PANE_BUILD_STAMP = "2026-09-08e task captions come from the string table"
+local PANE_BUILD_STAMP = "2026-09-08i placeholder cogs for the unit-level help rows"
 
 local PANE_STATE_KEY = "petports_paneState"
 
@@ -301,10 +301,15 @@ local SETTING_ROWS = {
 	{ key = "crosshairs", owner = "toggles", needs = nil, default = true,
 	  label = "petport.setting.crosshairs", tip = "petport.tip.crosshairs" },
 
-	--  WHAT THE BUBBLE SAYS, AS OPPOSED TO WHETHER THERE IS ONE. `carried`
-	--  above is the master switch; this decides whether one particular thing
-	--  gets said. A player wanting alerts without a running commentary on a
-	--  unit that is working fine should get that.
+	--  ONE OF TWO INDEPENDENT BUBBLE SETTINGS, NOT THE JUNIOR ONE. `carried`
+	--  above covers the alerts -- a unit asking for help -- and this covers the
+	--  running commentary on a unit working fine. EITHER CAN BE ON WITHOUT THE
+	--  OTHER, in both directions.
+	--
+	--  IT USED TO READ AS A MASTER AND A DETAIL, and the port enforced that:
+	--  pushUnitBubbles pushed petportBubbles as the channel flag, so switching
+	--  off the alerts silenced the cargo bubble too. Fixed 2026-09-08 -- see
+	--  petportBubbleChannel.
 	{ key = "showCargo", owner = "toggles", needs = nil, default = true,
 	  label = "petport.setting.showCargo", tip = "petport.tip.showCargo" },
 
@@ -428,6 +433,42 @@ local SETTINGS_ROW_CLEAR = "/interface/lofty_petports/shared/row_180_clear.png"
 --  whose label failed to resolve.
 local SETTINGS_SEPARATOR_TEXT = string.rep("-", 40)
 local SETTINGS_SEPARATOR_COLOR = { 184, 148, 64 }
+
+--  PLACEHOLDER HELP ICONS FOR THE ROWS NO MODULE OWNS.
+--
+--  A module row's tooltip shows that module's own icon, resolved from the
+--  socketed item. The seven unit-level rows have no module to ask, and left to
+--  the fallback they all showed the same question mark -- the row's own mark,
+--  which says nothing about which setting is being read.
+--
+--  A TABLE HERE RATHER THAN AN `icon` FIELD ON EACH ROW. SETTING_ROWS is about
+--  what a setting IS and where it is stored; which picture illustrates it is a
+--  different question, and keeping it separate means the art can be replaced
+--  without touching the list every module row also lives in.
+--
+--  KEYS MATCH COLORS IN petports_helpcogs.py, which generates these. They are
+--  cogs told apart by hue, deliberately generic until real art lands.
+--
+--  ONLY CONSULTED FOR needs == nil ROWS, so a module row's key cannot collide
+--  with one of these by accident.
+--
+--  A KEY THAT IS NOT HERE FALLS BACK TO THE QUESTION MARK, which is what makes
+--  adding a new unit-level setting a one-line change that still looks finished.
+local SETTINGS_HELP_ICONS = {
+	carried = "/interface/tooltips/petports_helptooltip_icon_cog.png",
+	nametag = "/interface/tooltips/petports_helptooltip_icon_cog.png",
+	hauling = "/interface/tooltips/petports_helptooltip_icon_cog.png",
+	restock = "/interface/tooltips/petports_helptooltip_icon_cog.png",
+	machines = "/interface/tooltips/petports_helptooltip_icon_cog.png",
+	crosshairs = "/interface/tooltips/petports_helptooltip_icon_cog.png",
+	showCargo = "/interface/tooltips/petports_helptooltip_icon_cog.png"
+}
+
+--  THE ITEM THAT CARRIES A ROW'S HELP TEXT. It is a question mark and a
+--  tooltip and nothing else -- see the item file for why help in this list has
+--  to be an item at all, and the config's note on helpSlot for why the slot
+--  cannot be anything but an itemslot with a null callback.
+local SETTINGS_HELP_ITEM = "petports_helptooltip"
 
 
 --  Widgets owned by each tab. Membership lives here rather than in the config
@@ -1382,6 +1423,141 @@ local function settingValue(row)
 	return value ~= false
 end
 
+--  WHICH SOCKETED MODULE OWNS EACH FLAG, AND WHAT IT LOOKS LIKE.
+--
+--  A settings row names the module flag that reveals it -- `needs` -- and the
+--  help tooltip wants that module's own icon and name. Neither is on the
+--  mirror and neither should be: the mirror sends the flag SET and the module
+--  DESCRIPTORS, which is enough to answer this here without a new field.
+--
+--  READ OFF THE SOCKETED ITEM, NOT A TABLE OF FLAG -> ITEM NAME. A hardcoded
+--  map would have to be edited for every module and would be wrong the moment
+--  another mod ships one; asking the item which flags it declares is the same
+--  question petportModuleFlags asks on the port side.
+--
+--  THE PATH RULE IS THE UPCYCLER'S. root.itemConfig hands back the item's own
+--  `directory` and `inventoryIcon` is relative to it unless it starts with a
+--  slash. That is what lets a modded module show its own art.
+--
+--  IT WILL NOT SEE AN INSTANCE ICON OVERRIDE -- fact.item.instanceicon:
+--  root.itemConfig returns the base config and the parameters unmerged. No
+--  module ships one, and a module that did would show its base art in a
+--  tooltip and nowhere else.
+--
+--  BUILT ONCE PER REBUILD, NOT PER ROW. Five slots against a dozen rows, and
+--  every medic row would otherwise resolve the same item six times.
+local function moduleHelpByFlag()
+	local out = {}
+
+	for slot = 1, MODULE_SLOTS do
+		local item = paneModules[slot]
+		local name = type(item) == "table" and item.name or nil
+
+		if type(name) == "string" then
+			local ok, resolved = pcall(root.itemConfig, { name = name, count = 1 })
+
+			if ok and type(resolved) == "table" and type(resolved.config) == "table" then
+				local cfg = resolved.config
+				local icon = cfg.inventoryIcon
+
+				if type(icon) == "string" and icon:sub(1, 1) ~= "/" then
+					icon = tostring(resolved.directory or "") .. icon
+				end
+
+				for _, flag in ipairs(cfg.petports_moduleFlags or {}) do
+					--  FIRST SOCKETED MODULE WINS A FLAG. Two cannot claim one:
+					--  fact.module.onefamily refuses a duplicate at the slot.
+					if out[flag] == nil then
+						out[flag] = {
+							icon = type(icon) == "string" and icon or nil,
+							subtitle = cfg.shortdescription,
+
+							--  FOR THE ROW'S SLOT, NOT FOR THE TOOLTIP. An
+							--  itemslot draws its item's rarity as a border,
+							--  so a help mark that stayed Common sat in a
+							--  plain frame beside a Legendary module. The
+							--  tooltip declares no rarityLabel and never
+							--  shows it.
+							rarity = type(cfg.rarity) == "string" and cfg.rarity or nil
+						}
+					end
+				end
+			end
+		end
+	end
+
+	return out
+end
+
+--  THE ROW'S HELP MARK, AND THE WORDS RIDE THE DESCRIPTOR.
+--
+--  A ContainerPane gets no createTooltip and the hand-drawn hover layer cannot
+--  reach inside a scrolling list, so the only tooltip a row can have is the one
+--  an ItemSlotWidget draws for the item it holds. The item is a placeholder;
+--  the text is per row and comes from the same petport.tip.* table the
+--  pane-level checkboxes already use.
+--
+--  PARAMETERS, NOT A PER-ROW ITEM FILE. The engine merges a descriptor's
+--  parameters over the asset config at INSTANTIATION -- instanceValue checks
+--  parameters first and falls back to the config -- and a slot instantiates.
+--  That is fact.item.instanceicon used deliberately rather than tripped over.
+--
+--  A ROW WITH NO TIP GETS NO MARK, which is what the string table's own note
+--  says should happen, and it is also how separators are handled: they carry no
+--  `tip` key, petports_string(nil) returns nil, and the slot is hidden. Stated
+--  in both directions because a row is rebuilt from a pool and may arrive
+--  wearing the last kind that used it.
+--
+--  WRAPPED, BECAUSE A THROW HERE COSTS THE WHOLE PANE. setItemSlotItem on a
+--  name the engine cannot resolve throws, and this runs inside the rebuild
+--  loop. A missing question mark is a blemish; a pane that will not open drops
+--  the client to the main menu.
+local function setRowHelp(rowPath, row, moduleHelp)
+	local tip = petports_string(row.tip)
+
+	if type(tip) ~= "table" or type(tip.title) ~= "string" then
+		widget.setVisible(rowPath .. ".helpSlot", false)
+		return
+	end
+
+	--  THE OWNING MODULE'S LOOK, OR NOTHING. A row with no `needs` belongs to
+	--  the unit rather than to a module, and passing none of the three is what
+	--  leaves the tooltip showing the question mark in the item's own Common
+	--  frame -- see the build script, where absent means "leave it alone" for
+	--  the icon and the rarity, and empty means "blank it" for the subtitle.
+	--  Those are different on purpose and this is the call site that relies on
+	--  it.
+	local owner = row.needs ~= nil and moduleHelp[row.needs] or nil
+
+	--  THE PLACEHOLDER COG, FOR ROWS NO MODULE OWNS. Only the icon: a
+	--  unit-level setting has no module name to put in the subtitle and no
+	--  rarity to inherit, and both of those reading as absent is correct.
+	local ownIcon = row.needs == nil and row.key ~= nil
+	                and SETTINGS_HELP_ICONS[row.key] or nil
+
+	local ok, err = pcall(function()
+		widget.setItemSlotItem(rowPath .. ".helpSlot", {
+			name = SETTINGS_HELP_ITEM,
+			count = 1,
+			parameters = {
+				shortdescription = tip.title,
+				description = tip.body or "",
+				helpIcon = (owner ~= nil and owner.icon) or ownIcon or nil,
+				helpSubtitle = owner ~= nil and owner.subtitle or nil,
+				helpRarity = owner ~= nil and owner.rarity or nil
+			}
+		})
+	end)
+
+	if not ok then
+		widget.setVisible(rowPath .. ".helpSlot", false)
+		dbg("help mark for %s FAILED: %s", tostring(row.tip), tostring(err))
+		return
+	end
+
+	widget.setVisible(rowPath .. ".helpSlot", true)
+end
+
 --  REBUILT ONLY WHEN THE SET CHANGES, repainted otherwise.
 --
 --  clearListItems invokes the list's own callback -- measured on the beacon
@@ -1412,6 +1588,10 @@ local function paintSettings()
 		lightShown = {}
 		lightPainted = {}
 
+		--  ONCE FOR THE WHOLE REBUILD. It resolves at most five items and the
+		--  loop below asks it per row; see moduleHelpByFlag.
+		local moduleHelp = moduleHelpByFlag()
+
 		--  PARITY RESETS AT EACH SEPARATOR so every module's block starts on
 		--  the base shade, exactly as the stats list does.
 		local stripe = false
@@ -1438,6 +1618,11 @@ local function paintSettings()
 			widget.setVisible(rowPath .. ".settingField", isRgb)
 			widget.setVisible(rowPath .. ".settingDown", isRgb)
 			widget.setVisible(rowPath .. ".settingUp", isRgb)
+
+			--  NOT KEYED ON KIND. Whether a row has help is whether its tip
+			--  key resolves, which is a separate question from whether it is a
+			--  checkbox, a colour field or a divider.
+			setRowHelp(rowPath, row, moduleHelp)
 
 			if kind == "sep" then
 				stripe = false
