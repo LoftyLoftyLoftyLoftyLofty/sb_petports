@@ -479,7 +479,17 @@ function petports_bubblePump(dt)
 	petports_bubbleFlip(false)
 end
 
---  Resolve an item descriptor to ONE asset path for an icon slot.
+--  Resolve a possibly-relative image path against the item's own directory.
+--
+--  SHARED BY BOTH SHAPES. A layered icon's images need exactly the treatment a
+--  single path gets, and writing it twice is how the two drift.
+local function absolutePath(image, directory)
+	if type(image) ~= "string" then return image end
+	if image:sub(1, 1) == "/" then return image end
+	return tostring(directory) .. image
+end
+
+--  Resolve an item descriptor to an icon for a slot.
 --
 --  root.itemConfig returns inventoryIcon as either a path string or a LIST of
 --  layered drawables, and an animator part image is a single path, so the list
@@ -500,17 +510,170 @@ function petports_bubbleItemIcon(descriptor)
 	local icon = nil
 	if cfg.config ~= nil then icon = cfg.config.inventoryIcon end
 
-	if type(icon) ~= "string" then
+	--  A LAYER LIST IS AN ICON TOO, NOT A FAILURE.
+	--
+	--  buildweapon.lua builds a generated weapon's icon as a list of
+	--  { image, position } drawables rather than one path, and this used to
+	--  return nil for it -- which is why every generated gun came out as the
+	--  stand-in box.
+	--
+	--  PASSED THROUGH AS A LIST. The player side assembles it, because that is
+	--  where root.imageSize and the drawing already live, and only it can size
+	--  the union of the layers.
+	--
+	--  POSITIONS ARE LEFT EXACTLY AS AUTHORED -- pixels, centre-relative, and
+	--  possibly nil. Converting them here would put half the geometry on this
+	--  side and half on the other.
+	if type(icon) == "table" then
+		local layers = {}
+
+		for _, layer in ipairs(icon) do
+			local image = type(layer) == "table" and layer.image or layer
+
+			if type(image) == "string" then
+				layers[#layers + 1] =
+				{
+					image = absolutePath(image, cfg.directory),
+					position = type(layer) == "table" and layer.position or nil
+				}
+			end
+		end
+
+		if #layers > 0 then
+			--  DUMPED ONCE PER ITEM NAME. This used to fire only when an icon
+			--  FAILED to resolve; once layered icons started resolving, the one
+			--  case worth seeing stopped being logged at all. A composite that
+			--  assembles wrongly is unreadable on screen and perfectly legible
+			--  here.
+			if BUBBLE_DEBUG then
+				self.petportsIconDumped = self.petportsIconDumped or {}
+				local name = tostring(descriptor and descriptor.name)
+
+				if not self.petportsIconDumped[name] then
+					self.petportsIconDumped[name] = true
+					local ok, encoded = pcall(sb.printJson, layers)
+					sb.logInfo("UNIT bubble %s icon has %s layer(s): %s", name,
+						tostring(#layers), ok and encoded or "unprintable")
+				end
+			end
+
+			return layers
+		end
+
 		if BUBBLE_DEBUG then
-			sb.logInfo("UNIT bubble %s has a non-string inventoryIcon (%s); caller "
-				.. "must pick a stand-in",
-				sb.printJson(descriptor), type(icon))
+			sb.logInfo("UNIT bubble %s has a layered inventoryIcon with no usable "
+				.. "images: %s", tostring(descriptor and descriptor.name),
+				sb.printJson(icon))
 		end
 		return nil
 	end
 
-	if icon:sub(1, 1) == "/" then return icon end
-	return tostring(cfg.directory) .. icon
+	if type(icon) ~= "string" then
+		if BUBBLE_DEBUG then
+			sb.logInfo("UNIT bubble %s has an inventoryIcon that is neither a path "
+				.. "nor a layer list (%s)",
+				tostring(descriptor and descriptor.name), type(icon))
+		end
+		return nil
+	end
+
+	return absolutePath(icon, cfg.directory)
+end
+
+--  RESOLVE ONE TOKEN FROM THE PORT INTO AN ASSET PATH.
+--
+--  Two forms, and the split is what keeps the port free of asset knowledge:
+--
+--    item:<name>   an inventory icon, through petports_bubbleItemIcon
+--    mark:<name>   a frame in the shared icons sheet -- x, box, sword, gun
+--
+--  AN ITEM THAT WILL NOT RESOLVE FALLS BACK TO THE BOX rather than dropping the
+--  slot. A missing icon in a three-icon sentence would silently change what the
+--  sentence says; a box says "something, and I could not draw it".
+--
+--  THE WEAPON FALLBACKS ARE NOT WIRED YET. icons.png carries sword and gun for
+--  generated melee and ranged, and choosing between them needs a tag test that
+--  has not been measured. Everything unresolvable is a box until then, which is
+--  the honest state rather than a guess dressed as a rule.
+local function resolveToken(token)
+	--  AN ITEM TOKEN IS A TABLE, A MARK IS A STRING.
+	--
+	--  Items carry their whole descriptor because a generated weapon's icon is
+	--  built from its parameters -- resolving one from a bare name produces a
+	--  different weapon, which is what this shape exists to stop. A mark names
+	--  a frame in our own sheet and has nothing to lose, so it stays a string.
+	if type(token) == "table" and type(token.item) == "table" then
+		local path = petports_bubbleItemIcon(token.item)
+		if path ~= nil then return path end
+
+		if BUBBLE_DEBUG then
+			sb.logInfo("UNIT bubble %s has no usable icon, using the box",
+				tostring(token.item.name))
+		end
+		return petports_bubbleIcon.box
+	end
+
+	if type(token) ~= "string" then return nil end
+
+	local kind, value = token:match("^(%a+):(.+)$")
+	if kind == nil then return nil end
+
+	if kind == "mark" then
+		return petports_bubbleIcon[value]
+	end
+
+	--  THE STRING FORM OF AN ITEM TOKEN, KEPT AS A FALLBACK. Nothing sends it
+	--  any more -- a name alone cannot resolve a generated weapon -- but a port
+	--  running an older script still can, and a box is a better answer than a
+	--  blank slot.
+	if kind == "item" then
+		--  SENT UNMODIFIED. Fitting an icon to its slot used to happen here,
+		--  as a ?scalenearest directive baked into the path, and a directive
+		--  RESAMPLES the source -- a 24x64 weapon sprite brought down to 16
+		--  kept one pixel in four. Scaling is a render-time transform now and
+		--  belongs where the drawable is built, which is the player side.
+		local path = petports_bubbleItemIcon({ name = value, count = 1 })
+		if path ~= nil then return path end
+
+		if BUBBLE_DEBUG then
+			sb.logInfo("UNIT bubble %s has no single-path icon, using the box", value)
+		end
+		return petports_bubbleIcon.box
+	end
+
+	return nil
+end
+
+--  WHAT THE PORT WANTS SAID. Called by pushUnitBubble in petports_petport.lua.
+--
+--  A TOKEN LIST OR nil. nil takes the bubble down, which is what a port with
+--  nothing to report sends -- so this is the ordinary quiet path rather than an
+--  error case.
+--
+--  THE PORT HAS ALREADY PICKED. This does not arbitrate between conditions and
+--  must not start to: the port is the only sender and the ladder lives there,
+--  so a second opinion here could only ever disagree with it.
+function petports_setUnitBubbleSpec(tokens)
+	if type(tokens) ~= "table" or #tokens == 0 then
+		petports_bubbleClear()
+		return true
+	end
+
+	local icons = {}
+	for _, token in ipairs(tokens) do
+		local path = resolveToken(token)
+		if path ~= nil then icons[#icons + 1] = path end
+	end
+
+	if #icons == 0 then
+		sb.logError("UNIT bubble resolved NONE of %s -- saying nothing",
+			sb.printJson(tokens))
+		petports_bubbleClear()
+		return false
+	end
+
+	petports_bubbleSet(icons)
+	return true
 end
 
 --  Bench call. Run once from anywhere to prove the render side works

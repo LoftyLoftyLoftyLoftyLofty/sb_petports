@@ -336,6 +336,13 @@ local SETTING_ROWS = {
 	{ key = "crosshairs", owner = "toggles", needs = nil, default = true,
 	  label = "petport.setting.crosshairs", tip = "petport.tip.crosshairs" },
 
+	--  WHAT THE BUBBLE SAYS, AS OPPOSED TO WHETHER THERE IS ONE. `carried`
+	--  above is the master switch; this decides whether one particular thing
+	--  gets said. A player wanting alerts without a running commentary on a
+	--  unit that is working fine should get that.
+	{ key = "showCargo", owner = "toggles", needs = nil, default = true,
+	  label = "petport.setting.showCargo", tip = "petport.tip.showCargo" },
+
 	{ sep = true, needs = "medic", label = "petport.setting.medicblock" },
 
 	{ key = "player", owner = "medic", needs = "medic",

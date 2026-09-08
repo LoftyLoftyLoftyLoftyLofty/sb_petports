@@ -50,83 +50,72 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-07 (the poison maze is navigated; the free mover is one predicate end to end; the amphibious side crashes on a dry target and is unmeasured)
+### What is built, as of 2026-09-07 evening (speech bubbles carry cargo end to end; participation moved onto the pet; the amphibious crash is still unmeasured)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-**READ THIS FIRST: THE SESSION OF 2026-09-06/07 WAS A SLOG AND THE TREE IS
-HOT.** Thirty-odd builds in a day, every one against a log, and at the end a
-two-hour soak in which swimmers navigated a poison maze both ways, chained
-legs without stopping, caught fish through it, and hairpinned. Then a drop on
-amphibious-walkable ground on the far side of the base crashed the game. That
-crash has NO log in this doc and is the first thing next session measures.
-Retire the churn; do not build on this tree until that log has been read.
+**THE AMPHIBIOUS DRY-TARGET CRASH WAS NOT LOOKED AT.** It was flagged at the
+start of this session as the mandatory first task and deliberately deferred;
+`todo.pathing.amphibiouscrash` still has no log. Nothing this session touched
+pathing, so the suspects listed there are unchanged. It is still the first
+thing next session measures.
 
-**WHAT WORKS, MEASURED (swimmers and flyers):**
-- `arch.pathing.trackedtarget` -- medic, animal, fish tracked at one layer.
-- `arch.pathing.sightlatch` -- a free mover in sight of its target drops the
-  hops; verified 47 tiles / 9 hops.
-- `arch.pathing.boundarycells` -- liquid boundaries in one shared store,
-  denied liquid as walls in the probe, the boundary floods along itself and
-  through denied pockets, walls seed the survey beside them. The maze's
-  corridors anchor because a denied wall is a surface (08e).
-- `arch.pathing.storegeneration` -- every store entry carries a generation;
-  a wipe is a generation bump nothing old can survive. This was the session's
-  central discovery: the index-driven wipe never wiped everything, and every
-  poison fix built before it was fighting a stale TRUE edge through the
-  pocket. See `fact.tooling.propertiesunlistable`.
-- `arch.pathing.onepredicate` -- the coarse probe, the waypoint picker, the
-  coarse-first gate, the sight latch and the string-pull all ask
-  `petports_flyPathClear`: collision POLY (not the box, `fact.pathing.polycollision`), medium at every step. Free movers string-pull to ANY
-  target whose line is clear (flyapproach 07k).
-- `arch.pathing.executorguards` -- the body guard (no fly command may put the
-  body in denied liquid; a body already in it may only move away), the brush
-  back-off, the nudge onto a real edge's start, the never-beyond-reach
-  waypoint, turn-aware arrival and braking measured against velocity.
-- The survey candidate scan is spatial AND walks out until it finds unswept
-  work (09m); the earlier 08h version stranded the frontier for a whole
-  evening (`dead.pathing.scanslice`).
-- The live overlay (`arch.tooling.liveoverlay`): the unit's own graph, walls,
-  boundary records, last route and verdict text, every tick from memory.
+**`PETPORTS_NAV_VERBOSE = true` IS STILL ON IN THE FILE.** Unchanged from last
+session. Turn it off before any release.
 
-**WHAT IS BROKEN OR UNKNOWN:**
-- The amphibious chassis on a dry target: the game died. Unmeasured. Suspects
-  in order: walker-side code paths that this session changed under the free
-  mover's assumptions (probe with `gravityEnabled = true`, the poly test in
-  the walker anchor, `navWithSide` around a walker survey, the turn/arrival
-  code with a walker's `mcontroller.velocity()`), or the two-sided survey
-  spending the whole instruction budget. `todo.pathing.amphibiouscrash`.
-- `PETPORTS_NAV_VERBOSE = true` IS ON IN THE FILE (09f). Turn it off before
-  any release; it multiplies the log by ten.
-- Six-hour TTL on FALSE edges: a wrongly contradicted edge stays gone for six
-  hours; only a wipe restores it (`todo.pathing.falsettl`).
-- Terrain changes: a placed block invalidates nothing until the sweep TTL
-  (`todo.pathing.terrainchange`, the plan is written there).
-- The turn-aware arrival/braking is cosmetic and Lofty has said to scrap it
-  if it acts up.
-- Every free-mover fix this session assumed the aquatic body; the flyer got
-  them by inheritance and was not tested in a maze.
+**WHAT WAS BUILT, MEASURED:**
+- `arch.bubble.rendering` -- a bubble over a unit's head, drawn on the PLAYER
+  at the `Overlay` layer, because a monster's drawables are clamped to its
+  monstervariant's render layer and water drew over them
+  (`fact.unit.renderlayer`).
+- `arch.bubble.protocol` -- the port decides what is said, the unit publishes
+  it, the client draws it. Priority is resolved on the port because the port is
+  the only sender. Tokens carry the whole item descriptor
+  (`fact.item.generatedicon`).
+- `arch.bubble.iconfit` -- icons fitted to a 16px slot by their VISIBLE pixels
+  and assembled from layered `inventoryIcon` lists, scaled by a drawable
+  transform rather than an image directive.
+- `arch.port.petsettings` -- the four participation checkboxes moved off the
+  port and onto `petData.toggles`, and the pane's four top boxes were deleted.
+- `fact.dispatch.upcyclegate` -- the `machines` group never gated the DELIVERY
+  leg. A unit with Machines unticked still fed upcyclers. Fixed.
 
-**THE OBSERVATION TO CARRY FORWARD (Lofty, session end):** building
-water/land connectivity through coarse cells has built, by accident, all the
-blocking infrastructure a universal flyer chassis needed. `dd.locomotion.
-universalflyer` records it as intent.
+**WHAT WORKS FROM LAST SESSION, UNTOUCHED:** all coarse-nav work --
+`arch.pathing.trackedtarget`, `arch.pathing.sightlatch`,
+`arch.pathing.boundarycells`, `arch.pathing.storegeneration`,
+`arch.pathing.onepredicate`, `arch.pathing.executorguards`,
+`arch.tooling.liveoverlay`. Nothing this session went near them.
 
-**DESIGN DECIDED THIS SESSION, NOT BUILT:** `dd.pathing.arteryfirst`,
-`dd.pathing.highwaynode`, `dd.pathing.railsanchor`, `dd.cargo.playerdefrag`.
-`dd.pathing.boundarystore` and `dd.pathing.probeprofile` ARE built.
+**WHAT IS BUILT BUT NOT FINISHED:** the bubble says exactly one thing --
+what a unit is carrying. Every alert on the agreed list is unbuilt and filed
+at `todo.bubble.alerts`; the remaining states at `todo.bubble.states`.
 
-**LINE ENDINGS.** `petports_petport.lua` CRLF; contract, taskAction,
-coarsenav, flyapproach LF. Amphibious and sinker `.monstertype` are CRLF.
+**WHAT IS KNOWN AND UNRESOLVED:**
+- Units stutter-step: velocity hits zero for ~0.3 s between every task, four
+  times per work cycle. MEASURED and CORRECT -- no preemption, every task
+  reports done -- but it looks broken. `todo.dispatch.turnaround`.
+- The 30 s world stall is still there, measured five times this session at
+  323-382 ms, dead regular at 30.2-30.3 s. It is `WorldStorage::sync()` and
+  predates everything here. The 45000 patch test still has no result.
+- `crosshairRefresh` is the largest port-side cost at ~150 ms per 10 s window.
+  Not frame-breaking, unrelated to this session, unfiled.
 
-**STAMPS AT SESSION END:** coarsenav 09m, taskAction 07u, flyapproach 07k,
-contract 07g, petport 07l, habitat 07a. All five `.monstertype` files
-changed (collision poly chamfer 0.4). `petports_localorder.py` added to
-tools -- run it on coarsenav before every build; four of this session's
-crashes were a local used above its definition.
+**LINE ENDINGS.** `petports_petport.lua` CRLF; everything else this session
+touched is LF. `petports_bubble.lua` went mixed mid-session and was
+re-indented back to tabs -- check it if a patch anchor ever misses.
 
+**THE TWO COMMITS SINCE THE LAST STATUS ARE LAST SESSION'S, NOT THIS ONE'S.**
+`d0d8cd7` (sight latch breaking on paths with denied liquids) and `2b7b662`
+(velocity and hairpin turn physics) both landed before this session started and
+are already described above under what works from last session --
+`arch.pathing.sightlatch` and the turn-aware arrival noted in
+`arch.pathing.executorguards`. Nothing in this session is committed yet.
+
+**STAMPS AT SESSION END:** petport 07l (unstamped changes since), bubble
+2026-09-07a. `petports_bubble.lua` and the bubble half of
+`petports_coverageoverlay.lua` are new this session.
 
 ## ARCHITECTURE
 
@@ -3130,13 +3119,20 @@ petports namespace. What transfers is the REASONING, not the code -- and not all
 of it: `nicemice_isAlly` compares team NUMBER, which `fact.unit.damageteams`
 shows would be wrong here.
 
-### The port owns an enabled switch and four participation groups
-`arch.port.switches` -- see also `dd.port.participationgroups`
+### The port owns an enabled switch; participation moved to the pet
+`arch.port.switches` -- see also `arch.port.petsettings`, `dd.port.participationgroups`
 
-Both are OBJECT parameters, not `petData`: they describe the PORT, survive the
-item being taken out and put back, and do not travel with a unit carried
-elsewhere. Both default to on when ABSENT, so no port in an existing world
-switches itself off on update.
+**AMENDED 2026-09-07. THE FOUR PARTICIPATION GROUPS ARE NO LONGER HERE.** They
+were object parameters on the port, for the reason this entry used to give; they
+are now on `petData.toggles` and travel with the unit. See
+`arch.port.petsettings` for the move and what it cost. `petports_participate` --
+a different parameter, the one that decides NETWORK MEMBERSHIP -- did not move
+and is still a port parameter.
+
+What is left here is the enabled switch. It is an OBJECT parameter, not
+`petData`: it describes the PORT, survives the item being taken out and put
+back, and does not travel with a unit carried elsewhere. It defaults to on when
+ABSENT, so no port in an existing world switches itself off on update.
 
 **THE HANDLERS ONLY WRITE. `update` RECONCILES.** One place decides whether a unit
 should exist, which also covers the cases no handler sees: a world loading with a
@@ -3146,6 +3142,148 @@ writes the item back first, so cargo and resources survive.
 **NOT AN EARLY RETURN.** The item write-back, the pane mirror, the module effect
 push and `workUpdate`'s housekeeping all keep running while a port is off. An
 early return there is how the replant sweep once stopped running for empty ports.
+
+### Participation and claim markers live on the pet, not the port
+`arch.port.petsettings` -- see also `arch.port.switches`, `dd.port.participationgroups`, `arch.bubble.protocol`
+
+**BUILT 2026-09-07, AND IT REVERSES THIS DOCUMENT IN TWO PLACES.** `hauling`,
+`sorting`, `machines` and `crosshairs` were object parameters on the port. They
+are now keys on `petData.toggles`, written by `petports_setToggles` like every
+other pet setting, and the pane's four top checkboxes are deleted.
+
+**THE ARGUMENT THAT LOST.** `arch.port.switches` held that these describe what a
+PORT contributes to the network and so mean something with nothing socketed.
+Measured: every consumer of the three participation groups is a work generator,
+and no generator runs without a unit -- so the answer an empty port gave was
+never read by anything.
+
+**CLAIM MARKERS ARE THE HARD CASE AND THEY MOVED ANYWAY.** `CROSSHAIRS_KEY`
+records that they were moved OFF `petData` earlier for a real reason:
+`crosshairRefresh` runs whether or not anything is socketed, so filing the switch
+on the pet made an empty port's markers unswitchable. The answer is that an empty
+port now shows NO markers -- `petportCrosshairs` returns false with no `petData`,
+so there is nothing on screen to be unable to switch off. What is given up
+deliberately is the diagnostic: reading a port's opinion about the drops in its
+coverage before socketing anything.
+
+**POLARITY IS THE THING THAT BREAKS.** All four default ON, so all four read
+`~= false` -- on the port AND in the pane's `settingValue`. `petportNametag`
+sits beside them reading `== true` because it defaults off. Two adjacent
+accessors reading their stored value in opposite directions looks like an
+inconsistency and is the whole point; getting one wrong paints a ticked box over
+a unit the port considers switched off.
+
+**NO LEGACY ADOPTION.** Ports carrying the old object parameters are not read
+forward. The mod is not published, so re-placing them is cheaper than a
+migration path that would have to be carried forever.
+
+### A bubble over a unit is drawn on the player, not on the unit
+`arch.bubble.rendering` -- see also `fact.unit.renderlayer`, `arch.tooling.liveoverlay`, `dead.bubble.animatorparts`
+
+**BUILT 2026-09-07.** Up to three 16px icons in a bubble above a unit's head,
+drawn by `petports_coverageoverlay.lua` -- a PLAYER script -- through
+`localAnimator.addDrawable` at `self.petportsOverlayLayer`, which
+`probeRenderLayer` measured as `Overlay` on 2026-09-04.
+
+**IT WAS BUILT ON THE MONSTER'S OWN ANIMATOR FIRST AND THAT CANNOT WORK.** Every
+drawable a monster produces is clamped to its monstervariant's render layer, so
+the bubble drew behind the water overlay with no way to lift it --
+`fact.unit.renderlayer`. `zLevel` orders parts within the entity and cannot
+escape it. The post-mortem for the whole monster-side attempt, including the
+mirror machinery it needed and no longer does, is `dead.bubble.animatorparts`.
+
+**IT IS A CO-TENANT OF THE COVERAGE OVERLAY, NOT ITS OWN SCRIPT.**
+`deploymentConfig/scripts` chain into ONE context on the player -- which is why
+that file does the `petports_overlay_originalInit` dance at all -- so a second
+script would share the same animator and the same drawable list. They share one
+clear-and-add pass. `update`'s early return is now "nothing to draw" rather than
+"no port held", and bubbles draw after the coverage segments so they sit over the
+hatching.
+
+**CULLED BY EARSHOT, NOT BY BUDGET.** 25 tiles, a radius, set by eye. There was a
+draw cap and it was removed on purpose: a player who fills the screen with units
+should see all of them. The sort survives the cap for a smaller reason --
+drawables overlap in the order they are added, so an unsorted `pairs()` walk makes
+two overlapping bubbles swap which is on top from frame to frame.
+
+**A UNIT THAT STOPPED EXISTING IS DROPPED.** What `world.entityExists` reports on
+a client for a unit that is merely far away is UNVERIFIED. Either way there is
+nothing to draw.
+
+### The port decides what a unit says; the unit says it; the client draws it
+`arch.bubble.protocol` -- see also `arch.bubble.rendering`, `fact.item.generatedicon`, `dd.bubble.publishalways`
+
+**BUILT 2026-09-07.** Every condition worth a bubble is something the PORT
+discovered -- cargo, full crates, unreachable targets -- because the unit only
+walks and stands. But the unit is what has a position and what can reach
+players. So:
+
+    bubbleSpec()          port     a ladder, first match wins, worst first
+    pushUnitBubble()      port     signature-gated from update, entity id in it
+    petports_setUnitBubbleSpec   unit   resolves tokens to asset paths
+    publishBubble()       unit     world.players(), sendEntityMessage on change
+    petports_bubbleShow   player   handler, tracked per unit id
+
+**PRIORITY IS RESOLVED ON THE PORT, BEFORE THE PUSH.** The port is the only
+sender, so it picks the winner. The unit never arbitrates and the client never
+sees two senders disagree. One rung exists today.
+
+**TOKENS, NOT PATHS, AND AN ITEM TOKEN CARRIES ITS WHOLE DESCRIPTOR.** A mark is
+the string `mark:x`; an item is a table `{ item = <descriptor> }`. The descriptor
+travels because a generated weapon's icon is built from its parameters and
+resolving one from a bare name produces a DIFFERENT weapon --
+`fact.item.generatedicon`. Measured affordable; the push log prints the encoded
+byte count so it stays watched.
+
+**world.players(), NOT playerQuery.** Range is a DRAWING decision and the client
+already makes it. Culling on the sender too would mean two ranges that have to
+agree, and the failure when they drift is a player well inside draw range seeing
+nothing. It also means a player HOLDS the state before they are close enough to
+see it, so walking into range shows the bubble at once.
+
+**A ~10 SECOND HEARTBEAT REPUBLISHES WHATEVER IS UP**, from `petBehavior.run`,
+which is a 1 Hz host -- `groundPet.querySurroundings` calls it on
+`querySurroundingsCooldown`, 1 in all five monstertypes. It exists because
+`localAnimator` drawables that stay offscreen long enough are dropped and the
+client cannot ask for them back: a monster's scripts run on the master only.
+Counted in calls, so ten CARRYING seconds rather than ten wall-clock ones.
+Verified at 8-9.
+
+### Icons are fitted to their slot by visible pixels and assembled from layers
+`arch.bubble.iconfit` -- see also `arch.bubble.protocol`, `fact.tooling.imageregion`, `fact.item.generatedicon`
+
+**BUILT 2026-09-07, over four wrong attempts.** A slot is 16px. Anything bigger
+is scaled down; nothing is ever scaled up.
+
+**THE SCALE IS A DRAWABLE TRANSFORM, NOT AN IMAGE DIRECTIVE.** `?scalenearest`
+RESAMPLES the source -- at 16/64 it keeps one pixel in four -- and a generated
+spear came out unreadable. A transform scales at draw time and leaves the art
+alone. The matrix layout is the one `arch.tooling.liveoverlay`'s pane cousin
+measured off live portrait drawables: `m[1]` is `{a, b, tx}`, `m[2]` is
+`{c, d, ty}`.
+
+**THE MATRIX SCALES AND NOTHING ELSE.** `centered = true` stays on the drawable.
+Carrying the centring in the matrix as well was a SECOND centring on top of the
+first and put every icon a half-image down and to the left -- `tx`/`ty` are in
+image pixels at 8 to the tile, so a 16x16 icon moved a full tile each way.
+
+**SIZED BY VISIBLE PIXELS.** `root.imageSize` reports the canvas including
+transparent padding, so a gun in a 16-tall sheet was scaled to fit its
+transparency. `root.nonEmptyRegion` gives the box that is actually drawn, which
+is what the inventory itself uses. Both calls are needed: the region says where
+the art is inside the canvas, the size says where the canvas centre is, and a
+drawable is centred on its position.
+
+**A LAYERED `inventoryIcon` IS ASSEMBLED, NOT SYMBOLISED.** `buildweapon.lua`
+builds a generated weapon's icon as `{ image, position }` drawables; a slot
+becomes one drawable per layer sharing one scale. The UNION box sets that scale,
+because the parts accumulate from zero and the assembly is neither centred on its
+origin nor bounded by any single layer. Positions are pixels, centre-relative,
+and may be nil -- see `fact.item.generatedicon`.
+
+**THE MEASUREMENTS ARE CACHED PER PATH, AND FAILURES ARE CACHED TOO.**
+`addBubble` runs every frame; a generated weapon is six distinct paths. A failure
+caches as `false` so an unmeasurable path is not retried sixty times a second.
 
 ### One string table for every pane
 `arch.pane.stringtable` -- see also `arch.pane.hoverlayer`, `todo.pane.tooltipstrings`
@@ -6772,6 +6910,44 @@ The same log confirmed the bidirectional property holds: from one wire, 17 found
 Consequence worth knowing: those nodes cannot also carry an on/off level. A vent
 a switch can close would need a second input node declared for it.
 
+### A silenced unit still publishes what it would have said
+`dd.bubble.publishalways` -- see also `arch.bubble.protocol`, `arch.port.petsettings`
+
+**DECIDED 2026-09-07, and Lofty was explicit: "just don't send updates bro" is
+not acceptable here.** The speech-bubble toggle is per unit, so on a base with
+some units talking and some silent, a player ticking one box wants that unit to
+appear NOW rather than at its next content change -- which may be a minute away
+on a unit doing something slow.
+
+So the enabled flag rides ALONGSIDE the content rather than gating it. Every
+client already holds the current state of every unit in the world, and the
+checkbox is a repaint on the next frame.
+
+**THE COST IS MESSAGES NOBODY LOOKS AT**, sent on content change rather than per
+tick, to every player in the world. Measured and accepted.
+
+**`~= false` ON THE READ**, so a message from a unit running an older script --
+no flag at all -- reads as enabled rather than silently going dark.
+
+### The cargo bubble is a second checkbox, not part of the first
+`dd.bubble.cargotoggle` -- see also `dd.bubble.publishalways`, `dd.pane.settingdefault`
+
+**DECIDED 2026-09-07.** `carried` is the master switch and defaults ON, because
+bubbles are how a unit reports that it cannot deposit or that storage is full --
+a fleet that shipped silent would hide its only channel for asking for help.
+`showCargo` decides whether one particular thing gets SAID, and also defaults on.
+
+A player who wants alerts without a running commentary on a unit that is working
+correctly should get that, and every state on the list -- carrying, working,
+health, sleeping -- gets the same treatment as it lands.
+
+**THE KEY NAMED `carried` IS THE MASTER SWITCH AND ITS STRINGS DESCRIBE THE
+STATE.** `petport.setting.carried` reads "Show speech bubbles" but
+`petport.tip.carried` still reads "Show what this unit is doing in a bubble above
+its head while it works", which describes `showCargo`. Wired that way because
+`carried` already existed with a row, a label and a tip, and renaming a settings
+key is a save-compat break. Worth untangling; filed at `todo.bubble.keyname`.
+
 ### Four participation groups, and two generators belong to none
 `dd.port.participationgroups` -- see also `arch.port.switches`
 
@@ -6781,7 +6957,13 @@ or fourteen boxes do not fit the band. Grouped by what a player SEES happening:
     hauling    collection                      labelled "Item Pickup"
     sorting    restockFetch, restockDeliver, tidy, compact
     farming    replant, water, harvest, animal, withdraw, withdrawWater
-    machines   drain, fuel
+    machines   upcycle, drain, fuel
+
+**AMENDED 2026-09-07 TWICE OVER.** `upcycle` was missing from this table AND from
+the gate -- see `fact.dispatch.upcyclegate`, where a unit with Machines unticked
+delivered anyway. And these no longer live on the port: they are keys on
+`petData.toggles` now, per `arch.port.petsettings`. `farming` left earlier still,
+to the farming module.
 
 **THE LINE BETWEEN THE FIRST TWO IS INGRESS.** `hauling` is how a thing ENTERS the
 network; `sorting` is everything done to a thing already inside it.
@@ -7544,19 +7726,19 @@ the run -- touches every item on that list and wants measuring before it is
 chosen over the other.
 
 ### The carried-item indicator
-`plan.pane.carriedindicator`
+`plan.pane.carriedindicator` -- see also `arch.bubble.rendering`, `arch.bubble.protocol`, `todo.bubble.states`
 
-A unit carrying something should say so: a small bubble above its head showing
-the ITEM ICON of what it holds. The same slot generalises to a TASK icon --
-sleeping, wandering, farming, depositing -- which is the cheapest available
-answer to "why is that one just standing there".
+**BUILT 2026-09-07 AND GRADUATED.** Kept here only so its references resolve; the
+architecture is `arch.bubble.rendering`, `arch.bubble.protocol` and
+`arch.bubble.iconfit`. What is still unbuilt from the original sketch is the TASK
+icon half, which is `todo.bubble.states`.
 
-**It is opt-in per unit, toggled on the petport panel.** A base running a dozen
-units with permanent bubbles overhead is visual clutter, and clutter is the
-exact vanilla ship-pet failure this mod exists to avoid. Default it off and let
-a player turn it on for the unit they are currently wondering about.
-
-This is a second consumer of the petport panel, which does not exist yet.
+**ONE THING IN IT WAS DECIDED THE OTHER WAY.** This entry said "default it off"
+against ship-pet clutter. Both bubble toggles ship ON -- see
+`dd.bubble.cargotoggle`. The argument that won is that bubbles are how a unit
+reports it is stuck, and a fleet that shipped silent would hide its only channel
+for asking for help until a player found the checkbox. Clutter is answered by the
+25-tile earshot cull and by the per-state toggles instead.
 
 ### Units should sleep in their ports
 `plan.unit.sleep`
@@ -10113,6 +10295,115 @@ Two wrong fixes went in before this was measured -- one guessing at the hit test
 one adding the `tooltipLayout` the config was genuinely missing. Both were real
 defects. Neither was the reason.
 
+### A monster's drawables are clamped to its monstervariant's render layer
+`fact.unit.renderlayer` -- see also `arch.bubble.rendering`, `dead.bubble.animatorparts`
+
+**MEASURED 2026-09-07, by Lofty, in the engine source.** Entity rendering collects
+the animator's drawables and hands them all to one render layer taken from the
+monstervariant. There is no per-part override, no `renderLayer` property on an
+animated part, and no `animator.setRenderLayer`.
+
+`zLevel` orders parts WITHIN the entity and cannot escape it. So anything drawn
+by a monster sits under whatever draws above that layer -- water, in the case that
+found this.
+
+**THE `renderLayer` KEY THAT DOES EXIST IS A PROJECTILE CONFIG KEY.**
+`petports_crosshair.projectile` sets `ForegroundEntity+1`, and it works because a
+projectile is its own entity carrying its own layer. That is what made this look
+solvable from the animation side for an afternoon.
+
+**AN UNKNOWN ANIMATION PART PROPERTY IS SILENTLY IGNORED**, unlike a bad
+`renderLayer` on a projectile, which is fatal to the asset. So "it loaded fine"
+proves nothing about a part property; only the picture does.
+
+### root.imageSize measures the canvas; root.nonEmptyRegion measures the art
+`fact.tooling.imageregion` -- see also `arch.bubble.iconfit`
+
+**MEASURED 2026-09-07.** `root.imageSize(path)` returns the whole image including
+transparent padding. For a framed path -- `sheet.png:frame` -- it returns the
+FRAME's size, not the sheet's; verified against a 16x16 frame in an 80x16 sheet.
+
+`root.nonEmptyRegion(path)` returns the rectangle of the image that is not
+transparent, which is what the inventory uses to fit a drawable into its own 16px
+slot. Sizing by `imageSize` alone scales art down to fit its own padding.
+
+**BOTH ARE AVAILABLE IN A MONSTER AND IN A PLAYER SCRIPT.** The prior precedent
+in this mod was an interface script.
+
+**DIRECTIVES ON THE PATH ARE RESOLVED FIRST**, so a `?replace=` chain measures
+the same as the bare image and a directive that changed dimensions would be
+accounted for.
+
+**THE Y ORIGIN IS UNVERIFIED.** Whether the region counts rows from the bottom or
+the top decides the sign of vertical centring, and nothing measured so far can
+expose it -- every real layer has position y = 0 and art roughly centred in its
+canvas. Art sitting low in its sheet is what would catch it.
+
+### A generated weapon's icon is built from its parameters, not authored
+`fact.item.generatedicon` -- see also `arch.bubble.protocol`, `arch.bubble.iconfit`
+
+**MEASURED 2026-09-07.** `/items/buildscripts/buildweapon.lua` assembles
+`config.inventoryIcon` when the item does not author one:
+
+    { image = animationParts[part] .. paletteSwaps, position = partImagePositions[part] }
+
+An absolute path with directives appended, and a position. Three things about
+that position, all from the `gunParts` loop directly above it:
+
+- **It is the CENTRE, not a corner.** The loop adds half the part's width,
+  records, then adds the other half. A layer spans `px +/- w/2`.
+- **It is in PIXELS.** The animation offset on the line above divides by 8 to
+  reach tiles; the icon position does not.
+- **It can be nil.** `partImagePositions` is only filled for
+  `builderConfig.gunParts`, so a generated melee weapon stacks every layer at the
+  origin. That is vanilla's behaviour, not a bug to correct.
+
+**THE PARTS ARE CHOSEN BY `parameters.seed` AND TINTED BY SWAPS DERIVED FROM IT**,
+so `root.itemConfig({name = ...})` with no parameters REBUILDS A DIFFERENT
+WEAPON. It resolves cleanly and looks plausible, which is why this presented as a
+rendering fault rather than a lookup fault.
+
+**MEASURED SHAPE:** one plasma pistol was 6 layers -- three parts, each with a
+`fullbright` companion at the same position -- widths 5/7/7 at 2.5/8.5/15.5,
+union 0..19. Authored two-layer icons exist too (`sb_crappyspear` and friends);
+those resolve correctly from a bare name because they do not depend on
+parameters.
+
+### `canvas:drawText` takes a Maybe<Color>, and a hex string is not one
+`fact.pane.drawtextcolor` -- see also `arch.bubble.rendering`
+
+**MEASURED 2026-09-07**, as a `LuaConversionException` converting to
+`Maybe<Color>` on the first frame the call ran. `"999999"` is not a Color; every
+colour in `petportconfig.lua` is a table -- `{ r, g, b }` or `{ r, g, b, a }`.
+
+**THE ARGUMENT IS A Maybe, SO OMIT IT.** Text can be recoloured mid-string with
+`^#rrggbb;`, so a Lua colour could only ever set the run before the first escape
+anyway -- and it hides a presentation choice from whoever edits the string. The
+colour belongs in the string table.
+
+### The `machines` group never gated delivery, only collection
+`fact.dispatch.upcyclegate` -- see also `dd.port.participationgroups`, `arch.port.petsettings`
+
+**MEASURED 2026-09-07:** a unit holding an item an upcycler wanted delivered it
+with the Machines box unticked.
+
+`machines` gated `drain` and `fuel` -- the two COLLECTION legs. The DELIVERY leg,
+`upcycle`, was in no group at all, because it is not a rung of its own: it is
+reached from the top of `depositWork`, and `depositWork` is ungated on purpose
+because gating the unload path deadlocks a loaded unit.
+
+**SO THE GATE CANNOT GO AT THE CALL SITE OR IN `findWork`.** It lives inside
+`upcyclerWork`, where every caller present and future is covered. It mirrors
+`doMachines` in full, oblivious included -- `depositWork` is not gated on
+oblivious either, so an oblivious unit carrying surplus fed machines by the same
+route. One hole, two ways in.
+
+**IT COSTS THE BATCH-FLOOR WAIVER IN ONE STATE.** With storage full, `upcyclerWork`
+normally waives its minimum batch and drip-feeds machines to stop drops decaying.
+With Machines unticked there is nowhere for a load to go at all, so the unit holds
+cargo and drops time out. That is the player's instruction, but it is the one
+state this switch can produce that looks like a stuck unit.
+
 ### `widget.getChecked` IN A CHECKABLE BUTTON'S CALLBACK IS THE POST-TOGGLE STATE
 `fact.pane.checkedpostoggle` -- see also `arch.upcycler.burnbox`
 
@@ -11737,6 +12028,45 @@ Better to have no tentative rect than a rect that lies.
 any always-running client context with a cursor. Nothing else. The overlay's
 aim probe was REMOVED along with the feature -- dead code that never runs rots,
 and this entry is the record.
+
+### The bubble as animated parts on the unit's own animator
+`dead.bubble.animatorparts` -- see also `arch.bubble.rendering`, `fact.unit.renderlayer`
+
+**BUILT, WORKED, AND THROWN AWAY IN ONE SESSION, 2026-09-07.** The first speech
+bubble was a `bubble` stateType and four parts on every chassis `.animation` --
+a backing plus three icon slots, images supplied at runtime through
+`animator.setPartTag`, layout by per-state `offset` overrides. It rendered
+correctly, networked to every client for free, and travelled with the pet
+without a single entity message.
+
+**IT DIED ON ONE FACT.** A monster's drawables are clamped to its monstervariant's
+render layer, so it drew behind the water overlay with no way to lift it --
+`fact.unit.renderlayer`. That is not a bug to work around; there is no per-part
+render layer to reach for.
+
+**WHAT IT COST BEFORE THAT WAS KNOWN**, and all of it is now deleted:
+
+- A `bubble` transformation group scaled -1 on x to cancel the engine's mirror,
+  because a mirrored bubble reverses the READING ORDER of its icons and
+  pre-mirrored art cannot fix content chosen at runtime.
+- `mcontroller.controlFace` shadowed so the mirror followed the COMMANDED turn
+  rather than the observed one -- `facingDirection()` reports the previous engine
+  tick's value from Lua no matter where it is read, because the movement
+  controller integrates after the script update returns.
+- `controlMove` shadowed too, briefly, and that was wrong: it commands MOVEMENT,
+  and a mover pushes one way while facing another during braking and approach
+  overshoot. Every one of those wrote a facing the controller never applied, the
+  bubble flipped, and the next `controlFace` corrected it a frame later. A
+  visible hiccup, and `petports_contract.lua` had the tell all along -- a
+  `controlMove` and a `controlFace` with the same direction on adjacent lines.
+
+**THE PLAYER-SIDE VERSION NEEDS NONE OF IT.** Nothing on the player is mirrored,
+so the group, both shadows and the pump all went. It also allows compound
+drawables, which the animator could not do -- one part is one image.
+
+**THE STATETYPE AND PARTS ARE STILL IN ALL FIVE `.animation` FILES**, switched off
+by `BUBBLE_MONSTER_PARTS = false` in `petports_bubble.lua` rather than deleted, so
+the two could be compared. Deleting them is `todo.bubble.animcleanup`.
 
 ## REFERENCE
 
@@ -13809,6 +14139,110 @@ per tick, a `lineTileCollision` per patrol check, a bounded teleport
 search), never measured. An `os.clock` guard on the lure projectile's
 `update` logging any tick over 5 ms closes it. "Confident from reading" is
 the thing this doc distrusts.
+
+### The bubble says one thing; the rest of the list is unbuilt
+`todo.bubble.alerts` -- see also `arch.bubble.protocol`, `todo.unit.complaints`
+
+**AGREED WITH LOFTY 2026-09-07, NOT BUILT.** `bubbleSpec` is a ladder with one
+rung. Every alert goes ABOVE the carrying rung, worst first, and each is a
+condition the port already detects:
+
+    cannot deposit cargo     item, X, crate     `every deposit beacon is backed off as full` + cargo
+    nowhere to deposit       X, crate           `no deposit beacon to tidy into`
+    hungry, no food          X, preferred treat `hungry, and no treat...` / `no container...pet feeder`
+    sleepy, going to bed     ZzZ, bed           the sleepy system does not exist yet
+    sleepy, no bed           ZzZ, X, bed        likewise
+    cannot reach target      target, X, map pin `unreachableFailures` fresh
+
+**NO WRONG-ENVIRONMENT BUBBLE.** Lofty was explicit: the unit recalls when it
+detects that, so there is nobody to show it to.
+
+**SUSTAIN WHILE TRUE.** An alert stays up as long as its condition holds, which
+`bubbleSpec` gives for free -- it is a pure function of live state, re-evaluated
+every tick and signature-gated, so a condition clearing pushes the retraction on
+its own.
+
+**THE TWO TIMED ONES DO NOT FIT THAT AND NEED A FRESHNESS WINDOW.** "Just took
+damage" and "just received a heal" are EVENTS -- nothing about the world still
+says they happened. The shape that keeps `bubbleSpec` pure is the one
+`paneDiagnostics` already uses: record the moment on the port, as `self.recallAt`
+and `self.unreachableAt` do, and have the rung test freshness against it. That
+turns an event back into a condition with an expiry. `DIAG_FRESH` is 30 s;
+Lofty's number for these is 10, so they want their own constant.
+
+### The bubble's remaining states, each with its own checkbox
+`todo.bubble.states` -- see also `dd.bubble.cargotoggle`, `arch.bubble.protocol`
+
+**AGREED 2026-09-07, NOT BUILT.** Below the alerts, and below carrying:
+
+- **Working** -- one icon per task type. Lofty makes the art once the count is
+  settled, which means enumerating the task types that are worth distinguishing
+  rather than shipping one per generator.
+- **Health** -- an exclamation on fresh damage, a partial heart while not full
+  once the damage window has elapsed, a heart while being healed.
+- **Sleeping** -- ZzZ.
+- **Thinking** -- the existing spinner icon, which today is a separate stateType
+  on the unit's own animator (`arch.tooling.liveoverlay`'s cousin). Folding it
+  into the bubble would let it die with the rest of the monster-side parts.
+
+Each gets its own toggle, per `dd.bubble.cargotoggle`.
+
+### Should a unit with an alert come and find the player?
+`todo.bubble.seekplayer` -- see also `todo.bubble.alerts`
+
+**RAISED 2026-09-07, DEFERRED.** Lofty: it depends on the alert. "I have no room
+to deposit this, please take it from me" wants it. "I am damaged, please heal me"
+is reasonable but must not stall the unit.
+
+**IT IS A TASK, NOT A MOVEMENT TWEAK.** A unit walking to a player has to be
+dispatched, claimed, deadlined and abandonable like anything else, or it strands
+the way any untracked errand would. `returnWork` is the precedent: ungated, top
+of the ladder, and it exists precisely because "go somewhere with no work at the
+end of it" still has to be a task. Placing the heal version BELOW the real work
+rungs is what stops it stalling -- it gets picked only when there is nothing
+better to do.
+
+### Delete the monster-side bubble parts
+`todo.bubble.animcleanup` -- see also `dead.bubble.animatorparts`
+
+**NOT DONE 2026-09-07.** A `bubble` stateType and four parts sit in all five
+chassis `.animation` files, plus a `bubble` transformation group, switched off by
+`BUBBLE_MONSTER_PARTS = false`. They were left in so the monster-side and
+player-side versions could be put side by side; that comparison is done.
+
+Purely subtractive, and `patch_bubble.py` in the session outputs shows exactly
+what was inserted. The shared art under `shared/bubble/` STAYS -- the player side
+uses the same sheets.
+
+### `carried` is the master bubble switch but its strings describe the state
+`todo.bubble.keyname` -- see also `dd.bubble.cargotoggle`
+
+**NOT DONE 2026-09-07.** `petport.setting.carried` reads "Show speech bubbles",
+which is what the key now does. `petport.tip.carried` reads "Show what this unit
+is doing in a bubble above its head while it works", which describes `showCargo`.
+
+The key was reused because it already had a row, a label and a tip and was read
+by nothing -- exactly as the note beside it predicted would happen "the day the
+speech bubbles land". Renaming a settings key is a save-compat break, which is
+cheap while the mod is unpublished and stops being cheap later.
+
+### Units stutter-step between tasks and it looks broken
+`todo.dispatch.turnaround` -- see also `arch.dispatch.eligibility`
+
+**MEASURED 2026-09-07 AND THE BEHAVIOUR IS CORRECT.** A unit's velocity hits zero
+for roughly 0.3-0.4 s between every task, four times per work cycle. Lofty watched
+it in the petport: the unit goes home, picks up a new task, and velocity drops as
+the new path starts.
+
+**IT IS NOT PREEMPTION.** A full cycle traced from the log -- `upcycle` 4.9 s,
+`fuel` 0.4 s, `restockput` 0.6 s, `drain` 5.2 s -- shows every task reporting
+done, nothing abandoned, nothing backed off. This is NOT the stutter-step
+`noteFailure` records for 2026-09-01, where alternating eligible targets
+preempted the leash.
+
+It is the report-to-dispatch turnaround, inherent to one-task-at-a-time dispatch.
+Three of the four tasks fire back to back at the machine, so the pauses cluster
+and read as one long hesitation.
 
 ## PROCESS
 

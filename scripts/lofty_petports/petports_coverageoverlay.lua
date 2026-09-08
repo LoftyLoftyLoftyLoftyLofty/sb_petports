@@ -595,13 +595,6 @@ local BUBBLE_Y = 3.0
 --  is nearest-first.
 local BUBBLE_DRAW_RANGE = 25.0
 
---  Most bubbles drawn at once, nearest first.
---
---  Four drawables each, on the same list as the coverage overlay's segments.
---  Twelve is far past the point where a player can read them, so this is a
---  guard against a fifty-unit base rather than a limit anyone should meet in
---  normal play.
-local BUBBLE_MAX_DRAWN = 12
 
 --  Slot x offsets by icon count, centred on the unit. Same derivation as the
 --  per-state offsets in the .animation files, from the same two numbers.
@@ -626,10 +619,16 @@ end
 --  walking out of range and back leaves no bubble until something happens to
 --  the unit. Nothing re-announces on approach today.
 --
---  SORTED AND CAPPED. pairs() order is nondeterministic, so capping an unsorted
---  walk would keep a different arbitrary subset each frame and the bubbles
---  would flicker. Nearest first, entity id as the tiebreak so two units at
---  exactly equal range still order stably.
+--  SORTED, AND NOT CAPPED. There was a draw budget here and it is gone: a
+--  player who fills the screen with units should see all of them say what they
+--  are doing, and a cap chooses for them. The range cull above is the only
+--  limit, and that one is an earshot rather than a performance guess.
+--
+--  THE SORT OUTLIVED THE CAP, for a smaller reason. pairs() order is
+--  nondeterministic and drawables overlap in the order they are added, so an
+--  unsorted walk makes two overlapping bubbles swap which is on top from frame
+--  to frame. Nearest first, entity id as the tiebreak so two units at exactly
+--  equal range still order stably.
 local function bubblesToDraw(origin)
 	local out = {}
 	if self.petportsBubbles == nil then return out end
@@ -668,20 +667,209 @@ local function bubblesToDraw(origin)
 		return a.id < b.id
 	end)
 
-	if #out > BUBBLE_MAX_DRAWN then
-		--  CHANGE-GATED. Standing in a crowd should say this once, not sixty
-		--  times a second.
-		if self.petportsBubbleDropped ~= #out then
-			self.petportsBubbleDropped = #out
-			sb.logInfo("PETPORTS bubbles over budget: %s in range, drawing the "
-				.. "nearest %s", tostring(#out), tostring(BUBBLE_MAX_DRAWN))
-		end
+	return out
+end
 
-		for i = #out, BUBBLE_MAX_DRAWN + 1, -1 do
-			out[i] = nil
+--  THE SIZE OF ONE ICON SLOT, IN PIXELS. bubble.frames is laid out around 16px
+--  icons at an 18px pitch, and every offset above derives from those two
+--  numbers -- so an icon bigger than this does not overflow its slot, it
+--  overflows the bubble.
+local BUBBLE_ICON_PX = 16
+
+--  HOW BIG IS THIS ICON, IN PIXELS? Cached, because addBubble runs every frame
+--  and a bubble that has not changed would otherwise cost three root.imageSize
+--  calls a frame forever.
+--
+--  A FAILURE IS CACHED TOO, as false rather than nil, so an unmeasurable path
+--  is not retried sixty times a second.
+local function iconSize(path)
+	self.petportsIconSize = self.petportsIconSize or {}
+
+	local held = self.petportsIconSize[path]
+	if held ~= nil then
+		if held == false then return nil end
+		return held
+	end
+
+	local ok, size = pcall(root.imageSize, path)
+
+	if not ok or type(size) ~= "table" or size[1] == nil then
+		self.petportsIconSize[path] = false
+		sb.logInfo("PETPORTS bubble could not measure %s (%s) -- drawn unscaled",
+			tostring(path), tostring(size))
+		return nil
+	end
+
+	self.petportsIconSize[path] = size
+
+	return size
+end
+
+--  THE VISIBLE BOX OF AN ICON, IN PIXELS RELATIVE TO ITS OWN CENTRE.
+--
+--  MEASURING THE CANVAS WAS WRONG. root.imageSize reports the whole image
+--  including transparent padding, so the plasma pistol's parts came back 5x16,
+--  7x16 and 7x16 -- 16-tall canvases holding a gun nowhere near 16 tall -- and
+--  the slot scale was decided by padding.
+--
+--  root.nonEmptyRegion IS WHAT THE INVENTORY USES to fit a drawable into its
+--  own 16x16 slot. It returns the rectangle of the image that is not
+--  transparent.
+--
+--  RELATIVE TO THE CENTRE, because the drawable is centred on its position.
+--  Layers have different canvas sizes, so their visible boxes cannot be unioned
+--  until they share an origin -- which is why imageSize is still needed.
+--
+--  FALLS BACK TO THE FULL CANVAS. An image that is entirely transparent, or a
+--  binding that will not answer, gives the old behaviour rather than nothing.
+local function iconBox(path)
+	self.petportsIconBox = self.petportsIconBox or {}
+
+	local held = self.petportsIconBox[path]
+	if held ~= nil then return held end
+
+	local size = iconSize(path)
+	if size == nil then return nil end
+
+	local w = size[1] or 0
+	local h = size[2] or 0
+
+	local box = { -w * 0.5, -h * 0.5, w * 0.5, h * 0.5 }
+	local ok, region = pcall(root.nonEmptyRegion, path)
+
+	if ok and type(region) == "table" and region[3] ~= nil
+	   and region[3] > region[1] and region[4] > region[2] then
+		box = {
+			region[1] - w * 0.5,
+			region[2] - h * 0.5,
+			region[3] - w * 0.5,
+			region[4] - h * 0.5
+		}
+	end
+
+	self.petportsIconBox[path] = box
+
+	--  THE REGION IS LOGGED BESIDE THE SIZE because whether nonEmptyRegion
+	--  counts rows from the bottom or the top is unverified, and that decides
+	--  the sign of the vertical centring. Art sitting low in its canvas is what
+	--  would expose it.
+	sb.logInfo("PETPORTS bubble %s canvas %sx%s visible %s",
+		tostring(path), tostring(w), tostring(h),
+		(ok and type(region) == "table") and sb.printJson(region) or "unavailable")
+
+	return box
+end
+
+--  MEASURE A SLOT'S ICON AND PLACE ITS LAYERS.
+--
+--  Takes a path string or a list of { image, position } layers -- see
+--  petports_bubbleItemIcon. Returns a list of { image, x, y } in TILES relative
+--  to the slot centre, already scaled, or nil if nothing could be measured.
+--
+--  THE UNION BOX SETS THE SCALE. A composite is laid out left to right from
+--  zero by buildweapon.lua, so scaling from any single layer would push the
+--  assembly out of its slot even where every piece fits on its own -- and the
+--  assembly is not centred on its origin either, so the box is what centres it.
+--
+--  POSITIONS ARE PIXELS AND CENTRE-RELATIVE, straight out of
+--  partImagePositions. A layer spans px +/- w/2, and nil means the origin --
+--  which is what a generated melee weapon gets, because partImagePositions is
+--  only filled for gunParts.
+--
+--  AN UNMEASURABLE LAYER IS ASSUMED SLOT-SIZED rather than dropped. Dropping it
+--  would silently change what the icon shows; a wrong size is visible.
+local function layoutIcon(icon)
+	local layers = icon
+	if type(icon) == "string" then layers = { { image = icon } } end
+	if type(layers) ~= "table" then return nil end
+
+	local placed = {}
+	local minX, minY, maxX, maxY
+
+	for _, layer in ipairs(layers) do
+		local image = type(layer) == "table" and layer.image or layer
+
+		if type(image) == "string" then
+			--  THE VISIBLE BOX, NOT THE CANVAS. See iconBox: padding decided the
+			--  scale before this, so a gun in a 16-tall sheet was shrunk to fit
+			--  transparency.
+			local box = iconBox(image)
+			if box == nil then
+				box = { -BUBBLE_ICON_PX * 0.5, -BUBBLE_ICON_PX * 0.5,
+				        BUBBLE_ICON_PX * 0.5, BUBBLE_ICON_PX * 0.5 }
+			end
+
+			local at = (type(layer) == "table" and layer.position) or { 0, 0 }
+			local px = tonumber(at[1]) or 0
+			local py = tonumber(at[2]) or 0
+
+			placed[#placed + 1] =
+			{
+				image = image, px = px, py = py,
+				w = box[3] - box[1], h = box[4] - box[2]
+			}
+
+			local l, r = px + box[1], px + box[3]
+			local b, t = py + box[2], py + box[4]
+
+			minX = (minX == nil or l < minX) and l or minX
+			maxX = (maxX == nil or r > maxX) and r or maxX
+			minY = (minY == nil or b < minY) and b or minY
+			maxY = (maxY == nil or t > maxY) and t or maxY
 		end
-	elseif self.petportsBubbleDropped ~= nil then
-		self.petportsBubbleDropped = nil
+	end
+
+	if #placed == 0 then return nil end
+
+	local spanX = maxX - minX
+	local spanY = maxY - minY
+	local biggest = math.max(spanX, spanY)
+
+	local scale = 1.0
+	if biggest > BUBBLE_ICON_PX and biggest > 0 then
+		scale = BUBBLE_ICON_PX / biggest
+	end
+
+	local cx = (minX + maxX) * 0.5
+	local cy = (minY + maxY) * 0.5
+
+	--  THE ASSEMBLED RESULT, ONCE PER DISTINCT ICON.
+	--
+	--  A composite that comes out spread across its slot is unreadable on
+	--  screen and says nothing about WHY. These are the four numbers that
+	--  decide it -- the span, the scale, and each layer's measured size against
+	--  its authored position. A layer that could not be measured is assumed
+	--  slot-sized, which inflates the span and pushes everything else apart, so
+	--  it shows up here as a suspiciously round 16x16.
+	if #placed > 1 then
+		self.petportsIconLogged = self.petportsIconLogged or {}
+		local key = placed[1].image
+
+		if not self.petportsIconLogged[key] then
+			self.petportsIconLogged[key] = true
+
+			local parts = {}
+			for _, part in ipairs(placed) do
+				parts[#parts + 1] = string.format("%sx%s@%s,%s",
+					tostring(part.w), tostring(part.h),
+					tostring(part.px), tostring(part.py))
+			end
+
+			sb.logInfo("PETPORTS bubble icon: %s layers, span %sx%s, scale %s -- %s",
+				tostring(#placed), tostring(spanX), tostring(spanY),
+				tostring(scale), table.concat(parts, " | "))
+		end
+	end
+
+	local out = { scale = scale }
+
+	for _, part in ipairs(placed) do
+		out[#out + 1] =
+		{
+			image = part.image,
+			x = (part.px - cx) * scale / BUBBLE_PPT,
+			y = (part.py - cy) * scale / BUBBLE_PPT
+		}
 	end
 
 	return out
@@ -709,17 +897,45 @@ local function addBubble(entry)
 
 	local xs = bubbleSlotX(n)
 	for i = 1, n do
-		local icon = {
-			image = icons[i],
-			position = { base[1] + xs[i], base[2] + BUBBLE_LIFT },
-			centered = true,
-			fullbright = true
-		}
+		local layout = layoutIcon(icons[i])
 
-		if self.petportsOverlayLayer ~= nil then
-			localAnimator.addDrawable(icon, self.petportsOverlayLayer)
-		else
-			localAnimator.addDrawable(icon)
+		if layout ~= nil then
+			--  ONE DRAWABLE PER LAYER, ALL SHARING THE SLOT'S SCALE. A plain
+			--  path is a one-layer icon, so it takes exactly this path too and
+			--  there is no second code route to keep in step.
+			local transform = nil
+
+			if layout.scale < 1.0 then
+				transform = {
+					{ layout.scale, 0, 0 },
+					{ 0, layout.scale, 0 },
+					{ 0, 0, 1 }
+				}
+			end
+
+			for _, part in ipairs(layout) do
+				local drawable = {
+					image = part.image,
+					position = {
+						base[1] + xs[i] + part.x,
+						base[2] + BUBBLE_LIFT + part.y
+					},
+
+					--  CENTRED BY THE DRAWABLE, SCALED BY THE MATRIX. Putting
+					--  the centring in the matrix as well moved every icon a
+					--  half-image down and to the left -- measured 2026-09-07.
+					centered = true,
+					fullbright = true
+				}
+
+				if transform ~= nil then drawable.transformation = transform end
+
+				if self.petportsOverlayLayer ~= nil then
+					localAnimator.addDrawable(drawable, self.petportsOverlayLayer)
+				else
+					localAnimator.addDrawable(drawable)
+				end
+			end
 		end
 	end
 end

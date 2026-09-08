@@ -2158,7 +2158,12 @@ function init()
       hauling = payload.hauling ~= false,
       sorting = payload.sorting ~= false,
       machines = payload.machines ~= false,
-      crosshairs = payload.crosshairs ~= false
+      crosshairs = payload.crosshairs ~= false,
+
+      --  THE CARGO BUBBLE, SEPARATE FROM `carried`. That one is the master
+      --  switch; this decides whether one particular thing gets said. Defaults
+      --  on -- see petportBubbleCargo.
+      showCargo = payload.showCargo ~= false
     }
     self.dirty = true
     self.paneSignature = nil
@@ -2173,6 +2178,12 @@ function init()
     --  speech bubbles, so it needs the same immediate push as the nametag or
     --  the checkbox does nothing until the unit respawns.
     pushUnitBubbles()
+
+    --  AND WHAT IT SAYS, since showCargo lives in this table too. Clearing the
+    --  signature would do on its own; calling it means the bubble changes on
+    --  the frame the box is clicked rather than on the next tick.
+    self.pushedUnitBubble = nil
+    pushUnitBubble()
 
     --  ZEROED SO AN OPT-IN IS PROMPT, matching what petports_setParticipation
     --  did when these lived on the port. A group ticked back on should be
@@ -4659,6 +4670,24 @@ function petportBubbles()
   return toggles.carried ~= false
 end
 
+--  SHOW WHAT THIS UNIT IS CARRYING?
+--
+--  SEPARATE FROM petportBubbles, ON PURPOSE. That one is the master switch and
+--  defaults on because bubbles are how a unit asks for help. This is a running
+--  commentary on a unit doing its job correctly, and wanting the alerts without
+--  it is a reasonable thing to want.
+--
+--  DEFAULTS ON. A unit carrying something is the commonest thing to want to see
+--  at a glance, and it is what the `carried` tip has described since it
+--  shipped.
+function petportBubbleCargo()
+  if self.petData == nil then return false end
+
+  local toggles = self.petData.toggles
+  if type(toggles) ~= "table" then return true end
+  return toggles.showCargo ~= false
+end
+
 function petportNametag()
   if self.petData == nil then return false end
 
@@ -4916,6 +4945,100 @@ function pushUnitBubbles()
   --  nil SILENTLY, so the log above fires whether or not the far end exists --
   --  the same guard every other push here uses.
   world.callScriptedEntity(self.petId, "petports_setUnitBubbles", show)
+end
+
+--  WHAT SHOULD THIS UNIT BE SAYING RIGHT NOW?
+--
+--  Returns a token list, or nil for nothing to say.
+--
+--  TOKENS RATHER THAN ASSET PATHS. "item:<name>" resolves through the unit's
+--  own petports_bubbleItemIcon; "mark:<name>" names a frame in the shared
+--  icons sheet. The port writes the grammar, the unit resolves it -- see the
+--  header of petports_bubble.lua.
+--
+--  A LADDER, FIRST MATCH WINS, WORST FIRST. That IS the priority arbitration:
+--  the port is the only sender, so picking here means the unit never arbitrates
+--  and the client never sees two senders disagree.
+--
+--  ONLY ONE RUNG TODAY. The alerts -- cannot deposit, nowhere to deposit,
+--  hungry with no food, sleepy with no bed, cannot reach -- all go ABOVE this
+--  one as they land, and each is a condition this file already detects. The
+--  states -- working, health, sleeping -- go below it and get their own
+--  checkboxes for the reason petportBubbleCargo gives.
+local function bubbleSpec()
+  --  ---- states -------------------------------------------------------------
+
+  if petportBubbleCargo() and self.petData ~= nil
+     and type(self.petData.cargo) == "table" then
+    local tokens = {}
+
+    for _, stack in ipairs(self.petData.cargo) do
+      if type(stack.name) == "string" and #tokens < 3 then
+        --  THE WHOLE DESCRIPTOR, NOT THE NAME.
+        --
+        --  A generated weapon has no authored inventoryIcon -- buildweapon.lua
+        --  assembles one from animationParts picked by parameters.seed and
+        --  tinted by palette swaps derived from it. Sending the name alone had
+        --  the unit rebuild the item from scratch, which produced a different
+        --  weapon every time and looked like a rendering bug.
+        --
+        --  COPIED, because this table belongs to petData and is about to cross
+        --  two boundaries. Handing out the stored one invites a caller to edit
+        --  persisted state through what looks like a local.
+        table.insert(tokens, {
+          item = {
+            name = stack.name,
+            count = 1,
+            parameters = copy(stack.parameters)
+          }
+        })
+      end
+    end
+
+    if #tokens > 0 then return tokens end
+  end
+
+  return nil
+end
+
+--  WHAT THE UNIT IS SAYING, PUSHED ON CHANGE.
+--
+--  SIGNATURE-GATED FROM update WITH THE ENTITY ID IN IT, which is
+--  arch.port.pushsignature and this is its fifth instance. Cargo changes on a
+--  task boundary rather than a tick, so this is quiet in practice -- but it is
+--  driven from update rather than from the sites that mutate cargo, because a
+--  respawn is not a mutation and a flag set at every write site is wrong the
+--  moment one is added without it.
+function pushUnitBubble()
+  if self.petId == nil or not world.entityExists(self.petId) then
+    self.pushedUnitBubble = nil
+    return
+  end
+
+  local tokens = bubbleSpec()
+
+  local ok, signature = pcall(sb.printJson, tokens or {})
+  if not ok then signature = tostring(tokens ~= nil) end
+  signature = tostring(self.petId) .. "|" .. signature
+
+  if signature == self.pushedUnitBubble then return end
+  self.pushedUnitBubble = signature
+
+  --  SIZE RATHER THAN CONTENTS. An item token now carries a full descriptor,
+  --  and a generated weapon's parameters run to hundreds of bytes -- printing
+  --  them in full would bury the log every time a unit picked something up.
+  --  The number is the thing worth watching: if it grows enough to matter, the
+  --  fix is to resolve icons port-side and put finished paths on the wire.
+  local encoded = signature and #signature or 0
+
+  sb.logInfo("PETPORT %s telling unit %s to say: %s token(s), %s bytes",
+    stationUniqueId(), sb.printJson(self.petId),
+    tokens == nil and "0" or tostring(#tokens), tostring(encoded))
+
+  --  Defined in petports_bubble.lua. callScriptedEntity to a function the
+  --  target does not define returns nil SILENTLY, so the line above fires
+  --  whether or not the far end exists -- the guard every push here uses.
+  world.callScriptedEntity(self.petId, "petports_setUnitBubbleSpec", tokens)
 end
 
 --  THE NAME OVER A DEPLOYED UNIT.
@@ -15354,6 +15477,10 @@ end
   --  it to speak, for the same reason it has no colour: the spawn parameters do
   --  not carry either.
   pushUnitBubbles()
+
+  --  AND THE FIFTH, WHICH IS WHAT IT SAYS RATHER THAN WHETHER IT MAY SPEAK.
+  --  Signature-gated on the token list, so a unit doing nothing pushes nothing.
+  pushUnitBubble()
 
   portProf("workUpdate", workUpdate, dt)
   portProfReport()
