@@ -1,6 +1,9 @@
 --  PETPORTS -- CHAT BUBBLE, RENDER LAYER
 --
---  2026-09-08a an instance icon override beats the base config
+--  2026-09-08b bench probe for engine-generated item icons (codex, blueprint)
+--  2026-09-08c probe hunts asset paths under keys we cannot name
+--  2026-09-08d codex icons read from codexIcon
+--  2026-09-08e blueprint paper composited back under the item icon
 --
 --  A bubble over a unit's head holding up to three 16x16 icons, read left to
 --  right. "I am carrying dirt", "I cannot deposit into a crate", "I am fishing".
@@ -171,6 +174,14 @@ local BUBBLE_TAG    = "icon"
 --  The spinner sheet's empty cell, reused rather than duplicated. The body
 --  layers already blank themselves with this exact path.
 local BUBBLE_BLANK  = "/monsters/lofty_petports/shared/spinner/spinner.png:blank"
+
+--  WHERE AN ICON CAN LIVE IN AN ITEM CONFIG, IN ORDER OF PREFERENCE.
+--
+--  ONE LIST BECAUSE THERE TURNED OUT TO BE MORE THAN ONE KEY, and a second key
+--  read inline would be a third one waiting to be added inline again. Both the
+--  parameter read and the config read walk this, so a key added here is added
+--  to both at once.
+local BUBBLE_ICON_KEYS = { "inventoryIcon", "codexIcon" }
 
 --  Generic stand-ins for items whose inventoryIcon is a drawable LIST rather
 --  than a single path. See icons.frames.
@@ -479,6 +490,26 @@ function petports_bubblePump(dt)
 	petports_bubbleFlip(false)
 end
 
+--  THE PAPER A BLUEPRINT IS DRAWN ON.
+--
+--  MEASURED 2026-09-08. A "-recipe" item's synthesised config carries ONE art
+--  path and it is the TARGET item's icon -- the paper is composited by the
+--  engine and is in no config anywhere, so no read of root.itemConfig will ever
+--  reach it and it has to be put back by hand.
+--
+--  NOTHING IS SCALED, AND THE INSET IS AN ARTEFACT OF THE SIZES. The paper is
+--  18x18 where an item icon is 16x16, so a 1px border of paper shows on every
+--  side; the item's own transparent padding -- 2px on the chest that was
+--  measured, visible region [2,2,14,14] -- widens that to a 3px margin around
+--  the art. It READS as an inset item and is two centred layers at their
+--  authored sizes. A per-layer scale was designed for this and is not needed.
+--
+--  THE UNION IS THEREFORE 18 AND THE SLOT SCALE IS 16/18. layoutIcon shrinks
+--  the assembly to the slot as it does for any other composite, so the paper
+--  lands at 16px and the art inside it at about 11. That is the vanilla
+--  proportion, fitted to our slot rather than to the inventory's.
+local BUBBLE_BLUEPRINT = "/items/generated/blueprint.png"
+
 --  Resolve a possibly-relative image path against the item's own directory.
 --
 --  SHARED BY BOTH SHAPES. A layered icon's images need exactly the treatment a
@@ -495,6 +526,35 @@ local function absolutePath(image, directory)
 	if type(image) ~= "string" then return image end
 	if image:sub(1, 1) == "/" then return image end
 	return tostring(directory) .. image
+end
+
+--  Put the paper back under a blueprint's icon.
+--
+--  TAKES EITHER SHAPE AND ALWAYS RETURNS A LIST, because a blueprint is a
+--  composite whatever the item it depicts happens to be -- a plain path becomes
+--  two layers and an authored layer list becomes that list with one more under
+--  it.
+--
+--  BACKING FIRST. Layer order is draw order, so the paper has to be authored
+--  before the thing standing on it. If it comes out over the top instead, that
+--  is this line and nothing else.
+--
+--  POSITIONS LEFT ALONE. Both layers are centred on the origin, which is what
+--  a nil position already means to layoutIcon, and the 18-versus-16 sizes are
+--  what produce the margin. Authoring an offset here would move the item off
+--  its paper.
+local function withBlueprintBacking(icon)
+	if icon == nil then return nil end
+
+	local layers = { { image = BUBBLE_BLUEPRINT } }
+
+	if type(icon) == "string" then
+		layers[#layers + 1] = { image = icon }
+	else
+		for _, layer in ipairs(icon) do layers[#layers + 1] = layer end
+	end
+
+	return layers
 end
 
 --  Resolve an item descriptor to an icon for a slot.
@@ -541,13 +601,46 @@ function petports_bubbleItemIcon(descriptor)
 	--
 	--  A LAYER LIST IS AS VALID HERE AS A PATH. The list branch below handles
 	--  whichever this turns out to be, so an override may be either shape.
+	--  inventoryIcon IS NOT THE ONLY KEY AN ICON CAN BE UNDER.
+	--
+	--  MEASURED 2026-09-08. A codex item's config carries NO inventoryIcon at
+	--  all. Its keys are category codexIcon codexId cooldown description
+	--  itemName price rarity shortdescription tooltipKind windupTime, and the
+	--  art is under codexIcon -- ABSOLUTE, "/codex/human/humancover1.png",
+	--  where a file-backed item's is relative ("dirt.png" against
+	--  /items/materials/). absolutePath handles both, so the only thing that
+	--  was ever wrong was the key.
+	--
+	--  EVERY vanilla codex draws as the box until this reads codexIcon, and
+	--  123 of them are pickup-able.
+	--
+	--  ORDERED, FIRST NON-NIL WINS, PARAMETERS BEFORE CONFIG PER KEY. That
+	--  keeps fact.item.instanceicon exactly as it was -- an instance override
+	--  still beats the base -- and adds the second key underneath rather than
+	--  beside it, so an item carrying both is read as its inventoryIcon, which
+	--  is the more specific answer.
+
+	--  A BLUEPRINT IS IDENTIFIED BY ITS CONFIG, NOT BY ITS NAME.
+	--
+	--  MEASURED 2026-09-08, WITH A CONTROL. nicemicetier1chest-recipe has a
+	--  "recipe" key; nicemicetier1chest, the same item without the suffix, does
+	--  not. The key is the engine saying what the item IS, where the suffix is
+	--  a naming convention a mod is free to break -- and the filter groups only
+	--  lean on suffixes because for codexes there was nothing else to lean on.
+	--  Here there is.
+	local blueprint = cfg.config ~= nil and cfg.config.recipe ~= nil
+
 	local icon = nil
+	local params = nil
 
 	if type(descriptor) == "table" and type(descriptor.parameters) == "table" then
-		icon = descriptor.parameters.inventoryIcon
+		params = descriptor.parameters
 	end
 
-	if icon == nil and cfg.config ~= nil then icon = cfg.config.inventoryIcon end
+	for _, key in ipairs(BUBBLE_ICON_KEYS) do
+		if icon == nil and params ~= nil then icon = params[key] end
+		if icon == nil and cfg.config ~= nil then icon = cfg.config[key] end
+	end
 
 	--  A LAYER LIST IS AN ICON TOO, NOT A FAILURE.
 	--
@@ -596,6 +689,7 @@ function petports_bubbleItemIcon(descriptor)
 				end
 			end
 
+			if blueprint then return withBlueprintBacking(layers) end
 			return layers
 		end
 
@@ -609,14 +703,21 @@ function petports_bubbleItemIcon(descriptor)
 
 	if type(icon) ~= "string" then
 		if BUBBLE_DEBUG then
-			sb.logInfo("UNIT bubble %s has an inventoryIcon that is neither a path "
-				.. "nor a layer list (%s)",
-				tostring(descriptor and descriptor.name), type(icon))
+			--  THE KEYS ARE NAMED because the codex case was exactly this line
+			--  reporting nil, and "nil" alone does not say whether the icon is
+			--  missing or merely somewhere this does not look.
+			sb.logInfo("UNIT bubble %s has no icon under %s that is a path or a "
+				.. "layer list (got %s)",
+				tostring(descriptor and descriptor.name),
+				table.concat(BUBBLE_ICON_KEYS, "/"), type(icon))
 		end
 		return nil
 	end
 
-	return absolutePath(icon, cfg.directory)
+	local path = absolutePath(icon, cfg.directory)
+
+	if blueprint then return withBlueprintBacking(path) end
+	return path
 end
 
 --  RESOLVE ONE TOKEN FROM THE PORT INTO AN ASSET PATH.
@@ -789,4 +890,223 @@ function petports_bubbleSelfTestLayout(n)
 	local icons = {}
 	for i = 1, (n or 3) do icons[i] = petports_bubbleIcon.box end
 	petports_bubbleSet(icons)
+end
+
+
+--  ------------------------------------------------------------------------
+--  BENCH PROBE: WHAT DOES root.itemConfig RETURN FOR AN ITEM WITH NO FILE?
+--
+--      petports_bubbleProbeIcon()
+--      petports_bubbleProbeIcon("dirtmaterial", "humanhistory1-codex", "<x>-recipe")
+--
+--  Codexes and blueprints have NO ASSET FILE. Their item configs are SYNTHESISED
+--  by the engine when the item database is built, which makes them a THIRD class
+--  beside the two already handled -- fact.item.generatedicon, where the icon is
+--  BUILT from parameters, and fact.item.instanceicon, where it is NAMED by them.
+--  Here the whole config is invented, and nothing in this mod has ever looked at
+--  one.
+--
+--  THREE THINGS DECIDE THE FIX AND NONE OF THEM ARE KNOWN:
+--
+--    1. WHICH KEY HOLDS THE ICON. The .codex source field is "icon", not
+--       "inventoryIcon" -- and the "itemConfig" block inside a .codex carries
+--       rarity and price and no icon at all, so the engine translates one into
+--       the other somewhere. If the result lands under any key other than
+--       inventoryIcon, petports_bubbleItemIcon reads nil and every codex in the
+--       game falls back to the box.
+--    2. WHETHER THE PATH IS ABSOLUTE. "humancover1.png" in the source is
+--       relative to the .codex file's own directory.
+--    3. WHAT cfg.directory SAYS FOR AN ITEM WITH NO FILE. absolutePath()
+--       resolves 2 using 3. If 3 is "/" or empty, the result is a path that
+--       cannot exist, and the failure surfaces two files away as an
+--       unmeasurable drawable in the overlay rather than as a lookup fault
+--       here.
+--
+--  So this prints all three, then what the real resolver makes of them, then
+--  whether that path can be MEASURED. Those last two are what separate the
+--  three possible answers, which want three different fixes:
+--
+--      resolver returns nil      -> wrong key, or a shape not handled
+--      path built but UNMEASURABLE -> directory or relativity, case 2/3
+--      path measures fine        -> the lookup is right and the fault is in
+--                                   the drawing, which is a different file
+--
+--  KEY NAMES ONLY, NOT THE WHOLE CONFIG. A codex config carries contentPages,
+--  which is pages of prose, and dumping it would bury the one line that matters.
+--  Every key with "icon" or "image" in its NAME is then printed in full --
+--  matched on the name rather than against a fixed list, because the entire
+--  point is that the key might not be the one expected.
+--
+--  LEADS WITH A CONTROL. dirtmaterial is plain and file-backed, so the generated
+--  items have something to be different FROM. A directory or a key that looks
+--  odd means nothing until the known-good one has been read in the same format.
+--
+--  THE RECIPE NAME IS NOT DEFAULTED. Which items have a "-recipe" is a fact
+--  about the recipe database rather than the item database, and a guess that
+--  misses costs a whole test cycle to find out. Pass the exact name that was
+--  seen to fail.
+
+--  Measure one path and say plainly whether it exists. Split out because a
+--  layered icon needs this per layer and a single path needs it once.
+--
+--  AN UNMEASURABLE PATH IS THE VERDICT, NOT A HICCUP. root.imageSize resolves
+--  directives and answers for framed paths -- fact.tooling.imageregion -- so a
+--  refusal here means the asset is not there, which is case 2 or 3 above.
+function petports_bubbleProbeMeasure(label, path)
+	if type(path) ~= "string" then
+		sb.logInfo("PROBE %s -- not a path (%s)", tostring(label), type(path))
+		return
+	end
+
+	local sized, size = pcall(root.imageSize, path)
+	local regioned, region = pcall(root.nonEmptyRegion, path)
+
+	local sizeText = "UNMEASURABLE -- THIS ASSET DOES NOT RESOLVE"
+	if sized and type(size) == "table" then
+		local shown, encoded = pcall(sb.printJson, size)
+		sizeText = shown and encoded or "unprintable"
+	end
+
+	local regionText = "unavailable"
+	if regioned and type(region) == "table" then
+		local shown, encoded = pcall(sb.printJson, region)
+		regionText = shown and encoded or "unprintable"
+	end
+
+	sb.logInfo("PROBE %s path %s canvas %s visible %s", tostring(label),
+		path, sizeText, regionText)
+end
+
+--  EVERY ASSET-LOOKING STRING ANYWHERE IN A TABLE, WITH THE PATH THAT REACHED
+--  IT. Collected as "config.foo.bar = /some/art.png".
+--
+--  BECAUSE THE KEY NAME IS THE THING WE DO NOT KNOW. Matching on keys called
+--  "icon" or "image" only finds an icon that is already named the way we
+--  expect, and the codex case has already proved that assumption wrong once --
+--  it came back nil from both reads, so whatever holds its art is not called
+--  inventoryIcon. A value that ends in .png is an asset no matter what the key
+--  above it says.
+--
+--  DEPTH CAPPED AT 3 AND contentPages SKIPPED. A codex config carries pages of
+--  prose in a nested list; walking it in full would cost nothing but would
+--  bury the answer under it. Nothing observed so far nests art deeper than a
+--  list of drawables inside a key.
+local function collectAssets(value, trail, out, depth)
+	if depth > 3 then return end
+
+	if type(value) == "string" then
+		local lower = value:lower()
+
+		if lower:find(".png", 1, true) or lower:find(".jpg", 1, true) then
+			out[#out + 1] = trail .. " = " .. value
+		end
+		return
+	end
+
+	if type(value) ~= "table" then return end
+
+	for key, sub in pairs(value) do
+		if key ~= "contentPages" then
+			collectAssets(sub, trail .. "." .. tostring(key), out, depth + 1)
+		end
+	end
+end
+
+--  Probe one item name end to end.
+function petports_bubbleProbeOne(name)
+	local descriptor = { name = name, count = 1 }
+
+	local ok, cfg = pcall(root.itemConfig, descriptor)
+	if not ok or cfg == nil then
+		sb.logInfo("PROBE %s -- root.itemConfig gave nothing (%s). No such item "
+			.. "under that name, so nothing below this line ran.",
+			tostring(name), tostring(cfg))
+		return
+	end
+
+	sb.logInfo("PROBE %s directory %s", tostring(name), tostring(cfg.directory))
+
+	local config = cfg.config
+	if type(config) ~= "table" then
+		sb.logInfo("PROBE %s has no config table (%s)", tostring(name), type(config))
+		return
+	end
+
+	--  SORTED. The question is which key the icon is under, and an alphabetical
+	--  list is readable where pairs() order is not.
+	local keys = {}
+	for key in pairs(config) do keys[#keys + 1] = tostring(key) end
+	table.sort(keys)
+
+	sb.logInfo("PROBE %s config keys: %s", tostring(name), table.concat(keys, " "))
+
+	for _, key in ipairs(keys) do
+		local lower = key:lower()
+
+		if lower:find("icon", 1, true) or lower:find("image", 1, true) then
+			local shown, encoded = pcall(sb.printJson, config[key])
+			sb.logInfo("PROBE %s config.%s = %s", tostring(name), key,
+				shown and encoded or type(config[key]))
+		end
+	end
+
+	local pkeys = {}
+	if type(cfg.parameters) == "table" then
+		for key in pairs(cfg.parameters) do pkeys[#pkeys + 1] = tostring(key) end
+		table.sort(pkeys)
+	end
+
+	sb.logInfo("PROBE %s parameter keys: %s", tostring(name),
+		#pkeys > 0 and table.concat(pkeys, " ") or "(none)")
+
+	--  THE WHOLE CONFIG AND THE WHOLE PARAMETER BLOCK, HUNTED FOR ART. If the
+	--  codex icon is in here at all this is what finds it, whatever it is
+	--  called. If nothing comes back, the icon is NOT IN THE CONFIG -- which
+	--  means the engine assembles it in C++ from the codex database and no
+	--  read of root.itemConfig will ever reach it. That is a different fix and
+	--  this line is what tells the two apart.
+	local assets = {}
+	collectAssets(config, "config", assets, 0)
+	collectAssets(cfg.parameters, "parameters", assets, 0)
+
+	if #assets == 0 then
+		sb.logInfo("PROBE %s carries NO asset path anywhere in its config or "
+			.. "parameters", tostring(name))
+	end
+
+	for _, line in ipairs(assets) do
+		sb.logInfo("PROBE %s %s", tostring(name), line)
+	end
+
+	--  THE REAL RESOLVER, NOT A REIMPLEMENTATION OF IT. Whatever this build
+	--  ships is what the bubble will do; a probe that decided for itself what
+	--  the icon should be would agree with itself and prove nothing.
+	local icon = petports_bubbleItemIcon(descriptor)
+
+	if icon == nil then
+		sb.logInfo("PROBE %s resolver returned NIL -- this item draws as the box",
+			tostring(name))
+		return
+	end
+
+	if type(icon) == "string" then
+		petports_bubbleProbeMeasure(name, icon)
+		return
+	end
+
+	sb.logInfo("PROBE %s resolved to %s layer(s)", tostring(name), tostring(#icon))
+
+	for i, layer in ipairs(icon) do
+		petports_bubbleProbeMeasure(tostring(name) .. " layer " .. tostring(i),
+			type(layer) == "table" and layer.image or layer)
+	end
+end
+
+function petports_bubbleProbeIcon(...)
+	local names = { ... }
+	if #names == 0 then names = { "dirtmaterial", "humanhistory1-codex" } end
+
+	for _, name in ipairs(names) do
+		petports_bubbleProbeOne(name)
+	end
 end

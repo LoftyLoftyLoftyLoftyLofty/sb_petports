@@ -35,7 +35,7 @@
 
 require "/scripts/lofty_petports/petports_work.lua"
 
-local PETPORTS_OVERLAY_BUILD_STAMP = "2026-09-04g outline and crosshatch, no tentative rect"
+local PETPORTS_OVERLAY_BUILD_STAMP = "2026-09-08a bubble reader, blueprint slack"
 
 --------------------------------------------------------------------------------
 --  TUNING
@@ -676,6 +676,33 @@ end
 --  overflows the bubble.
 local BUBBLE_ICON_PX = 16
 
+--  HOW FAR AN ICON MAY OVERSHOOT ITS SLOT BEFORE IT IS SHRUNK.
+--
+--  MEASURED 2026-09-08. A blueprint is an 18x18 paper behind a 16x16 item icon
+--  -- see BUBBLE_BLUEPRINT in petports_bubble.lua -- so the assembly is 18 and
+--  the 16px cap was scaling it by 16/18. That resamples 12px of visible pixel
+--  art down to 10.67 at a NON-INTEGER ratio, which is visible mush, and it is
+--  worse damage than the overshoot costs.
+--
+--  WHAT THE OVERSHOOT ACTUALLY COSTS, FROM bubble.frames: cell 16, gap 2, so
+--  the pitch is 18. An 18px icon centred in its cell spends 1px of gap on each
+--  side and reaches neither the 4px padding nor the border. The worst case in
+--  the game is two blueprints side by side, which touch exactly and do not
+--  overlap; a blueprint beside an ordinary 16px icon still leaves 1px.
+--
+--  VANILLA DOES THE SAME THING. Blueprints are drawn oversized in the 16px
+--  inventory slot rather than fitted to it.
+--
+--  IT DOES NOT CHANGE ANYTHING THAT WAS ALREADY SCALING. An icon past the
+--  tolerance is still fitted to BUBBLE_ICON_PX and not to the tolerance, so a
+--  generated weapon lands at exactly the 16 it landed at before and the padding
+--  tuned against it is untouched. Only the 17-to-18 band behaves differently,
+--  and the one thing in it is the blueprint.
+--
+--  2 AND NOT MORE. This is the gap, in full. A wider tolerance would start
+--  overlapping neighbours rather than closing on them.
+local BUBBLE_ICON_SLACK = 2
+
 --  HOW BIG IS THIS ICON, IN PIXELS? Cached, because addBubble runs every frame
 --  and a bubble that has not changed would otherwise cost three root.imageSize
 --  calls a frame forever.
@@ -826,7 +853,7 @@ local function layoutIcon(icon)
 	local biggest = math.max(spanX, spanY)
 
 	local scale = 1.0
-	if biggest > BUBBLE_ICON_PX and biggest > 0 then
+	if biggest > BUBBLE_ICON_PX + BUBBLE_ICON_SLACK and biggest > 0 then
 		scale = BUBBLE_ICON_PX / biggest
 	end
 
