@@ -131,7 +131,9 @@ local STATS_ROW_CLEAR = "/interface/lofty_petports/shared/row_180_clear.png"
 --  it reads unmistakably as "separator, art pending" rather than as a stat
 --  that failed to resolve. Real art replaces both of these later.
 local STATS_SEPARATOR_TEXT = string.rep("-", 50)
-local STATS_SEPARATOR_COLOR = { 184, --  THE TASK LABELS LIVED HERE AND ARE NOW IN THE STRING TABLE.
+local STATS_SEPARATOR_COLOR = { 184, 148, 64 }
+
+--  THE TASK LABELS LIVED HERE AND ARE NOW IN THE STRING TABLE.
 --
 --  arch.pane.stringtable: every visible string lives in one asset. Twenty
 --  player-facing captions in a Lua table in this file were the largest
@@ -148,9 +150,6 @@ local STATS_SEPARATOR_COLOR = { 184, --  THE TASK LABELS LIVED HERE AND ARE NOW 
 --  label that has nowhere else to go; here the RAW TYPE is a better failure,
 --  because a task added to dispatch without a caption then reads as an
 --  untranslated identifier and names itself.
-
-ostics"
-}
 
 --  Severity tints for the diagnostic row, sharing the crosshair vocabulary on
 --  purpose: a player who has learned the world markers can already read these.
