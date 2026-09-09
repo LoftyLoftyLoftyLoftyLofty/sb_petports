@@ -50,85 +50,101 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-08 (the defragmentation module, end to end)
+### What is built, as of 2026-09-08 (the container slot sort, end to end)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-**THE AMPHIBIOUS DRY-TARGET CRASH IS STILL UNMEASURED.** Third session running.
+**THE AMPHIBIOUS DRY-TARGET CRASH IS STILL UNMEASURED.** Fourth session running.
 `todo.pathing.amphibiouscrash` has no log, nothing this session went near
-pathing, and the suspects listed there are unchanged. It has now been nominated
-as the mandatory first task twice and deferred twice.
+pathing, and the suspects listed there are unchanged. Nominated as the mandatory
+first task twice and deferred three times.
 
 **`PETPORTS_NAV_VERBOSE = true` IS STILL ON**, at `petports_coarsenav.lua:221`.
-Unchanged for three sessions. Turn it off before any release.
+Unchanged for four sessions. Turn it off before any release.
 
-**THE SIX COMMITS THAT WERE UNFILED AT THE LAST STATUS ARE NOW DESCRIBED.**
-`822a7f8`/`0526a1f` are the bubble build (`arch.bubble.rendering`,
-`arch.bubble.protocol`, `arch.bubble.iconfit`); `f09df32` is the participation
-move (`arch.port.petsettings`); `e323fcb` is `fact.dispatch.upcyclegate`;
-`e4c322c` is swimmer path tuning, covered by `arch.pathing.sightlatch`;
-`1c8b924` is the out-of-range preview string, which is pane text and has no
-entry and needs none.
+**THE SIX COMMITS UNFILED AT THE LAST STATUS ARE PANE AND BUBBLE WORK, AND ONE
+IS NOT.** `0d3d225`/`7cf9bb3` are the pet-settings tooltips and `ccd8134` is
+blueprint and codex display on bubbles -- both covered by existing entries
+(`arch.pane.stringtable`, `arch.bubble.iconfit`). `f73d4e5`/`ab21adf` are
+`plan.drawio` and carry no code. `0b404e8` is the restock tidy gate, which is
+`dd.module.defraggates` behaving as written and needs no entry of its own.
 
 **WHAT WAS BUILT THIS SESSION, IN GAME, AND VERIFIED AT EVERY STEP:** the
-DEFRAGMENTATION MODULE. Seven builds, each with its own log before the next
-began.
+CONTAINER SLOT SORT. Four builds, `08q` through `08t`, each with its own log
+before the next began.
 
-- `arch.cargo.spread` -- the scan records WHERE each item lives, not just how
-  much of it the network holds.
-- `arch.filter.breadth` -- how much of the manifest a filter admits, in
-  subgroups, as the specificity measure the destination ladder ranks on.
-- `arch.cargo.defrag` -- the destination ladder, the pull leg, and the deposit
-  preference that carries the load home.
-- `arch.cargo.fridge` -- perishables prefer cold crates and everything else
-  prefers warm ones.
-- `dd.module.defraggates` -- `sorting` retired; `restock` is its own switch and
-  tidy, compact, defrag and chill moved behind the module.
-- `dd.cargo.migration` -- the network self-corrects rather than tidying once.
-- `dd.cargo.defragorder` -- longest job first, which reverses what was proposed.
-- `dd.filter.perishable` -- the manifest says what rots, so modders get
-  refrigeration with no code.
-- `fact.item.instanceicon` -- an instance icon override was invisible to the
-  bubble, which is why modded moth fluff drew as vanilla cotton. Fixed.
-- `fact.filter.itemrules` -- the deposit pane cannot write an item rule, which
-  made the first destination ladder's top tier unreachable.
+- `arch.cargo.slotorder` -- the fourth storage rung. It reorders one crate's
+  grid in place and closes the holes the other three leave behind, using
+  `PlayerInventory::sortBag`'s comparator.
+- `dd.cargo.bagmimic` -- the filter manifest could have supplied a better
+  ordering and was rejected, because familiar beats better here.
+- `dd.cargo.beaconsfirst` -- beacons are lifted out of the comparator, or a
+  sorted chest silently changes which filter owns it.
+- `dd.dispatch.sortbackoff` -- one crate per scan, cursor between ticks, and an
+  ordinary per-crate backoff.
+- `fact.item.itemtypeorder` -- the enum, its string vocabulary, and the member
+  that occupies an ordinal and cannot exist.
+- `dead.cargo.sortsettle` -- the settle window, invented and deleted the same
+  session.
+- `ref.tooling.sorttest` -- the permutation is tested against a stand-in
+  container rather than against a restatement of its own intent.
 
-**THE TOGGLE STORE DROPPED EVERY NEW KEY FOR MOST OF THE SESSION.** Builds 2a
-through 5b shipped five checkboxes that painted correctly and changed nothing --
-`fact.port.togglewhitelist`. Everything tested between them ran with all five ON
-because absent reads as participating, which is why the behaviour looked right.
-Fixed in 08n and re-tested.
+**THE FIRST TWO BUILDS DID NOT WORK AND LOOKED LIKE THEY DID.** `08q`/`08r`
+lifted from `record.key` -- where a stack STARTED -- instead of where it is now.
+Twelve trips in six minutes, every one abandoned three or four moves in,
+disorder falling a little each trip because the moves before the divergence were
+real. From inside the game it read as a unit walking to a crate and doing
+nothing. Fixed in `08s`; the log had said so from the first run and was not read
+closely enough until the second.
 
-**THE PANE WAS FINISHED AFTERWARDS.** The `defrag` task had no caption and would
-have rendered as a bare identifier; all twenty captions then moved out of
-`petportconfig.lua` into the string table, which was the largest remaining
-exception to `arch.pane.stringtable`.
+**THE ITEM TYPE ORDER WAS SHIPPED UNVERIFIED FOR ONE BUILD.** `08q` transcribed
+it from a forum post because the header had not been read; the post was missing
+`currency` and carried a `saplingitem` that does not exist. It was flagged
+UNVERIFIED in the file with the exact grep to run, and Lofty ran it. The
+comparator is cosmetic, so being wrong there could not have lost an item -- but
+`proc.pathing.readsource` says read the source, and a developer quoting
+a list is not the source.
+
+**THE SETTLE WINDOW WAS AN INVENTED REQUIREMENT.** `08q` refused to sort a crate
+until its contents had been unchanged for twenty seconds, which makes the
+busiest crate in the base the one that never gets sorted. Nobody asked for it,
+it brought a signature cache with it to serve itself, and all of it came out in
+`08t`. `dead.cargo.sortsettle`.
 
 **WHAT IS BUILT BUT NOT WRITTEN UP FOR PLAYERS.** `SORTING_FOR_MODDERS.md` says
 nothing about `"perishable"`, which is a manifest flag a third party is meant to
-use. Filed at `todo.filter.perishabledocs`.
+use -- `todo.filter.perishabledocs`, unchanged. It says nothing about the slot
+sort either, and does not need to: the sort reads no manifest.
 
 **WHAT IS KNOWN AND UNRESOLVED:**
 - `DEFRAG_DEBUG` is `true` and joins the release-preflight flag sweep.
   `DEFRAG_PLAN_CAP` at 16 is NOT a debug value -- it caps work --
   `todo.cargo.defragcap`.
+- The sort ring takes about 25 minutes to come round on a 300-crate base. That
+  is the accepted cost of one crate per scan and is UNMEASURED at that size --
+  `todo.cargo.sortring`.
+- Sorting fills the tidy score much faster than type-eliminations do. Not
+  clamped, because the right clamp depends on what a rank is worth --
+  `todo.dispatch.sortscore`.
 - A defrag destination flipped between two crates on consecutive passes with
-  both declaring 220 and holding none of the item, which means the room test
-  alternated. Probably a nearly-full 24-slot crate meeting the bare-descriptor
-  approximation `crateHasRoom` documents. NOT DIAGNOSED -- `todo.cargo.roomflip`.
+  both declaring 220 and holding none of the item. NOT DIAGNOSED --
+  `todo.cargo.roomflip`.
 - The defrag module has NO ART. `petports_module_defrag.png` does not exist and
   the item renders as a placeholder box.
-- `workUpdate` peaked at 66 ms this session and at 112 ms before any of this
-  work. Not ours and not new, but it is the number the census cursor will have
-  to answer to -- `todo.dispatch.scancursor`.
+- `workUpdate` peaked at 197 ms this session, of which `g.sort` was 188 before
+  the cursor landed. Re-measure after `08t` -- the number that remains is the
+  one `todo.dispatch.scancursor` has to answer to.
 - The 30 s world stall is unchanged and still `WorldStorage::sync()`. The 45000
   patch test still has no result.
 - Units still stutter-step between tasks (`todo.dispatch.turnaround`).
 
-**WHAT WORKS FROM LAST SESSION, UNTOUCHED:** all coarse-nav work, and the
-bubbles apart from the icon read named above.
+**WHAT WORKS FROM LAST SESSION, UNTOUCHED:** the whole defragmentation module --
+`arch.cargo.spread`, `arch.filter.breadth`, `arch.cargo.defrag`,
+`arch.cargo.fridge`, `dd.cargo.migration`, `dd.cargo.defragorder`,
+`dd.filter.perishable` -- all coarse-nav work, and the bubbles including the
+instance icon fix.
 
 **LINE ENDINGS.** `.gitattributes` specifies LF for everything, and
 `petports_petport.lua` and this document are both CRLF in the working copy --
@@ -620,8 +636,10 @@ either cycle detection during traversal or a hard hop limit.
 ### Tidying and auto-disperse — built
 `arch.cargo.tidying` -- see also `arch.cargo.defrag`, `dd.cargo.migration`
 
-**AMENDED 2026-09-08: TIDYING IS NOW ONE OF THREE, AND IT IS THE NARROWEST.**
-It moves what a crate REJECTS. Compaction reshapes what is already in the
+**AMENDED 2026-09-08: TIDYING IS NOW ONE OF FOUR, AND IT IS THE NARROWEST.**
+It moves what a crate REJECTS. The fourth, `arch.cargo.slotorder`, moves nothing
+between crates at all -- it reorders one crate's grid in place, and it runs below
+these three precisely because all three scramble that order on their way past. Compaction reshapes what is already in the
 right one, and defragmentation moves what a crate merely TOLERATES -- see
 `dd.cargo.migration` for why that third case is not a misfit and cannot be
 reached from here. All three now sit behind the defragmentation module
@@ -5842,6 +5860,63 @@ shelf.
 defaults to 1.0 on any failure. Reading a failure as cold would send every
 perishable in the network toward it and rot the lot.
 
+### Slot order -- built
+`arch.cargo.slotorder` -- see also `arch.cargo.tidying`, `arch.cargo.compaction`, `arch.cargo.defrag`, `dd.cargo.bagmimic`, `fact.item.itemtypeorder`
+
+BUILT 2026-09-08. The fourth storage rung and the only one that changes nothing
+about WHAT is in a crate. Tidying moves what a crate rejects, compaction merges
+what is split, defragmentation gathers what is scattered; this one permutes
+WHERE IN THE GRID a stack sits and touches contents not at all.
+
+**THE HOLES ARE OURS, WHICH IS WHY THIS IS NOT HOUSEKEEPING OF SOMEBODY ELSE'S
+MESS.** `defragWork` withdraws one slot per trip and `world.containerAddItems`
+fills the first slot that will take a stack -- `fact.item.addorder`. A network
+that has been gathering for an hour leaves the crates it worked on punched
+through with gaps, in the order the units happened to visit them. Nothing is
+lost and nothing is misfiled; the grid stops being readable, which is the only
+cost `dd.dispatch.tidyscore` was ever about.
+
+**THE COMPARATOR IS `PlayerInventory::sortBag`** -- item type, then rarity
+DESCENDING, then name, then count DESCENDING, empties last -- plus two tiebreaks
+the engine does not need and this does: `parameterKey`, then the originating
+slot. Lua 5.1's `table.sort` raises on an inconsistent comparator, and without a
+total order two `sb_musicsheet` stacks come out arranged differently on every
+pass, so the crate never reads as settled and the unit walks back forever.
+
+**PERMUTED IN PLACE BY CYCLE PLACEMENT, NOT EMPTIED AND REBUILT.**
+`compactContainer` empties a whole NAME and re-adds it, which is survivable
+because a consume is all-or-nothing over one item. The same shape here would put
+the entire contents of a chest in a Lua table for the length of a loop, and any
+throw inside that loop is a chest the player has lost. At most two stacks are
+outside the container at once, for the length of two calls; every intermediate
+state is a valid container; abandoning at any point leaves the crate partially
+sorted rather than damaged. Before-and-after tally by name, every pass.
+
+**THE LIVE MODEL IS WALKED, NOT THE PLAN'S ORIGINAL KEYS.** `at` maps slot to
+record and `where` is its inverse, and both are updated after every move.
+Lifting from `record.key` -- where a stack STARTED -- is correct only until the
+first move completes, and the first build did exactly that: twelve trips in six
+minutes, every one abandoned three or four moves in, disorder falling a little
+each time because the moves before the divergence were real. It converged,
+visibly did something, and never finished.
+
+**THE MISMATCH GUARD IS ON NAME, NOT PARAMETERS**, which is the opposite of
+`takeFromSlot` and deliberately so. That one hands a stack to something that
+cares which music sheet it got. This lays back down exactly what the take
+RETURNED, into another slot of the same container, so a perishable whose age
+advanced between the `containerItems` snapshot and the lift travels with its own
+item and nothing is predicted from the stale read. Comparing parameters here
+meant every crate holding milk aborted every pass.
+
+**A CAPPED PASS IS A CORRECT PREFIX.** `SORT_MOVE_CAP` at 64 is a safety valve
+for a large modded container, not a budget. The plan is applied in target order,
+so stopping early leaves a sorted prefix and an untouched tail, lowers the
+disorder count, and converges next visit.
+
+**ONE TIDY POINT PER CRATE, ON A COMPLETED PASS ONLY.** See
+`dd.dispatch.tidyscore` for why a capped or abandoned pass scores nothing and
+for the tap-rate problem this rung introduces.
+
 ## DESIGN DECISIONS
 
 ### The port band splits by what the player SEES, not by what the code owns
@@ -6139,6 +6214,21 @@ measurement.
 **SO: WHEN A UNIT REMOVES THE LAST STACK OF A TYPE FROM A CONTAINER, +1.** One
 sentence to explain, an integer, an event rather than a differential, and it
 keeps the only distinction that mattered.
+
+**AMENDED 2026-09-08: A CRATE PUT IN ORDER IS ALSO +1**, and it is the same
+shape -- an event, an integer, and the thing the score claims to measure.
+`arch.cargo.slotorder`. Awarded on a COMPLETED pass only: a capped or abandoned
+pass left the crate better but not organised, and paying per pass would make a
+200-slot modded container worth more points than a chest for no reason a player
+would recognise.
+
+**IT IS NOT MONOTONIC THE WAY THE OTHER TAP IS, AND THAT IS THE THING TO WATCH.**
+Clearing the last of a type out of a crate is rare and cannot be re-earned until
+the type comes back. A crate can be re-sorted every time it takes a delivery, so
+this rung earns roughly one point per crate per `SORT_REVISIT` on a busy base.
+`SORT_REVISIT` is the only thing bounding it. Filed as `todo.dispatch.sortscore`
+rather than pre-emptively clamped, because the number only matters once ranks
+exist.
 
 **THE FLEET CANNOT MAKE IT WORSE, BY CONSTRUCTION.** Every put a unit makes is
 filter-approved: deposits go where the filter accepts them, restock delivers to
@@ -7840,6 +7930,77 @@ a cheaper mistake than produce rotting on a shelf.
 filed -- which covers modded food the manifest has never heard of.
 `itemAgingScripts` was the obvious config test and is WRONG: vanilla uses one to
 cool molten metal.
+
+### Sorting mimics the player's own sort button rather than improving on it
+`dd.cargo.bagmimic` -- see also `arch.cargo.slotorder`, `dd.filter.taxonomy`
+
+The mod already owns a total order over every item -- the filter manifest's
+group and subgroup, with a declared display order, which is the vocabulary the
+player configured their beacons in. Sorting crates by it would have made a
+crate's visual order match the beacon picker's order, and it would have been
+free.
+
+**IT WAS REJECTED BECAUSE "BETTER" IS STILL A SECOND THING TO LEARN.** A player
+who has pressed sort in their own inventory already knows what this does to a
+chest. An ordering that is defensibly superior but unfamiliar means the crate
+and the backpack disagree, and the player has to hold both.
+
+**SO THE COMPARATOR IS COPIED FROM THE ENGINE, INCLUDING THE PART THAT LOOKS
+WRONG.** Rarity sorts DESCENDING while everything else ascends, which is not a
+transcription error -- `fact.item.itemtypeorder`.
+
+### Beacons are lifted out of the sort, not sorted with everything else
+`dd.cargo.beaconsfirst` -- see also `arch.cargo.slotorder`, `arch.dispatch.census`
+
+`scanContainers` decides what a container is FOR by taking the first enabled
+beacon in slot order, and it sorts the slot keys precisely so that two beacons
+in one chest cannot swap roles between scans.
+
+**A GENERAL SORT WOULD HAVE REINTRODUCED THAT BUG IN A NEW SHAPE.** Two deposit
+beacons differ only in their filter, so name and count cannot separate them and
+`parameterKey` would -- deterministically handing the container to whichever
+filter happened to serialise first. The chest keeps working and is silently
+filtering for something else. This is the one way the feature could have changed
+BEHAVIOUR rather than appearance.
+
+**SO BEACONS ARE PLACED FIRST, IN THE RELATIVE ORDER THEY ALREADY HAD.**
+Relative order preserved means the winner is preserved by construction rather
+than by a rule someone has to remember.
+
+**FIRST RATHER THAN PINNED IN PLACE**, which was the other option: pinning
+leaves the beacon stranded at slot 17 with the sorted run flowing around it, so
+every crate in the network gains one permanent hole. Front is also where a label
+belongs.
+
+### Sorting looks at one crate per scan and backs off per crate
+`dd.dispatch.sortbackoff` -- see also `arch.cargo.slotorder`, `todo.dispatch.scancursor`, `dead.cargo.sortsettle`
+
+Every other storage rung walks the whole network on every tick it is reached.
+Those are bounded by having something to DO -- they stop the moment they find
+work. This one is not: on a settled base it finds nothing and reads every crate
+to prove it.
+
+**ONE PET OVER TWENTY CRATES IS NOT A HAZARD. TWENTY PETS OVER THREE HUNDRED
+CRATES IS.** That is six thousand `containerItems` calls per tick, which is the
+shape that takes a server down rather than making it slow. Measured smaller and
+already visible: `g.sort` at 188 ms of a 197 ms tick before the rung had
+dispatched anything, because the plan calls `parameterKey` -- `sb.printJson` --
+on every stack of every crate.
+
+**SO THE SWEEP IS SPREAD ACROSS SCANS INSTEAD OF FITTING INSIDE ONE.** A cursor
+advances by one every scan and wraps. A port reads exactly one container per
+`SORT_SCAN_INTERVAL` regardless of network size.
+
+**THE RING IS NOT A PROMISE AND DOES NOT NEED TO BE.** `tidySources` is rebuilt
+per call, so a crate appearing or disappearing shifts what "next" means. A crate
+is visited eventually and repeatedly, which is all a cosmetic rung wants.
+
+**AND THE RESTRAINT IS AN ORDINARY BACKOFF, LIKE EVERY OTHER RUNG.**
+`SORT_REVISIT` is stamped per crate at DISPATCH, not on arrival, because a trip
+that never arrives has still spent the unit. It sits alongside the existing
+`FAILURE_BACKOFF` check, which answers a different question: that ramp is "the
+last trip to this crate failed", this is "the last trip to this crate happened".
+Nothing anywhere asks whether a crate is BUSY -- see `dead.cargo.sortsettle`.
 
 ## DESIGN INTENT -- PLANNED
 
@@ -11718,6 +11879,39 @@ makes it safe rather than a literal.
 DRIFT SILENTLY WHEN ITS DEFAULT IS PERMISSIVE.** The pane and the port agreed by
 hand and nothing compared them.
 
+### `ItemType` ordering, its string vocabulary, and the member that cannot exist
+`fact.item.itemtypeorder` -- see also `arch.cargo.slotorder`, `ref.tooling.osbaseline`
+
+READ 2026-09-08 from `source/game/StarItemDatabase.hpp` and the matching `.cpp`
+in the OSB baseline, because `PlayerInventory::sortBag` compares an ENUM ORDINAL
+and Lua has no way to ask for one.
+
+- `root.itemType(name)` exists and returns the type's NAME, not its ordinal.
+  Confirmed on the Root binding list.
+- The strings come from the `ItemTypeNames` EnumMap and DISAGREE with the enum
+  member names on purpose: `LiquidItem` is `"liquid"`, `MaterialItem` is
+  `"material"`, `InstrumentItem` is `"instrument"`. Transcribe from the EnumMap,
+  never derive from the enum.
+- Order: generic, liquid, material, object, currency, miningtool, flashlight,
+  wiretool, beamminingtool, harvestingtool, tillingtool, paintingbeamtool,
+  headarmor, chestarmor, legsarmor, backarmor, consumable, blueprint, codex,
+  inspectiontool, instrument, thrownitem, unlockitem, activeitem, augmentitem.
+- **`ItemType::GrapplingHook` IS IN THE ENUM AND IN NOTHING ELSE.** It sits
+  between `InstrumentItem` and `ThrownItem` in the header, has no entry in
+  `ItemTypeNames`, no `scanItemType` call giving it a file extension, and no
+  branch in `createItem`. Nothing can construct one, so no item can report that
+  type, and the ordinal it occupies shifts only the four below it -- which
+  changes no RELATIVE order, and relative order is all a comparator reads.
+- `ItemDatabase::itemData` THROWS `No such item` for a name the database does
+  not hold, so `root.itemType` raises rather than returning nil. Blueprints and
+  codexes are real entries (`<item>-recipe`, `<codex>-codex`) and answer
+  normally.
+
+**AN EARLIER BUILD TRANSCRIBED THIS FROM A FORUM POST** listing the
+`deathDropItemTypes` vocabulary. It was missing `currency` and carried a
+`saplingitem` that does not exist. The list was quoted by a developer and was
+still not the enum -- `proc.pathing.readsource`.
+
 ## DISPROVEN
 
 ### A wipe that walks the store's indices does not wipe the store
@@ -12475,6 +12669,26 @@ drawables, which the animator could not do -- one part is one image.
 by `BUBBLE_MONSTER_PARTS = false` in `petports_bubble.lua` rather than deleted, so
 the two could be compared. Deleting them is `todo.bubble.animcleanup`.
 
+### Waiting for a crate to stop being busy before sorting it
+`dead.cargo.sortsettle` -- see also `dd.dispatch.sortbackoff`, `arch.cargo.slotorder`
+
+REJECTED 2026-09-08, on design grounds rather than by measurement.
+
+The first build would not sort a crate until its contents had been unchanged for
+twenty seconds, on the reasoning that every deposit appends to the first free
+slot, so a crate actively receiving deliveries is unsorted again the moment it is
+sorted -- and sorting it anyway costs a walk per delivery.
+
+**THE RULE THAT PRODUCES IS: THE BUSIEST CRATE IN THE BASE IS THE ONE THAT NEVER
+GETS SORTED.** Which is the opposite of what socketing the module and ticking the
+box asked for. A player said organise my containers; waiting for the storage to
+stop being used is not a smaller version of that, it is a different thing.
+
+**IT WAS ALSO INVENTED RATHER THAN ASKED FOR**, and it brought a signature cache
+and a settle timestamp with it -- state that existed only to serve it. All of it
+deleted. The restraint that replaced it is an ordinary per-crate backoff, which
+every other rung already had.
+
 ## REFERENCE
 
 ### The filter vocabulary is measured, not guessed
@@ -12814,6 +13028,26 @@ can reach chat. And `StarListWidget` -- whether a row's `m_members` order comes
 from the template, which `fact.pane.rowdispatch` concludes it does not, from two
 failed experiments rather than from reading it.
 
+
+### The slot permutation is tested against a stand-in container, not against itself
+`ref.tooling.sorttest` -- see also `arch.cargo.slotorder`, `proc.tooling.controlfirst`
+
+`workbench/tools/petports_sorttest.py`. WRITTEN 2026-09-08 after the
+`record.key` divergence, because "it should finish now" is a theory and the log
+could only show it had not.
+
+**THE CONTAINER IS THE STAND-IN, NOT THE ALGORITHM.** It holds items at 0-based
+offsets, refuses what the engine refuses, and knows nothing about the plan; the
+mover loop is transliterated line for line from `sortContainer`, offset
+arithmetic and lift guard included. If the loop is wrong the container disagrees
+and the final arrangement is not the sorted one. This is the distinction that
+made the earlier cull-logic test theatre -- that one reimplemented the intent and
+reported agreement with itself.
+
+40 randomised containers, 4 to 40 slots, holes and mixed stacks: all sorted, all
+holes closed, nothing lost, every one in a single pass. `--old` reinstates the
+`record.key` lift so the test can be seen to CATCH the bug rather than merely
+pass without it.
 
 ## BACKLOG
 
@@ -14682,7 +14916,7 @@ per-subgroup behaviour flag and the one that buys automatic refrigeration. A
 flag a third party is meant to use and cannot discover is a flag nobody uses.
 
 ### The container scan is one shot and a large base will feel it
-`todo.dispatch.scancursor` -- see also `arch.cargo.spread`, `fact.tooling.frameceiling`
+`todo.dispatch.scancursor` -- see also `arch.cargo.spread`, `fact.tooling.frameceiling`, `dd.dispatch.sortbackoff`
 
 OPENED 2026-09-08 (Lofty: "for big bases we're gonna need coroutine yield batch
 for census"). `refreshBeacons` walks every container in every network rect in
@@ -14692,6 +14926,12 @@ work, against a 16.7 ms frame.
 THE SHAPE IS A CURSOR AND A BUDGET, NOT A COROUTINE, matching what the survey
 and the boundary contradiction pass already do -- 10 ms and 4 sweep steps there,
 300 keys then 2 ms there. Keep a rect and entity cursor between ticks.
+
+**AMENDED 2026-09-08: `sortWork` ALREADY SHIPS THE PATTERN** at its simplest --
+one container per scan, cursor between ticks, no budget because the batch is
+one. `dd.dispatch.sortbackoff`. It is not a solution to this entry, which needs
+a PARTIAL pass to be invisible to consumers, and the sort has no consumers. But
+it is a worked example of the cursor half in this file.
 
 **PUBLISH ONLY WHEN A FULL PASS COMPLETES.** A half-built spread map would show
 a name in one crate that is actually in three, and every consumer would act on
@@ -14725,6 +14965,31 @@ itself explain alternation, which needs something moving in and out of 49.
 IT COSTS NOTHING TODAY: the plan is a log line, and the dispatch re-asks with the
 real descriptor before a unit moves. It becomes real if a unit is ever seen
 walking to a crate that then refuses the load.
+
+### The sort ring is slow rather than thorough on a large base
+`todo.cargo.sortring` -- see also `dd.dispatch.sortbackoff`, `arch.cargo.slotorder`
+
+OPENED 2026-09-08, and it is the accepted cost of the cursor rather than a
+defect. One crate per port per `SORT_SCAN_INTERVAL` means a 300-crate base takes
+about 25 minutes for the cursor to come all the way round. On the bottom rung of
+the ladder that is probably invisible; if it reads as broken in play,
+`SORT_SCAN_INTERVAL` is the single number, and at 2.0 it walks with the work tick
+and the ring is ten minutes at still one read per tick per port.
+
+NOT MEASURED IN PLAY on anything approaching that size.
+
+### Sorting earns tidy points far faster than eliminations do
+`todo.dispatch.sortscore` -- see also `dd.dispatch.tidyscore`, `arch.cargo.slotorder`
+
+OPENED 2026-09-08. Removing the last stack of a type from a crate is rare and
+cannot be re-earned until the type comes back. A crate can be re-sorted every
+time it takes a delivery, so the sort rung earns roughly one point per crate per
+`SORT_REVISIT` on a busy base and `SORT_REVISIT` is the only bound.
+
+THE TWO TAPS NOW FILL THE SAME NUMBER AT VERY DIFFERENT RATES, which does not
+matter while the score is unread and matters entirely once ranks are granted
+against it. Deliberately not pre-emptively clamped: the right answer depends on
+what a rank is worth, and that has not been decided.
 
 ## PROCESS
 

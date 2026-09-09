@@ -387,6 +387,18 @@ local SETTING_ROWS = {
 	{ key = "defrag", owner = "toggles", needs = "defrag", default = true,
 	  label = "petport.setting.defragspread", tip = "petport.tip.defragspread" },
 
+	--  FOURTH, AND IT CONTINUES THE SCOPE READING RATHER THAN BREAKING IT.
+	--
+	--  The three above widen from a slot to a crate to the network. This one
+	--  comes back to a single crate, which looks like a step backwards until you
+	--  notice it is the only one that changes nothing about WHAT is in the crate.
+	--  It is last because the port runs it last, and for the same reason: the
+	--  other three all scramble the grid on their way past, so sorting has to
+	--  happen after them or it is undone before a player sees it. sortWork's
+	--  header has the argument.
+	{ key = "sort", owner = "toggles", needs = "defrag", default = true,
+	  label = "petport.setting.defragsort", tip = "petport.tip.defragsort" },
+
 	--  LAST IN THE BLOCK, AND NOT A SCOPE. The three above are one job at
 	--  widening scope -- within a slot, within a crate, across the network. This
 	--  one is orthogonal: it ranks crates by a PROPERTY of the container rather

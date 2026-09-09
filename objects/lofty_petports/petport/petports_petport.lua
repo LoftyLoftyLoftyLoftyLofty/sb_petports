@@ -200,6 +200,7 @@ DOOR_POLL = 0.0
 --      tidy       tidy          -- defrag module, deposit crates only
 --      compact    compact       -- defrag module
 --      defrag     defrag        -- defrag module
+--      sort       sort          -- defrag module
 --      farming    replant, water, harvest, animal, withdraw, withdrawWater
 --      machines   upcycle, drain, fuel
 --
@@ -319,6 +320,7 @@ PET_TOGGLES =
   tidy = true,
   compact = true,
   defrag = true,
+  sort = true,
   chill = true
 }
 
@@ -1532,7 +1534,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-08p restock crates are tidied without the defrag module"
+local PETPORT_BUILD_STAMP = "2026-09-08t sort: settle window out, per-crate backoff in, one crate per scan"
 
 --  PORT PROFILER, 2026-09-07b. MEASURED 21:00: six ports on a small islet,
 --  59 port ticks over 30 ms in 39 s totalling 3.7 s, worst 268 ms, while
@@ -2707,6 +2709,15 @@ function init()
     if report.outcome == "done" and self.task ~= nil
        and self.task.type == "compact" and self.task.id == report.id then
       compactContainer(self.task.target)
+    end
+
+    --  Arrived at a crate whose grid reads as noise. Same shape once more --
+    --  the unit walked and stood, the container work happens here -- and the
+    --  same reason: a slot permutation is a sequence of engine calls with no
+    --  unit-side step in it at all.
+    if report.outcome == "done" and self.task ~= nil
+       and self.task.type == "sort" and self.task.id == report.id then
+      sortContainer(self.task.target)
     end
 
     --  Tiles were wetted. Spend one item per tile actually done.
@@ -10756,6 +10767,684 @@ function compactContainer(containerId)
 end
 
 --------------------------------------------------------------------------------
+--  SLOT ORDER
+--------------------------------------------------------------------------------
+--
+--  A CRATE HOLDING THE RIGHT THINGS IN THE WRONG SHAPE IS STILL WORK FOR THE
+--  PLAYER, and that is a complaint none of the other three rungs answers.
+--
+--  entropy.txt is the argument and it is worth restating in the terms that file
+--  uses. Entropy there is not disorder; it is THE WORK A PLAYER'S EYE HAS TO DO
+--  to get the information it came for. Two crates holding byte-identical
+--  contents can cost very different amounts to read. Tidying moves a thing out
+--  of the wrong box, compaction merges what is split, defragmentation gathers
+--  what is scattered -- all three fix WHAT is in a crate and not one of them
+--  touches WHERE IT SITS IN THE GRID.
+--
+--  THE HOLES ARE OURS, WHICH IS WHY THIS IS NOT COSMETIC HOUSEKEEPING OF
+--  SOMEBODY ELSE'S MESS. defragWork withdraws ONE SLOT PER TRIP and
+--  world.containerAddItems fills the first slot that will take a stack, so a
+--  network that has been gathering for an hour leaves the crates it worked on
+--  punched through with gaps, in the order the units happened to visit them.
+--  Nothing is lost and nothing is misfiled. The grid just stops being readable.
+--
+--  IT MIMICS THE PLAYER'S OWN SORT BUTTON, DELIBERATELY, AND THAT IS THE WHOLE
+--  SPECIFICATION. PlayerInventory::sortBag orders a bag by item type, then by
+--  rarity DESCENDING, then by name, then by count DESCENDING, with empty slots
+--  last. A player who has pressed sort in their own inventory already knows
+--  what this does to a chest, and an ordering that was merely BETTER would
+--  still be a second thing to learn. See dd.sort.bagmimic.
+
+--  THE ITEM-TYPE TIER, AND THE ONE PART OF THE COMPARATOR THAT HAS TO LIVE HERE
+--  AS DATA.
+--
+--  sortBag compares `itemDatabase->itemType(name)`, which is an ENUM ORDINAL.
+--  Lua gets `root.itemType(name)`, which returns the type's NAME, and no way at
+--  all to ask what ordinal that name carries. So the ordinals are transcribed.
+--
+--  READ, NOT GUESSED -- fact.engine.itemtypeorder. This is `enum class ItemType`
+--  from source/game/StarItemDatabase.hpp in ref.tooling.osbaseline, with the
+--  strings from the `ItemTypeNames` EnumMap at the top of the matching .cpp.
+--  Both were checked; an earlier build of this table was transcribed from a
+--  forum post instead and had `currency` missing and a `saplingitem` that does
+--  not exist.
+--
+--  THE ENUM HAS ONE MORE MEMBER THAN THIS TABLE DOES, AND IT IS CORRECT THAT IT
+--  IS ABSENT. `ItemType::GrapplingHook` sits between InstrumentItem and
+--  ThrownItem in the header and appears NOWHERE ELSE in the engine: it has no
+--  entry in ItemTypeNames, no `scanItemType` call to give it a file extension,
+--  and no branch in `createItem`. Nothing can construct one, so no item can ever
+--  report that type, and the ordinal it occupies only shifts the four below it
+--  by one -- which changes no RELATIVE order and is all this comparator reads.
+--
+--  Left out rather than given a rank of its own, because a row here for a type
+--  that cannot exist is a row somebody would later "fix" by wiring it up.
+--
+--  KEYS ARE THE ItemTypeNames STRINGS, lowercased on the way in. The vocabulary
+--  disagrees with the enum member names on purpose -- LiquidItem is "liquid",
+--  MaterialItem is "material", InstrumentItem is "instrument" -- so these are
+--  copied from the EnumMap and not derived from the enum.
+SORT_TYPE_ORDER =
+{
+	generic          =  1,
+	liquid           =  2,
+	material         =  3,
+	object           =  4,
+	currency         =  5,
+	miningtool       =  6,
+	flashlight       =  7,
+	wiretool         =  8,
+	beamminingtool   =  9,
+	harvestingtool   = 10,
+	tillingtool      = 11,
+	paintingbeamtool = 12,
+	headarmor        = 13,
+	chestarmor       = 14,
+	legsarmor        = 15,
+	backarmor        = 16,
+	consumable       = 17,
+	blueprint        = 18,
+	codex            = 19,
+	inspectiontool   = 20,
+	instrument       = 21,
+	thrownitem       = 22,
+	unlockitem       = 23,
+	activeitem       = 24,
+	augmentitem      = 25
+}
+
+--  WHERE A TYPE THIS FILE HAS NEVER HEARD OF GOES.
+--
+--  LAST, AND DEFINED RATHER THAN ARBITRARY. The table above is the whole of
+--  retail's enum, so this is reached only by a MOD that adds an item type -- but
+--  it also has to be defined for the same reason every other tiebreak here does:
+--  a type with no stable rank means a crate that is arranged differently on
+--  every pass, never reads as settled, and gets walked back to forever. That is
+--  the exact loop compactContainer's header describes living through.
+--
+--  root.itemType ALSO THROWS FOR A NAME THE DATABASE DOES NOT HOLD --
+--  ItemDatabase::itemData raises "No such item" rather than returning anything
+--  -- and that lands here too, through the pcall in sortTypeRank.
+SORT_TYPE_UNKNOWN = 99
+
+--  RARITY, RANKED THE WAY sortBag COMPARES IT, WHICH IS BACKWARDS FROM THE ENUM.
+--
+--  `a->rarity() > b->rarity()` with Common lowest, so the RAREST thing sorts
+--  FIRST. Stored here already inverted, so sortLess can compare two rank numbers
+--  in the same direction as everything else in it.
+--
+--  ABSENT MEANS COMMON, matching the engine: an item declaring no rarity IS
+--  Common, so an unknown string is not a special case and does not get a bucket
+--  of its own.
+SORT_RARITY_ORDER =
+{
+	essential = 1,
+	legendary = 2,
+	rare      = 3,
+	uncommon  = 4,
+	common    = 5
+}
+
+--  HOW LONG A CRATE IS LEFT ALONE AFTER A UNIT HAS BEEN SENT TO IT.
+--
+--  THE ORDINARY BACKOFF, AND IT REPLACED A SETTLE WINDOW THAT WAS THE WRONG
+--  IDEA. That version refused to sort a crate until its contents had been
+--  unchanged for twenty seconds, which sounds like patience and is actually a
+--  rule that the BUSIEST crate in the base is the one that never gets sorted.
+--  A player who socketed the module and ticked the box asked for their
+--  containers to be organised; waiting for the storage to stop being used is
+--  not a smaller version of that, it is a different thing.
+--
+--  SO IT BACKS OFF PER CRATE, LIKE EVERY OTHER RUNG. A crate that has just been
+--  visited is not reconsidered for a while, whatever the outcome was, and
+--  nothing anywhere asks whether the crate is BUSY. A crate taking constant
+--  deliveries gets sorted, then sorted again a minute later, which is exactly
+--  what was asked for and costs one trip a minute on the lowest rung of the
+--  ladder.
+--
+--  STAMPED AT DISPATCH, NOT ON ARRIVAL, and that is deliberate: a trip that
+--  never arrives has still spent the unit, so it has still cost what the backoff
+--  is rationing.
+--
+--  SEPARATE FROM FAILURE_BACKOFF, WHICH STILL APPLIES ON TOP. That ramp is for a
+--  task that FAILED -- could not path, timed out -- and sortWork checks it the
+--  same way every other generator does. This one is not about failure at all.
+SORT_REVISIT = 60.0
+
+--  HOW OFTEN ONE CRATE IS LOOKED AT.
+--
+--  ONE CRATE PER SCAN, ROUND ROBIN -- see sortWork. This is therefore the rate
+--  at which a port reads a SINGLE container, not the rate at which it sweeps
+--  storage, and the whole ring takes crates x 5 seconds to come round.
+--
+--  SLOW IS THE POINT. Twenty pets over three hundred crates is ninety thousand
+--  container reads per sweep if every port walks every crate; at one crate per
+--  port per five seconds it is four reads a second across the whole server,
+--  regardless of how many crates there are.
+--
+--  A STALE CHOICE OF CRATE IS HARMLESS. sortContainer re-reads the container on
+--  arrival and no-ops if somebody got there first, so latency on the bottom rung
+--  of the ladder costs nothing that can be observed.
+SORT_SCAN_INTERVAL = 5.0
+
+--  HOW MANY SLOTS MUST BE IN THE WRONG PLACE TO BE WORTH A WALK.
+--
+--  COUNTED IN MOVES, NOT IN HOLES, and the two are very different numbers. One
+--  gap near the top of a full crate displaces everything below it, so "one hole"
+--  is thirty moves -- and that is the cost, which is the thing a threshold
+--  should be about.
+--
+--  TWO. One misplaced slot is a swap and not worth crossing a base for; two is
+--  the point where a player would see something.
+SORT_MIN_DISORDER = 2
+
+--  HOW MANY SLOTS ONE VISIT MAY MOVE.
+--
+--  A SAFETY VALVE, NOT A BUDGET. A vanilla chest is 40 slots and will never come
+--  near this; a 200-slot modded container would otherwise spend several hundred
+--  engine calls inside one report handler.
+--
+--  A CAPPED PASS IS NOT A FAILED PASS. The plan is applied in target order, so
+--  stopping early leaves a correctly sorted PREFIX and an untouched tail --
+--  which looks right from the top of the grid, lowers the disorder count, and
+--  converges on the next visit because the comparator is total and deterministic.
+SORT_MOVE_CAP = 64
+
+--  DOES A BEACON GET SORTED LIKE ANYTHING ELSE?
+--
+--  NO, AND THIS IS THE ONE PLACE THIS FEATURE COULD HAVE CHANGED BEHAVIOUR
+--  RATHER THAN APPEARANCE.
+--
+--  scanContainers picks the FIRST ENABLED BEACON IN SLOT ORDER to decide what a
+--  container is for -- it sorts the slot keys precisely so that two beacons in
+--  one chest cannot swap roles between scans. A general sort would reorder those
+--  two beacons by name, then by parameters, and hand the container to whichever
+--  filter happened to serialise first. The chest would keep working and would
+--  silently be filtering for something else.
+--
+--  So beacons are lifted out of the comparator and laid down FIRST, in the slot
+--  order they already had. Relative order preserved means the winner is
+--  preserved, by construction rather than by a rule that has to be remembered.
+--
+--  FIRST RATHER THAN PINNED IN PLACE, which was the other option. Pinning leaves
+--  the beacon stranded at slot 17 with the sorted run flowing around it, and
+--  every crate then has one permanent hole in it. Front is also where a label
+--  belongs.
+SORT_BEACONS_FIRST = true
+
+--  WHAT TIER DOES THIS NAME SORT IN?
+--
+--  MEMOISED BY NAME. root.itemType takes a name and nothing else, so parameters
+--  cannot change the answer and one lookup per name per session is the whole
+--  cost.
+--
+--  pcall'd, unlike the root.itemConfig call in beaconBehaviorOf. That one is
+--  safe because an item in a container HAS a config; this is a different
+--  binding, generated items reach it, and a throw here would abandon a sort
+--  halfway through a permutation.
+local function sortTypeRank(name)
+	self.sortTypes = self.sortTypes or {}
+
+	if self.sortTypes[name] == nil then
+		local rank = SORT_TYPE_UNKNOWN
+		local ok, kind = pcall(root.itemType, name)
+
+		if ok and type(kind) == "string" then
+			rank = SORT_TYPE_ORDER[string.lower(kind)] or SORT_TYPE_UNKNOWN
+
+			--  ONCE PER UNRECOGNISED TYPE PER SESSION, and unconditional. This
+			--  is the line that says the table above needs a row, and it is the
+			--  only way anybody would find out.
+			if rank == SORT_TYPE_UNKNOWN then
+				sb.logInfo("PETPORT %s sort: item type %s (%s) is not in "
+					.. "SORT_TYPE_ORDER -- sorting it last",
+					stationUniqueId(), tostring(kind), tostring(name))
+			end
+		end
+
+		self.sortTypes[name] = rank
+	end
+
+	return self.sortTypes[name]
+end
+
+--  HOW RARE IS THIS?
+--
+--  MEMOISED BY NAME, AND THAT IS A KNOWN APPROXIMATION RATHER THAN A SHORTCUT.
+--  root.itemConfig re-runs an item's build script with a fresh seed when the
+--  descriptor carries none, so asking per instance would be both expensive and
+--  no more accurate -- a generated weapon's rarity comes from the file it was
+--  built from either way, and every commonshortsword answers Common.
+--
+--  AN INSTANCE PARAMETER STILL WINS. A descriptor that carries its own rarity is
+--  stating one, and that is the number the tooltip shows.
+local function sortRarityRank(name, parameters)
+	if type(parameters) == "table" and type(parameters.rarity) == "string" then
+		local stated = SORT_RARITY_ORDER[string.lower(parameters.rarity)]
+		if stated ~= nil then return stated end
+	end
+
+	self.sortRarities = self.sortRarities or {}
+
+	if self.sortRarities[name] == nil then
+		local rank = SORT_RARITY_ORDER.common
+		local ok, resolved = pcall(root.itemConfig, { name = name, count = 1 })
+
+		if ok and type(resolved) == "table" and type(resolved.config) == "table"
+			and type(resolved.config.rarity) == "string" then
+
+			rank = SORT_RARITY_ORDER[string.lower(resolved.config.rarity)]
+				or SORT_RARITY_ORDER.common
+		end
+
+		self.sortRarities[name] = rank
+	end
+
+	return self.sortRarities[name]
+end
+
+--  IS A BEFORE B?
+--
+--  sortBag's comparator, plus two tiebreaks it does not need and this does.
+--
+--  THE ENGINE'S FOUR KEYS ARE NOT A TOTAL ORDER, and table.sort in Lua 5.1
+--  raises "invalid order function for sorting" when a comparator is
+--  inconsistent -- so "returns false both ways" is not a safe place to stop.
+--  Two music sheets share a name, a type, a rarity and a count and differ only
+--  in parameters; without a tiebreak their relative order comes out of whatever
+--  the sort's partitioning happened to do, which means the crate is arranged
+--  differently on every pass and NEVER READS AS SETTLED. The unit then walks
+--  back to it forever.
+--
+--  So parameters break the tie, and the ORIGINAL SLOT breaks that. The slot key
+--  is unique by construction, which makes the order total by construction --
+--  the property that matters is not which of two identical stacks goes first
+--  but that the same one goes first every time.
+local function sortLess(a, b)
+	if a.type ~= b.type then return a.type < b.type end
+	if a.rarity ~= b.rarity then return a.rarity < b.rarity end
+	if a.name ~= b.name then return a.name < b.name end
+	if a.count ~= b.count then return a.count > b.count end
+	if a.pkey ~= b.pkey then return a.pkey < b.pkey end
+	return a.key < b.key
+end
+
+--  WHAT SHOULD THIS CONTAINER LOOK LIKE?
+--
+--  Returns an ORDERED array of records and how many of them are in the wrong
+--  slot. Record `n` wants to be in slot key `n`; empty slots fall out of that
+--  for free, since the array is dense and everything past #order is empty.
+--
+--  KEYS, NOT OFFSETS. world.containerItems hands back a 1-based Lua table and
+--  the container's own slots are 0-based -- SLOT_KEY_TO_OFFSET, and the
+--  measurement behind it, is in takeFromSlot's header. Everything in this
+--  section works in KEYS and converts once, at the engine call.
+local function sortPlan(items)
+	if type(items) ~= "table" then return {}, 0 end
+
+	local keys = {}
+	for key in pairs(items) do table.insert(keys, key) end
+	table.sort(keys)
+
+	local pinned, loose = {}, {}
+
+	for _, key in ipairs(keys) do
+		local stack = items[key]
+
+		if type(stack) == "table" and type(stack.name) == "string" then
+			--  BEACONS ARE LIFTED OUT BEFORE ANYTHING IS COMPARED. See
+			--  SORT_BEACONS_FIRST: their relative order is what decides what
+			--  the container is for.
+			if SORT_BEACONS_FIRST and beaconBehaviorOf(stack) ~= nil then
+				table.insert(pinned, { key = key, stack = stack })
+			else
+				table.insert(loose, {
+					key = key,
+					stack = stack,
+					name = stack.name,
+					count = stack.count or 1,
+					type = sortTypeRank(stack.name),
+					rarity = sortRarityRank(stack.name, stack.parameters),
+					pkey = parameterKey(stack.parameters)
+				})
+			end
+		end
+	end
+
+	table.sort(loose, sortLess)
+
+	local order = {}
+	for _, record in ipairs(pinned) do table.insert(order, record) end
+	for _, record in ipairs(loose) do table.insert(order, record) end
+
+	local disorder = 0
+	for index, record in ipairs(order) do
+		if record.key ~= index then disorder = disorder + 1 end
+	end
+
+	return order, disorder
+end
+
+--  Lift a whole slot out, and hand back nothing at all if it was not what the
+--  plan thought was there.
+--
+--  THE SLOT IS PASSED IN AND IS NOT record.key. MEASURED 2026-09-08 21:55, and
+--  it was the whole feature not working.
+--
+--  `record.key` is where a stack STARTED. `where[record]` is where it is NOW,
+--  and after the first move those stop being the same number -- an evicted
+--  record is by definition sitting at the destination it was just displaced
+--  from rather than at its original slot. Reading record.key here meant every
+--  pass ran correctly for a handful of moves and then lifted the wrong slot:
+--
+--    sort: slot key 2 held siliconboard, not the salvagebody the plan expected
+--    sort of 37 ABANDONED after 2 move(s): lift refused
+--
+--  Twelve passes in six minutes, every one of them abandoned, disorder falling
+--  by three or four slots a trip because the moves BEFORE the divergence were
+--  real. It converged, visibly did something, and never finished -- which is
+--  exactly what it looked like from inside the game.
+--
+--  NAME ONLY, NOT PARAMETERS, AND THAT IS THE SECOND HALF OF THE SAME LOG.
+--
+--    sort: slot key 7 held milk, not the milk the plan expected
+--
+--  Same name both sides. Perishables carry an age that the engine advances
+--  between the containerItems snapshot and this take, so compare() on the
+--  parameter block is false for every rotting item in the network -- which is a
+--  crate of milk aborting every pass forever.
+--
+--  IT IS ALSO THE WRONG QUESTION HERE, WHICH IS WHY THIS IS NOT A LOOSENED
+--  GUARD SO MUCH AS A CORRECTED ONE. takeFromSlot compares parameters because it
+--  is about to hand the stack to something that cares WHICH music sheet it got.
+--  This lays back down exactly what the take RETURNED, into another slot of the
+--  same container -- so a drifted age travels with its own item and nothing is
+--  predicted from the stale snapshot. The name is the only thing that has to
+--  hold, because the name is what says the model still describes the container.
+--
+--  A DRIFT IS STILL SAID OUT LOUD, ONCE PER CONTAINER PER PASS. Two stacks of
+--  one name differing only in parameters are a real thing (sb_musicsheet), and
+--  if the model ever diverged among them the name check alone would not catch
+--  it. Worth knowing it happened; not worth abandoning over.
+--
+--  PUT BACK ON MISMATCH, exactly as takeFromSlot does, and raw for the same
+--  reason -- what came out was in one slot a moment ago, so it is stack-sized by
+--  construction.
+local function sortLift(containerId, record, key)
+	local offset = key + SLOT_KEY_TO_OFFSET
+	local ok, taken = pcall(world.containerTakeNumItemsAt, containerId, offset,
+		record.stack.count or 1)
+
+	if not ok or type(taken) ~= "table" or (taken.count or 0) < 1 then
+		return nil
+	end
+
+	if taken.name ~= record.stack.name then
+		sb.logError("PETPORT %s sort: slot key %s held %s, not the %s the plan "
+			.. "expected -- returning it and abandoning this pass",
+			stationUniqueId(), sb.printJson(key), tostring(taken.name),
+			tostring(record.stack.name))
+
+		world.containerAddItems(containerId, taken)
+		return nil
+	end
+
+	if not compare(taken.parameters, record.stack.parameters)
+		and not self.sortDrifted then
+
+		self.sortDrifted = true
+
+		sb.logInfo("PETPORT %s sort: %s at slot key %s came back with different "
+			.. "parameters than the scan read -- moving it anyway, since what is "
+			.. "put down is what the take handed over",
+			stationUniqueId(), tostring(taken.name), sb.printJson(key))
+	end
+
+	return taken
+end
+
+--  Lay a stack into a slot that is known to be empty.
+--
+--  RETURNS FALSE RATHER THAN LOSING IT. The slot was emptied by this function's
+--  caller one call earlier, so a refusal is not something that can happen -- and
+--  "cannot happen" is exactly the class of failure compactContainer's accounting
+--  block exists to catch, so it is checked and it is loud.
+local function sortLay(containerId, stack, key)
+	local offset = key + SLOT_KEY_TO_OFFSET
+	local ok, leftover = pcall(world.containerPutItemsAt, containerId, stack, offset)
+
+	if not ok then
+		sb.logError("PETPORT %s sort: put of %s into slot key %s THREW",
+			stationUniqueId(), tostring(stack.name), sb.printJson(key))
+		return false
+	end
+
+	local refused = (type(leftover) == "table" and (leftover.count or 0)) or 0
+
+	if refused > 0 then
+		sb.logError("PETPORT %s sort: slot key %s REFUSED %s of %s -- putting "
+			.. "the remainder back loose",
+			stationUniqueId(), sb.printJson(key), sb.printJson(refused),
+			tostring(stack.name))
+
+		--  Loose rather than lost. The crate ends unsorted, which is the state
+		--  it was already in.
+		world.containerAddItems(containerId, leftover)
+		return false
+	end
+
+	return true
+end
+
+--  How many items, by name, does this container hold?
+--
+--  THE BEFORE-AND-AFTER FOR THE ACCOUNTING BELOW. A permutation must not change
+--  this by one, and the whole reason compactContainer counts is that the failure
+--  it was chasing was SILENT -- calls that reported success with fewer items in
+--  the world afterwards.
+local function sortTally(items)
+	local tally = {}
+
+	if type(items) == "table" then
+		for _, stack in pairs(items) do
+			if type(stack) == "table" and type(stack.name) == "string" then
+				tally[stack.name] = (tally[stack.name] or 0) + (stack.count or 1)
+			end
+		end
+	end
+
+	return tally
+end
+
+--  Put one container's slots into sorted order.
+--
+--  CYCLE PLACEMENT, NOT TAKE-EVERYTHING-OUT-AND-PUT-IT-BACK. compactContainer
+--  empties a whole NAME and rebuilds it, which is survivable because a consume
+--  is all-or-nothing and the name is one item. The same shape here would mean
+--  the entire contents of a chest living in a Lua table for the length of a
+--  loop, and any throw inside that loop is a chest the player has lost.
+--
+--  So the container is permuted in place. At most TWO stacks are out of the
+--  container at once and only for the length of two calls, every intermediate
+--  state is a valid container, and abandoning the pass at any point leaves the
+--  crate partially sorted rather than damaged.
+--
+--  GLOBAL, like compactContainer beside it and for the same reason: the
+--  petports_taskReport handler is registered in init(), far earlier in this file
+--  than this definition.
+function sortContainer(containerId)
+	if not world.entityExists(containerId) then return false end
+
+	local ok, items = pcall(world.containerItems, containerId)
+	if not ok or type(items) ~= "table" then return false end
+
+	local before = sortTally(items)
+	local order, disorder = sortPlan(items)
+
+	if disorder < SORT_MIN_DISORDER then
+		--  Somebody sorted it, or the player did, between dispatch and arrival.
+		--  Not a failure and not silent: a unit that walked across a base for
+		--  nothing is worth one line.
+		sb.logInfo("PETPORT %s sort of %s: nothing to do on arrival (%s slot(s) "
+			.. "out of place)",
+			stationUniqueId(), sb.printJson(containerId), sb.printJson(disorder))
+		return false
+	end
+
+	--  THE LIVE MODEL. `at` is what each slot key holds right now and `where` is
+	--  the inverse; both are updated after every move, so the plan is walked
+	--  against the container as it currently is rather than as it was read.
+	local at, where = {}, {}
+
+	for _, record in ipairs(order) do
+		at[record.key] = record
+		where[record] = record.key
+	end
+
+	--  Change-gated per pass, not per session: a container that drifts once is
+	--  worth one line, and a network of fridges is not worth one line per crate
+	--  per pass forever.
+	self.sortDrifted = false
+
+	local moved, aborted = 0, nil
+
+	for target = 1, #order do
+		if moved >= SORT_MOVE_CAP then
+			--  A CAPPED PASS IS A CORRECT PREFIX. See SORT_MOVE_CAP.
+			sb.logInfo("PETPORT %s sort of %s hit the move cap at %s -- the "
+				.. "first %s slot(s) are in order and the rest waits for the "
+				.. "next pass",
+				stationUniqueId(), sb.printJson(containerId),
+				sb.printJson(SORT_MOVE_CAP), sb.printJson(target - 1))
+			break
+		end
+
+		local record = order[target]
+		local source = where[record]
+
+		if source ~= target then
+			--  FROM `source`, WHICH IS where[record] AND NOT record.key. See
+			--  sortLift's header for what reading the wrong one of those cost.
+			local hand = sortLift(containerId, record, source)
+
+			if hand == nil then
+				aborted = "lift refused"
+				break
+			end
+
+			--  The occupant of the destination, captured BEFORE the model is
+			--  updated -- it is about to be put where `record` came from.
+			local evicted = at[target]
+			local carried = nil
+
+			if evicted ~= nil then
+				--  FROM `target`, because that is where the evicted record is
+				--  sitting right now -- which is the case that diverged most
+				--  often, since being at the destination is what makes it
+				--  evicted in the first place.
+				carried = sortLift(containerId, evicted, target)
+
+				if carried == nil then
+					--  One stack is in hand and the crate is one slot short of
+					--  where it started. Put it straight back and stop.
+					sortLay(containerId, hand, source)
+					aborted = "second lift refused"
+					break
+				end
+			end
+
+			if not sortLay(containerId, hand, target) then
+				if carried ~= nil then sortLay(containerId, carried, source) end
+				aborted = "destination refused"
+				break
+			end
+
+			at[target] = record
+			where[record] = target
+			at[source] = nil
+
+			if carried ~= nil then
+				if not sortLay(containerId, carried, source) then
+					aborted = "return refused"
+					break
+				end
+
+				at[source] = evicted
+				where[evicted] = source
+			end
+
+			moved = moved + 1
+		end
+	end
+
+	--  HARD ACCOUNTING, EVERY PASS, exactly as compactContainer does it and for
+	--  the identical reason: the failure this is chasing is the silent one.
+	local okAfter, after = pcall(world.containerItems, containerId)
+
+	if okAfter then
+		local tally = sortTally(after)
+
+		for name, count in pairs(before) do
+			if (tally[name] or 0) ~= count then
+				sb.logError("PETPORT %s SORT CHANGED THE CONTENTS of %s: %s went "
+					.. "from %s to %s",
+					stationUniqueId(), sb.printJson(containerId), tostring(name),
+					sb.printJson(count), sb.printJson(tally[name] or 0))
+			end
+		end
+
+		for name, count in pairs(tally) do
+			if before[name] == nil then
+				sb.logError("PETPORT %s SORT CHANGED THE CONTENTS of %s: %s %s "
+					.. "appeared out of nothing",
+					stationUniqueId(), sb.printJson(containerId),
+					sb.printJson(count), tostring(name))
+			end
+		end
+	end
+
+	if aborted ~= nil then
+		sb.logError("PETPORT %s sort of %s ABANDONED after %s move(s): %s",
+			stationUniqueId(), sb.printJson(containerId), sb.printJson(moved),
+			tostring(aborted))
+		return moved > 0
+	end
+
+	--  ONE MAXWELL POINT FOR THE CRATE, NOT ONE PER SLOT MOVED.
+	--
+	--  THE SAME WEIGHT AS CLEARING THE LAST OF A TYPE OUT OF A CRATE, and the
+	--  same shape: an event, an integer, and monotonic. See dd.dispatch.tidyscore
+	--  -- the score is about the player's eye, and a crate whose grid has been
+	--  put in order is exactly the thing that score is measuring.
+	--
+	--  AWARDED ONLY FOR A COMPLETED PASS. A pass that hit SORT_MOVE_CAP or was
+	--  abandoned did real work and left the crate better, but it did not leave it
+	--  ORGANISED -- and paying per pass rather than per finished crate would mean
+	--  a 200-slot container was worth more points than a chest for no reason a
+	--  player would recognise. It scores when it finishes, on the next trip.
+	--
+	--  NOT MONOTONIC IN THE WAY noteStorageTake IS, AND THIS IS THE ONE THING TO
+	--  WATCH. Clearing the last of a type out of a crate is rare and cannot be
+	--  re-earned without the type coming back. A crate can be re-sorted every time
+	--  it takes a delivery, so this rung earns at roughly one point per crate per
+	--  SORT_REVISIT on a busy base, which is a much faster tap than the other two
+	--  and will show up as inflation if the score is ever ranked. SORT_REVISIT is
+	--  the only thing bounding it.
+	if moved > 0 then
+		metrics.add("tidy", 1)
+
+		sb.logInfo("PETPORT %s sorted %s: %s slot(s) moved, %s stack(s) in order "
+			.. "(TIDY +1, score %s)",
+			stationUniqueId(), sb.printJson(containerId), sb.printJson(moved),
+			sb.printJson(#order),
+			sb.printJson((self.petData and self.petData.stats
+				and self.petData.stats.tidy) or 0))
+	end
+
+	return moved > 0
+end
+
+--------------------------------------------------------------------------------
 --  FARMABLES
 --------------------------------------------------------------------------------
 
@@ -15208,6 +15897,155 @@ local function defragWork()
     #names, homeless, full, unreachable)
 end
 
+--  ---------------------------------------------------------------------------
+--  SORT: PUT ONE CRATE'S GRID BACK IN READABLE ORDER
+--  ---------------------------------------------------------------------------
+--
+--  BELOW DEFRAGMENTATION AND ABOVE DRAINING, and the position is forced rather
+--  than chosen.
+--
+--  BELOW TIDY, COMPACT AND DEFRAG BECAUSE ALL THREE DESTROY THE ORDER. Tidying
+--  and defragmentation each take a slot OUT of a crate and leave a hole where it
+--  was; compaction empties a name and re-adds it through containerAddItems,
+--  which lands it wherever the first free slot happens to be. Sorting above any
+--  of them is work that the very next rung undoes.
+--
+--  This is not merely wasteful ordering, it is the ordering that makes the
+--  feature converge at all: findWork is first-match-wins, so a crate is only
+--  sorted once the whole network has nothing left to tidy, merge or gather.
+--
+--  ABOVE DRAINING because draining is irreversible and everything else comes
+--  first -- the argument drainWork's own header makes, unchanged.
+--
+--  ONE CRATE PER TRIP, and sortContainer permutes the whole grid on arrival, so
+--  a badly scrambled crate is one walk rather than one walk per slot.
+--
+--  ONE CRATE PER SCAN AS WELL, WHICH IS A SEPARATE CLAIM AND THE MORE IMPORTANT
+--  ONE. This rung does not sweep storage looking for the worst crate; it looks
+--  at one container per scan and takes it or leaves it. See the cursor below.
+local function sortWork()
+	--  ITS OWN CADENCE, AND IT PACES A SINGLE CONTAINER READ. See
+	--  SORT_SCAN_INTERVAL.
+	self.sortScan = (self.sortScan or 0) - (WORK_INTERVAL or 1.0)
+	if self.sortScan > 0 then return nil, "one crate is looked at every few seconds" end
+	self.sortScan = SORT_SCAN_INTERVAL
+
+	--  BOTH KINDS, like compaction. Sorting reshapes a crate that is already
+	--  correct, so there is no half of it that has to run without the module.
+	local sources = tidySources(true, true)
+	if #sources == 0 then return nil, "no crate to sort" end
+
+	--  ONE CRATE PER SCAN, ROUND ROBIN, AND THIS IS THE WHOLE COST MODEL.
+	--
+	--  Every other storage rung walks the network on every tick it is reached:
+	--  tidyWork, compactWork and defragWork each call world.containerItems per
+	--  crate per tick. Those are bounded by having something to do -- they stop
+	--  the moment they find work -- and this one is not, because on a settled
+	--  base it finds nothing and reads every crate to prove it.
+	--
+	--  One pet over twenty crates is not a hazard. Twenty pets over three
+	--  hundred crates is six thousand container reads every tick, and that is
+	--  the shape that takes a server down rather than making it slow.
+	--
+	--  SO THE SWEEP IS SPREAD ACROSS SCANS INSTEAD OF FITTING INSIDE ONE. The
+	--  cursor advances by one every scan and wraps; a port reads exactly one
+	--  container per SORT_SCAN_INTERVAL no matter how large the network is.
+	--
+	--  THE RING IS NOT A PROMISE, AND IT DOES NOT NEED TO BE. tidySources is
+	--  rebuilt per call and a crate appearing or disappearing shifts what
+	--  "next" means, so a given crate is not visited on a fixed schedule -- it
+	--  is visited eventually, repeatedly, which is all a cosmetic rung wants.
+	self.sortCursor = (self.sortCursor or 0) + 1
+	if self.sortCursor > #sources then self.sortCursor = 1 end
+
+	local source = sources[self.sortCursor]
+	if source == nil then return nil, "no crate to sort" end
+
+	if not world.entityExists(source.id) then
+		return nil, "the crate in the ring this scan is gone"
+	end
+
+	--  THE PER-CRATE BACKOFF. See SORT_REVISIT: a crate a unit was sent to is
+	--  left alone for a while, whatever came of it.
+	self.sortQuiet = self.sortQuiet or {}
+
+	local quiet = self.sortQuiet[source.id]
+	if quiet ~= nil and quiet > world.time() then
+		return nil, string.format("crate %s was sorted recently",
+			tostring(source.id))
+	end
+
+	local ok, items = pcall(world.containerItems, source.id)
+	if not ok or type(items) ~= "table" then
+		return nil, "the crate in the ring this scan could not be read"
+	end
+
+	local _, disorder = sortPlan(items)
+
+	if disorder < SORT_MIN_DISORDER then
+		return nil, string.format("crate %s is already in order",
+			tostring(source.id))
+	end
+
+	local workId = "sort:" .. tostring(source.id)
+
+	--  THE ORDINARY FAILURE RAMP, ON TOP OF THE BACKOFF ABOVE AND ANSWERING A
+	--  DIFFERENT QUESTION. This one is "the last trip to this crate failed";
+	--  SORT_REVISIT is "the last trip to this crate happened".
+	local failure = self.workFailures[workId]
+	local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
+
+	if backedOff then
+		return nil, string.format("crate %s is backed off after a failed trip",
+			tostring(source.id))
+	end
+
+	--  NETWORK-EXCLUSIVE CLAIM, no port suffix, like compaction. Two units
+	--  walking to the same crate to rearrange the same slots is pure waste, and
+	--  the second one has nothing useful to do when it arrives.
+	if not claimFree(workId) then
+		return nil, string.format("crate %s is already claimed", tostring(source.id))
+	end
+
+	local stand, standWhy = servicePointNear("crate " .. tostring(source.id),
+		source.id, source.position, 4)
+
+	if stand == nil then
+		sb.logInfo("PETPORT %s sort of %s SKIPPED: %s of %s",
+			stationUniqueId(), sb.printJson(source.id), tostring(standWhy),
+			sb.printJson(source.position))
+
+		return nil, string.format("nowhere to stand at crate %s",
+			tostring(source.id))
+	end
+
+	--  STAMPED HERE, AT DISPATCH. A trip that never arrives has still spent the
+	--  unit, so it has still cost what this is rationing.
+	self.sortQuiet[source.id] = world.time() + SORT_REVISIT
+
+	sb.logInfo("PETPORT %s sorting %s: %s slot(s) out of place (crate %s of %s "
+		.. "in the ring)",
+		stationUniqueId(), sb.printJson(source.id), sb.printJson(disorder),
+		sb.printJson(self.sortCursor), sb.printJson(#sources))
+
+	return {
+		id = workId,
+
+		--  A TYPE petportsTaskAction HAS NEVER HEARD OF, like "compact" and
+		--  "tidy" before it. Dispatch falls through to the generic
+		--  walk-and-stand path and the port does the container work when the
+		--  arrival is reported.
+		--  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
+		mediumVerified = true,
+		type = "sort",
+		target = source.id,
+		position = stand,
+		containerPosition = source.position,
+		port = stationUniqueId(),
+		dwell = 0
+	}
+end
+
 local function findWork()
   --  PARTICIPATION, READ ONCE. Four config reads rather than fourteen, and
   --  every branch below reasons about the same snapshot -- a set that changed
@@ -15267,6 +16105,10 @@ local function findWork()
   local doTidy = doTidyDeposit or doTidyRestock
   local doCompact = defrag and petportParticipates("compact")
   local doDefrag = defrag and petportParticipates("defrag")
+
+  --  SORTING IS THE FOURTH BOX UNDER THE MODULE. It is housekeeping of the
+  --  same family and it runs below the other three -- see sortWork.
+  local doSort = defrag and petportParticipates("sort")
 
   --  FARMING SPLITS INTO FOUR, GATED BY THE MODULE RATHER THAN BY THE PORT.
   local farming = not oblivious and petportFarming()
@@ -15586,6 +16428,14 @@ local function findWork()
   if doDefrag then gather, noGather = portProf("g.defrag", defragWork) end
   if dispatchable(gather) ~= nil then return gather end
 
+  --  BELOW EVERYTHING THAT MOVES ITEMS BETWEEN CRATES, ABOVE THE ONE THING THAT
+  --  DESTROYS THEM. Tidying, compaction and defragmentation all scramble the
+  --  grid on their way past, so sorting has to be the last thing that touches a
+  --  crate or it is undone before a player ever sees it. See sortWork.
+  local order, noOrder
+  if doSort then order, noOrder = portProf("g.sort", sortWork) end
+  if dispatchable(order) ~= nil then return order end
+
   --  BELOW THE VERY BOTTOM. Draining is the only IRREVERSIBLE work in the mod:
   --  everything above moves things, and this one feeds them to a machine that
   --  destroys them. A unit should do literally anything else first, including
@@ -15637,6 +16487,7 @@ local function findWork()
     if not doTidyDeposit then table.insert(off, "tidy (deposit crates)") end
     if not doCompact then table.insert(off, "compact") end
     if not doDefrag then table.insert(off, "defrag") end
+    if not doSort then table.insert(off, "sort") end
   end
   --  FARMING REPORTS ITS OWN REASON, because "does not participate in farming"
   --  is now three different situations: no module, the module with this activity
@@ -15697,6 +16548,7 @@ local function findWork()
       .. "; " .. tostring(noTidy or "no tidying work")
       .. "; " .. tostring(noSquash or "no compaction work")
       .. "; " .. tostring(noGather or "no gathering work")
+      .. "; " .. tostring(noOrder or "no sorting work")
       .. "; " .. tostring(noDrain or "no draining work"))
   end
 
