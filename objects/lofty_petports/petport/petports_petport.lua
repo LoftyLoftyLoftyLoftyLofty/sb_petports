@@ -196,8 +196,8 @@ DOOR_POLL = 0.0
 --  THE FOUR GROUPS, AND WHICH GENERATORS EACH ONE GATES.
 --
 --      hauling    collection
---      restock    restockFetch, restockDeliver
---      tidy       tidy          -- defrag module
+--      restock    restockFetch, restockDeliver, tidy (request crates only)
+--      tidy       tidy          -- defrag module, deposit crates only
 --      compact    compact       -- defrag module
 --      defrag     defrag        -- defrag module
 --      farming    replant, water, harvest, animal, withdraw, withdrawWater
@@ -1532,7 +1532,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-08o cargo bubbles no longer ride on the alert toggle"
+local PETPORT_BUILD_STAMP = "2026-09-08p restock crates are tidied without the defrag module"
 
 --  PORT PROFILER, 2026-09-07b. MEASURED 21:00: six ports on a small islet,
 --  59 port ticks over 30 ms in 39 s totalling 3.7 s, worst 268 ms, while
@@ -10187,6 +10187,15 @@ end
 --  the crate settles at max. Capping here would leave a remainder on the unit
 --  instead, which is the state the cargo guard exists to avoid.
 --
+--  THAT SENTENCE WAS FALSE FOR A WHILE AND IS TRUE AGAIN. It was written when
+--  tidying was gated by `sorting`, which every unit had. The three sorting
+--  behaviours then moved behind the Defragmentation Module and nothing here was
+--  revisited, so for any unit without one the excess simply stayed -- 1001 in a
+--  crate asking for 1000, permanently. dd.port.tidysplit put the request-crate
+--  half of tidying back on the `restock` switch, which is what this paragraph
+--  has always assumed. Anything that fills a request crate can clean up after
+--  filling it.
+--
 --  GLOBAL, like depositCargo beside it and for the same reason: the
 --  petports_taskReport handler is registered in init(), earlier in this file
 --  than this definition, so a local would not be in scope at the call site.
@@ -13811,11 +13820,19 @@ local function restockFetchWork()
     short, unstocked, noRoom, unreachable)
 end
 
---  Every crate the network can act on, both kinds, in a stable order.
+--  Every crate the network can act on, in a stable order.
 --
 --  Deposit beacons and configured restock beacons. Shared by tidyWork, which
 --  wants misfits out of both, and compactWork, which wants split stacks merged
 --  in both.
+--
+--  THE TWO KINDS ARE ASKED FOR SEPARATELY, because tidying them is gated
+--  separately -- see the gate note in tidyWork. compactWork wants both and says
+--  so; nothing here decides for a caller.
+--
+--  STATED AT EVERY CALL, NOT DEFAULTED. A default of true would mean a future
+--  caller silently gets the ungated half of a gated feature by writing nothing,
+--  which is exactly the mistake this parameter exists to prevent.
 --
 --  DEFINED ABOVE ITS FIRST CALLER, and that is not incidental. A `local
 --  function` called from earlier in the file resolves as a nil GLOBAL and
@@ -13823,16 +13840,20 @@ end
 --  also deleted outright once, by a block rewrite of the restock generators
 --  that ran up to the header below; the two call sites survived and nothing in
 --  a syntax check noticed. Grep for callers after moving anything near here.
-local function tidySources()
+local function tidySources(wantDeposit, wantRestock)
   local sources = {}
 
-  for _, beacon in ipairs(petports_beaconsFor("deposit")) do
-    table.insert(sources, beacon)
+  if wantDeposit then
+    for _, beacon in ipairs(petports_beaconsFor("deposit")) do
+      table.insert(sources, beacon)
+    end
   end
 
-  for _, beacon in ipairs(petports_beaconsFor("restock")) do
-    if beacon.requests ~= nil then
-      table.insert(sources, beacon)
+  if wantRestock then
+    for _, beacon in ipairs(petports_beaconsFor("restock")) do
+      if beacon.requests ~= nil then
+        table.insert(sources, beacon)
+      end
     end
   end
 
@@ -13872,7 +13893,35 @@ end
 --
 --  SELF-LIMITING. One stack per trip is the standing design, so a crate with
 --  forty misfits produces forty sequential trips rather than forty tasks.
-local function tidyWork()
+--
+--  ---- TWO GATES, NOT ONE, AND THE SOURCE KIND DECIDES WHICH -------------
+--
+--  DEPOSIT CRATES ARE MODULE WORK. Filing a stray sword out of a chest is
+--  housekeeping nobody asked for, which is the whole argument for putting tidy
+--  behind the Defragmentation Module beside compact and defrag.
+--
+--  REQUEST CRATES ARE NOT, AND THAT IS A CORRECTION. A quota's excess is a
+--  misfit the network ITSELF created, and this generator is the only thing that
+--  removes one: petports_restockMisfits has exactly one runtime caller and it
+--  is here. So while tidying was gated by `sorting` -- a plain toggle every
+--  unit had -- depositCargoOnly could correctly say overshoot "settles at max".
+--  When the three sorting behaviours moved behind the module, that sentence
+--  quietly stopped being true for any unit without one, and 1001 dirt in a
+--  crate asking for 1000 became permanent.
+--
+--  IT IS NOT A RARE STATE EITHER. depositCargoOnly reasons about two ports
+--  racing, which is genuinely uncommon; a player hand-dropping a stack into a
+--  request crate reaches the same place, and so does lowering a quota, which
+--  turns the difference into misfits instantly.
+--
+--  SO RESTOCK-SOURCED TIDYING RIDES THE RESTOCK SWITCH -- dd.port.tidysplit.
+--  Anything that honours requests can clean up after honouring them. The module
+--  still owns every deposit crate in the network.
+--
+--  DESTINATIONS STAY DEPOSIT BEACONS EITHER WAY, so a module-less unit evicting
+--  overstock puts it into ordinary storage, which is precisely what
+--  depositCargoOnly says should happen.
+local function tidyWork(doDeposit, doRestock)
   --  DESTINATIONS ARE DEPOSIT BEACONS. A misfit always goes to ordinary
   --  storage, never straight into another request crate -- restockFetchWork is
   --  the only thing that fills those, and giving eviction a second route into
@@ -13896,7 +13945,12 @@ local function tidyWork()
   --  false the moment it became its own behaviour, because everything here
   --  iterated petports_beaconsFor("deposit") and a request crate is not in that
   --  list.
-  local sources = tidySources()
+  --  ONE KIND, THE OTHER, OR BOTH. See the gate note in the header.
+  local sources = tidySources(doDeposit, doRestock)
+
+  if #sources == 0 then
+    return nil, "no crate this unit is allowed to tidy"
+  end
 
   --  Counted so the no-work reason can tell "nothing is misfiled" from
   --  "plenty is misfiled and storage is full", which are very different
@@ -14910,7 +14964,10 @@ end
 --  on arrival -- so a badly fragmented crate is one walk, not one walk per
 --  item.
 local function compactWork()
-  for _, source in ipairs(tidySources()) do
+  --  BOTH KINDS. Compaction is module work end to end -- it reshapes a crate
+  --  that is already correct -- so unlike tidying it has no half that has to
+  --  run without one.
+  for _, source in ipairs(tidySources(true, true)) do
     if world.entityExists(source.id) then
       local ok, items = pcall(world.containerItems, source.id)
 
@@ -15191,7 +15248,23 @@ local function findWork()
   --  BY A BOX EACH -- the same two-level shape farming uses directly below.
   local defrag = not oblivious and petportDefrag()
 
-  local doTidy = defrag and petportParticipates("tidy")
+  --  TIDYING SPLITS AGAIN, BY WHAT IT IS TIDYING -- dd.port.tidysplit.
+  --
+  --  A DEPOSIT CRATE IS MODULE WORK; A REQUEST CRATE IS PART OF RESTOCKING.
+  --  Overshoot and over-quota stock are misfits the network made while honouring
+  --  a request, and tidyWork is the only thing that removes one -- so a unit
+  --  that fills request crates must be able to clean up after itself whether or
+  --  not it carries a Defragmentation Module. tidyWork's header has the full
+  --  reasoning and the sentence in depositCargoOnly this restores.
+  --
+  --  THE `tidy` BOX STILL MEANS DEPOSIT CRATES ONLY. It sits under the module in
+  --  the pane with compact and defrag, which is where a player will read it, and
+  --  a unit with the module and the box unticked still tidies its request
+  --  crates -- because that half is restocking's, and `restock` is what turns it
+  --  off.
+  local doTidyDeposit = defrag and petportParticipates("tidy")
+  local doTidyRestock = doRestock
+  local doTidy = doTidyDeposit or doTidyRestock
   local doCompact = defrag and petportParticipates("compact")
   local doDefrag = defrag and petportParticipates("defrag")
 
@@ -15476,7 +15549,11 @@ local function findWork()
   --  timer is running, and every other job represents something that either
   --  perishes or is already half done.
   local tidy, noTidy
-  if doTidy then tidy, noTidy = portProf("g.tidy", tidyWork) end
+  if doTidy then
+    tidy, noTidy = portProf("g.tidy", function()
+      return tidyWork(doTidyDeposit, doTidyRestock)
+    end)
+  end
   if dispatchable(tidy) ~= nil then return tidy end
 
   --  BELOW TIDYING, AND ABOVE DEFRAGMENTATION WHEN THAT LANDS. Tidying moves
@@ -15550,10 +15627,14 @@ local function findWork()
   if not doRestock then table.insert(off, "restock") end
 
   if not defrag then
+    --  NAMES THE DEPOSIT HALF ONLY. Tidying request crates rides `restock` and
+    --  is reported by the line above when that is what is off; saying
+    --  "tidy (no module)" flatly would send someone looking for a module they
+    --  do not need -- dd.port.tidysplit.
     table.insert(off, petportDefrag() and "defrag module (port off)"
-      or "tidy/compact/defrag (no module)")
+      or "tidy (deposit crates)/compact/defrag (no module)")
   else
-    if not doTidy then table.insert(off, "tidy") end
+    if not doTidyDeposit then table.insert(off, "tidy (deposit crates)") end
     if not doCompact then table.insert(off, "compact") end
     if not doDefrag then table.insert(off, "defrag") end
   end
