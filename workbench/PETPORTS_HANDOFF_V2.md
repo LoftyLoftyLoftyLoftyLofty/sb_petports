@@ -50,7 +50,7 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-08 (the container slot sort, end to end)
+### What is built, as of 2026-09-08 (the container slot sort, then the upcycler feeder)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
@@ -64,16 +64,15 @@ first task twice and deferred three times.
 **`PETPORTS_NAV_VERBOSE = true` IS STILL ON**, at `petports_coarsenav.lua:221`.
 Unchanged for four sessions. Turn it off before any release.
 
-**THE SIX COMMITS UNFILED AT THE LAST STATUS ARE PANE AND BUBBLE WORK, AND ONE
-IS NOT.** `0d3d225`/`7cf9bb3` are the pet-settings tooltips and `ccd8134` is
-blueprint and codex display on bubbles -- both covered by existing entries
+**THE SIX COMMITS UNFILED AT THE LAST STATUS ARE PANE AND BUBBLE WORK, AND TWO
+CARRY NO CODE.** `0d3d225`/`7cf9bb3` are the pet-settings tooltips and `ccd8134`
+is blueprint and codex display on bubbles, both covered by existing entries
 (`arch.pane.stringtable`, `arch.bubble.iconfit`). `f73d4e5`/`ab21adf` are
-`plan.drawio` and carry no code. `0b404e8` is the restock tidy gate, which is
+`plan.drawio`. `0b404e8` is the restock tidy gate, which is
 `dd.module.defraggates` behaving as written and needs no entry of its own.
 
-**WHAT WAS BUILT THIS SESSION, IN GAME, AND VERIFIED AT EVERY STEP:** the
-CONTAINER SLOT SORT. Four builds, `08q` through `08t`, each with its own log
-before the next began.
+**FIRST HALF: THE CONTAINER SLOT SORT.** Four builds, `08q` through `08t`, each
+with its own log before the next began.
 
 - `arch.cargo.slotorder` -- the fourth storage rung. It reorders one crate's
   grid in place and closes the holes the other three leave behind, using
@@ -91,7 +90,7 @@ before the next began.
 - `ref.tooling.sorttest` -- the permutation is tested against a stand-in
   container rather than against a restatement of its own intent.
 
-**THE FIRST TWO BUILDS DID NOT WORK AND LOOKED LIKE THEY DID.** `08q`/`08r`
+**THE FIRST TWO SORT BUILDS DID NOT WORK AND LOOKED LIKE THEY DID.** `08q`/`08r`
 lifted from `record.key` -- where a stack STARTED -- instead of where it is now.
 Twelve trips in six minutes, every one abandoned three or four moves in,
 disorder falling a little each trip because the moves before the divergence were
@@ -99,43 +98,61 @@ real. From inside the game it read as a unit walking to a crate and doing
 nothing. Fixed in `08s`; the log had said so from the first run and was not read
 closely enough until the second.
 
-**THE ITEM TYPE ORDER WAS SHIPPED UNVERIFIED FOR ONE BUILD.** `08q` transcribed
+**AND THE ITEM TYPE ORDER SHIPPED UNVERIFIED FOR ONE BUILD.** `08q` transcribed
 it from a forum post because the header had not been read; the post was missing
 `currency` and carried a `saplingitem` that does not exist. It was flagged
 UNVERIFIED in the file with the exact grep to run, and Lofty ran it. The
-comparator is cosmetic, so being wrong there could not have lost an item -- but
-`proc.pathing.readsource` says read the source, and a developer quoting
-a list is not the source.
+comparator is cosmetic so it could not have lost an item -- but
+`proc.pathing.readsource` says read the source, and a developer quoting a list
+is not the source.
 
-**THE SETTLE WINDOW WAS AN INVENTED REQUIREMENT.** `08q` refused to sort a crate
-until its contents had been unchanged for twenty seconds, which makes the
-busiest crate in the base the one that never gets sorted. Nobody asked for it,
-it brought a signature cache with it to serve itself, and all of it came out in
-`08t`. `dead.cargo.sortsettle`.
+**SECOND HALF: THE UPCYCLER AS A FOOD SOURCE.** Started from a bug report --
+the pet feeder checkbox neither saved nor applied -- which turned out to be two
+independent faults on either side of the wire.
+
+- The pane declared two parameter keys and `readDirect` returned two fields
+  where the write had three, so the tick was on disk the whole time and the
+  pane never asked for it. `proc.tooling.halfedit` in its usual shape.
+- Nothing read the flag at all. `storedFeeder`'s only caller was an unused
+  message handler, and `fuelFetchWork` built its feeder list from beacon items
+  alone. `arch.fuel.machinefeed` is the wiring.
+- `dd.upcycler.feederdefault` -- the box now defaults ON, reversing the
+  original call.
+- `arch.upcycler.plaintreat` -- a blank treat in the input slot is flavored one
+  at a time while the charge holds, tag-driven so a modded blank works too.
+- `todo.tooling.globalread` -- and that build exposed a pre-existing nil global
+  that had made the pane's "converting" status unreachable since it was
+  written.
 
 **WHAT IS BUILT BUT NOT WRITTEN UP FOR PLAYERS.** `SORTING_FOR_MODDERS.md` says
-nothing about `"perishable"`, which is a manifest flag a third party is meant to
-use -- `todo.filter.perishabledocs`, unchanged. It says nothing about the slot
-sort either, and does not need to: the sort reads no manifest.
+nothing about `"perishable"` -- `todo.filter.perishabledocs`, unchanged -- and
+nothing about `petports_plain_treat`, which is the second manifest-adjacent tag
+a third party is meant to use and cannot discover. Same entry covers both.
 
 **WHAT IS KNOWN AND UNRESOLVED:**
 - `DEFRAG_DEBUG` is `true` and joins the release-preflight flag sweep.
   `DEFRAG_PLAN_CAP` at 16 is NOT a debug value -- it caps work --
   `todo.cargo.defragcap`.
-- The sort ring takes about 25 minutes to come round on a 300-crate base. That
-  is the accepted cost of one crate per scan and is UNMEASURED at that size --
+- The sort ring takes about 25 minutes to come round on a 300-crate base. The
+  accepted cost of one crate per scan, UNMEASURED at that size --
   `todo.cargo.sortring`.
 - Sorting fills the tidy score much faster than type-eliminations do. Not
   clamped, because the right clamp depends on what a rank is worth --
   `todo.dispatch.sortscore`.
+- `petports_flavorItem` is assumed never to resolve a real flavor back to the
+  blank treat's own name. If it can, `flavorTreat` keeps the blip and logs
+  rather than burning one on a no-op -- but this was NOT verified.
+- The pane's "converting" status has never displayed until this build. That it
+  now does is the observable half of the nil-global fix and is UNCONFIRMED IN
+  GAME.
 - A defrag destination flipped between two crates on consecutive passes with
   both declaring 220 and holding none of the item. NOT DIAGNOSED --
   `todo.cargo.roomflip`.
 - The defrag module has NO ART. `petports_module_defrag.png` does not exist and
   the item renders as a placeholder box.
 - `workUpdate` peaked at 197 ms this session, of which `g.sort` was 188 before
-  the cursor landed. Re-measure after `08t` -- the number that remains is the
-  one `todo.dispatch.scancursor` has to answer to.
+  the cursor landed. Re-measure after `08t` -- what remains is the number
+  `todo.dispatch.scancursor` has to answer to.
 - The 30 s world stall is unchanged and still `WorldStorage::sync()`. The 45000
   patch test still has no result.
 - Units still stutter-step between tasks (`todo.dispatch.turnaround`).
@@ -5917,6 +5934,84 @@ disorder count, and converges next visit.
 `dd.dispatch.tidyscore` for why a capped or abandoned pass scores nothing and
 for the tap-rate problem this rung introduces.
 
+### Units eat from a machine's output slot, not just from crates
+`arch.fuel.machinefeed` -- see also `dd.fuel.selffeed`, `arch.fuel.eat`, `dd.upcycler.feederdefault`, `todo.upcycler.slotorderdup`
+
+BUILT 2026-09-08, and it is the last of the three sources `dd.fuel.selffeed`
+named that had no code.
+
+**THE MACHINE IS A PEER, NOT A LAST RESORT.** It sits inside `fuelFetchWork`'s
+existing treat loop, so preference still decides first: a savory in a crate
+beats a plain in the machine for a savory-preferring unit, exactly as a savory
+in one crate beats a plain in another. Within one treat, crates are tried before
+the machine -- not a priority claim, just that a treat already hauled into
+storage cost the fleet nothing more to reach.
+
+**A SECOND LOOP RATHER THAN A THIRD `behavior`.** A machine is not a beacon: it
+is found through `self.machines`, its stock is one SLOT rather than a container,
+and the task it produces carries that slot. `machineAt` grew a `feeder` field
+read from `petports_upcyclerFeeder`.
+
+**NOT GATED ON THE MACHINE'S `enabled`.** That switch says whether the machine
+CONVERTS; the feeder box says whether what it has already made is food. A player
+pausing a machine has not said the treats in its output are off limits, and
+requiring both would starve the fleet the moment somebody hits pause. `fuelWork`
+already draws the same line for collection.
+
+**A CRATE CAN BE FED FROM WHOLESALE AND A MACHINE CANNOT**, which is the whole
+difference in the arrival handler. `world.containerConsume` and
+`world.containerAddItems` both work on a container ENTIRE: on an upcycler the
+consume could take a treat the player queued in the INPUT slot for conversion,
+and -- much worse -- the put-back after a refused feed lands in the first free
+slot, which on a machine with an empty input IS the input. A unit that declined
+a treat would have posted it for destruction. So `feedFromCrate` takes an
+optional slot and pins both ends of the loop to it.
+
+**THE TASK FIELD IS `feedSlot`, NOT `slot`, AND THE NAME IS LOAD-BEARING.** The
+`fuel` task already carries a `slot` and it carries a ONE-BASED KEY, because
+`withdrawMisfit` applies `SLOT_KEY_TO_OFFSET` itself. This one is a ZERO-BASED
+OFFSET, because `feedFromCrate` hands it straight to `world.containerItemAt` and
+`world.containerTakeNumItemsAt`. Two conventions under one field name in one
+dispatch table is a bug this file has already paid for once.
+
+### A blank treat plus a charge is a flavored treat
+`arch.upcycler.plaintreat` -- see also `arch.upcycler.burnbox`, `dd.upcycler.blips`, `arch.upcycler.stateladder`
+
+BUILT 2026-09-08. Every treat carries `petports_no_upcycling` so output can
+never be laundered back into output. That closes the loop and it also closed the
+one conversion that should happen: a blank treat and a flavor charge make a
+flavored treat.
+
+**THE EXCEPTION IS A TAG ON THE ITEM, `petports_plain_treat`, NOT A NAME CHECK.**
+A third party adding their own plain treat gets this for free; the machine asks
+"is this a blank treat" and never "is this `petports_petfuel`". The seven
+flavored treats deliberately do not carry it -- a spicy treat that could be
+re-flavored is the laundering loop back with an extra step.
+
+**ONE PER TICK, ONE FOR ONE, AND NO POINTS EITHER WAY.** The blank is not burned
+for value and banks nothing; it is consumed and its flavored equivalent placed,
+at the cost of exactly one blip. Nothing enters the points economy, so there is
+no rate at which treats become more treats. A stack of a thousand is a thousand
+ticks, and the limiting resource is reagents -- which is the one that should be
+limiting.
+
+**CHECKED BEFORE `exempt`, AND `exempt` ITSELF IS UNCHANGED.** The blank must
+stay exempt or the units would deliver it to the burner and the rules pane would
+let a player name it. It matters more that the SHUTTLE reads `exempt`: a blank
+treat shuttled into the reagent slot has no flavor to give and would sit there
+blocking the one input that can refill the charge.
+
+**TAKE FIRST, PLACE SECOND, PUT BACK ON REFUSAL.** Placing first and failing to
+take is a free treat; taking first and failing to place goes back to the input
+slot, merging with the remainder. Only one of those is recoverable.
+
+**AND IT NEEDED ITS OWN WARNING**, because all three input ladders fire on a
+blank treat and all three say something false. `inputExempt` -- "can never be
+upcycled" -- is the worst of them, in front of a machine about to flavor a
+thousand of them, because it tells the player to take the stack out. The new
+cause is `inputNoCharge`, severity `waiting`, and it names no item: the blanks
+are fine exactly where they are.
+
 ## DESIGN DECISIONS
 
 ### The port band splits by what the player SEES, not by what the code owns
@@ -6503,6 +6598,8 @@ Three sources, and no others:
     may eat from this container" checkbox, so eligibility is authored where the
     container's purpose already is. The upcycler gets the same checkbox, which
     makes eating straight from its output the shortest possible fuel loop.
+    BUILT 2026-09-08 -- `arch.fuel.machinefeed` -- and the machine's box
+    defaults ON, `dd.upcycler.feederdefault`.
   - **Manual feeding through the petport pane.** An itemslot used as a DROP
     ZONE: the treat is consumed on drop if the unit has room, so the slot never
     holds anything and never needs serialising.
@@ -8001,6 +8098,46 @@ that never arrives has still spent the unit. It sits alongside the existing
 `FAILURE_BACKOFF` check, which answers a different question: that ramp is "the
 last trip to this crate failed", this is "the last trip to this crate happened".
 Nothing anywhere asks whether a crate is BUSY -- see `dead.cargo.sortsettle`.
+
+### The upcycler's pet feeder box defaults ON, reversing the original call
+`dd.upcycler.feederdefault` -- see also `arch.fuel.machinefeed`, `dd.fuel.selffeed`
+
+AMENDED 2026-09-08. It shipped defaulting OFF and the argument for that is kept
+here, because it was not a bad argument -- it was answered.
+
+**IT DEFAULTED OFF BECAUSE GRAZING THE MACHINE IS FIRST-ORDER OPTIMAL.** The
+upcycler MAKES the treats, so a unit that may graze it will always graze it: no
+drain trip, no deposit, no fetch. Defaulting on retires the fuel logistics loop,
+and a player would never see the behaviour they built the crates for.
+
+**WHAT WAS WRONG WITH THAT IS WHO IT PROTECTED.** It optimises for the player who
+has already built the crates, at the cost of the one who has not -- and the
+second player is the one who needs feeding to work at all. A fleet whose units
+starve beside a machine full of food, because a box nobody mentioned is
+unticked, does not read as a design invitation. It reads as broken.
+
+**THE SIMPLE LOOP IS THE BOOTSTRAP AND THE NETWORK IS THE GRADUATION.** One
+machine, no crates, no beacons, no filters, and the fleet runs. Distributing
+flavors across the network so units which benefit from a specific treat receive
+it is a real and better thing to build, and it is a thing a player moves ON to
+once they know why it is worth the crates. It is not the entry fee.
+
+**AND NOTHING IS LOST BY GRAZING FIRST**, which is what makes the reversal cheap:
+`arch.fuel.machinefeed` puts the machine inside the same treat tier as the
+crates rather than above them, so a player who HAS built distribution still gets
+flavor preference honoured. Defaulting on costs that player nothing; defaulting
+off cost the other one everything.
+
+**IT NO LONGER MATCHES `enabled`, WHICH IS ABSENT-AND-OFF ON A FRESH MACHINE**,
+and that is not an inconsistency to tidy up. `enabled` is a machine doing
+something to the player's items unasked; this is a machine letting its own
+output be eaten. Only one of those needs consent.
+
+**THREE READERS HAVE TO AGREE** -- `storedFeeder` on the object, `readDirect` in
+the pane, `machineAt` on the port -- or the pane draws one thing and the fleet
+does another. An existing machine has no parameter and so reads as ON from the
+next load, which is the intended migration and is a behaviour change in worlds
+nobody touched.
 
 ## DESIGN INTENT -- PLANNED
 
@@ -14990,6 +15127,36 @@ THE TWO TAPS NOW FILL THE SAME NUMBER AT VERY DIFFERENT RATES, which does not
 matter while the score is unread and matters entirely once ranks are granted
 against it. Deliberately not pre-emptively clamped: the right answer depends on
 what a rank is worth, and that has not been decided.
+
+### The pane checker reports undefined calls and not undefined reads
+`todo.tooling.globalread` -- see also `proc.tooling.paneheck`, `fact.tooling.nilglobal`, `proc.tooling.localorder`
+
+OPENED 2026-09-08, on the second nil-global to reach a build.
+
+`refreshStatus` in `upcyclerconfig.lua` used a bare `input` twice -- the idle
+test and the converting line -- and `input` was declared NOWHERE in the file. An
+undeclared name is a global, an unassigned global is nil, so `input == nil` was
+unconditionally true: the pane reported "idle, nothing in the input slot"
+whenever no warning fired, whatever was in the slot, and the converting status
+below it was unreachable code that would have thrown on `input.name` if reached.
+The converting line had therefore never once displayed.
+
+**NEITHER EXISTING CHECKER COULD SEE IT.** `petports_localorder.py` catches
+use-BEFORE-local, and this had no local to be before. `petports_paneheck.py`
+reports an undefined CALL, and this was a read.
+
+THE RULE IS THE SAME SHAPE AS THE CALL RULE: a name that is read, is not a
+local, is not a pane global and is not engine, is a nil read. The false-positive
+risk is the interesting part -- the pane globals list already exists for the
+call check and would be reused.
+
+**IT SURVIVED BECAUSE EVERY LOADED INPUT USED TO PRODUCE A WARNING** and the
+ladder returned above the idle test. `arch.upcycler.plaintreat` made blank
+treats the first input state that is both loaded and blameless, which is what
+finally exposed it -- with the output full, which produces no verdict of its own
+because a slot full of treats is fuel-tagged and `outputBlocked` only fires on
+something that is not. Both conditions had to hold to reach the line with
+something in the slot.
 
 ## PROCESS
 

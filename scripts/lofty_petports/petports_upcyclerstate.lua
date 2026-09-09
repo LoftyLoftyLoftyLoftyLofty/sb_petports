@@ -40,6 +40,14 @@ PETPORTS_UPCYCLER_SLOT_OUTPUT = 2
 PETPORTS_TAG_NO_UPCYCLING = "petports_no_upcycling"
 PETPORTS_TAG_FUEL = "petports_fuel"
 
+--  A BLANK TREAT: THE ONE THING THE UPCYCLER MAY EAT DESPITE BEING EXEMPT.
+--
+--  See the tag's own comment on petports_petfuel.item. Declared here rather
+--  than in the machine because the PANE has to agree about which items get the
+--  no-charge warning instead of the never-upcycled one, and two opinions about
+--  that is how a pane starts lying about a working machine.
+PETPORTS_TAG_PLAIN_TREAT = "petports_plain_treat"
+
 --  CACHED BY NAME, WHICH IS SAFE HERE. An item's tags are a property of its
 --  definition; no build script invents them per instance. This is the one
 --  place that reads them -- the pane's hasTag and the object's exempt were
@@ -72,6 +80,14 @@ end
 
 --  Refused by every slot regardless of rules. A property of the ITEM, so it is
 --  asked before any table lookup -- see the ladder ordering note below.
+--  Is this a blank treat, waiting for a flavor?
+--
+--  MEMOISED THROUGH petports_hasItemTag like every other tag question here, so
+--  this is a table read after the first call and safe on the machine's tick.
+function petports_upcyclerPlainTreat(name)
+	return petports_hasItemTag(name, PETPORTS_TAG_PLAIN_TREAT) == true
+end
+
 function petports_upcyclerExempt(name)
 	return petports_hasItemTag(name, PETPORTS_TAG_NO_UPCYCLING)
 end
@@ -211,7 +227,25 @@ function petports_upcyclerVerdict(ctx)
 		local name = ctx.input
 		local rule = ruleFor(name)
 
-		if petports_upcyclerExempt(name) then
+		--  A BLANK TREAT IS NOT A FAULT, IT IS A JOB WAITING ON A CHARGE.
+		--
+		--  It is exempt, it has no rule and it is denied the burner, so all
+		--  three ladders below would fire on it -- and every one of them would
+		--  say something false. "Can never be upcycled" in front of a machine
+		--  that is about to flavor a thousand of them is the worst of the
+		--  three, because it tells the player to take the stack out.
+		--
+		--  THE CHARGE IS THE ONLY THING THAT CAN BE WRONG HERE, and when it is,
+		--  the fault is `waiting` rather than `error`: nothing is stuck, the
+		--  machine wants a reagent.
+		local plain = petports_upcyclerPlainTreat(name)
+
+		if plain and (tonumber(ctx.charges) or 0) < 1 then
+			return { cause = "inputNoCharge", item = name,
+				slot = PETPORTS_UPCYCLER_SLOT_INPUT, severity = "waiting" }
+		end
+
+		if not plain and petports_upcyclerExempt(name) then
 			return { cause = "inputExempt", item = name,
 				slot = PETPORTS_UPCYCLER_SLOT_INPUT, severity = "error" }
 		end
@@ -221,12 +255,16 @@ function petports_upcyclerVerdict(ctx)
 		--  flavour and there is nowhere else it could have been going. A
 		--  hand-dropped burn item is not, and the rule is also the green light
 		--  for the units, so it has to be asked for explicitly.
-		if rule == nil then
+		if not plain and rule == nil then
 			return { cause = "inputNoRule", item = name,
 				slot = PETPORTS_UPCYCLER_SLOT_INPUT, severity = "error" }
 		end
 
-		if rule.burn == false then
+		--  `rule ~= nil` IS NOT REDUNDANT ONCE `plain` EXISTS. The check above
+		--  used to guarantee a rule by returning; a blank treat now walks past
+		--  it without one, and indexing nil here would throw inside the pane's
+		--  refresh rather than anywhere obvious.
+		if not plain and rule ~= nil and rule.burn == false then
 			--  Denied the burner. The shuttle can still save it IF the reagent
 			--  slot will have it -- reagent box open and the manifest calls it
 			--  a reagent. Otherwise both doors are shut and it needs a human.

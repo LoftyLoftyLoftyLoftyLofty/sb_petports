@@ -1,4 +1,4 @@
-<mxfile host="Electron" modified="2026-09-09T08:08:22.672Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.2.5 Chrome/120.0.6099.109 Electron/28.1.0 Safari/537.36" etag="Z5k4nPhhHLq8uxreCpIF" version="24.2.5" type="device">
+<mxfile host="Electron" modified="2026-09-09T08:24:12.931Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.2.5 Chrome/120.0.6099.109 Electron/28.1.0 Safari/537.36" etag="CrMi962nmLzAjZ0c7vih" version="24.2.5" type="device">
   <diagram name="Page-1" id="NveRE99YrSAUUvzC1UxD">
     <mxGraphModel dx="1509" dy="888" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
       <root>
@@ -1017,6 +1017,9 @@
         </mxCell>
         <mxCell id="kWl2yqEFlSN1XD8LCRPn-32" value="we need some kind of chart that shows food production and consumption by type over time" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
           <mxGeometry x="1400" y="2760" width="640" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-33" value="upcycler status messages don&#39;t properly show when output is blocked and all of the upcycler status messages probably need an audit" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="2840" width="640" height="80" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>

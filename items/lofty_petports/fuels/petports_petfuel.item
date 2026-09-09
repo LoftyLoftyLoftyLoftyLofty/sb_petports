@@ -34,7 +34,25 @@
 	//  odd entry matched by name. It also leaves room for the rarity tiers
 	//  the flavored treats are set up for: an uncommon plain treat sorts
 	//  into the same crate without a manifest edit.
-	"itemTags" : [ "petports", "petports_fuel", "petports_flavor_plain", "petports_no_upcycling" ],
+	//  petports_plain_treat IS THE ONE EXCEPTION TO petports_no_upcycling, AND
+	//  IT IS A TAG SO THAT IT IS NOT ABOUT THIS ITEM.
+	//
+	//  Every treat carries petports_no_upcycling so output can never be
+	//  laundered back into output. That closes the loop and it also closes the
+	//  one conversion that SHOULD happen: a blank treat plus a flavor charge is
+	//  a flavored treat, one for one, no points earned and none spent. The
+	//  machine made the blank; flavoring it later is finishing the job, not
+	//  reprocessing it.
+	//
+	//  A TAG RATHER THAN A NAME CHECK because a third party adding their own
+	//  plain treat should get this for free. The upcycler asks "is this a blank
+	//  treat", never "is this petports_petfuel", so a modded blank flavors the
+	//  same way with no edit here or there.
+	//
+	//  FLAVORED TREATS DELIBERATELY DO NOT CARRY IT. They are already finished,
+	//  and a spicy treat that could be re-flavored is the laundering loop back
+	//  again with an extra step.
+	"itemTags" : [ "petports", "petports_fuel", "petports_flavor_plain", "petports_no_upcycling", "petports_plain_treat" ],
 
 	//  PRICE ZERO, AND THAT IS LOAD-BEARING RATHER THAN LAZY.
 	//

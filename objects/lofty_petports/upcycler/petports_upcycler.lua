@@ -168,7 +168,7 @@ local FUEL_ITEM = "petports_petfuel"
 --  in this mod. Pet Treats carry the tag too, so output can never be laundered
 --  back into output -- the value floor means even a zero-price item is worth a
 --  point, so price alone would not have closed that loop.
-local OBJECT_BUILD_STAMP = "2026-09-08a the pet feeder box defaults on"
+local OBJECT_BUILD_STAMP = "2026-09-08b blank treats are flavored while the charge holds"
 
 local EXEMPT_TAG = "petports_no_upcycling"
 
@@ -310,6 +310,19 @@ local function valueOf(descriptor)
 	local price = petports_itemValue(descriptor)
 	if price > self.valueFloor then return price end
 	return self.valueFloor
+end
+
+--  Is this a blank treat waiting for a flavor?
+--
+--  THROUGH THE SHARED CLASSIFIER so the machine and the pane cannot disagree
+--  about which items get the no-charge message instead of the never-upcycled
+--  one. petports_upcyclerstate.lua memoises the tag lookup.
+local function plainTreat(descriptor)
+	if type(descriptor) ~= "table" or type(descriptor.name) ~= "string" then
+		return false
+	end
+
+	return petports_upcyclerPlainTreat(descriptor.name)
 end
 
 --  Refused regardless of rules. See EXEMPT_TAG.
@@ -906,6 +919,81 @@ local function shuttleSlots()
 	end
 end
 
+--  Turn one blank treat in the input slot into one flavored treat.
+--
+--  ONE PER TICK, ONE FOR ONE, AND NO POINTS EITHER WAY. A blank treat is not
+--  burned for value and does not bank anything -- it is consumed and its
+--  flavored equivalent is placed, at the cost of exactly one blip. That is what
+--  keeps this outside the laundering loop EXEMPT_TAG exists to close: nothing
+--  enters the points economy, so there is no rate at which treats become more
+--  treats.
+--
+--  SO A STACK OF A THOUSAND IS A THOUSAND TICKS, and that is the intended
+--  shape. The player parks blanks in the input, the fleet keeps delivering
+--  reagents, and the machine flavors as fast as the charge is refilled. The
+--  limit is reagents, which is the resource that should be limiting.
+--
+--  TAKE FIRST, PLACE SECOND, PUT BACK ON REFUSAL. Placing first and failing to
+--  take is a free treat; taking first and failing to place is a treat that
+--  goes straight back where it came from. Only one of those is recoverable.
+local function flavorTreat(input)
+	local queue = blipQueue()
+	local flavor = queue[1]
+
+	if flavor == nil then
+		--  THE MESSAGE THE PANE ALSO SHOWS, and the machine says it too so a
+		--  log tells the same story as the screen.
+		state(string.format("holding %s: no flavor charge remains to spend on it",
+			input.name))
+		return
+	end
+
+	local item = petports_flavorItem(flavor)
+
+	if item == nil or item == input.name then
+		--  A flavor that does not resolve, or one whose treat IS the blank.
+		--  emitFuel falls back to a plain treat in the same situation; here
+		--  that would be a no-op that spent a blip, so the blip is kept and
+		--  the machine says why.
+		state(string.format("cannot flavor %s: flavor %s has no treat of its own",
+			input.name, tostring(flavor)))
+		return
+	end
+
+	local taken = world.containerTakeNumItemsAt(entity.id(), SLOT_INPUT, 1)
+
+	if type(taken) ~= "table" or (taken.count or 0) < 1 then
+		--  Emptied between the read and the take. Not an error.
+		return
+	end
+
+	local leftover = world.containerPutItemsAt(entity.id(),
+		{ name = item, count = 1 }, SLOT_OUTPUT)
+
+	if type(leftover) == "table" and (leftover.count or 0) > 0 then
+		--  BACK TO THE INPUT SLOT, which either still holds the rest of the
+		--  stack -- so this merges -- or is empty, so it lands. Either way the
+		--  blip is unspent and the machine is exactly where it started.
+		local back = world.containerPutItemsAt(entity.id(), taken, SLOT_INPUT)
+
+		if type(back) == "table" and (back.count or 0) > 0 then
+			sb.logError("PETPORTS upcycler: could not return %s to the input "
+				.. "slot after a blocked flavoring -- one treat lost",
+				tostring(taken.name))
+		end
+
+		storage.blocked = true
+		state(string.format("output blocked: cannot place a %s", item))
+		return
+	end
+
+	blipTake()
+	storage.blocked = false
+
+	state(string.format("flavored 1 %s into %s, %s blip(s) left",
+		input.name, item, tostring(#blipQueue())))
+end
+
 --  Move banked points into the output slot, one Treat at a time.
 --
 --  Returns true if the output can still take more. The caller uses that to
@@ -1041,6 +1129,22 @@ function update(dt)
 
 	if type(input) ~= "table" or type(input.name) ~= "string" then
 		state("idle: input slot empty")
+		self.carry = 0
+		return
+	end
+
+	--  BEFORE exempt, AND THAT ORDER IS THE WHOLE EXCEPTION. A blank treat
+	--  carries petports_no_upcycling like every other treat -- it has to, or
+	--  the units would deliver it to the burner and the rules pane would let a
+	--  player name it -- so the only way it ever gets flavored is by being
+	--  asked about first. See petports_plain_treat on petports_petfuel.item.
+	--
+	--  exempt() ITSELF IS UNCHANGED, DELIBERATELY. The shuttle below reads it
+	--  to decide what may be moved between the slots, and a blank treat must
+	--  never be shuttled into the reagent slot: it has no flavor to give, so it
+	--  would sit there blocking the one input that can refill the charge.
+	if plainTreat(input) then
+		flavorTreat(input)
 		self.carry = 0
 		return
 	end

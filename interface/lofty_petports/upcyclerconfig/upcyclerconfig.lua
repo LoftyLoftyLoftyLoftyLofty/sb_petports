@@ -38,7 +38,7 @@ require "/scripts/lofty_petports/petports_strings.lua"
 local DEBUG = true
 
 --  Bump on every change to this file. See the log line in init().
-local PANE_BUILD_STAMP = "2026-09-08b the feeder checkbox is read back, and defaults on"
+local PANE_BUILD_STAMP = "2026-09-08d status reads the input slot instead of a nil global"
 
 --  sb.logInfo accepts %s and nothing else. Pre-format through string.format,
 --  which has no such limit, and hand the logger one string.
@@ -943,10 +943,37 @@ function refreshStatus()
 	--  cause falls through to a generic sentence rather than showing nothing,
 	--  so a classifier that learns a new fault before the pane learns its
 	--  wording still tells the player something true.
+	--  READ ONCE, INTO A LOCAL, AND THE `local` IS THE BUG FIX.
+	--
+	--  `input` was used twice below -- the idle test and the converting line --
+	--  and was never declared anywhere in this file. An undeclared name is a
+	--  GLOBAL, a global that was never assigned is nil, so `input == nil` was
+	--  unconditionally true: the pane reported "idle, nothing in the input
+	--  slot" whenever no warning fired, whatever was actually in there, and the
+	--  converting line below was unreachable code that would have thrown on
+	--  `input.name` if it had ever run. fact.tooling.nilglobal again.
+	--
+	--  IT SURVIVED BECAUSE EVERY LOADED INPUT USED TO PRODUCE A WARNING and the
+	--  ladder returned above this point. Blank treats flavoring against a live
+	--  charge are the first input state that is both loaded and blameless, so
+	--  they are what made a pre-existing lie visible -- with the output full,
+	--  which produces no verdict of its own because a slot full of TREATS is
+	--  fuel-tagged and outputBlocked only fires on something that is not.
+	--
+	--  Also one call rather than two: inputItem() was invoked twice on the same
+	--  line to test and then read.
+	local input = inputItem()
+
 	local verdict = petports_upcyclerVerdict({
-		input = inputItem() ~= nil and inputItem().name or nil,
+		input = input ~= nil and input.name or nil,
 		reagent = type(self.reagentName) == "string" and self.reagentName or nil,
 		output = type(self.outputName) == "string" and self.outputName or nil,
+
+		--  ARRIVES ON THE POLL, like the reagent and output names beside it, so
+		--  it can be one poll behind the charge it is describing. Acceptable
+		--  here: the wrong answer for one poll is a warning that appears or
+		--  clears a moment late, not a wrong action.
+		charges = tonumber(self.blipCount) or 0,
 		ruleFor = ruleFor
 	})
 
@@ -1083,6 +1110,12 @@ local function refreshProgress(dt)
 				tostring(self.points), tostring(self.pointsPerFuel)))
 
 			refreshBlips(result.blips)
+
+			--  KEPT, NOT JUST DRAWN. The verdict needs to know whether the
+			--  charge is empty to tell "this blank treat is waiting for a
+			--  reagent" apart from "this item can never be upcycled", and those
+			--  two sentences point a player in opposite directions.
+			self.blipCount = type(result.blips) == "table" and #result.blips or 0
 
 			--  PUBLISHED BY THE MACHINE, not read off the grid.
 			--
