@@ -61,7 +61,7 @@
 --  are unprobeable and time-varying and nobody's fault -- are allowed to
 --  produce optimistic-wrong answers. They fail in the cheap direction.
 
-local COARSENAV_BUILD_STAMP = "2026-09-09s a graph rebuild advances every tick, asked or not"
+local COARSENAV_BUILD_STAMP = "2026-09-09v the merged graph: routing crosses bridges, legs stop at the side change"
 
 local navStamped = false
 
@@ -961,6 +961,8 @@ local function navDropMemos(generation)
 	self.petportsNavCellCache = {}
 	self.petportsNavGraph = nil
 	self.petportsNavGraphBuild = nil
+	self.petportsNavMerged = nil
+	self.petportsNavMergedBuild = nil
 	self.petportsNavComplete = {}
 	self.petportsNavPassRadius = nil
 	self.petportsNavIndexPending = nil
@@ -1627,6 +1629,22 @@ navBoundaryNote = function(cx, cy)
 		end
 		if unchanged then
 			navSeedBesideWall(cx, cy, media)
+
+	--  A BOUNDARY THIS CHASSIS MAY CROSS IS A BRIDGE CANDIDATE, 2026-09-09t.
+	--  Queued for navBridgeTick; re-examined every NAV_BRIDGE_SEEN_TTL.
+	local crossable = petports_gravitySwitchable ~= nil and petports_gravitySwitchable()
+	for _, name in ipairs(names) do
+		if petports_liquidNameDenied ~= nil and petports_liquidNameDenied(name) then crossable = false end
+	end
+	if crossable then
+		self.petportsNavBridgeSeen = self.petportsNavBridgeSeen or {}
+		local bseen = self.petportsNavBridgeSeen[cellKey]
+		if bseen == nil or (now - bseen) > NAV_BRIDGE_SEEN_TTL then
+			self.petportsNavBridgeSeen[cellKey] = now
+			self.petportsNavBridgeQueue = self.petportsNavBridgeQueue or {}
+			self.petportsNavBridgeQueue[cellKey] = { cx = cx, cy = cy, bucket = bucket, record = record }
+		end
+	end
 			return true
 		end
 	end
@@ -1665,6 +1683,22 @@ navBoundaryNote = function(cx, cy)
 	end
 
 	navSeedBesideWall(cx, cy, media)
+
+	--  A BOUNDARY THIS CHASSIS MAY CROSS IS A BRIDGE CANDIDATE, 2026-09-09t.
+	--  Queued for navBridgeTick; re-examined every NAV_BRIDGE_SEEN_TTL.
+	local crossable = petports_gravitySwitchable ~= nil and petports_gravitySwitchable()
+	for _, name in ipairs(names) do
+		if petports_liquidNameDenied ~= nil and petports_liquidNameDenied(name) then crossable = false end
+	end
+	if crossable then
+		self.petportsNavBridgeSeen = self.petportsNavBridgeSeen or {}
+		local bseen = self.petportsNavBridgeSeen[cellKey]
+		if bseen == nil or (now - bseen) > NAV_BRIDGE_SEEN_TTL then
+			self.petportsNavBridgeSeen[cellKey] = now
+			self.petportsNavBridgeQueue = self.petportsNavBridgeQueue or {}
+			self.petportsNavBridgeQueue[cellKey] = { cx = cx, cy = cy, bucket = bucket, record = record }
+		end
+	end
 
 	if PETPORTS_NAV_VERBOSE then
 		sb.logInfo("NAV boundary %s in %s: top %s, media %s, fit %s",
@@ -1856,6 +1890,10 @@ navSeedBesideWall = function(cx, cy, media)
 end
 
 local NAV_FLOOD_PER_TICK = 6
+
+--  Declared with the flood, defined with the bridges below: navBoundaryNote
+--  reads it and runs first.
+NAV_BRIDGE_SEEN_TTL = 300.0
 
 --  ONE SLICE OF THE BOUNDARY FLOOD. Pops queued neighbours of found
 --  boundary cells and samples them; a find queues its own neighbours in
@@ -3023,6 +3061,413 @@ function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 	return "searching"
 end
 
+--  ---------------------------------------------------------------- BRIDGES
+--
+--  A BRIDGE IS AN EDGE BETWEEN THE TWO SIDES OF A SWITCHABLE CHASSIS,
+--  2026-09-09t (todo.pathing.amphibiousbridge, dd.pathing.boundarystore).
+--  The otter surveys two stores -- `|f0|` walker cells and `|f1|` swimmer
+--  cells -- and nothing joined them, so a land-mode route to a wet target
+--  had no leg and the dive only ever engaged at dispatch for a fish. A
+--  bridge is a land cell L and a swim cell S with a way across the
+--  boundary between them, learned here and stored in a THIRD profile,
+--  `|fb|`, through the ordinary edge store: index, flush, generation,
+--  wipe, TTL and stats come for free. The graph loader for a switchable
+--  chassis merges all three (build two; not this file yet).
+--
+--  THREE KINDS, TWO DIRECTIONS. Into the water:
+--
+--      dive   L's anchor is a BOARD above a HOLE -- a boundary column whose
+--             `fit` says the body fits in the air above the wet tile -- with
+--             a clear sight line board -> hole, and a body-clear drop from
+--             the hole to S's anchor. The stored plan is exactly what
+--             petports_diveLaunch takes: { launch = board, entry = hole }.
+--      wade   L's anchor and S's anchor are within NAV_BRIDGE_WADE_REACH of
+--             each other with the body fitting all the way between: a
+--             shore the unit walks down until it is under. No launch; the
+--             mode flips when the medium does.
+--
+--  Out of the water:
+--
+--      exit   from the FLOAT point -- the body afloat at the surface,
+--             feet on the top wet row, which is where `exiting` holds it
+--             -- a walker A* to L's anchor under `exiting`'s own physics:
+--             gravity on, liquidBuoyancy 1.0 (arch.locomotion.exitdefer).
+--             dd.pathing.probeprofile: platformerPathStart takes the
+--             parameters as an argument, so a swimming otter can ask.
+--
+--  DISCOVERY RIDES ON THE BOUNDARY FLOOD. navBoundaryNote queues every
+--  boundary cell whose liquid this chassis may enter; navBridgeTick takes
+--  one per tick, gathers the anchored cells of both sides within
+--  NAV_BRIDGE_RADIUS, and pairs them. Dives and wades are verdicts now
+--  (a ray and a sweep); exits are an incremental A* in one slot, the same
+--  shape as petports_navProbeStep.
+--
+--  BUILD ONE IS DISCOVERY ONLY. Nothing routes over these yet; the log
+--  says where the bridges are and the overlay will draw them.
+
+NAV_BRIDGE_RADIUS = 4            --  cells either side of a boundary cell
+NAV_BRIDGE_DX = 6                --  tiles of horizontal offset a dive may solve
+NAV_BRIDGE_PAIRS = 3             --  dives kept per boundary cell, best first
+NAV_BRIDGE_WADE_REACH = 3.0      --  tiles between a land anchor and a swim anchor
+NAV_BRIDGE_EXIT_RATE = 300       --  A* explores per tick for an exit probe
+NAV_BRIDGE_EXIT_TICKS = 40       --  ticks before an exit probe is given up on
+NAV_BRIDGE_RETRY = 30.0          --  a cell with nothing to pair is looked at again this soon
+NAV_BRIDGE_RETRIES = 10          --  ...this many times, then it waits out NAV_BRIDGE_SEEN_TTL
+
+--  THE BRIDGE PROFILE IS THE WALKER PROFILE WITH ITS SIDE RENAMED. Body,
+--  liquids, doors and avoidLiquid all still discriminate; only the side is
+--  new. Memoised per tick with the profile it derives from.
+local function navBridgeProfile()
+	local now = world.time()
+
+	if self.petportsNavBridgeProfileAt ~= now or self.petportsNavBridgeProfile == nil then
+		local land = navWithSide(false, petports_navProfile)
+		self.petportsNavBridgeProfile = (string.gsub(land, "|f0|", "|fb|", 1))
+		self.petportsNavBridgeProfileAt = now
+	end
+
+	return self.petportsNavBridgeProfile
+end
+
+function petports_navBridgeProfile()
+	if not petports_gravitySwitchable() then return nil end
+	return navBridgeProfile()
+end
+
+--  ONE LEARNED BRIDGE. The plain edge goes through petports_navLearn so the
+--  contradiction log, the batch and the flush all apply; the kind and the
+--  points ride on the pending entry, which is the table the flush writes.
+local function navBridgeLearn(fromKey, toKey, reachable, extra)
+	local profile = navBridgeProfile()
+
+	navIndexRegister(profile)
+	petports_navLearn(profile, fromKey, toKey, reachable)
+
+	local pending = self.petportsNavPending and self.petportsNavPending[profile]
+	local entry = pending and pending[navEdgeKey(fromKey, toKey)]
+
+	if type(entry) == "table" and type(extra) == "table" then
+		for k, v in pairs(extra) do entry[k] = v end
+	end
+
+	--  KEPT LOCALLY FOR THE OVERLAY, like the boundary records.
+	self.petportsNavBridgesLocal = self.petportsNavBridgesLocal or {}
+	self.petportsNavBridgesLocal[navEdgeKey(fromKey, toKey)] = {
+		k = extra and extra.k, r = reachable,
+		a = extra and (extra.board or extra.float),
+		b = extra and extra.hole,
+		fromKey = fromKey, toKey = toKey
+	}
+
+	--  BOTH CELLS INTO THE INDEX, so the merged loader can find the shard.
+	--  Radius 1: a bridge is a single edge, not a sweep.
+	local now = world.time()
+	local cells = navIndexRead()[profile]
+	for _, cellKey in ipairs({ fromKey, toKey }) do
+		local held = type(cells) == "table" and type(cells[cellKey]) == "table"
+			and tonumber(cells[cellKey].radius) or 0
+		navIndexQueue(profile, cellKey, {
+			at = now, radius = math.max(held, 1), g = navGenNow()
+		})
+	end
+	self.petportsNavFlushAt = self.petportsNavFlushAt or (now + NAV_FLUSH_INTERVAL)
+end
+
+--  THE ANCHORED CELLS OF ONE SIDE AROUND A CELL, with their anchors. Anchor
+--  resolution runs as that side (navWithSide), so a swimming otter resolves
+--  walker anchors and a walking one resolves swim anchors. Only cells the
+--  side's index already knows: an anchor nothing has swept is not in any
+--  graph and a bridge to it would dangle.
+local function navBridgeAnchorsAround(cx, cy, freeMover)
+	local out = {}
+	local profile = navWithSide(freeMover, petports_navProfile)
+	local cells = navIndexRead()[profile]
+
+	if type(cells) ~= "table" then return out end
+
+	for dy = -NAV_BRIDGE_RADIUS, NAV_BRIDGE_RADIUS do
+		for dx = -NAV_BRIDGE_RADIUS, NAV_BRIDGE_RADIUS do
+			local key = petports_navCellKey(cx + dx, cy + dy)
+
+			if cells[key] ~= nil then
+				local anchor = navWithSide(freeMover, petports_navAnchor, cx + dx, cy + dy, freeMover)
+				if anchor ~= nil then
+					table.insert(out, { key = key, anchor = anchor })
+				end
+			end
+		end
+	end
+
+	return out
+end
+
+--  A SIGHT LINE FOR A DIVE: the fish code's diveSighted, spelled here
+--  because that one is file-local to the contract.
+local function navBridgeSighted(from, to)
+	local set = PETPORTS_DIVE_SOLID_SET or NAV_SOLID_SET
+	local ok, hit = pcall(world.lineTileCollision, from, to, set)
+	return ok and hit == false
+end
+
+local function navBridgeQueueTake()
+	local queue = self.petportsNavBridgeQueue
+	if type(queue) ~= "table" then return nil end
+
+	for cellKey, item in pairs(queue) do
+		queue[cellKey] = nil
+		return cellKey, item
+	end
+
+	return nil
+end
+
+--  STEP THE ONE EXIT PROBE. Returns true while it is still searching.
+local function navBridgeExitStep()
+	local probe = self.petportsNavBridgeExit
+	if probe == nil then return false end
+
+	if probe.aStar == nil then
+		local params = mcontroller.baseParameters()
+
+		if type(params.airJumpProfile) == "table"
+		   and params.airJumpProfile.jumpSpeed ~= nil then
+			local jumpSpeed = params.airJumpProfile.jumpSpeed
+			params.airJumpProfile.jumpSpeed =
+				jumpSpeed + (jumpSpeed * (status.stat("jumpModifier") or 0))
+		end
+
+		--  `exiting`: gravity, but afloat. See petports_assertSwimMode.
+		params.gravityEnabled = true
+		params.liquidBuoyancy = 1.0
+
+		local ok, aStar = pcall(world.platformerPathStart, probe.from, probe.to,
+			params, navPathOptions())
+
+		if not ok or aStar == nil then
+			sb.logInfo("NAV bridge exit %s -> %s SKIPPED: platformerPathStart refused (%s)",
+				probe.fromKey, probe.toKey, tostring(aStar))
+			self.petportsNavBridgeExit = nil
+			return false
+		end
+
+		probe.aStar = aStar
+		probe.ticks = 0
+	end
+
+	probe.ticks = probe.ticks + 1
+
+	local result = probe.aStar:explore(NAV_BRIDGE_EXIT_RATE)
+	local edgeCount = nil
+
+	if result == true then
+		local ok, edges = pcall(function() return probe.aStar:result() end)
+		if ok and type(edges) == "table" then
+			edgeCount = #edges
+			local wall = navPathForbidden(edges)
+			if wall ~= nil then result = false end
+		end
+	end
+
+	if result ~= true and result ~= false and probe.ticks >= NAV_BRIDGE_EXIT_TICKS then
+		result = false
+	end
+
+	if result == true or result == false then
+		sb.logInfo("NAV bridge exit %s -> %s %s after %s tick(s), %s edge(s): float %s -> land %s",
+			probe.fromKey, probe.toKey, result and "REACHABLE" or "UNREACHABLE",
+			sb.printJson(probe.ticks), tostring(edgeCount),
+			sb.printJson(probe.from), sb.printJson(probe.to))
+
+		navBridgeLearn(probe.fromKey, probe.toKey, result, { k = "exit", float = probe.from })
+		petports_profCount(result and "bridgeExit" or "bridgeExitFalse")
+		self.petportsNavBridgeExit = nil
+		return false
+	end
+
+	return true
+end
+
+--  EXAMINE ONE BOUNDARY CELL: pair its holes and shore with the anchored
+--  cells around it. Every pair found queues its exit probe behind it.
+local function navBridgeExamine(cellKey, item)
+	local cx, cy, record = item.cx, item.cy, item.record
+	local baseX, baseY = navCellOrigin(cx, cy)
+	local bounds = mcontroller.boundBox()
+	local top = tonumber(record.top)
+
+	if top == nil then return end
+
+	local land = navBridgeAnchorsAround(cx, cy, false)
+	local swim = navBridgeAnchorsAround(cx, cy, true)
+
+	--  NOTHING TO PAIR IS USUALLY "NOT YET", 2026-09-09u. MEASURED 12:47:54:
+	--  250 boundary cells examined within twenty seconds of spawn, every
+	--  one with 0 land and 0 swim anchors -- the flood walks a shoreline in
+	--  seconds and the survey indexes the cells beside it in minutes. Such
+	--  a cell comes back in NAV_BRIDGE_RETRY rather than the full TTL, a
+	--  bounded number of times.
+	if #land == 0 or #swim == 0 then
+		if PETPORTS_NAV_VERBOSE then
+			sb.logInfo("NAV bridge %s: nothing to pair (%s land, %s swim anchor(s) within %s)",
+				cellKey, sb.printJson(#land), sb.printJson(#swim), sb.printJson(NAV_BRIDGE_RADIUS))
+		end
+		item.retries = (item.retries or 0) + 1
+		if item.retries <= NAV_BRIDGE_RETRIES then
+			self.petportsNavBridgeRetry = self.petportsNavBridgeRetry or {}
+			self.petportsNavBridgeRetry[cellKey] = { at = world.time() + NAV_BRIDGE_RETRY, item = item }
+		end
+		return
+	end
+
+	local exits = {}
+	local learned = 0
+
+	--  THE FLOAT POINT for an exit from column x: feet on the top wet row.
+	local function floatAt(x)
+		return { x, top + 1 - (bounds[2] or -0.8) }
+	end
+
+	local function queueExit(s, l, float)
+		local key = s.key .. ">" .. l.key
+		if exits[key] then return end
+		exits[key] = true
+		self.petportsNavBridgeExits = self.petportsNavBridgeExits or {}
+		table.insert(self.petportsNavBridgeExits, {
+			fromKey = s.key, toKey = l.key, from = float, to = l.anchor
+		})
+	end
+
+	--  DIVES: one per hole column, scored the way the fish dive scores its
+	--  pairs -- aligned first, then the drop, then the offset.
+	local dives = {}
+
+	for dx = 0, PETPORTS_NAV_CELL - 1 do
+		if type(record.fit) == "table" and record.fit[tostring(dx)] == true then
+			local hole = { baseX + dx + 0.5, top + 0.5 }
+
+			--  THE NEAREST SWIM ANCHOR BELOW THE HOLE the body drops to clear.
+			local bestS, bestSDist = nil, nil
+			for _, s in ipairs(swim) do
+				if s.anchor[2] < hole[2] then
+					local d = world.magnitude(s.anchor, hole)
+					if (bestSDist == nil or d < bestSDist)
+					   and petports_bodyFitsAlong ~= nil
+					   and petports_bodyFitsAlong(hole, s.anchor) then
+						bestS, bestSDist = s, d
+					end
+				end
+			end
+
+			if bestS ~= nil then
+				for _, l in ipairs(land) do
+					local board = l.anchor
+					local offset = math.abs(board[1] - hole[1])
+					local drop = board[2] - hole[2]
+
+					if drop > 0 and offset <= NAV_BRIDGE_DX and navBridgeSighted(board, hole) then
+						local aligned = offset <= (PETPORTS_DIVE_DROP_ALIGN or 0.5)
+						table.insert(dives, {
+							l = l, s = bestS, hole = hole,
+							score = (aligned and 0 or 1000) + offset + drop * 0.1,
+							aligned = aligned
+						})
+					end
+				end
+			end
+		end
+	end
+
+	table.sort(dives, function(a, b) return a.score < b.score end)
+
+	local seenPair = {}
+	for i = 1, math.min(#dives, NAV_BRIDGE_PAIRS) do
+		local d = dives[i]
+		local pairKey = d.l.key .. ">" .. d.s.key
+
+		if not seenPair[pairKey] then
+			seenPair[pairKey] = true
+			if petports_navKnown(navBridgeProfile(), d.l.key, d.s.key) == true then
+				queueExit(d.s, d.l, floatAt(d.hole[1]))
+			else
+				sb.logInfo("NAV bridge DIVE %s -> %s at %s: board %s, hole %s, %s",
+					d.l.key, d.s.key, cellKey, sb.printJson(d.l.anchor), sb.printJson(d.hole),
+					d.aligned and "aligned" or "offset")
+				navBridgeLearn(d.l.key, d.s.key, true, { k = "dive", board = d.l.anchor, hole = d.hole })
+				learned = learned + 1
+				queueExit(d.s, d.l, floatAt(d.hole[1]))
+			end
+		end
+	end
+
+	--  WADES: a land anchor and a swim anchor close enough to walk between,
+	--  the body fitting the whole way, the land side no lower than the
+	--  water side. Nothing to launch.
+	for _, l in ipairs(land) do
+		for _, s in ipairs(swim) do
+			local pairKey = l.key .. ">" .. s.key
+			if not seenPair[pairKey]
+			   and l.anchor[2] >= s.anchor[2]
+			   and world.magnitude(l.anchor, s.anchor) <= NAV_BRIDGE_WADE_REACH
+			   and petports_bodyFitsAlong ~= nil
+			   and petports_bodyFitsAlong(l.anchor, s.anchor) then
+				seenPair[pairKey] = true
+				if petports_navKnown(navBridgeProfile(), l.key, s.key) == true then
+					queueExit(s, l, floatAt(s.anchor[1]))
+				else
+					sb.logInfo("NAV bridge WADE %s -> %s at %s: shore %s, water %s",
+						l.key, s.key, cellKey, sb.printJson(l.anchor), sb.printJson(s.anchor))
+					navBridgeLearn(l.key, s.key, true, { k = "wade" })
+					learned = learned + 1
+					queueExit(s, l, floatAt(s.anchor[1]))
+				end
+			end
+		end
+	end
+
+	if learned == 0 and PETPORTS_NAV_VERBOSE then
+		sb.logInfo("NAV bridge %s: %s land and %s swim anchor(s), no pair crosses",
+			cellKey, sb.printJson(#land), sb.printJson(#swim))
+	end
+
+	petports_profCount("bridgeCells")
+	petports_profCount("bridgeLearned", learned)
+end
+
+--  ONE BOUNDARY CELL PER TICK, and the exit slot stepped every tick.
+local function navBridgeTick()
+	if not petports_gravitySwitchable() then return end
+
+	if navBridgeExitStep() then return end
+
+	local queued = self.petportsNavBridgeExits
+	if type(queued) == "table" and #queued > 0 then
+		local job = table.remove(queued, 1)
+		local known = petports_navKnown(navBridgeProfile(), job.fromKey, job.toKey)
+		if known == nil then
+			self.petportsNavBridgeExit = job
+		end
+		return
+	end
+
+	local retry = self.petportsNavBridgeRetry
+	if type(retry) == "table" then
+		local now = world.time()
+		for key, held in pairs(retry) do
+			if now >= held.at then
+				retry[key] = nil
+				self.petportsNavBridgeQueue = self.petportsNavBridgeQueue or {}
+				self.petportsNavBridgeQueue[key] = held.item
+			end
+		end
+	end
+
+	local cellKey, item = navBridgeQueueTake()
+	if cellKey == nil then return end
+
+	navBridgeExamine(cellKey, item)
+end
+
+
 --  ----------------------------------------------------------- CONNECTIVITY
 
 --  THE LIVE TRUE EDGES FOR ONE PROFILE, AS AN ADJACENCY LIST.
@@ -3229,7 +3674,190 @@ local function navGraphBuildStep(profile)
 	return self.petportsNavGraph
 end
 
+
+--  ------------------------------------------------------ THE MERGED GRAPH
+--
+--  ONE GRAPH FOR A SWITCHABLE CHASSIS, 2026-09-09v: the walker cells, the
+--  swimmer cells and the bridges between them, so a route from a dry cell
+--  to a wet one is the ordinary BFS. Nodes keep their plain cell keys --
+--  both strides are 1, so a key names the same 2x2 window on either side
+--  and the thirty places that parse a key go on working. The side rides
+--  beside the adjacency: `side[key]` is 0 (walker), 1 (swimmer) or 2 (in
+--  both indexes), and `bridge[from>to]` is the stored bridge entry with
+--  its kind and points.
+--
+--  A CELL ON BOTH SIDES IS A WADE IN ITSELF. Its walker anchor is a
+--  standing point and its swim anchor the window centre, at most two
+--  tiles apart, so the body is at the waterline there; the merged
+--  adjacency is the union and a route may change side on it without a
+--  bridge. Counted at build time so the log says how often it happens.
+--
+--  ITS OWN MEMO. The side graph memo is one slot and the survey already
+--  alternates sides through it; a third profile in the same slot would
+--  rebuild on every routing call. Rebuilt in chunks when the store version
+--  moves, no more than once per NAV_MERGED_MIN_AGE, and served stale
+--  meanwhile like the side graph is.
+local NAV_MERGED_MIN_AGE = 5.0
+
+local function navMergedBuildStep()
+	local build = self.petportsNavMergedBuild
+	local bridgeProfile = navBridgeProfile()
+
+	if build == nil then
+		local land = navWithSide(false, petports_navProfile)
+		local swim = navWithSide(true, petports_navProfile)
+		local index = navIndexRead()
+		local keys = {}
+
+		for _, source in ipairs({ { land, 0 }, { swim, 1 }, { bridgeProfile, 3 } }) do
+			local cells = index[source[1]]
+			for cellKey in pairs(type(cells) == "table" and cells or {}) do
+				table.insert(keys, { cellKey, source[1], source[2] })
+			end
+		end
+
+		build = {
+			version = self.petportsNavVersion or 0,
+			keys = keys, at = 1,
+			edges = {}, side = {}, bridge = {},
+			land = land, swim = swim
+		}
+		self.petportsNavMergedBuild = build
+		petports_profCount("mergedBuildStart")
+	end
+
+	local stop = math.min(#build.keys, build.at + NAV_BUILD_CHUNK - 1)
+
+	for k = build.at, stop do
+		local cellKey, profile, sideTag = build.keys[k][1], build.keys[k][2], build.keys[k][3]
+
+		if sideTag < 2 then
+			local held = build.side[cellKey]
+			if held == nil then
+				build.side[cellKey] = sideTag
+			elseif held ~= sideTag then
+				build.side[cellKey] = 2
+			end
+		end
+
+		for to, entry in pairs(navCellRead(profile, cellKey)) do
+			local key = cellKey .. ">" .. to
+			if sideTag == 3 then
+				if type(entry) == "table" and entry.r == true then
+					build.bridge[key] = entry
+					build.edges[key] = entry
+				end
+			elseif build.edges[key] == nil then
+				build.edges[key] = entry
+			end
+		end
+	end
+
+	build.at = stop + 1
+	if build.at <= #build.keys then return nil end
+
+	if build.edgeKeys == nil then
+		for _, profile in ipairs({ build.land, build.swim }) do
+			for key, entry in pairs(navPendingFor(profile) or {}) do
+				if build.edges[key] == nil then build.edges[key] = entry end
+			end
+		end
+		for key, entry in pairs(navPendingFor(bridgeProfile) or {}) do
+			if type(entry) == "table" and entry.r == true then
+				build.bridge[key] = entry
+				build.edges[key] = entry
+			end
+		end
+
+		build.edgeKeys = {}
+		for key in pairs(build.edges) do table.insert(build.edgeKeys, key) end
+		build.edgeAt = 1
+		build.fine = {}
+		build.coarse = {}
+		for _, tiles in ipairs(NAV_LEVELS) do build.coarse[tiles] = {} end
+	end
+
+	local edgeStop = math.min(#build.edgeKeys, build.edgeAt + NAV_BUILD_CHUNK * 8 - 1)
+
+	for k = build.edgeAt, edgeStop do
+		local key = build.edgeKeys[k]
+		local entry = build.edges[key]
+
+		if type(entry) == "table" and entry.r == true then
+			local from, to = string.match(key, "^(.-)>(.*)$")
+
+			if from ~= nil and to ~= nil then
+				build.fine[from] = build.fine[from] or {}
+				table.insert(build.fine[from], to)
+
+				for _, tiles in ipairs(NAV_LEVELS) do
+					local a = navBlockKey(from, tiles)
+					local b = navBlockKey(to, tiles)
+					if a ~= nil and b ~= nil and a ~= b then
+						local bucket = build.coarse[tiles]
+						bucket[a] = bucket[a] or {}
+						bucket[a][b] = true
+					end
+				end
+			end
+		end
+	end
+
+	build.edgeAt = edgeStop + 1
+	if build.edgeAt <= #build.edgeKeys then return nil end
+
+	local both, bridges = 0, 0
+	for _, sideTag in pairs(build.side) do if sideTag == 2 then both = both + 1 end end
+	for _ in pairs(build.bridge) do bridges = bridges + 1 end
+
+	self.petportsNavMerged = {
+		profile = bridgeProfile,
+		version = build.version,
+		builtAt = world.time(),
+		fine = build.fine, coarse = build.coarse,
+		side = build.side, bridge = build.bridge
+	}
+	self.petportsNavMergedBuild = nil
+	petports_profCount("mergedBuildDone")
+
+	if self.petportsNavMergedNoted ~= bridges then
+		self.petportsNavMergedNoted = bridges
+		sb.logInfo("NAV merged graph: %s cell(s), %s on both sides, %s bridge(s)",
+			sb.printJson(#build.keys), sb.printJson(both), sb.printJson(bridges))
+	end
+
+	return self.petportsNavMerged
+end
+
+local function navMergedGraphFor()
+	local cached = self.petportsNavMerged
+	local version = self.petportsNavVersion or 0
+	local now = world.time()
+
+	if cached ~= nil and cached.version == version then return cached end
+
+	if self.petportsNavMergedBuild == nil and cached ~= nil
+	   and (now - (cached.builtAt or 0)) < NAV_MERGED_MIN_AGE then
+		return cached
+	end
+
+	if self.petportsNavMergedBuildAt ~= now then
+		self.petportsNavMergedBuildAt = now
+		local done = navMergedBuildStep()
+		if done ~= nil then return done end
+	end
+
+	if cached ~= nil then return cached end
+
+	return { profile = navBridgeProfile(), version = -1, fine = {}, coarse = {},
+		side = {}, bridge = {}, building = true }
+end
+
 local function navGraphForInner(profile)
+	if petports_gravitySwitchable() and profile == navBridgeProfile() then
+		return navMergedGraphFor()
+	end
+
 	local cached = self.petportsNavGraph
 
 	if cached ~= nil and cached.profile == profile
@@ -3586,11 +4214,48 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdva
 
 	minAdvance = minAdvance or 0
 
-	local origin = petports_navAnchor(
-		tonumber(string.match(path[1], "^(-?%d+),")),
-		tonumber(string.match(path[1], ",(-?%d+)$")), freeMover)
+	--  SIDES, 2026-09-09v. In a merged graph every node has a side and an
+	--  anchor is resolved AS that side; a cell on both sides resolves as
+	--  the caller's. A leg never crosses a side change, and a route whose
+	--  next hop crosses one is a BRIDGE leg: the stored plan travels with
+	--  it in petportsNavLastRoute.bridge.
+	local graph = navGraphFor(profile)
+	local sides = graph.side
+	local function sideOf(key)
+		local tag = sides ~= nil and sides[key] or nil
+		if tag == nil or tag == 2 then return freeMover and 1 or 0 end
+		return tag
+	end
+	local function anchorOf(key, asSide)
+		local kx = tonumber(string.match(key, "^(-?%d+),"))
+		local ky = tonumber(string.match(key, ",(-?%d+)$"))
+		if kx == nil then return nil end
+		if sides == nil then return petports_navAnchor(kx, ky, freeMover) end
+		local swim = (asSide or sideOf(key)) == 1
+		return navWithSide(swim, petports_navAnchor, kx, ky, swim)
+	end
+	local startSide = sideOf(path[1])
+	self.petportsNavLastRoute.bridge = nil
+
+	local origin = anchorOf(path[1], startSide)
 
 	if origin == nil then return nil end
+
+	if sides ~= nil and sideOf(path[2]) ~= startSide then
+		local entry = graph.bridge ~= nil and graph.bridge[path[1] .. ">" .. path[2]] or nil
+		local target = anchorOf(path[2])
+		if target == nil then return nil end
+		self.petportsNavLastRoute.bridge = {
+			k = entry and entry.k or "wade",
+			board = entry and entry.board, hole = entry and entry.hole,
+			float = entry and entry.float,
+			from = path[1], to = path[2], toSide = sideOf(path[2])
+		}
+		self.petportsNavLastRoute.leg = path[2]
+		self.petportsNavLastRoute.waypoint = target
+		self.petportsNavLastRoute.nextAnchor = #path >= 3 and anchorOf(path[3]) or nil
+		return target, #path - 2, path[2], 1, path[1], path[1]
+	end
 
 	--  FROM THE BODY, NOT THE CELL, 2026-09-09c (Lofty): the string-pull
 	--  line was judged from the route's first anchor, and the unit steers
@@ -3612,7 +4277,7 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdva
 	if freeMover and petports_flyPathClear ~= nil and #path >= 2 then
 		local hopX = tonumber(string.match(path[2], "^(-?%d+),"))
 		local hopY = tonumber(string.match(path[2], ",(-?%d+)$"))
-		local hop = petports_navAnchor(hopX, hopY, freeMover)
+		local hop = anchorOf(path[2])
 
 		if hop ~= nil then
 			local okHop, hopClear = pcall(petports_flyPathClear, origin, hop)
@@ -3641,9 +4306,11 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdva
 	local nearest, nearestAt = nil, nil
 
 	for i = 2, #path do
-		local cx = tonumber(string.match(path[i], "^(-?%d+),"))
-		local cy = tonumber(string.match(path[i], ",(-?%d+)$"))
-		local anchor = petports_navAnchor(cx, cy, freeMover)
+		--  THE LEG ENDS BEFORE THE SIDE CHANGES. The hop across is its own
+		--  leg, planned from the cell before it on the next call.
+		if sides ~= nil and sideOf(path[i]) ~= startSide then break end
+
+		local anchor = anchorOf(path[i], startSide)
 
 		if anchor ~= nil then
 			local dx = anchor[1] - origin[1]
@@ -3731,9 +4398,7 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdva
 	self.petportsNavLastRoute.turn = nil
 	self.petportsNavLastRoute.nextAnchor = nil
 	if chosenAt < #path then
-		local nx = tonumber(string.match(path[chosenAt + 1], "^(-?%d+),"))
-		local ny = tonumber(string.match(path[chosenAt + 1], ",(-?%d+)$"))
-		self.petportsNavLastRoute.nextAnchor = nx ~= nil and petports_navAnchor(nx, ny, freeMover) or nil
+		self.petportsNavLastRoute.nextAnchor = anchorOf(path[chosenAt + 1])
 	end
 
 	--  ALSO THE CHOSEN CELL AND HOW MANY HOPS THE LEG SPANS, so a caller that
@@ -3846,19 +4511,19 @@ local function navNearestFrom(candidates, startAt, position, freeMover, radius, 
 	return nil
 end
 
-function petports_navNearestCell(position, freeMover, radius)
+local function navNearestCellIn(graph, position, freeMover, radius, sideTag)
 	radius = radius or 2.5
 
 	if freeMover then radius = math.max(radius, NAV_MAX_DISTANCE) end
 
-	local profile = petports_navProfile()
-	local fine = navGraphFor(profile).fine
+	local fine = graph.fine
+	local sides = graph.side
 	local px, py = petports_navCell(position)
 
 	local reach = math.ceil(radius / navStride())
 
 	local resumeKey = petports_navCellKey(px, py) .. "|" .. tostring(freeMover)
-		.. "|" .. tostring(radius)
+		.. "|" .. tostring(radius) .. "|" .. tostring(sideTag)
 	local resume = self.petportsNavNearestResume
 
 	if resume ~= nil and resume.key == resumeKey and resume.fine == fine then
@@ -3880,7 +4545,7 @@ function petports_navNearestCell(position, freeMover, radius)
 	--  drift re-resolve -- before sweeping anything. The block index (08h)
 	--  holds only the graph's cells; the blocks in range are walked instead.
 	local candidates = {}
-	local blocks = navGraphBlocks(navGraphFor(profile))
+	local blocks = navGraphBlocks(graph)
 	local bx0 = math.floor((px - reach) / NAV_BLOCK_CELLS)
 	local bx1 = math.floor((px + reach) / NAV_BLOCK_CELLS)
 	local by0 = math.floor((py - reach) / NAV_BLOCK_CELLS)
@@ -3891,7 +4556,12 @@ function petports_navNearestCell(position, freeMover, radius)
 			for _, key in ipairs(blocks.map[bx .. "," .. by] or {}) do
 				local cx = tonumber(string.match(key, "^(-?%d+),"))
 				local cy = tonumber(string.match(key, ",(-?%d+)$"))
-				if cx ~= nil and math.abs(cx - px) <= reach and math.abs(cy - py) <= reach then
+				--  THE ASKED-FOR SIDE ONLY, in a merged graph: a walker
+				--  starts from a walker cell, a swimmer from a swimmer cell,
+				--  and a cell on both sides serves either.
+				local sideOk = sideTag == nil or sides == nil
+					or sides[key] == sideTag or sides[key] == 2
+				if sideOk and cx ~= nil and math.abs(cx - px) <= reach and math.abs(cy - py) <= reach then
 					local ox, oy = navCellOrigin(cx, cy)
 					local dx = ox + PETPORTS_NAV_CELL * 0.5 - position[1]
 					local dy = oy + PETPORTS_NAV_CELL * 0.5 - position[2]
@@ -3909,6 +4579,23 @@ function petports_navNearestCell(position, freeMover, radius)
 	end)
 
 	return navNearestFrom(candidates, 1, position, freeMover, radius, resumeKey, fine)
+end
+
+function petports_navNearestCell(position, freeMover, radius)
+	return navNearestCellIn(navGraphFor(petports_navProfile()), position, freeMover, radius, nil)
+end
+
+--  THE NEAREST CELL OF ONE SIDE OF THE MERGED GRAPH, 2026-09-09v, with the
+--  anchors resolved as that side. This is how a walker finds the swim cell
+--  nearest a wet target, and a swimmer the walker cell nearest a dry one.
+function petports_navNearestCellSide(position, freeMover, radius)
+	if not petports_gravitySwitchable() then
+		return petports_navNearestCell(position, freeMover, radius)
+	end
+
+	local graph = navGraphFor(navBridgeProfile())
+	return navWithSide(freeMover, navNearestCellIn, graph, position, freeMover,
+		radius, freeMover and 1 or 0)
 end
 
 --  What is in the store, for a log line. Counted rather than dumped: a full
@@ -5029,6 +5716,68 @@ local function navBoundsInRange(here)
 	return out
 end
 
+--  THE OVERLAY'S SHARE, 2026-09-09u: every bridge this unit has learned,
+--  within NAV_DRAW_RANGE. Green board -> hole for a dive, green shore ->
+--  water for a wade, orange float -> land for an exit that works, red for
+--  one that does not, magenta for the exit probe in flight, and a grey
+--  cross at the centre of every boundary cell still waiting to be paired.
+local function navDrawBridges(here)
+	local function near(p)
+		return type(p) == "table"
+			and math.abs(p[1] - here[1]) <= NAV_DRAW_RANGE
+			and math.abs(p[2] - here[2]) <= NAV_DRAW_RANGE
+	end
+
+	local function cross(position, colour)
+		local size = 0.25
+		navDrawSafely(world.debugLine,
+			{ position[1] - size, position[2] }, { position[1] + size, position[2] }, colour)
+		navDrawSafely(world.debugLine,
+			{ position[1], position[2] - size }, { position[1], position[2] + size }, colour)
+	end
+
+	for _, bridge in pairs(self.petportsNavBridgesLocal or {}) do
+		if bridge.k == "dive" and near(bridge.a) then
+			navDrawSafely(world.debugLine, bridge.a, bridge.b, "green")
+			cross(bridge.a, "green")
+			cross(bridge.b, "green")
+		elseif bridge.k == "wade" then
+			local fx, fy = string.match(bridge.fromKey, "^(-?%d+),(-?%d+)$")
+			local tx, ty = string.match(bridge.toKey, "^(-?%d+),(-?%d+)$")
+			if fx ~= nil and tx ~= nil then
+				local a = navWithSide(false, petports_navAnchor, tonumber(fx), tonumber(fy), false)
+				local b = navWithSide(true, petports_navAnchor, tonumber(tx), tonumber(ty), true)
+				if a ~= nil and b ~= nil and near(a) then
+					navDrawSafely(world.debugLine, a, b, "green")
+					cross(a, "green")
+				end
+			end
+		elseif bridge.k == "exit" and near(bridge.a) then
+			local tx, ty = string.match(bridge.toKey, "^(-?%d+),(-?%d+)$")
+			local land = tx ~= nil and navWithSide(false, petports_navAnchor, tonumber(tx), tonumber(ty), false) or nil
+			local colour = bridge.r and "orange" or "red"
+			cross(bridge.a, colour)
+			if land ~= nil then navDrawSafely(world.debugLine, bridge.a, land, colour) end
+		end
+	end
+
+	local probe = self.petportsNavBridgeExit
+	if probe ~= nil and near(probe.from) then
+		navDrawSafely(world.debugLine, probe.from, probe.to, "magenta")
+	end
+
+	local function pendingCross(key)
+		local cx, cy = string.match(key, "^(-?%d+),(-?%d+)$")
+		if cx == nil then return end
+		local ox, oy = navCellOrigin(tonumber(cx), tonumber(cy))
+		local centre = { ox + PETPORTS_NAV_CELL / 2, oy + PETPORTS_NAV_CELL / 2 }
+		if near(centre) then cross(centre, "gray") end
+	end
+
+	for key in pairs(self.petportsNavBridgeQueue or {}) do pendingCross(key) end
+	for key in pairs(self.petportsNavBridgeRetry or {}) do pendingCross(key) end
+end
+
 navDrawBounds = function(here)
 	for _, entry in ipairs(navBoundsInRange(here)) do
 		local record = entry.record
@@ -5122,6 +5871,7 @@ function petports_navDebugDraw()
 	--  otherwise -- and the record's `top` row is a white line across the
 	--  window, with the bucket's liquid list under the lower-left corner.
 	navDrawBounds(here)
+	navDrawBridges(here)
 
 	local sweptColour = petports_freeMover() and "blue" or "green"
 	local now = world.time()
@@ -6066,6 +6816,9 @@ local function navTickInner(dt, ownerId)
 	if self.petportsNavGraphBuild ~= nil then
 		navGraphFor(petports_navProfile())
 	end
+	if self.petportsNavMergedBuild ~= nil then
+		navMergedGraphFor()
+	end
 
 	petports_profBegin("contradict")
 	navContradictTick()
@@ -6073,6 +6826,9 @@ local function navTickInner(dt, ownerId)
 	petports_profBegin("flood")
 	navBoundsFloodTick()
 	petports_profEnd("flood")
+	petports_profBegin("bridge")
+	navBridgeTick()
+	petports_profEnd("bridge")
 	--  BEFORE THE STEP, so the pair currently in flight is drawn even on the
 	--  tick it resolves and clears itself.
 	petports_profBegin("draw")
@@ -6316,6 +7072,7 @@ function petports_navWipe()
 	local own = { petports_navProfile() }
 	if petports_gravitySwitchable() then
 		own[2] = navWithSide(not petports_freeMover(), petports_navProfile)
+		own[3] = petports_navBridgeProfile()
 	end
 	for _, profile in ipairs(own) do
 		local okCells, cells = pcall(world.getProperty, navIndexProperty(profile))

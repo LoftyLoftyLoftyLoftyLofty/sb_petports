@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-09-07f the body's solid test is its collision poly, as the engine's is"
+local CONTRACT_BUILD_STAMP = "2026-09-09b a wade leg walks into the water instead of asking the pather"
 
 local contractStamped = false
 
@@ -2957,6 +2957,12 @@ PETPORTS_SWIM_TASK_TYPES = {
 --  what carries it and that path is reached from a water mode rather than this
 --  one.
 local function taskWantsSwimming()
+	--  A ROUTE THAT ENTERS THE WATER IS A REASON TO SWIM, 2026-09-09
+	--  (todo.pathing.amphibiousbridge): the active coarse leg ends on the
+	--  swim side, so whatever the task is, getting wet here is the plan.
+	--  petportsLegSide is written by tryCoarseLeg and cleared with the leg.
+	if self.petportsLegSide == 1 then return true end
+
 	local task = self.petportsTask
 
 	return type(task) == "table" and task.type ~= nil
@@ -3119,7 +3125,24 @@ end
 --
 --  nil IS A REAL ANSWER meaning "nowhere in particular", and callers treat it
 --  as such rather than as an error.
+--  THE ACTIVE LEG FIRST, 2026-09-09 (todo.pathing.amphibiousbridge): a
+--  swimmer whose task is dry but whose route is still wet must stay a
+--  swimmer until the leg that leaves the water, and the leg is the only
+--  thing that knows that. The raw task destination stays available for the
+--  one reader that must not see a leg: the board-abandon test, which asks
+--  whether the FISH is swimmable from here, not the next waypoint.
 function petports_currentTaskDestination()
+	if type(self.petportsLegWaypoint) == "table" then
+		return self.petportsLegWaypoint
+	end
+	if type(self.petportsLegLast) == "table" then
+		return self.petportsLegLast
+	end
+
+	return petports_taskDestinationRaw()
+end
+
+function petports_taskDestinationRaw()
 	local task = self.petportsTask
 
 	if type(task) == "table" and type(task.position) == "table" then
@@ -3305,6 +3328,33 @@ function petports_swimModeTick()
 		petports_diveForget()
 	end
 
+	--  A WADE LEG WALKS IN, 2026-09-09b. MEASURED 13:13:23..13:15:11: a
+	--  walker on the shore at [5841.64,1150.8] with a wade leg to
+	--  [5840,1148.8] -- 1.6 tiles away, in the water -- got `path found ...
+	--  unreadable edge(s), first action nil` from the engine every two
+	--  seconds and stood still for two minutes. A wade is a shore the body
+	--  walks down until it is under, so it is walked with controlMove,
+	--  toward the waypoint's column, until the medium reads swim; then the
+	--  leg's side makes taskWantsSwimming true and the ordinary flip to
+	--  aquatic takes over. Dry-side only: once wet this does nothing.
+	local wade = self.petportsLegBridge
+	if type(wade) == "table" and wade.k == "wade"
+	   and petports_swimMode() == PETPORTS_SWIM_MODE_LAND
+	   and type(self.petportsLegWaypoint) == "table" then
+		local here = mcontroller.position()
+		if petports_mediumAt(here, mcontroller.boundBox()) ~= "swim" then
+			local direction = self.petportsLegWaypoint[1] > here[1] and 1 or -1
+			mcontroller.controlMove(direction, false)
+			mcontroller.controlFace(direction)
+			if self.petportsWadeNoted ~= wade then
+				self.petportsWadeNoted = wade
+				sb.logInfo("UNIT WADE walking %s into the water toward %s from %s",
+					direction > 0 and "right" or "left",
+					sb.printJson(self.petportsLegWaypoint), sb.printJson(here))
+			end
+		end
+	end
+
 	--  LATCH ARRIVAL AT THE BOARD.
 	--
 	--  CHECKED HERE RATHER THAN IN THE APPROACH, because the approach resolve
@@ -3364,7 +3414,7 @@ function petports_swimModeTick()
 	if plan ~= nil and not plan.reached and not plan.abandoned
 	   and medium == "swim" then
 
-		local fish = petports_currentTaskDestination()
+		local fish = petports_taskDestinationRaw()
 
 		if swimReachable(fish) then
 			plan.abandoned = true

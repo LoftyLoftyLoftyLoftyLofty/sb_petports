@@ -178,7 +178,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-07u the turn at a leg's end is measured against the body's heading"
+local BUILD_STAMP = "2026-09-09d coarse-first re-asks while the nearest-cell search is still running"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -1099,7 +1099,12 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
 
   reach = reach or NAV_LEG_REACH
 
-  local profile = petports_navProfile()
+  --  THE MERGED GRAPH FOR A SWITCHABLE CHASSIS, 2026-09-09a. Its profile is
+  --  the bridge profile; coarsenav answers every routing call for it from
+  --  the graph that joins both sides (todo.pathing.amphibiousbridge).
+  local switchable = petports_gravitySwitchable ~= nil and petports_gravitySwitchable()
+  local profile = (switchable and petports_navBridgeProfile ~= nil
+    and petports_navBridgeProfile()) or petports_navProfile()
   local freeMover = petports_freeMover()
 
   --  NOT IN THE AIR. A plan from the cell a unit is falling through starts
@@ -1127,10 +1132,15 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
   --  below would otherwise print once per tick for the whole search.
   local fromKey, fromMore = fromOverride, false
   if fromKey == nil then
-    local key, _, _, more = petports_navNearestCell(here, freeMover, nearRadius)
+    local key, _, _, more
+    if switchable and petports_navNearestCellSide ~= nil then
+      key, _, _, more = petports_navNearestCellSide(here, freeMover, nearRadius)
+    else
+      key, _, _, more = petports_navNearestCell(here, freeMover, nearRadius)
+    end
     fromKey, fromMore = key, more
   end
-  if fromMore then return false end
+  if fromMore then return false, "more" end
 
   if fromKey == nil then
     local fx, fy = petports_navCell(here)
@@ -1145,8 +1155,19 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
   if stateData.navToFor == targetKey then
     toKey = stateData.navToKey
   else
-    local key, _, _, more = petports_navNearestCell(target, freeMover, nearRadius + 0.5)
-    if more then return false end
+    --  THE TARGET'S CELL IS ON THE TARGET'S SIDE, 2026-09-09a: a wet target
+    --  is a swim cell whatever the unit is now, and a dry one a walker cell.
+    --  MEASURED (soak, 2026-09-05): 4,807 `no leg` lines were a land otter
+    --  looking for a wet target's cell in the land graph.
+    local key, _, _, more
+    if switchable and petports_navNearestCellSide ~= nil then
+      local targetSwim = petports_mediumAtPoint(target) == "swim"
+      local targetRadius = (targetSwim and ((PETPORTS_NAV_STRIDE_FREE or 4) + 1.5) or 2.5) + 0.5
+      key, _, _, more = petports_navNearestCellSide(target, targetSwim, targetRadius)
+    else
+      key, _, _, more = petports_navNearestCell(target, freeMover, nearRadius + 0.5)
+    end
+    if more then return false, "more" end
     toKey = key
 
     if toKey == nil then
@@ -1199,6 +1220,31 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
   stateData.navLegHops = legHops
   stateData.navLegNext = self.petportsNavLastRoute and self.petportsNavLastRoute.nextAnchor or nil
   stateData.navLegReach = reach
+
+  --  A BRIDGE LEG, 2026-09-09a. The leg's side is what the mode machinery
+  --  reads (taskWantsSwimming, petports_currentTaskDestination): a leg that
+  --  ends in the water is a reason to swim, one that ends on land a reason
+  --  to get out. A dive installs its plan and the board-walk-and-launch
+  --  executor in petports_swimModeTick runs it exactly as it runs a fish's.
+  local bridge = self.petportsNavLastRoute and self.petportsNavLastRoute.bridge or nil
+  stateData.navBridge = bridge
+  self.petportsLegBridge = bridge
+  self.petportsLegSide = bridge and bridge.toSide or (freeMover and 1 or 0)
+
+  if bridge ~= nil then
+    sb.logInfo("UNIT coarse leg is a %s bridge %s -> %s (side %s)",
+      tostring(bridge.k), tostring(bridge.from), tostring(bridge.to), tostring(bridge.toSide))
+
+    if bridge.k == "dive" and bridge.board ~= nil and bridge.hole ~= nil then
+      self.petportsDiveEntry = { bridge.hole[1], bridge.hole[2] }
+      self.petportsDivePlan = {
+        taskId = stateData.task and stateData.task.id or nil,
+        launch = { bridge.board[1], bridge.board[2] },
+        entry = { bridge.hole[1], bridge.hole[2] },
+        route = true
+      }
+    end
+  end
 
   --  EVERYTHING THE OLD TARGET LEFT BEHIND. The same reset tryVentRoute does
   --  on a hop and for the same reason: a search timer, an approach timeout and
@@ -3636,12 +3682,43 @@ end
 --  findStandingPoint on the port is demoted to the no-unit-exists fallback its
 --  own header always said it was. `radius` exists because the port asks wider
 --  than a task does.
+local standableNearInner
+
+--  AS THE TARGET'S SIDE, 2026-09-09c. 09b chose the branch by the target's
+--  medium and it was not enough: MEASURED 13:33:03, an aquatic otter resolving
+--  a collect target on a dry ledge took the walker branch and the walker
+--  search then rejected the spot -- petports_mediumAllows read the LIVE mode,
+--  free mover, spot in air, "cannot leave the water". Every mode read inside
+--  the search (avoidLiquid, mediumAllows, freeMover) follows the same
+--  override coarsenav's survey uses (navWithSide, petports_freeMover), so the
+--  whole resolve runs as a walker for a dry target and as a swimmer for a wet
+--  one, whichever the body is now. Restored on every path out, error or not.
 local function standableNear(position, searchUp, radius, mediumVerified, searchDown)
+  if not (petports_gravitySwitchable ~= nil and petports_gravitySwitchable()) then
+    return standableNearInner(position, searchUp, radius, mediumVerified, searchDown)
+  end
+
+  local asFreeMover = petports_mediumAtPoint(position) == "swim"
+  local held = self.petportsNavSurveyFree
+  self.petportsNavSurveyFree = asFreeMover
+
+  local results = { pcall(standableNearInner, position, searchUp, radius, mediumVerified, searchDown) }
+
+  self.petportsNavSurveyFree = held
+
+  if not results[1] then error(results[2], 0) end
+  return select(2, table.unpack(results))
+end
+
+standableNearInner = function(position, searchUp, radius, mediumVerified, searchDown)
   --  A FREE-MOVING CHASSIS OWNS THIS ANSWER OUTRIGHT, INCLUDING THE nil.
   --  Same correction as petports_standingPointNear -- read the note there for
   --  the measurement. Short version: nil from petports_flyPointNear now means
   --  REFUSED as well as "not a flyer", and falling through to the ground search
   --  handed an aquatic unit a dry-land target one line after it declined one.
+  --
+  --  09b's per-branch medium test lived here; 09c moved the whole question
+  --  into the wrapper above, so this reads the (possibly overridden) mode.
   if petports_freeMover() then
     --  `mediumVerified` is only meaningful to this branch: the ground search
     --  below decides medium by physics, and will not stand a walker in a liquid
@@ -4245,6 +4322,18 @@ local function approachTargetFor(stateData, rawPosition)
   --  resolve below will usually answer nil over open water, the task holds, and
   --  the next tick resolves the fish itself as a free mover.
   local divePlan = self.petportsDivePlan
+
+  --  A ROUTE DIVE AIMS AT ITS BOARD THE SAME WAY, 2026-09-09a, for any task:
+  --  the plan came from the graph, not from a trace, so nothing is resolved
+  --  here -- the walker is pointed at the board and swimModeTick launches.
+  if not homeward and divePlan ~= nil and divePlan.route
+     and not divePlan.abandoned and not divePlan.reached
+     and petports_gravitySwitchable()
+     and petports_swimMode() == PETPORTS_SWIM_MODE_LAND then
+    stateData.groundTarget = divePlan.launch
+    stateData.petportsDiveEntry = divePlan.entry
+    return stateData.groundTarget
+  end
 
   if not homeward and task ~= nil and task.type == "fish"
      and petports_gravitySwitchable()
@@ -6312,10 +6401,30 @@ local function petportsTaskUpdateInner(dt, stateData)
         why = far and "far" or "out of sight"
       end
 
-      if wanted and tryCoarseLeg(stateData, routeTarget) then
+      local taken, notYet = false, nil
+      if wanted then taken, notYet = tryCoarseLeg(stateData, routeTarget) end
+
+      if taken then
         sb.logInfo("UNIT coarse first: target %s is %s (%s tiles) -- leg taken",
           routeKey, why, sb.printJson(math.floor(span * 10 + 0.5) / 10))
         return false
+      end
+
+      --  "MORE" IS NOT "NO", 2026-09-09d. MEASURED 13:45:48: a wet target
+      --  97 tiles away, no `coarse first` line at all, the engine's direct
+      --  plan followed for twenty seconds round the bottom of the island.
+      --  Since 09v the wet target's cell is found on the swim side, which is
+      --  the bounded sweep search (petports_navNearestCell, NAV_NEAREST_SWEEPS
+      --  per call); its "ask again next tick" came back as a plain false and
+      --  this gate latched on it. Un-latch and ask again next tick.
+      if notYet == "more" then
+        stateData.coarseFirstFor = nil
+        if stateData.coarseFirstWaitFor ~= routeKey then
+          stateData.coarseFirstWaitFor = routeKey
+          sb.logInfo("UNIT coarse first: target %s is %s (%s tiles) -- nearest-cell "
+            .. "search still running, asking again next tick",
+            routeKey, why, sb.printJson(math.floor(span * 10 + 0.5) / 10))
+        end
       end
 
       --  ASKED AGAIN ONCE THE GRAPH HAS BUILT, 2026-09-07k. The gate is keyed
@@ -6895,12 +7004,18 @@ local function petportsTaskUpdateInner(dt, stateData)
 
     if stateData.navWaypoint ~= nil then
       approachTo = stateData.navWaypoint
+      --  STICKY UNTIL THE TASK ENDS, 2026-09-09a, with petportsLegSide: in
+      --  the tick between one leg being reached and the next being planned
+      --  a submerged unit with a dry task would otherwise read its task as
+      --  its destination and start exiting.
+      self.petportsLegLast = stateData.navWaypoint
     end
   end
 
   if stateData.navWaypoint == nil then
     self.petportsLegWaypoint = nil
     self.petportsLegTightTurn = nil
+    self.petportsLegBridge = nil
   end
 
   if not stateData.arrived then
@@ -8376,6 +8491,10 @@ function petportsTaskAction.leavingState(stateData)
   --  to.
   stateData.navWaypoint = nil
   stateData.navRemaining = nil
+  stateData.navBridge = nil
+  self.petportsLegBridge = nil
+  self.petportsLegSide = nil
+  self.petportsLegLast = nil
 
   sb.logInfo("UNIT leaving task state for %s at %s, still holding a task: %s",
     stateData.task and tostring(stateData.task.id) or "none",
