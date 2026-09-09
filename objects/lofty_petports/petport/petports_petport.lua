@@ -493,6 +493,13 @@ MACHINE_KEY = "petports_machine"
 MACHINE_RULES_KEY = "petports_upcyclerRules"
 MACHINE_ENABLED_KEY = "petports_upcyclerEnabled"
 
+--  MAY UNITS EAT STRAIGHT OUT OF THIS MACHINE'S OUTPUT SLOT.
+--
+--  Same principle again: read the machine itself. This is the third key on the
+--  same object and the fourth copy of its spelling -- the object, its pane, and
+--  here -- which is the shape `todo.upcycler.slotorderdup` already describes.
+MACHINE_FEEDER_KEY = "petports_upcyclerFeeder"
+
 --  A MACHINE'S SLOTS ARE NOT STORAGE.
 --
 --  An upcycler is a container, so a beacon dropped into its input slot would
@@ -1534,7 +1541,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-08t sort: settle window out, per-crate backoff in, one crate per scan"
+local PETPORT_BUILD_STAMP = "2026-09-08v the upcycler pet feeder box defaults on"
 
 --  PORT PROFILER, 2026-09-07b. MEASURED 21:00: six ports on a small islet,
 --  59 port ticks over 30 ms in 39 s totalling 3.7 s, worst 268 ms, while
@@ -2663,7 +2670,8 @@ function init()
     --  back if it was refused.
     if report.outcome == "done" and self.task ~= nil
        and self.task.type == "fuelfetch" and self.task.id == report.id then
-      feedFromCrate(self.task.target, self.task.treat, self.task.id)
+      feedFromCrate(self.task.target, self.task.treat, self.task.id,
+        self.task.feedSlot)
     end
 
     --  Arrived at a crate holding over-quota stock. IDENTICAL to a tidy: take
@@ -3348,6 +3356,22 @@ local function machineAt(id)
   --  at all, and the whole off-on-placement guarantee depends on reading that
   --  as false rather than as missing data.
   machine.enabled = okEnabled and enabled == true
+
+  local okFeeder, feeder = pcall(world.getObjectParameter, id, MACHINE_FEEDER_KEY)
+
+  --  ABSENCE IS ON, exactly as it is for a beacon crate -- see storedFeeder in
+  --  petports_upcycler.lua for why this stopped diverging. Only an explicit
+  --  false closes the machine to grazing.
+  --
+  --  A READ THAT THREW IS ALSO ON, and that is the same rule rather than a
+  --  second one: this asks "has the player said no", and a failed read has not.
+  --
+  --  NOT GATED ON `enabled`, WHICH IS A DELIBERATE SPLIT. `enabled` says whether
+  --  the machine CONVERTS; this says whether what it has already made is food.
+  --  A player who switches a machine off to stop it burning stock has not said
+  --  the treats already sitting in its output are off limits, and requiring both
+  --  would mean the fleet quietly starves the moment somebody pauses a machine.
+  machine.feeder = (not okFeeder) or feeder ~= false
 
   local okRules, rules = pcall(world.getObjectParameter, id, MACHINE_RULES_KEY)
 
@@ -8569,6 +8593,11 @@ MACHINE_SLOT_INPUT = 0
 --  a unit posting surplus into whatever the slot became.
 MACHINE_SLOT_REAGENT = 1
 
+--  THE OUTPUT SLOT IS **NOT** DECLARED HERE. It is already a global, declared
+--  beside fuelWork much further down, and a second assignment of the same name
+--  at file scope is a landmine even when both spell 2 -- whichever runs last
+--  wins, and nothing about that is visible at either site.
+
 --  DO NOT WALK ACROSS A BASE TO DELIVER TWENTY BLOCKS.
 --
 --  Measured: with a machine consuming 5 items a second and a round trip of
@@ -13508,7 +13537,20 @@ local function nibbleFromCargo()
 	end
 end
 
-function feedFromCrate(containerId, treatName, workId)
+--  `slot` IS THE MACHINE CASE AND NOTHING ELSE PASSES IT.
+--
+--  A crate is fed from wholesale: any slot holding the treat will do, and the
+--  engine picks. A machine has exactly one slot whose contents are food, and
+--  both of the engine calls this loop would otherwise use work on a container
+--  ENTIRE: `world.containerConsume` could take a treat the player queued in the
+--  INPUT slot for conversion, and -- much worse -- the `world.containerAddItems`
+--  put-back after a refused feed lands in the first free slot, which on a
+--  machine with an empty input IS the input. A unit that declined a treat would
+--  have posted it for destruction.
+--
+--  So when this is set, both ends of the loop are pinned to it. A ZERO-BASED
+--  OFFSET, which is what containerItemAt and containerTakeNumItemsAt take.
+function feedFromCrate(containerId, treatName, workId, slot)
   if containerId == nil or treatName == nil then return end
   if not world.entityExists(containerId) then return end
 
@@ -13554,8 +13596,29 @@ function feedFromCrate(containerId, treatName, workId)
       while hungry and meals < FUEL_MEAL_LIMIT do
         local item = { name = treat.name, count = 1 }
 
-        local okTake, taken = pcall(world.containerConsume, containerId, item)
-        if not okTake or taken ~= true then break end
+        local okTake, taken
+
+        if slot == nil then
+          okTake, taken = pcall(world.containerConsume, containerId, item)
+          taken = okTake and taken == true
+        else
+          --  CHECKED BEFORE IT IS TAKEN, because a take of the wrong name from
+          --  a pinned slot is not a miss, it is the machine having moved on --
+          --  it converted while the unit was walking and the slot now holds
+          --  something else entirely.
+          local okAt, at = pcall(world.containerItemAt, containerId, slot)
+
+          if okAt and type(at) == "table" and at.name == treat.name then
+            local okOne, one = pcall(world.containerTakeNumItemsAt,
+              containerId, slot, 1)
+
+            taken = okOne and type(one) == "table" and (one.count or 0) >= 1
+          else
+            taken = false
+          end
+        end
+
+        if not taken then break end
 
         --  SPARING. dd.fuel.autoeat: a player may choose to burn 119 of a
         --  treat topping a unit off; a unit doing it to itself, repeatedly,
@@ -13574,7 +13637,17 @@ function feedFromCrate(containerId, treatName, workId)
           --  take another treat out and hand it straight back.
           hungry = false
 
-          local okBack, left = pcall(world.containerAddItems, containerId, item)
+          local okBack, left
+
+          if slot == nil then
+            okBack, left = pcall(world.containerAddItems, containerId, item)
+          else
+            --  BACK WHERE IT CAME FROM. containerAddItems would land this in
+            --  the first free slot, which on a machine is the input -- see
+            --  MACHINE_SLOT_OUTPUT.
+            okBack, left = pcall(world.containerPutItemsAt, containerId, item, slot)
+          end
+
           if not okBack or (type(left) == "table" and (left.count or 0) > 0) then
             sb.logError("PETPORT %s could not return %s to crate %s after a "
               .. "refused feed -- one treat lost", stationUniqueId(),
@@ -13654,12 +13727,87 @@ local function fuelFetchWork()
     end
   end
 
+  --  MACHINES ARE PEERS, NOT A LAST RESORT.
+  --
+  --  An upcycler with the box ticked is the SIMPLEST AND MOST DIRECT WAY TO
+  --  FEED A FLEET -- one machine, no crates, no beacons, no filters -- and that
+  --  is the whole point of it. A player bootstrapping a fleet should not have
+  --  to build a logistics network first, and an advanced player distributing
+  --  specific flavors across the network for the units that benefit from them
+  --  is the thing they GRADUATE to, not the entry fee.
+  --
+  --  SO IT IS INSIDE THE SAME TREAT LOOP, and preference still decides first: a
+  --  savory in a crate beats a plain in the machine, for a unit that prefers
+  --  savory, exactly as a savory in one crate beats a plain in another. Within
+  --  one treat the crates are tried before the machine, which is not a priority
+  --  claim -- it is that a treat already hauled into storage cost the fleet
+  --  nothing more to reach, while the machine is the source everything else was
+  --  filled from.
+  --
+  --  A SECOND LOOP RATHER THAN A THIRD `behavior`, because a machine is not a
+  --  beacon: it is found through self.machines, its stock is one SLOT rather
+  --  than a container, and the task it produces carries that slot.
+  for _, treat in ipairs(wanted) do
+    if treat.value <= headroom then
+      for _, machine in ipairs(self.machines or {}) do
+        if machine.kind == "upcycler" and machine.feeder
+           and world.entityExists(machine.id) then
+
+          crates = crates + 1
+
+          local workId = "fuelfetch:" .. tostring(machine.id) .. ":" .. treat.name
+          local failure = self.workFailures[workId]
+          local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
+
+          if not backedOff and claimFree(workId) then
+            --  THE OUTPUT SLOT, NOT containerAvailable. The machine's input may
+            --  well hold the same item on its way to becoming something else,
+            --  and a unit sent to eat that would arrive, find the pinned slot
+            --  holding something different, and walk home having done nothing.
+            local okAt, at = pcall(world.containerItemAt, machine.id,
+              MACHINE_SLOT_OUTPUT)
+
+            if okAt and type(at) == "table" and at.name == treat.name
+               and (at.count or 0) >= 1
+               and servicePointNear("feeder " .. tostring(machine.id),
+                 machine.id, machine.position, 4) ~= nil then
+
+              return {
+                id = workId,
+                mediumVerified = true,
+                type = "fuelfetch",
+                port = stationUniqueId(),
+                target = machine.id,
+                treat = treat.name,
+
+                --  WHAT MAKES THIS A MACHINE FEED. feedFromCrate pins both the
+                --  take and the put-back to it.
+                --
+                --  `feedSlot`, NOT `slot`, AND THE NAME IS LOAD-BEARING. The
+                --  `fuel` task already carries a `slot`, and it carries a
+                --  ONE-BASED KEY because withdrawMisfit applies
+                --  SLOT_KEY_TO_OFFSET itself -- see its comment for the trip
+                --  that cost. This one is a ZERO-BASED OFFSET, because
+                --  feedFromCrate hands it straight to world.containerItemAt and
+                --  world.containerTakeNumItemsAt. Two conventions under one
+                --  field name in one dispatch table is the same bug waiting to
+                --  be made a third time.
+                feedSlot = MACHINE_SLOT_OUTPUT,
+                position = world.entityPosition(machine.id)
+              }
+            end
+          end
+        end
+      end
+    end
+  end
+
   if crates == 0 then
-    return nil, "no container in the network is marked as a pet feeder"
+    return nil, "no container or machine in the network is marked as a pet feeder"
   end
 
   return nil, string.format(
-    "%s feeder crate(s), none holding a treat this unit can use (headroom %s)",
+    "%s feeder source(s), none holding a treat this unit can use (headroom %s)",
     crates, tostring(math.floor(headroom)))
 end
 

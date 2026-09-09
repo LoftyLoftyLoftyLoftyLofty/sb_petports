@@ -61,8 +61,8 @@ local ENABLED_KEY = "petports_upcyclerEnabled"
 
 --  MAY UNITS EAT STRAIGHT OUT OF THE OUTPUT SLOT.
 --
---  DEFAULTS OFF, WHICH DIVERGES FROM THE BEACONS ON PURPOSE -- see storedFeeder
---  for the reasoning.
+--  DEFAULTS ON, MATCHING THE BEACONS -- see storedFeeder for the reasoning, and
+--  for what the earlier default was and why it was wrong.
 local FEEDER_KEY = "petports_upcyclerFeeder"
 
 --  BANKED POINTS, MIRRORED INTO A PARAMETER SO THEY SURVIVE THE PICKAXE.
@@ -168,7 +168,7 @@ local FUEL_ITEM = "petports_petfuel"
 --  in this mod. Pet Treats carry the tag too, so output can never be laundered
 --  back into output -- the value floor means even a zero-price item is worth a
 --  point, so price alone would not have closed that loop.
-local OBJECT_BUILD_STAMP = "2026-09-04b one price lookup per conversion"
+local OBJECT_BUILD_STAMP = "2026-09-08a the pet feeder box defaults on"
 
 local EXEMPT_TAG = "petports_no_upcycling"
 
@@ -218,28 +218,42 @@ end
 
 --  MAY UNITS FEED FROM THIS MACHINE'S OUTPUT.
 --
---  ABSENT MEANS OFF, AND THAT IS THE OPPOSITE OF THE BEACONS. Worth stating
---  plainly because the inconsistency is deliberate and will otherwise read as an
---  oversight.
+--  ABSENT MEANS ON, THE SAME AS THE BEACONS. AMENDED 2026-09-08; it defaulted
+--  off, and the argument for that is recorded below because it was not a bad
+--  argument, it was answered.
 --
---  A BEACON DEFAULTS ON because a crate a player has told the network about is
---  one they expect the network to use. An upcycler is not a crate -- the player
---  told the network "this is a converter", never "this is a pantry".
+--  IT DEFAULTED OFF BECAUSE GRAZING THE MACHINE IS FIRST-ORDER OPTIMAL. This
+--  object MAKES the treats, so a unit that may graze it will always graze it:
+--  no drain trip, no deposit, no fetch. Defaulting on retires the fuel
+--  logistics loop, and a player would never see the behaviour they built the
+--  crates for.
 --
---  AND IT IS THE FIRST-ORDER OPTIMAL PLACE TO EAT, which is the real reason.
---  This machine MAKES the treats, so a unit that may graze it will always graze
---  it: no drain trip, no deposit, no fetch. Defaulting it on would quietly
---  retire the entire fuel logistics loop the moment the fuel system lands, and a
---  player would never see the behaviour they built the crates for. Off makes
---  grazing an optimisation somebody chooses, which is the interesting version.
+--  WHAT WAS WRONG WITH THAT IS WHO IT PROTECTED. It optimises for the player who
+--  has already built the crates, at the cost of the one who has not -- and the
+--  second player is the one who needs feeding to work. A fleet whose units
+--  starve beside a machine full of food, because a box nobody mentioned is
+--  unticked, does not read as a design invitation. It reads as broken.
 --
---  It also matches this object's own convention: `enabled` is absent-and-off on
---  a freshly placed machine, for the same reason -- a machine does nothing until
---  it is told to.
+--  THE SIMPLE LOOP IS THE BOOTSTRAP AND THE NETWORK IS THE GRADUATION. One
+--  machine, no crates, no beacons, no filters, and the fleet runs. Distributing
+--  flavors across the network so that units which benefit from a specific treat
+--  receive it is a real and better thing to build -- and it is a thing a player
+--  moves ON to, once they know why it is worth the crates. It is not the entry
+--  fee.
+--
+--  AND NOTHING IS LOST BY GRAZING FIRST. fuelFetchWork puts the machine inside
+--  the same treat tier as the crates, not above it, so a player who HAS built
+--  distribution still gets flavor preference honoured -- a preferred treat in a
+--  crate still beats a plain one in the machine. Defaulting on costs that player
+--  nothing; defaulting off cost the other one everything.
+--
+--  IT NO LONGER MATCHES `enabled`, WHICH IS ABSENT-AND-OFF ON A FRESH MACHINE.
+--  That is not an inconsistency to tidy up: `enabled` is a machine doing
+--  something to the player's items unasked, and this is a machine letting its
+--  own output be eaten. Only one of those needs consent.
 local function storedFeeder()
 	local stored = config.getParameter(FEEDER_KEY)
-	if stored == nil then return false end
-	return stored == true
+	return stored ~= false
 end
 
 --  Is this item name named by a rule?

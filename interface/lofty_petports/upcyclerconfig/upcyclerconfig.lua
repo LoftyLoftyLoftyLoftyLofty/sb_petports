@@ -38,7 +38,7 @@ require "/scripts/lofty_petports/petports_strings.lua"
 local DEBUG = true
 
 --  Bump on every change to this file. See the log line in init().
-local PANE_BUILD_STAMP = "2026-08-30e string sweep actually runs"
+local PANE_BUILD_STAMP = "2026-09-08b the feeder checkbox is read back, and defaults on"
 
 --  sb.logInfo accepts %s and nothing else. Pre-format through string.format,
 --  which has no such limit, and hand the logger one string.
@@ -81,6 +81,13 @@ end
 
 local RULES_KEY = "petports_upcyclerRules"
 local ENABLED_KEY = "petports_upcyclerEnabled"
+
+--  MUST MATCH FEEDER_KEY IN petports_upcycler.lua. This pane writes the feeder
+--  flag through petports_upcyclerWrite and reads it back through
+--  world.getObjectParameter, so the spelling lives in two files and there is no
+--  shared constant to hold it -- the same arrangement RULES_KEY and ENABLED_KEY
+--  are already in.
+local FEEDER_KEY = "petports_upcyclerFeeder"
 
 local RULES_LIST = "rulesScroll.rulesList"
 
@@ -170,14 +177,16 @@ local function readDirect()
 
 	local okRules, rules = pcall(world.getObjectParameter, id, RULES_KEY)
 	local okEnabled, enabled = pcall(world.getObjectParameter, id, ENABLED_KEY)
+	local okFeeder, feeder = pcall(world.getObjectParameter, id, FEEDER_KEY)
 
-	if not okRules or not okEnabled then
-		dbg("readDirect: threw (rules ok=%s enabled ok=%s)",
-			tostring(okRules), tostring(okEnabled))
+	if not okRules or not okEnabled or not okFeeder then
+		dbg("readDirect: threw (rules ok=%s enabled ok=%s feeder ok=%s)",
+			tostring(okRules), tostring(okEnabled), tostring(okFeeder))
 		return nil
 	end
 
-	dbg("readDirect OK: rules=%s enabled=%s", j(rules), tostring(enabled))
+	dbg("readDirect OK: rules=%s enabled=%s feeder=%s",
+		j(rules), tostring(enabled), tostring(feeder))
 
 	return {
 		--  Absent is not empty, but for a read both behave the same way here:
@@ -187,7 +196,21 @@ local function readDirect()
 		--  ABSENCE MEANS OFF. A machine that has never been configured has no
 		--  parameter at all, and the whole off-on-placement guarantee rests on
 		--  reading that as false rather than as missing data.
-		enabled = enabled == true
+		enabled = enabled == true,
+
+		--  THE FIELD THIS TABLE WAS MISSING, AND THE WHOLE OF THE BUG.
+		--
+		--  feederToggled wrote through fine and the object stored it fine; this
+		--  table had two fields where the write had three, so applyState read
+		--  `state.feeder` as nil, `nil == true` as false, and unchecked the box
+		--  on every open. The tick was on disk the entire time and the pane
+		--  never asked for it. proc.tooling.halfedit, in its usual shape: a
+		--  three-field state whose read side got two.
+		--
+		--  ABSENT MEANS ON, matching storedFeeder on the object and the
+		--  beacons both. AMENDED 2026-09-08 -- see storedFeeder for what the
+		--  old default was and why it was answered.
+		feeder = feeder ~= false
 	}
 end
 
@@ -570,14 +593,15 @@ end
 
 --  MAY UNITS EAT STRAIGHT OUT OF THE OUTPUT SLOT.
 --
---  NOTHING READS IT YET -- the fuel system is unbuilt, treats accumulate and
---  nothing consumes one. Stored now so that the preference exists before the
---  behaviour does.
+--  IT IS READ. AMENDED 2026-09-08: this said "nothing reads it yet -- the fuel
+--  system is unbuilt", which stopped being true when fuelFetchWork landed and
+--  stayed in the file. A unit now walks to a ticked machine and eats out of its
+--  output slot.
 --
---  DEFAULTS OFF HERE AND ON FOR THE BEACONS. See storedFeeder in
---  petports_upcycler.lua; the short version is that grazing the machine that
---  MAKES the treats skips the whole haul-and-store loop, so it should be a
---  choice rather than the path of least resistance.
+--  DEFAULTS ON, THE SAME AS THE BEACONS. See storedFeeder in
+--  petports_upcycler.lua; the short version is that one machine and no crates
+--  is how a player bootstraps a fleet, and distributing flavors across a
+--  network is what they graduate to rather than what they must build first.
 function feederToggled()
 	self.feeder = widget.getChecked("feederCheckbox") == true
 	dbg("feederToggled -> %s", tostring(self.feeder))
@@ -1122,7 +1146,10 @@ local function applyState(state)
 
 	widget.setChecked("enabledCheckbox", self.enabled)
 
-	--  ABSENT READS AS OFF, matching storedFeeder on the object.
+	--  READ FROM THE STATE AS GIVEN, because readDirect has already applied
+	--  the absent-means-on default and applying it twice would be two places to
+	--  get it wrong. `== true` here rather than `~= false` for exactly that
+	--  reason: this is a boolean by the time it arrives.
 	self.feeder = state.feeder == true
 	widget.setChecked("feederCheckbox", self.feeder)
 
