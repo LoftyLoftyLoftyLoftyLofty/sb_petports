@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-09-09b a wade leg walks into the water instead of asking the pather"
+local CONTRACT_BUILD_STAMP = "2026-09-10a the port tells the unit how many units its network has"
 
 local contractStamped = false
 
@@ -633,9 +633,12 @@ end
 --
 --  Deliberately NOT persisted into storage. Entity ids and network shape both
 --  change across a reload, and the port re-pushes on spawn anyway.
-function petports_setNetwork(rects, home)
+function petports_setNetwork(rects, home, units)
   self.petportsNetwork = rects
   self.petportsHome = home
+  --  HOW MANY MEMBER PORTS HAVE A UNIT, 2026-09-10 (coarsenav 10c reads it
+  --  for the survey stride). nil from an older port keeps the port count.
+  self.petportsNetworkUnits = tonumber(units)
   return true
 end
 
@@ -1657,7 +1660,15 @@ function petports_mediumAllows(position, bounds)
   --  of its body and none on the other and slides under; a swimmer here is
   --  hauling itself against the surface. There is no chassis this is right for,
   --  so it is refused before the fly/swim split rather than inside it.
+  --  BOTH MEDIA, NO WATERLINE, 2026-09-09c (plan.unit.unrestrictedflyer).
+  --  The refusal below exists because a body half in water gets buoyancy on
+  --  the wet half and none on the dry one and slides under; a chassis that
+  --  is allowed on both sides of the line has nowhere it can slide TO that
+  --  it is not allowed. So for it the line is a position like any other,
+  --  and the probe, the picker, the gate, the latch and the pull all follow
+  --  from this one answer (arch.pathing.onepredicate).
   if medium == "mixed" then
+    if media.fly and media.swim then return true, "either medium, the waterline is nothing" end
     return false, "straddling the waterline, which no free-moving chassis can hold"
   end
 

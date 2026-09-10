@@ -1,10 +1,44 @@
-# COARSE NAV -- SESSION HANDOFF (as of coarsenav 09m / taskAction 07u / petport 07l / flyapproach 07k / contract 07g / habitat 07a)
+# COARSE NAV -- SESSION HANDOFF (as of coarsenav 10r / taskAction 10a / petport 10a / flyapproach 10c / contract 10a / habitat 07a)
 
 Read this before proposing anything. MEASURED means read out of a
 starbound.log or an engine `.luaprofile`; FACT means read out of retail 1.4.4
 source pasted into a session. Retail Starbound 1.4.4 only; never propose an
 OpenStarbound or fork binding. The OpenStarbound repo's first commit is
 unmodified retail source and may be READ for facts (StarLuaRoot.cpp was).
+
+**2026-09-10 EVENING -- THE VERDICT.** Lofty: performance is not
+acceptable; unsocketing the pets removes the hitching, so the remaining
+stalls are ours. Per-unit cost is solved (10c..10r, every constant in
+`arch.pathing.tickbudget`); what is left is (1) the 30 s flush, grown
+with the property store -- `todo.pathing.storesize`, chunked dense
+shards are now FIRST in `plan.pathing.cityscale`; (2) the PORT script,
+whose generators and refreshes run to completion, 43 ms median every
+four seconds across six ports -- `todo.port.tickyield`, first build next
+session. Nothing since 09-08 is committed. Six units socketed on the
+ocean base: chili (drone), Fops (sinker), Ona (amphibious), Fuwafuwa
+(aquatic), Swooce (flyer), and the unnamed unrestricted.
+
+**2026-09-10, THE PROFILE SESSION -- READ V2 STATUS FIRST.** The survey
+plumbing the bridge and the unrestricted flyer exposed was stalling the
+game; fixed build by build from the profiler (coarsenav 10c..10m,
+flyapproach 10b/10c): `arch.pathing.tickbudget` has every constant and
+the number that set it. Rule in force: `dd.pathing.yieldrule`. Plan:
+`plan.pathing.cityscale` (chunk-keyed store, coarse-level routing --
+the levels were built and never routed on, named as drift). Verified
+12:53..13:00: update avg 5.2 ms, navTick max 59. NOTHING COMMITTED SINCE
+09-08; the 13:00 profile is the commit gate. Owed to the rule: route BFS,
+waypoint sweeps, bridge seeding.
+
+**2026-09-09, THE BRIDGE SESSION -- READ V2 STATUS FIRST.** The amphibious
+chassis routes through water: bridges in a third store (`arch.pathing.bridges`,
+coarsenav 09t..09w), one merged graph per switchable chassis
+(`arch.pathing.mergedgraph`, 09v + taskAction 09a), the resolve run as the
+target's side (`arch.pathing.targetside`, taskAction 09b/09c), and the
+coarse-first gate un-latched on a resumable nearest-cell search (09d).
+Verified 13:51..13:53: nine tasks through the lava both ways, zero failures.
+`todo.pathing.amphibiouscrash` is closed unreproducible. Next: the
+unrestricted flyer (`plan.unit.unrestrictedflyer`), then the cache rescan
+rule (`dd.pathing.cacherescan`). PETPORTS_NAV_VERBOSE IS STILL ON.
 
 Builds in play:
 `petports_coarsenav.lua` **2026-09-09m**, `petportsTaskAction.lua`

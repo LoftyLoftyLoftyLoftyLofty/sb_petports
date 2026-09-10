@@ -178,7 +178,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-09d coarse-first re-asks while the nearest-cell search is still running"
+local BUILD_STAMP = "2026-09-10a a leg that is not ready yet is asked for again next update, not reported as no leg"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -1187,6 +1187,11 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
     petports_navWaypoint(profile, fromKey, toKey, reach, freeMover,
       ARRIVAL_DISTANCE + 0.5)
 
+  --  NOT READY IS NOT NO LEG, 2026-09-10a (dd.pathing.yieldrule): the
+  --  route search and the waypoint sweeps are resumable now (coarsenav
+  --  10n) and say "more" mid-work. Ask again next update, log nothing.
+  if waypoint == nil and remaining == "more" then return false, "more" end
+
   if waypoint == nil then
     --  CHANGE-GATED ON THE PAIR: this resolves twice a second on a fish.
     local pairKey = fromKey .. ">" .. toKey
@@ -1194,6 +1199,7 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
       stateData.navNoLegFor = pairKey
       local why = petports_navWhyNoRoute ~= nil
         and petports_navWhyNoRoute(profile, fromKey, toKey) or "unknown"
+      if self.petportsNavLastRoute ~= nil then self.petportsNavLastRoute.why = why end
       sb.logInfo("UNIT coarse nav has no leg from %s to %s -- %s", fromKey, toKey, tostring(why))
     end
     return false

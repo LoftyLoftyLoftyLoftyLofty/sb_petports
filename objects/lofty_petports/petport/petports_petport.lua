@@ -1256,6 +1256,18 @@ local function refreshNetwork()
       self.networkRects = rects
       unitChanged = true
       sb.logInfo("PETPORT %s network now %s ports", stationUniqueId(), #rects)
+    end
+
+    --  HOW MANY MEMBER PORTS HAVE A UNIT, 2026-09-10a, for coarsenav's
+    --  survey stride (it divided by ports and skipped two of three updates
+    --  on a six-port, one-unit network). Re-pushed when the count moves.
+    local units = 0
+    for _, member in ipairs(petports_networkMembers(stationUniqueId())) do
+      if member.hasUnit then units = units + 1 end
+    end
+    if units ~= self.networkUnits then
+      self.networkUnits = units
+      unitChanged = true
 
       --  Coverage changed, so vents may have appeared or vanished and terrain
       --  the cache was derived from may no longer be reachable the same way.
@@ -1296,7 +1308,7 @@ local function refreshNetwork()
   if (unitChanged or self.routeDirty or self.pushedToPet ~= self.petId)
      and self.petId ~= nil and world.entityExists(self.petId) then
     world.callScriptedEntity(self.petId, "petports_setNetwork",
-      self.networkRects, entity.position())
+      self.networkRects, entity.position(), self.networkUnits)
 
     --  Vent list rides the same push. Entity ids are not stable across a
     --  reload, which is fine: this is re-gathered and re-pushed on every spawn.
@@ -1541,7 +1553,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-08v the upcycler pet feeder box defaults on"
+local PETPORT_BUILD_STAMP = "2026-09-10a the unit is told how many units the network has, for the survey stride"
 
 --  PORT PROFILER, 2026-09-07b. MEASURED 21:00: six ports on a small islet,
 --  59 port ticks over 30 ms in 39 s totalling 3.7 s, worst 268 ms, while

@@ -82,7 +82,11 @@
 --  delegate, and stays one.
 local vanillaSetJumpState = setJumpState
 
-local BUILD_STAMP = "2026-09-07m a released string-pull keeps its speed"
+local BUILD_STAMP = "2026-09-10c the string-pull line is never swept past STRING_PULL_RANGE"
+
+--  Tiles the live target may drift from the latched one before the direct
+--  pather is re-aimed. See the latch beside self.pather:move.
+local FLY_RETARGET_DISTANCE = 4.0
 local stampLogged = false
 
 --  DELETE ME ONCE THE ANSWER IS IN THE LOG.
@@ -532,6 +536,17 @@ local FLY_SWEEP_SET = { "Null", "Block", "Dynamic" }
 --  swept line per tick for the one unit that is pulling.
 local STRING_PULL_RECHECK = 0.05
 
+--  NEVER SWEPT PAST THIS, 2026-09-10c. MEASURED 12:53..13:00: `freeMover
+--  max=136 ms`, the one spike left in the profile, outside navTick. The
+--  recheck below ran flyPathClear from the body to the TASK target on every
+--  update, and that sweep had no length cap: a target 100 tiles off is 130
+--  samples of poly collision and liquid in one call, for a line that is
+--  almost never clear at that range. A coarse leg is at most
+--  NAV_MAX_DISTANCE (32) long and the legs are what carry a unit that far;
+--  string-pull is for the last stretch. Past this range the answer is "not
+--  clear" without asking.
+local STRING_PULL_RANGE = 40.0
+
 --  WHICH TASKS MAY ABANDON THE PATHFINDER FOR A STRAIGHT LINE.
 --
 --  ALL THREE MOVING-TARGET TASKS AND NOTHING ELSE. A fish chases a lure, a farm
@@ -714,12 +729,33 @@ local function steerDirectly(toTarget, length, running)
   setMovementState(running)
 end
 
+--  ONE LIQUID SAMPLE PER STEP FOR A BODY THAT HAS BOTH MEDIA, 2026-09-10b.
+--  MEASURED 11:40 on the ocean base: `probeStep n=55 ms=1244` -- 20 ms a
+--  probe, 79 max -- against 2 ms on the lava islet, with the world counters
+--  reading `liquidAt 2562/s` against `rectTileCollision 22/s`. The medium
+--  sample was petports_mediumAt over the body's wall box and its column,
+--  six to eight liquidAt calls every 0.8 tiles, and for a chassis allowed
+--  in air AND water every one of them could only ever say "forbidden" or
+--  not. One liquidAt at the body's centre per step catches a denied liquid
+--  the body is in; the corners are covered by the neighbouring steps. Any
+--  chassis with a medium it cannot enter keeps the full sample, because
+--  for it "mixed" and "air" are answers.
+local function mediumClearAt(x, y, bounds, bothMedia)
+  if not bothMedia then return petports_mediumAllows({ x, y }, bounds) end
+  local level = world.liquidAt({ x, y })
+  local fill = (level ~= nil) and (level[2] or 0) or 0
+  if fill >= 0.1 and petports_liquidDenied(level[1]) then return false end
+  return true
+end
+
 local function flyPathClear(from, to)
   local span = world.distance(to, from)
   local length = math.sqrt(span[1] * span[1] + span[2] * span[2])
   if length < 0.001 then return true end
 
   local bounds = mcontroller.boundBox()
+  local media = petports_media()
+  local bothMedia = media.fly == true and media.swim == true
   local steps = math.ceil(length / FLY_SWEEP_STEP)
 
   for i = 0, steps do
@@ -733,7 +769,9 @@ local function flyPathClear(from, to)
     --  MEDIUM, SAMPLED ALONG THE SHORTCUT. petports_mediumAllows is the same
     --  predicate the destination resolver uses, so a chassis cannot be offered
     --  a route through something it is not allowed to be offered a position in.
-    if not petports_mediumAllows({ x, y }, bounds) then return false end
+    --  For a both-media body that predicate reduces to "not denied", so it
+    --  is asked the cheap way (mediumClearAt above).
+    if not mediumClearAt(x, y, bounds, bothMedia) then return false end
   end
 
   return true
@@ -780,7 +818,11 @@ local function stringPullClear(here, targetPosition, dt)
 
   if self.petportsPullTimer <= 0 then
     self.petportsPullTimer = STRING_PULL_RECHECK
-    self.petportsPullClear = flyPathClear(here, targetPosition)
+    if world.magnitude(here, targetPosition) > STRING_PULL_RANGE then
+      self.petportsPullClear = false
+    else
+      self.petportsPullClear = flyPathClear(here, targetPosition)
+    end
   end
 
   return self.petportsPullClear == true
@@ -1687,7 +1729,32 @@ function approachPoint(dt, targetPosition, stopDistance, running, arrival)
     self.pather.moveSwim = petportsFreeMover
   end
 
-  local result = self.pather:move(targetPosition, dt)
+  --  A MOVING TARGET IS LATCHED, 2026-09-10a. MEASURED 02:27:25..29 (Lofty:
+  --  "blinking a path to the fish then immediately discarding it"): the
+  --  fish moved every tick, the fly point every half second, and every new
+  --  target restarted the engine's search -- 1.8 s to a 161-edge plan,
+  --  accepted, and thrown away on the next update because the target had
+  --  moved a tile. The coarse legs already keep a moving target until it
+  --  has moved a threshold; the direct pather never did. The pather is given
+  --  the LATCHED target, re-latched when the live one has moved more than
+  --  FLY_RETARGET_DISTANCE from it, when the pather was rebuilt, or when
+  --  the body has reached the latched point and the plan has run out.
+  local latch = self.petportsDirectLatch
+  local here = mcontroller.position()
+  if latch == nil or latch.pather ~= self.pather
+     or world.magnitude(targetPosition, latch.target) > FLY_RETARGET_DISTANCE
+     or (latch.done and world.magnitude(here, latch.target) <= FLY_RETARGET_DISTANCE) then
+    if latch ~= nil and latch.pather == self.pather then
+      sb.logInfo("UNIT direct target re-latched: live %s is %s from latched %s%s",
+        sb.printJson(targetPosition),
+        sb.printJson(math.floor(world.magnitude(targetPosition, latch.target) * 10 + 0.5) / 10),
+        sb.printJson(latch.target), latch.done and " (plan finished)" or "")
+    end
+    latch = { target = { targetPosition[1], targetPosition[2] }, pather = self.pather }
+    self.petportsDirectLatch = latch
+  end
+  local result = self.pather:move(latch.target, dt)
+  latch.done = result ~= "running" and result ~= "pathfinding"
 
   reportPlanShape(self.pather.finder)
   sampleFlyCommand(dt)
@@ -1721,6 +1788,30 @@ function approachPoint(dt, targetPosition, stopDistance, running, arrival)
     --  worth telling apart eventually; for now the distance in the line says
     --  which one it was.
     reportFlyPathEnd(result, targetPosition, targetDistance)
+
+    --  A SEARCH STILL RUNNING IS NOT A FAILED SEARCH, 2026-09-09a. MEASURED
+    --  15:11:19..15:12:22 (Lofty: "flying directly into the ceiling as a
+    --  first resort when capturing fish in the lava tunnel"): PathFinder:move
+    --  returns "pathfinding" while its A* is still exploring and false only
+    --  when it has given up, and this branch treated both as "no route" and
+    --  steered straight at the target through the rock. A fish moves every
+    --  tick, so the search restarted every tick, and every tick had one
+    --  blind steer in it before `PLAN accepted ... 68 edge(s)` arrived 80 ms
+    --  later. The line-of-sight step that vanilla's flyInGeneralDirection
+    --  lacks is the plan; while the plan is being made, hold: no control,
+    --  air friction bleeds the speed, and the plan's first edge takes over.
+    if result == "pathfinding" then
+      --  Rate-limited, not change-gated: a moving target replans every tick
+      --  and the running branch clears the gate every tick it runs.
+      local now = world.time()
+      if (now - (self.petportsHoldNoted or 0)) > 5 then
+        self.petportsHoldNoted = now
+        sb.logInfo("UNIT HOLDING at %s for %s -- no route, and the direct search is still running; "
+          .. "no blind steer until it fails",
+          sb.printJson(mcontroller.position()), sb.printJson(targetPosition))
+      end
+      return false
+    end
 
     --  A FAILED SEARCH IS NOT A REASON TO STOP MOVING. STEER DIRECTLY.
     --

@@ -50,124 +50,316 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-08 (the container slot sort, then the upcycler feeder)
+### What is built, as of 2026-09-10 (the bridge, the unrestricted flyer, and the survey made to fit in a tick)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-**THE AMPHIBIOUS DRY-TARGET CRASH IS STILL UNMEASURED.** Fourth session running.
-`todo.pathing.amphibiouscrash` has no log, nothing this session went near
-pathing, and the suspects listed there are unchanged. Nominated as the mandatory
-first task twice and deferred three times.
+**LOFTY'S VERDICT, END OF 2026-09-10, AND THE NEXT SESSION OPENS ON IT:
+THE PERFORMANCE IS NOT ACCEPTABLE.** With six units socketed the world
+hitches; with the pets unsocketed it does not. That is the control, and it
+says the remaining stalls are ours whatever the profiler attributes them
+to. Per-unit script cost is down an order of magnitude (below) and is no
+longer the source; what is left, in the order the player feels it:
 
-**`PETPORTS_NAV_VERBOSE = true` IS STILL ON**, at `petports_coarsenav.lua:221`.
-Unchanged for four sessions. Turn it off before any release.
+1. **The 30 s freeze grew with the store** (`fact.tooling.worldstorage`,
+   `todo.pathing.storesize`): retail's per-world storage sync serialises
+   every world property, our per-cell edge shards across six profiles are
+   now most of that payload, and the floor the tree measured with ports
+   only has doubled. Lever: bytes in the store -- chunk-keyed shards with a
+   dense encoding (`plan.pathing.cityscale` item 2, promoted to FIRST;
+   `todo.pathing.freeradius` is the same item from 09-06),
+   stale-shard purge, claims off the property store if they are on it.
+2. **The every-few-seconds hitch is the port script** (`todo.port.tickyield`):
+   `findWork` runs every generator in one call (avg 14 ms, max 135;
+   `g.sort` alone 101), `mirrorPaneState` max 93, `refreshBeacons` max 72,
+   `crosshairRefresh` 44, `refreshFarmables` 59, on six ports. Every one
+   of these runs to completion and is owed `dd.pathing.yieldrule`.
+3. **The units' steady load** is six x 100-330 ms per 5 s (`10r` log,
+   named per unit) and falls as each survey completes (`10q` idle gate).
+   Fops' one 638 ms update was the flush landing inside his harvest swing.
 
-**THE SIX COMMITS UNFILED AT THE LAST STATUS ARE PANE AND BUBBLE WORK, AND TWO
-CARRY NO CODE.** `0d3d225`/`7cf9bb3` are the pet-settings tooltips and `ccd8134`
-is blueprint and codex display on bubbles, both covered by existing entries
-(`arch.pane.stringtable`, `arch.bubble.iconfit`). `f73d4e5`/`ab21adf` are
-`plan.drawio`. `0b404e8` is the restock tidy gate, which is
-`dd.module.defraggates` behaving as written and needs no entry of its own.
+NOTHING FROM 09-09 OR 09-10 IS COMMITTED. Lofty's standard for committing
+the unrestricted flyer is "it stops lagging the game"; by the control
+above that standard is not met yet, and the items above are what meets it.
 
-**FIRST HALF: THE CONTAINER SLOT SORT.** Four builds, `08q` through `08t`, each
-with its own log before the next began.
+**TWO DAYS, ONE ARC.** 09-09 built the amphibious bridge and the unrestricted
+flyer; 09-10 discovered that the survey plumbing those exposed was stalling
+the game, and fixed it build by build against the profiler until the tick
+histogram sat under 50 ms. Everything in this block is VERIFIED by a log
+unless marked otherwise. NOTHING FROM 09-09 OR 09-10 IS COMMITTED YET (Lofty:
+"it's not going to be if the unrestricted flyer doesn't stop lagging the
+game"); the 13:00 profile is the one to commit against.
 
-- `arch.cargo.slotorder` -- the fourth storage rung. It reorders one crate's
-  grid in place and closes the holes the other three leave behind, using
-  `PlayerInventory::sortBag`'s comparator.
-- `dd.cargo.bagmimic` -- the filter manifest could have supplied a better
-  ordering and was rejected, because familiar beats better here.
-- `dd.cargo.beaconsfirst` -- beacons are lifted out of the comparator, or a
-  sorted chest silently changes which filter owns it.
-- `dd.dispatch.sortbackoff` -- one crate per scan, cursor between ticks, and an
-  ordinary per-crate backoff.
-- `fact.item.itemtypeorder` -- the enum, its string vocabulary, and the member
-  that occupies an ordinal and cannot exist.
-- `dead.cargo.sortsettle` -- the settle window, invented and deleted the same
-  session.
-- `ref.tooling.sorttest` -- the permutation is tested against a stand-in
-  container rather than against a restatement of its own intent.
+**THE AMPHIBIOUS CHASSIS ROUTES THROUGH WATER, BOTH WAYS, ANY TASK.**
+`arch.pathing.bridges` (a third store of dive/wade/exit edges, discovered
+from the boundary flood, which also SEEDS THE SURVEY ACROSS EVERY SHORELINE
+since 09x), `arch.pathing.mergedgraph` (one graph for a switchable chassis),
+`arch.pathing.targetside` (a target is resolved as its own side),
+`dd.pathing.routeswims`, `dd.pathing.bothsideswade`. Nine tasks through the
+lava in the verifying log, zero failures.
 
-**THE FIRST TWO SORT BUILDS DID NOT WORK AND LOOKED LIKE THEY DID.** `08q`/`08r`
-lifted from `record.key` -- where a stack STARTED -- instead of where it is now.
-Twelve trips in six minutes, every one abandoned three or four moves in,
-disorder falling a little each trip because the moves before the divergence were
-real. From inside the game it read as a unit walking to a crate and doing
-nothing. Fixed in `08s`; the log had said so from the first run and was not read
-closely enough until the second.
+**THE UNRESTRICTED FLYER IS BUILT AND FAST** (`plan.unit.unrestrictedflyer`,
+option A: one free-mover profile, gravity never on, the waterline is nothing
+to it). Files under `monsters/lofty_petports/unrestricted/`. It surveyed the
+ocean base to radius 4 in under a minute and routes over it.
 
-**AND THE ITEM TYPE ORDER SHIPPED UNVERIFIED FOR ONE BUILD.** `08q` transcribed
-it from a forum post because the header had not been read; the post was missing
-`currency` and carried a `saplingitem` that does not exist. It was flagged
-UNVERIFIED in the file with the exact grep to run, and Lofty ran it. The
-comparator is cosmetic so it could not have lost an item -- but
-`proc.pathing.readsource` says read the source, and a developer quoting a list
-is not the source.
+**THE SURVEY WAS THE LAG, NOT THE FLYER.** The 09-10 profile arc, each step
+from a number (`arch.pathing.tickbudget` has the table): a free mover's
+survey was rationed to 3.5 probes/s by a per-port stride, a two-step cap and
+a turn-stretched timer (10c); its frontier queue and widening list were
+per-instance and ring-bounded, so far cells were never swept and `survey
+COMPLETE` lied (10d, 10e); the graph build was chunk-constant and took 24 s
+on a 2,000-cell store (10f, 10g); one sweep step ran a whole cell's probes
+before yielding (10h); the index -- one property for the whole profile --
+was PARSED EVERY UPDATE THAT TOUCHED IT, 10-20 ms charged to whichever probe
+asked first (10j, `fact.pathing.indexparse`); the route BFS had a fixed
+2,000-node budget that a 2,915-cell graph exhausted a third of the way
+across and reported as "no path" (10i, `dead.pathing.flatbudget`); the
+free-mover waypoint swept every in-reach node (10k); the candidate recompute
+ran to completion (10l/10m, the first build under `dd.pathing.yieldrule`);
+and the string-pull line was swept to any distance (flyapproach 10c).
+Result, 12:53..13:00 on the ocean base with two units: update avg 5.2 ms,
+navTick max 59, 92 of 99 windows under 50 ms.
 
-**SECOND HALF: THE UPCYCLER AS A FOOD SOURCE.** Started from a bug report --
-the pet feeder checkbox neither saved nor applied -- which turned out to be two
-independent faults on either side of the wire.
+**THE RULE THAT NOW GOVERNS EVERY BUILD** is `dd.pathing.yieldrule` (Lofty):
+nothing a unit does may stall a server tick; anything that can take longer
+than its clock budget is a coroutine, and not-ready is a result. Applied
+to the candidate recompute (10l/m), the route search and the waypoint
+sweeps (10n, taskAction 10a), the bridge seeding and pairing (10o/10p); the
+flood and bridge ticks idle when the survey is complete (10q); the PROFILE
+line names its unit (10r). Owed: everything in the PORT (above).
 
-- The pane declared two parameter keys and `readDirect` returned two fields
-  where the write had three, so the tick was on disk the whole time and the
-  pane never asked for it. `proc.tooling.halfedit` in its usual shape.
-- Nothing read the flag at all. `storedFeeder`'s only caller was an unused
-  message handler, and `fuelFetchWork` built its feeder list from beacon items
-  alone. `arch.fuel.machinefeed` is the wiring.
-- `dd.upcycler.feederdefault` -- the box now defaults ON, reversing the
-  original call.
-- `arch.upcycler.plaintreat` -- a blank treat in the input slot is flavored one
-  at a time while the charge holds, tag-driven so a modded blank works too.
-- `todo.tooling.globalread` -- and that build exposed a pre-existing nil global
-  that had made the pane's "converting" status unreachable since it was
-  written.
+**THE CITY-SCALE PLAN** is `plan.pathing.cityscale`: chunk-keyed index AND
+edges (one property per 32-tile chunk per profile, one migration, one
+generation -- Lofty), hierarchical routing on the coarse levels that were
+built for it and never wired to it (the drift is named there), a chunk
+loader in place of the whole-profile graph, and per-chunk frontier and
+candidate structures. Everything else -- cell size, probe, executor, walls,
+bridges -- rides on top unchanged.
 
-**WHAT IS BUILT BUT NOT WRITTEN UP FOR PLAYERS.** `SORTING_FOR_MODDERS.md` says
-nothing about `"perishable"` -- `todo.filter.perishabledocs`, unchanged -- and
-nothing about `petports_plain_treat`, which is the second manifest-adjacent tag
-a third party is meant to use and cannot discover. Same entry covers both.
+**CLOSED THIS SESSION:** `todo.pathing.amphibiouscrash` (unreproducible),
+`todo.tooling.stampclock` (today's stamps are today's date; the letter
+restarted). **OPENED:** `todo.pathing.indexshrink` (guarded by 10a/10b,
+cause not yet named -- no `INDEX SHRANK` line in any log since),
+`todo.pathing.moduleprofile`, `todo.pathing.surfacerefusal`,
+`todo.pathing.openliquid`, `todo.pathing.waterlinepark`.
 
-**WHAT IS KNOWN AND UNRESOLVED:**
-- `DEFRAG_DEBUG` is `true` and joins the release-preflight flag sweep.
-  `DEFRAG_PLAN_CAP` at 16 is NOT a debug value -- it caps work --
-  `todo.cargo.defragcap`.
-- The sort ring takes about 25 minutes to come round on a 300-crate base. The
-  accepted cost of one crate per scan, UNMEASURED at that size --
-  `todo.cargo.sortring`.
-- Sorting fills the tidy score much faster than type-eliminations do. Not
-  clamped, because the right clamp depends on what a rank is worth --
-  `todo.dispatch.sortscore`.
-- `petports_flavorItem` is assumed never to resolve a real flavor back to the
-  blank treat's own name. If it can, `flavorTreat` keeps the blip and logs
-  rather than burning one on a no-op -- but this was NOT verified.
-- The pane's "converting" status has never displayed until this build. That it
-  now does is the observable half of the nil-global fix and is UNCONFIRMED IN
-  GAME.
-- A defrag destination flipped between two crates on consecutive passes with
-  both declaring 220 and holding none of the item. NOT DIAGNOSED --
-  `todo.cargo.roomflip`.
-- The defrag module has NO ART. `petports_module_defrag.png` does not exist and
-  the item renders as a placeholder box.
-- `workUpdate` peaked at 197 ms this session, of which `g.sort` was 188 before
-  the cursor landed. Re-measure after `08t` -- what remains is the number
-  `todo.dispatch.scancursor` has to answer to.
-- The 30 s world stall is unchanged and still `WorldStorage::sync()`. The 45000
-  patch test still has no result.
-- Units still stutter-step between tasks (`todo.dispatch.turnaround`).
-
-**WHAT WORKS FROM LAST SESSION, UNTOUCHED:** the whole defragmentation module --
-`arch.cargo.spread`, `arch.filter.breadth`, `arch.cargo.defrag`,
-`arch.cargo.fridge`, `dd.cargo.migration`, `dd.cargo.defragorder`,
-`dd.filter.perishable` -- all coarse-nav work, and the bubbles including the
-instance icon fix.
-
-**LINE ENDINGS.** `.gitattributes` specifies LF for everything, and
-`petports_petport.lua` and this document are both CRLF in the working copy --
-stale checkouts rather than a rule. `todo.tooling.crlfstale`.
+**AMBIENT, UNCHANGED:** `PETPORTS_NAV_VERBOSE = true` and the four other debug
+flags, all on the release-preflight sweep. `.gitattributes` says LF and
+`petports_petport.lua` and this document are still CRLF
+(`todo.tooling.crlfstale`). The debug overlay costs 1.4-1.9 s of every 5 s
+when on (`draw` in the profile) and is the first thing to turn off when the
+game feels slow.
 
 ## ARCHITECTURE
+
+### A bridge is an edge between the two sides of a switchable chassis, in a third store
+`arch.pathing.bridges` -- see also `arch.pathing.mergedgraph`, `arch.pathing.boundarycells`, `dd.pathing.boundarystore`, `dd.pathing.probeprofile`, `arch.locomotion.dive`, `arch.locomotion.exitdefer`, `fact.pathing.exitprobestart`, `fact.pathing.wadeunreadable`
+
+**BUILT AND VERIFIED 2026-09-09 (coarsenav 09t..09w).** The otter surveys
+two stores -- `|f0|` walker cells, `|f1|` swimmer cells -- and nothing joined
+them. A bridge is a land cell L and a swim cell S with a way across the
+boundary between them, learned by the unit and stored under a THIRD profile,
+`|fb|` (the walker profile with its side renamed), through the ordinary edge
+store: index, flush, generation, contradiction log, wipe and stats come for
+free. Three kinds, two directions:
+
+    dive   L>S   L's walker anchor is a BOARD above a HOLE -- a boundary
+                 column whose `fit` says the body fits in the air over the
+                 wet tile -- with a clear sight line board -> hole and a
+                 body-clear drop hole -> S's anchor. Scored as the fish dive
+                 scores its pairs; best three per boundary cell. The entry
+                 carries { board, hole }, which is exactly what
+                 petports_diveLaunch takes.
+    wade   L>S   L and S anchors within NAV_BRIDGE_WADE_REACH (3) with the
+                 body fitting all the way between and L no lower than S: a
+                 shore walked down until the body is under. No launch.
+    exit   S>L   a walker A* from the FLOAT point -- feet on the top wet
+                 row, where `exiting` holds a body -- to L's anchor, run with
+                 gravityEnabled true and liquidBuoyancy 1.0 overlaid
+                 (dd.pathing.probeprofile), 300 explores a tick in one slot.
+
+**DISCOVERY RIDES ON THE BOUNDARY FLOOD.** `navBoundaryNote` queues every
+boundary cell whose liquids the chassis may enter; `navBridgeTick` (every
+tick, ahead of the survey-turn gate) steps the exit probe, else starts the
+next queued exit, else examines one cell: the anchored cells of BOTH sides
+within NAV_BRIDGE_RADIUS (4), resolved as their side through navWithSide,
+paired as above. Only cells a side's index already knows: an anchor nothing
+has swept is in no graph and a bridge to it would dangle.
+
+**THE FLOOD BEATS THE SURVEY TO A SHORELINE BY MINUTES.** MEASURED 12:47:54:
+250 boundary cells examined within twenty seconds of spawn, every one with
+0 land and 0 swim anchors, then marked seen for 300 s. A cell with nothing
+to pair comes back at 30 s, doubling to the TTL, ten times (09u/09w): the
+open ocean is most of the shoreline's cells and has no anchors on either
+side, ever -- 2,039 of 2,481 examinations in five minutes at a flat 30 s.
+
+**MEASURED ON THE ISLET (13:51 verifying log and the 09u discovery log):**
+49 wades, 18 dives (8 aligned), 67 exits, all 67 REACHABLE in one or two
+ticks. `bridge` 20-140 ms per 5 s, worst tick 27 ms, one unit. The overlay
+draws them: green board -> hole and shore -> water, orange float -> land,
+red for a refused exit, magenta for the probe in flight, grey crosses on
+cells waiting to be paired.
+
+**THE FRONTIER DOES NOT CROSS WATER ON ITS OWN, 2026-09-09x (Lofty).** The
+candidate walk grows from the neighbour lists of swept cells, so a walker's
+survey cannot reach a shore it has no walker edge to and a swimmer's stops
+where its edges stop; the far side of the lava tunnel was mapped only when
+a unit happened to walk round the islet. A boundary cell is where the two
+frontiers meet and the flood finds every one within seconds of spawn, so
+each one SEEDS THE SURVEY with the anchored cells around it on every side
+the chassis has (`navBridgeSeedSides`), for every chassis that may enter
+the liquid, not only a switchable one. The pairing stays switchable-only.
+
+**WHAT IT DOES NOT DO.** Learn a bridge for a chassis that cannot switch; a
+flyer that can enter water is `plan.unit.unrestrictedflyer` and gets these
+unchanged. Budget itself against thirty units: the seeding pass for one
+boundary cell is up to 81 cells x 2 sides of anchor resolves in one update
+(`bridge` max 33 ms) and is owed to `dd.pathing.yieldrule`.
+
+### Every survey cost, budgeted, and the numbers that set each budget
+`arch.pathing.tickbudget` -- see also `dd.pathing.yieldrule`, `arch.pathing.frontierqueue`, `arch.pathing.coarsenav`, `fact.pathing.indexparse`, `proc.tooling.profilefirst`
+
+**BUILT 2026-09-10 (coarsenav 10c..10m, flyapproach 10b/10c), VERIFIED
+12:53..13:00: update avg 5.2 ms, navTick max 59, 92 of 99 windows under
+50 ms, two units on the ocean base.** One entry for the whole arc because
+every step was the same shape -- a number, a cause, a constant -- and the
+constants only make sense together:
+
+    NAV_TICK_BUDGET_MS        4.0   the clock every survey step checks
+    NAV_STEPS_PER_TICK_FREE   8     free mover; walkers keep 2 (10c)
+    stride                    by UNITS with a port, not by ports (10c)
+    top-up timer              counts every update, not only turns (10c)
+    NAV_FRONTIER_REBUILD      10 s  empty queue rebuilt from the graph (10d)
+    widening list             from the index, not the ring walk (10e)
+    NAV_BUILD_BUDGET_MS       3.0   graph build steps on the clock (10f)
+    NAV_GRAPH_MIN_AGE         30 s  a built graph is not rebuilt sooner (10f)
+    edge placement            parse-free, block keys memoised (10g)
+    workers per resume        1 for a free mover; 4 for a walker (10h)
+    NAV_CANDIDATE_CACHE       2 s   candidates served from the last list (10h)
+    NAV_INDEX_FLUSH_INTERVAL  30 s  the index property written this often (10h)
+    NAV_INDEX_READ_INTERVAL   10 s  ...and parsed this often (10j)
+    PETPORTS_NAV_SEARCH_BUDGET 20000 route BFS; a budget-out is named (10i)
+    waypoint                  bisected, log2(n) sweeps (10k)
+    navKeyCoords              key parsing memoised (10k)
+    candidate recompute       a coroutine, 32-entry head (10l/10m)
+    STRING_PULL_RANGE         40    no sweep past this (flyapproach 10c)
+    both-media medium sample  one liquidAt per step (flyapproach 10b)
+
+**THE ORDER MATTERED.** Each fix exposed the next: the stride and step cap
+hid the whole-cell resume; the whole-cell resume hid the index parse; the
+index parse hid the candidate walk; the candidate walk hid the waypoint
+sweep. None of them was visible while the one above it was in place, which
+is why `proc.tooling.profilefirst` says one change per profile.
+
+**WHAT IS STILL RUN-TO-COMPLETION** and owed to `dd.pathing.yieldrule`: the
+route BFS (`coarseLeg` max 65), the waypoint's sweeps (`waypoint` max 45),
+one boundary cell's seeding pass (`bridge` max 33), and a graph build step
+that overruns when one shard read does (`graphFor` max 31). All under the
+tick; none under the clock.
+
+### The survey frontier is a queue, oldest first, and nothing widens while it has anything in it
+`arch.pathing.frontierqueue` -- see also `arch.pathing.coarsenav`, `arch.pathing.bridges`, `dead.pathing.localfirst`, `fact.pathing.onewaytrue`
+
+**BUILT 2026-09-09 (coarsenav 09z), UNTESTED, ON LOFTY'S RULE: "no r4
+should ever run while there is frontier to be explored; expanding the
+frontier to the edges is important."** MEASURED 14:41..15:00: the dry
+pocket under the deck was swept at radius 2 once and the cell that would
+have joined it to the rest was found as a target and never swept, because
+candidates were the SIXTY NEAREST unswept cells and the coast by the port
+supplied new ones faster than they were swept. Nearest-first starves the
+far frontier forever inside a coverage rect that is mostly shoreline.
+
+**THE SHAPE.** Every unswept cell this unit learns of -- a true sweep target
+(`petports_navLearn`), a wall or boundary seed, a ring-walk find -- goes
+into one queue per side (`petportsNavFrontier[side]`) stamped with when it
+was first seen. `petports_navCandidates` purges the queue of what is swept
+or out of coverage, puts the unit's own unswept cell at its head, and if
+anything remains THAT is the candidate list, oldest first. Only an empty
+queue falls through to the ring walk's narrowest-first-then-nearest
+widening. Breadth-first over the graph: the frontier reaches the coverage
+edge in discovery order wherever the unit is. Capped at NAV_FRONTIER_CAP
+(2000) keys, oldest dropped. The `NAV surveying` line now ends with
+`frontier, queue N, waited Ns` or `widening, queue empty`.
+
+**THREE MORE BUILDS ON THE SAME RULE, 2026-09-10.** 10d: the queue is on
+the instance and a respawn starts it empty, and the ring walk that refills
+it is bounded, so an empty queue is REBUILT FROM THE GRAPH -- every edge
+target not in the index is frontier -- at most every 10 s. 10e: `survey
+COMPLETE` had been announced with r2 cells still on the map because the
+ring walk was the only source of widening candidates; every indexed cell
+below the full radius, in coverage, is now offered wherever the unit is.
+10l/10m: the recompute is a coroutine on the clock, a top-up that asks early
+gets nothing (not "complete"), and the queue's 32 oldest are selected by
+bounded insertion rather than a full sort. MEASURED: both ocean-base
+surveys complete to radius 4 in under a minute.
+
+### One graph for a switchable chassis: both sides, the bridges, and a side per node
+`arch.pathing.mergedgraph` -- see also `arch.pathing.bridges`, `arch.pathing.coarsenav`, `dd.pathing.bothsideswade`, `arch.pathing.targetside`
+
+**BUILT AND VERIFIED 2026-09-09 (coarsenav 09v, taskAction 09a).** Nodes
+keep their plain cell keys -- both strides are 1, so a key names the same
+2x2 window on either side and the thirty places that parse a key go on
+working. The side rides beside the adjacency: `graph.side[key]` is 0
+(walker), 1 (swimmer) or 2 (in both indexes), and `graph.bridge[from>to]` is
+the stored bridge entry. `navGraphFor(bridgeProfile)` answers with it, so
+`petports_navPath`, `navReaches`, `navWhyNoRoute` and `navWaypoint` get it
+by being handed the bridge profile, which is what a switchable chassis's
+`tryCoarseLeg` passes.
+
+**ITS OWN MEMO.** The side-graph memo is one slot and the survey already
+alternates sides through it; a third profile in that slot would rebuild on
+every routing call. Built chunked from three stores like the side graph is,
+rebuilt when the store version moves and no more than once per
+NAV_MERGED_MIN_AGE (5 s), served stale meanwhile. Logs `NAV merged graph: N
+cell(s), N on both sides, N bridge(s)` when the bridge count changes.
+
+**THE WAYPOINT KNOWS SIDES.** Every anchor on a route is resolved AS its
+node's side; a leg ends before the first node whose side differs from the
+start's; when the very next hop crosses, the leg IS the bridge and
+`petportsNavLastRoute.bridge` carries the kind and the stored points. A dive
+bridge installs `petportsDivePlan { route = true }` and the fish's
+board-walk-and-launch executor in `petports_swimModeTick` runs it unchanged;
+an exit is `exiting` and the walker pather, as the fish return already was;
+a wade is walked in with controlMove (`fact.pathing.wadeunreadable`). The
+leg's side is what the mode machinery reads: `taskWantsSwimming` is true
+when the active leg ends on the swim side, `petports_currentTaskDestination`
+returns the live or last leg, both sticky until the task ends so the tick
+between legs does not flip a submerged unit to `exiting`.
+
+**ENDPOINTS ARE FOUND ON THEIR OWN SIDE.** `petports_navNearestCellSide`
+searches the merged graph's blocks filtered by side, with the anchors
+resolved as that side. MEASURED (soak, 2026-09-05): 4,807 `no leg` lines
+were a land otter looking for a wet target's cell in the land graph.
+
+**MEASURED.** A 122-tile crossing -- land legs, dive, swim legs, exit, land
+legs -- in 23 s with four pather rebuilds, one per mode change, which is the
+cost `dd.locomotion.otterswitch` accepted. Nine consecutive tasks through
+the lava with no failures in the verifying log.
+
+### A target is resolved as its own side, whatever mode the body is in
+`arch.pathing.targetside` -- see also `arch.pathing.mergedgraph`, `arch.locomotion.swimmode`, `arch.pathing.oneanchor`
+
+**BUILT 2026-09-09 (taskAction 09b, then 09c), AND IT TOOK TWO BUILDS
+BECAUSE THE FIRST ONE FIXED THE SYMPTOM.** MEASURED 13:13:21 and 13:17:38:
+the otter dived, chained its swim legs, and the task failed two seconds
+later -- `no standable position near animal target` -- because
+`standableNear` in aquatic mode took the free-mover branch and
+`petports_targetAllowed` refused the dry target outright as "cannot leave the
+water". 09b chose the branch by the target's medium. MEASURED 13:33:03: the
+walker branch then rejected the resolved spot, because `petports_mediumAllows`
+inside it read the LIVE mode -- free mover, spot in air, the same refusal one
+layer down.
+
+**CHOOSING A BRANCH IS NOT RUNNING AS A SIDE.** 09c makes `standableNear` a
+wrapper that sets the survey's side override (`self.petportsNavSurveyFree`,
+which `petports_freeMover()` reads first) to the target's medium, runs the
+old body as `standableNearInner`, and restores on every path out including
+error. Every mode read inside the search -- avoidLiquid, mediumAllows, the
+branch itself -- follows. One override, already existing, rather than a
+fourth spelling of "which side am I asking for" (`arch.pathing.oneanchor`).
 
 ### Coarse navigation — a surveyed cell graph that walkers and flyers route over
 `arch.pathing.coarsenav` -- see also `todo.dispatch.reachbudget`, `fact.pathing.updaterate`, `fact.pathing.maxdistance`, `proc.tooling.profilefirst`
@@ -176,6 +368,15 @@ stale checkouts rather than a rule. `todo.tooling.crlfstale`.
 The full shape, every constant, every measured fact and the open list live in
 `workbench/COARSENAV_SESSION_HANDOFF.md`, which is rewritten at feature
 boundaries; this entry is the part that will still be true in a month.
+
+**THE COARSE LEVELS ARE BUILT AND NOT ROUTED ON, 2026-09-10 (Lofty: "that
+was the point").** `NAV_LEVELS` builds block adjacency at 4, 8, 16 and 32
+tiles on every graph rebuild; the only reader is `petports_navReaches`,
+which runs the ladder as a REJECTION filter before the walker survey spends
+an A* on a pair. `petports_navPath` has been a flat BFS over `fine` since
+it was written. There is no `dd` recording that narrowing, so it was drift,
+and the fixed search budget (`dead.pathing.flatbudget`) was a patch over it.
+The fix is `plan.pathing.cityscale` item 1.
 
 **THE PROBLEM IT SOLVES.** The engine's A* is starved on long routes (see
 `todo.dispatch.reachbudget`): the unit script updates 12 times a second
@@ -4589,7 +4790,9 @@ the chassis value, so each drove the unit into the other's territory, y bouncing
 that; it only sets the period. `mixed` carries no information about DIRECTION,
 and the current mode is the only record of it.
 
-**ENTRY IS GATED ON THE TASK, EXIT IS NOT.** Only a fish task turns a walker into
+**ENTRY IS GATED ON THE TASK, EXIT IS NOT** -- SUPERSEDED IN PART 2026-09-09 BY
+`dd.pathing.routeswims`: a coarse leg that ends in the water is also a reason.
+As written: only a fish task turns a walker into
 a swimmer -- every other submerged behaviour was already correct with gravity on,
 and a harvest route crossing a puddle used to throw away a working plan and spend
 two seconds rebuilding. But once a unit IS a swimmer it must get out regardless
@@ -6013,6 +6216,75 @@ cause is `inputNoCharge`, severity `waiting`, and it names no item: the blanks
 are fine exactly where they are.
 
 ## DESIGN DECISIONS
+
+### Nothing a unit does may stall a server tick: anything longer than its budget yields
+`dd.pathing.yieldrule` -- see also `arch.pathing.tickbudget`, `arch.pathing.frontierqueue`, `proc.tooling.profilefirst`, `plan.pathing.cityscale`
+
+**DECIDED 2026-09-10 (Lofty): "nothing the pet does should ever stutter an
+entire server tick. what we should be moving toward build-by-build is
+wrapping everything so that it can yield if it takes too long. the unit
+taking 2 or 3 seconds to process a route is fine -- the unit stalling the
+entire game every half second for 10 seconds while it processes a route is
+unacceptable."** The engine gives a script no time slice: it runs
+synchronously on the world thread and a 100 ms callback is 100 ms taken
+from every entity in that tick. The only cap is the Lua instruction limit,
+a count, not a clock. So the budget is ours: NAV_TICK_BUDGET_MS, checked
+between steps, and every operation that can exceed it is a coroutine
+resumed once per update with "not ready" as a legitimate result the caller
+handles -- the way tryCoarseLeg already handles a nearest-cell "more".
+
+**WHAT CANNOT YIELD** is a single engine call, and those are a problem only
+when their payload is large -- a `getProperty` of a 30-entry shard is
+microseconds, of a 3,000-entry index is 15 ms. The fix for those is the
+key layout, not the call: `plan.pathing.cityscale` puts index and edges
+per chunk so no single call can be big.
+
+**APPLIED:** the survey sweeps and walker probes (always were), the graph
+build (state machine on a clock, 10f), the candidate recompute (10l).
+**OWED:** the route BFS, the waypoint sweeps, the bridge seeding pass.
+
+### A route that enters the water is a reason to swim, for any task
+`dd.pathing.routeswims` -- see also `arch.locomotion.swimmode`, `arch.pathing.mergedgraph`, `arch.pathing.bridges`
+
+**DECIDED AND BUILT 2026-09-09 (Lofty: "if our otter wants to enter and
+exit the water along a route like 8 times to go deliver something, that's
+correct").** `arch.locomotion.swimmode` gated water-mode ENTRY on a fish
+task, because every other submerged behaviour was correct with gravity on
+and a harvest route crossing a puddle used to throw away a working plan.
+That gate stands for a unit that gets wet by accident. A unit whose active
+coarse leg ends on the swim side got wet on purpose, so `taskWantsSwimming`
+is also true then, and the dive-plan forget, the wade, and the flip to
+aquatic all follow from it. SUPERSEDES the task-only reading of "entry is
+gated on the task"; the wading floor (`wadeableBottom`) is untouched for the
+accidental case.
+
+### A cell anchored on both sides is a wade in itself
+`dd.pathing.bothsideswade` -- see also `arch.pathing.mergedgraph`, `arch.pathing.bridges`
+
+**DECIDED 2026-09-09.** A cell in both the walker and the swimmer index has
+a standing point and a window-centre swim anchor at most two tiles apart,
+so the body is at the waterline there. The merged adjacency is the union and
+a route may change side on such a cell without a bridge. Seven of 444 cells
+on the islet; the count is in the `NAV merged graph` line so a shore that
+produces many can be looked at.
+
+**REJECTED:** namespacing the two sides' node keys. Thirty parse sites read
+a cell key as two integers, and the on-disk stores would have needed a wipe.
+The side map beside the graph costs one table and touches none of them.
+
+### The cache does not die; stale is rescanned in order and contradicted first
+`dd.pathing.cacherescan` -- see also `todo.pathing.falsettl`, `todo.pathing.terrainchange`, `arch.pathing.coarsenav`, `arch.pathing.executorguards`
+
+**DECIDED 2026-09-09, NOT BUILT (Lofty).** Today a failed path poisons an
+edge for the sweep TTL -- six hours, nine after a rebuild -- when what it
+should do is mark itself "someone please rescan me when convenient". The
+rule: the cache invalidates quickly and does not die. Entries are rescanned
+in order of oldest last-scanned first; a contradicted entry jumps the queue.
+Nothing is deleted on a failure and nothing is trusted forever. This
+subsumes `todo.pathing.falsettl` (false and true would no longer share a
+lifetime; false is simply older sooner) and gives `todo.pathing.terrainchange`
+its mechanism (a brush, a contradiction, a placed block are all "rescan
+this first"). Build after the unrestricted flyer.
 
 ### The port band splits by what the player SEES, not by what the code owns
 `dd.pane.bandsplit`
@@ -7813,7 +8085,9 @@ lookout.
 ### The liquid boundary is one shared store, never six copies of the ocean
 `dd.pathing.boundarystore` -- see also `todo.pathing.boundarycells`, `todo.pathing.poisonocean`, `todo.pathing.amphibiousbridge`, `arch.pathing.mediummixed`, `arch.locomotion.dive`
 
-**DECIDED 2026-09-06, NOT BUILT.** Where the water is does not depend on who
+**DECIDED 2026-09-06; BUILT 2026-09-07 AS `arch.pathing.boundarycells` AND
+THE BRIDGE INTERPRETATION 2026-09-09 AS `arch.pathing.bridges`** (the entry
+said "not built" until then). Where the water is does not depend on who
 is asking; what it MEANS does. Boundary cells -- the surface row, which side
 is wet, the liquid type, the openings a body fits through -- live in one
 store family keyed on liquid type and body width (`petports_navbounds:
@@ -7866,7 +8140,9 @@ body box, not a collision set entry.
 ### The probe carries the profile it probes; surrogate probing entities are rejected
 `dd.pathing.probeprofile` -- see also `fact.pathing.pathstartparams`, `arch.pathing.coarsenav`, `arch.locomotion.swimmode`, `todo.pathing.amphibiousbridge`
 
-**DECIDED 2026-09-06, NOT BUILT.** A walker probe from a swimming otter, or
+**DECIDED 2026-09-06; BUILT 2026-09-07 (coarsenav 07u, gravity overlaid on
+the walker probe) AND 2026-09-09 (the exit probe overlays buoyancy too,
+`fact.pathing.exitprobestart`).** The entry said "not built" until 09-09. A walker probe from a swimming otter, or
 an exit probe with `exiting`'s physics, is run by calling
 `world.platformerPathStart` directly with a copy of `baseParameters()` (the
 wrapper's `jumpModifier` adjustment applied) overlaid by the probed
@@ -7894,7 +8170,9 @@ connectivity between water and not-water through coarse cells -- boundary
 cells, per-profile interpretation, the two-sided survey, the one predicate
 -- has built, as a side effect, everything that was blocking a chassis that
 flies AND swims. Recorded as intent; the amphibious bridge is the first
-consumer and the universal flyer the second.
+consumer and the universal flyer the second. **2026-09-09: the bridge is
+built (`arch.pathing.bridges`) and the flyer is planned as
+`plan.unit.unrestrictedflyer`.**
 
 ### The module gates the housekeeping and `sorting` is retired
 `dd.module.defraggates` -- see also `dd.port.participationgroups`, `arch.cargo.defrag`, `arch.port.petsettings`
@@ -8141,6 +8419,80 @@ nobody touched.
 
 ## DESIGN INTENT -- PLANNED
 
+### City scale: chunk-keyed store, hierarchical routing, a chunk loader
+`plan.pathing.cityscale` -- see also `arch.pathing.coarsenav`, `dd.pathing.yieldrule`, `dead.pathing.flatbudget`, `fact.pathing.indexparse`, `todo.pathing.indexshrink`, `arch.pathing.tickbudget`
+
+**PLANNED 2026-09-10 (Lofty: "players cover entire cities with petport
+coverage. our pathing needs to be able to handle builds measuring in
+thousands of tiles on both axes").** The current design fails at that
+scale in a known order, and this is that order:
+
+1. **Route on the coarse levels.** `petports_navPath` runs the same ladder
+   `navReaches` runs, top-down, keeps the block path at the first level
+   that connects, and runs the fine BFS only inside the corridor of blocks
+   on that path. The optimism argument at NAV_LEVELS makes the corridor
+   sound: a fine path induces a block path, so nothing a widened corridor
+   would find is lost. Work scales with route length, not graph size, and
+   PETPORTS_NAV_SEARCH_BUDGET becomes a corridor size. Mostly wiring; the
+   ladder exists.
+2. **Chunk-keyed index AND edges** (Lofty: "per chunk rather than per
+   tile"). One property per 32x32-tile chunk per profile for the index
+   (today one property for the whole profile: `fact.pathing.indexparse`)
+   and one for the edges of its 256 cells (today one property per CELL:
+   2,078 reads to load a graph). Every read and write becomes a few
+   thousand entries at most, sub-tick; thirty units contend only where
+   their coverage overlaps; the `_n` guard moves down to the chunk and gets
+   stronger. A store format change, so ONE migration with one generation
+   bump, index and edges together.
+3. **A chunk loader in place of the whole-profile graph.** Each instance
+   parses its own copy because Lua contexts share nothing but world
+   properties (`arch.pathing.coarsenav`, "per pet"); at 100k cells x 13
+   edges that is over a million table entries per unit per respawn. Load
+   the chunks along the block route from item 1, evict by age, never hold
+   the profile.
+4. **Per-chunk frontier, candidates and widening.** Today's rebuilds walk
+   every cell every ten seconds (O(cells)); keyed by chunk they walk the
+   chunks near the frontier.
+5. **Survey time is not the problem.** 10c..10e made a 3,000-cell survey a
+   one-minute job for one unit; thirty units on a shared store are fine
+   provided items 2 and 4 keep them from rewriting one property.
+
+What does not change: the cell size, the probe, the executor, the walls,
+the bridges, the mode machinery. This is a routing, loading and indexing
+layer under all of that. **ORDER, REVISED 2026-09-10 EVENING: 2 FIRST**
+(`todo.pathing.storesize` -- the store's bytes are the 30 s freeze, which
+is the stall the player feels most), then 1, then 3, then 4.
+
+### The unrestricted flyer: a switchable chassis that can also fly
+`plan.unit.unrestrictedflyer` -- see also `arch.pathing.bridges`, `arch.pathing.mergedgraph`, `dd.locomotion.otterswitch`, `arch.locomotion.swimmode`, `dd.locomotion.universalflyer`
+
+**BUILT 2026-09-09 EVENING (option A, Lofty: "we don't need it to dive, it
+just needs to go"): one free-mover profile, gravity never on, `petports_canSwim
+true`, contract 09c lets `petports_mediumAllows` accept the waterline for a
+chassis with both media -- the only refusal of "mixed" in the tree -- and
+the aquatic's `liquidForce/liquidFriction/liquidImpedance` copied in after
+the first crossing ran at half speed (MEASURED 14:19:41, 4.5 tiles/s
+against flySpeed 9: the engine's default impedance). Files under
+`monsters/lofty_petports/unrestricted/` and `items/lofty_petports/units/`.
+Art: the flyer's stripe and icon desaturated to a white ramp. VERIFIED
+2026-09-10 on the ocean base: surveys to radius 4 in under a minute,
+routes over the graph, catches fish by string-pull. Two things it needed
+that the flyer never did: `flyapproach 10a` latches a moving target for
+the direct pather (a fish moved every tick and every move restarted a
+1.8 s search: "blinking a path to the fish then immediately discarding
+it"), and `flyapproach 10b` samples one liquid tile per sweep step for a
+both-media body (the full medium sample was 20 ms a probe on water). AS
+PLANNED:**
+The flyer's files copied, `gravitySwitchable` and `canSwim` on, the fullbright
+stripe and the placeholder item icon recoloured white. Named "unrestricted
+flyer" because removing the medium constraint is what makes it special;
+"universal free mover" and "multimedia flyer" were considered and rejected
+on sound. Everything bridge-shaped is free: both stores, the bridges, the
+merged graph, the target-side resolve. The open question is the EXIT -- a
+flyer lifts out and does not float-and-jump, so `exiting` as gravity-on may
+be wrong for it and the exit probe may be a body sweep rather than a walker
+A*. Not designed yet.
+
 ### The drone is always running
 `plan.art.animstates`
 
@@ -8381,6 +8733,96 @@ missing.
 ## DESIGN INTENT -- NICE TO HAVE
 
 ## ENGINE FACTS
+
+### A free mover's true sweep verdict was learned one way, and every "no path" was a leaf
+`fact.pathing.onewaytrue` -- see also `arch.pathing.frontierqueue`, `arch.pathing.executorguards`, `arch.pathing.coarsenav`
+
+**MEASURED 2026-09-09 15:10..15:15, FIXED IN COARSENAV 09z, UNTESTED.**
+`petports_navProbeStep` learned a REACHABLE body sweep as `from -> to` only
+(coarsenav 2894); 09g had made a free mover's CONTRADICTION two-way and
+left the true verdict alone. The BFS is directed, so a cell reached by
+another cell's sweep had edges in and none out until its own sweep, which
+the starved frontier never gave it. Every "both known, no path" in the log
+read as a directed component: `7 cell(s) reachable from 5853,1126 of 979`
+(the pocket, pointing at itself), `43 from 5853,1188` seven tiles from
+`634 from 5848,1181`, thirty such lines with sizes 2..160 down the seabed
+where the unit had flown. Routes HOME failed more than routes out because
+home is planned from wherever the unit was last dropped off -- a leaf. The
+otter's `447 of 480 reachable` from the water was the same. 09z learns the
+reciprocal on a true free-mover sweep; walkers stay directional (a drop is
+not a climb).
+
+### The index property is parsed on every read, and a read every update is the lag
+`fact.pathing.indexparse` -- see also `arch.pathing.tickbudget`, `plan.pathing.cityscale`, `todo.pathing.indexshrink`
+
+**MEASURED 2026-09-10 12:04..12:10, FIXED IN COARSENAV 10j.** `world.getProperty`
+of the index -- one JSON table for the whole profile, 3,000 entries on the
+ocean base -- costs 10-20 ms per call in parse alone, and `navIndexRead`
+was memoised per UPDATE, so every update that touched the index (every true
+probe, since 09z's frontier check) paid it and charged it to whoever asked
+first: `probeStep max 101` on a 0.6 ms sweep, `candidates max 171`, tick
+max 213 with three units. 10j memoises for ten seconds and merges this
+unit's own queued entries into the memo; `probeStep` fell to 0.8 ms and
+update avg from 24.7 to 8.9 ms in the next log. The call cannot yield; the
+payload is the problem; `plan.pathing.cityscale` item 2 makes it small.
+
+### The engine's pathfinder cannot plan from a body straddling the lava line
+`fact.pathing.waterlinestart` -- see also `todo.pathing.waterlinepark`, `arch.pathing.mergedgraph`
+
+**MEASURED 2026-09-10 02:07:46 and 02:16:20..29.** The unrestricted flyer
+parked at [5838,1150] -- the crate at the lava's edge, body half in -- and
+every direct search from there to a target 45 tiles west along an open
+deck ran to `SEARCH_LIMIT 6 with no path`. The same target from [5790,1152]
+planned in 80 ms. With the coarse graph present the leg from 5838,1150
+exists and the engine is not asked; without it (a fresh instance before
+its build, 10f) the unit held and the task timed out.
+
+### A free mover's probe on open water was twenty milliseconds, and it was the liquid sample
+`fact.pathing.probeliquid` -- see also `arch.pathing.tickbudget`, `plan.unit.unrestrictedflyer`
+
+**MEASURED 2026-09-10 11:40 on the ocean base, FIXED IN FLYAPPROACH 10b.**
+`probeStep n=55 ms=1244` -- 20 ms a probe, 79 max -- against 2 ms on the
+lava islet, with the world counters reading `liquidAt 2562/s` against
+`rectTileCollision 22/s`. petports_mediumAt sampled the body's wall box and
+its column, six to eight liquidAt calls every 0.8 tiles. For a chassis
+allowed in air AND water the only answer that sample can give is
+"forbidden", which one liquidAt at the body's centre gives; the aquatic
+and flyer chassis keep the full sample because for them "mixed" and "air"
+are answers. 0.6 ms a probe after.
+
+### PathMover:move returns "pathfinding" while searching and false only when it has failed
+`fact.pathing.pathfindingresult` -- see also `arch.pathing.nosteer`, `fact.pathing.onewaytrue`
+
+**MEASURED 2026-09-09 15:11:19..15:12:22, FIXED IN FLYAPPROACH 09a,
+UNTESTED.** `FLY path ended with pathfinding ... replanning next tick`, then
+`STEERING DIRECTLY ... blocked by terrain but legal`, then `PLAN accepted
+... 68 edge(s)` 80 ms later, every tick of a fish chase: the fish moved, the
+search restarted, and the fallback branch -- written for `false`, the
+engine giving up -- fired on "pathfinding" too. One `controlApproachVelocity`
+straight at the fish through the tunnel ceiling per tick. flyapproach 09a
+holds (no control, air friction bleeds speed) while the result is
+"pathfinding", rate-limited `UNIT HOLDING` line, and steers blind only on
+false as before.
+
+### platformerPathStart plans from a start point in liquid with buoyancy overlaid
+`fact.pathing.exitprobestart` -- see also `arch.pathing.bridges`, `dd.pathing.probeprofile`, `fact.pathing.pathstartparams`
+
+**MEASURED 2026-09-09 (09u log): 67 of 67 exit probes REACHABLE in one or
+two ticks**, each started from a point with the body's feet on the top wet
+row and `gravityEnabled = true, liquidBuoyancy = 1.0` overlaid on a copy of
+`baseParameters()`. No `platformerPathStart refused`. The engine's search
+does not require a grounded start under gravity; a floating one plans.
+
+### A walker asked to path into the water beside it gets a plan it cannot read
+`fact.pathing.wadeunreadable` -- see also `arch.pathing.bridges`, `arch.pathing.mergedgraph`
+
+**MEASURED 2026-09-09 13:13:23..13:15:11:** a walker on the shore at
+[5841.64,1150.8] with a target at [5840,1148.8] -- 1.6 tiles away, in the
+water -- got `path found after 2.17 s: unreadable edge(s), first action nil`
+from the engine every two seconds and stood still for two minutes, the
+progress watchdog replanning on the same answer. The engine finds a path; the
+mover has no action for its first edge. A wade is therefore walked with
+controlMove until the body reads swim, not pathed.
 
 ### The unit script updates twelve times a second
 `fact.pathing.updaterate` -- see also `arch.pathing.coarsenav`
@@ -12051,6 +12493,34 @@ still not the enum -- `proc.pathing.readsource`.
 
 ## DISPROVEN
 
+### A fixed search budget on a graph that grows
+`dead.pathing.flatbudget` -- see also `plan.pathing.cityscale`, `arch.pathing.coarsenav`
+
+**RETIRED AS A DESIGN 2026-09-10, THE NUMBER RAISED AS A STOPGAP (coarsenav
+10i).** MEASURED 11:53:34 and 11:55:16 on the ocean base: `both known, no
+path: 2000 cell(s) reachable from 2516,1152, 2000 from 2603,1123, of 2915
+in the graph`. PETPORTS_NAV_SEARCH_BUDGET was 2,000 and the graph, since
+the reciprocal edges and the faster survey, was 2,915 cells at 13 edges
+each; the flat BFS stopped a third of the way across and reported "no
+path", the engine's plan was the only plan, it does not know poison, and
+the body guard refused it -- read at the time as the poison obstacle
+regressing. 10i raised the budget to 20,000 and made a budget-out say so
+in the diagnostic. The lesson: a fixed count on a search whose input grows
+is a regression waiting for the input to grow, and every speed-up since
+09z made the input grow faster. The design answer is `plan.pathing.cityscale`
+item 1, where the budget is a corridor.
+
+### Local-first candidate ranking
+`dead.pathing.localfirst` -- see also `arch.pathing.frontierqueue`
+
+**BUILT AND RETIRED THE SAME EVENING, 2026-09-09 (coarsenav 09y, one
+build).** Ranked candidates within 24 tiles of the unit ahead of everything
+else, alternating with the pass order on even top-ups, to get the pocket
+its radius 4. Lofty's rule is the opposite -- nothing widens while frontier
+exists -- and the actual cause of the pocket's isolation was
+`fact.pathing.onewaytrue`, not the radius. Replaced by
+`arch.pathing.frontierqueue`. The 24-tile window is gone entirely.
+
 ### A wipe that walks the store's indices does not wipe the store
 `dead.pathing.indexwipe` -- see also `arch.pathing.storegeneration`, `fact.tooling.propertiesunlistable`
 
@@ -13187,6 +13657,138 @@ holes closed, nothing lost, every one in a single pass. `--old` reinstates the
 pass without it.
 
 ## BACKLOG
+
+### The edge index loses cells, and the graph is built from the index
+`todo.pathing.indexshrink` -- see also `arch.pathing.coarsenav`, `fact.pathing.onewaytrue`, `arch.pathing.frontierqueue`, `fact.pathing.indexparse`
+
+**2026-09-10: no `INDEX SHRANK` line in any log since 10b**, across eight
+logs and two bases, including the respawn-heavy ones. Either the guard is
+holding or the cause was something 10j's ten-second memo also removed
+(a per-update read racing a write is the candidate). Still open until a
+run with the line absent AND a graph that only grows is on record.
+
+OPENED 2026-09-09 (22:40 log), CAUSE NOT YET NAMED, MADE HARMLESS IN
+COARSENAV 10a. MEASURED after a wipe at 22:01: `of N in the graph` went
+77->37 (22:02), 155->111 (22:05), 346->305 (22:09), 477->329 (22:11),
+521->396 (22:13), 1306->581 (22:31). The first five sit within seconds of
+a respawn (a dispatch spawns a fresh instance); the sixth has nothing near
+it -- no wipe, no `generation`, no SEALED, no purge. Sweeps completed on
+1,606 distinct cells; the graph peaked at 1,306. The graph build reads
+`navIndexRead()[profile]`, so a cell missing from the index is a cell with
+no outgoing edges in the router's graph whatever its shard says, and the
+tunnel and shaft under the deck were the cells that went missing. The
+index flush is read-merge-write: `world.getProperty` of the index, the
+generation filter, this unit's pending and `IndexMine` merged in,
+`world.setProperty` back. Either the read comes back short or the filter
+drops good entries; 10a's `NAV INDEX SHRANK` line carries the four counts
+that tell them apart. Until then 10a keeps `petportsNavIndexSeen` -- every
+entry this instance has ever read or queued -- and writes the union on
+every flush, so the index cannot shrink through this writer; entries
+leave only through forget and purge. A respawn starts Seen empty, so the
+property itself is the only carrier across instances (Lofty: "so he's going
+to fly in the water, get stuck, re-home and have the same issue?"), and 10b
+puts the guard IN the property: every write records `_n`, the cells
+written; a reader that gets fewer than 90% of `_n` knows the read is short
+with no memory at all, and a flush whose read was short is HELD -- pending
+kept, `NAV index flush ... HELD (try N of 12)` -- and written anyway after
+twelve consecutive shorts with a line saying so, because a property that
+really did shrink must not wedge every writer forever. The collapse was
+always a short read becoming a short write; no instance can do that now.
+
+### The world's 30 s storage flush is now mostly our property store
+`todo.pathing.storesize` -- see also `fact.tooling.worldstorage`, `plan.pathing.cityscale`, `todo.pathing.freeradius`, `arch.pathing.coarsenav`
+
+OPENED 2026-09-10 (Lofty: "when I unsocket the pets the world doesn't
+hitch"). MEASURED 14:14..14:19 on the ocean base, six units: `PETPORT
+STALL` at every 30-31 s on all six ports, median 680 ms of process time
+(~340 ms wall; the process runs two busy threads), max 1400. The 09-06
+control put the floor at ~330 ms with ports only and ~100-200 ms per 3k
+cell shards; six profiles of shards, six indices, the bounds store and
+the claims are the difference. The engine rewrites the whole metadata
+blob on every flush whether or not most of it changed, so the ONLY lever
+is bytes: (a) chunk-keyed shards with a dense per-cell encoding instead
+of `{ r, t, g }` tables keyed by string per edge -- `plan.pathing.cityscale`
+item 2, now first; (b) purge shards older than the sweep TTL and cells
+outside every coverage rect; (c) audit whether survey claims are world
+properties and how many are live at once (`petports_claimTake`); (d) the
+`|f0|` and `|f1|` stores of a switchable chassis share their dry cells.
+Measure the metadata size before and after each; `fact.tooling.worldstorage`
+has the method.
+
+### The port script runs every work generator in one update
+`todo.port.tickyield` -- see also `dd.pathing.yieldrule`, `arch.port.beatstages`, `fact.tooling.frameceiling`
+
+OPENED 2026-09-10 (port profiler, 14:14..14:19, six ports, 174 ten-second
+reports): `findWork`/`dispatchWork` avg 14 ms max 135 (every generator in
+one call when a unit needs work; `g.sort` max 101, `g.withdrawWater` avg
+16), `mirrorPaneState` max 93 (pane state serialised to JSON and written
+as a config parameter -- size and change-gating unknown), `refreshBeacons`
+avg 6.6 max 72 every ~2.6 s, `refreshFarmables` max 59, `crosshairRefresh`
+max 44. 75 `PETPORT slow tick` lines in five minutes, median 43 ms: one
+three-to-eight-frame server stall every four seconds across the fleet,
+which is the "everyone stops walking" hitch once the units are quiet.
+Under `dd.pathing.yieldrule`: one generator per update with the verdicts
+carried across updates; the refreshes budgeted; `mirrorPaneState` logged
+by byte size and written only on change. Port work in the CRLF file; the
+first build of the next session.
+
+### Open liquid has no anchors, so a fish in open water is not in any graph
+`todo.pathing.openliquid` -- see also `arch.pathing.coarsenav`, `plan.unit.unrestrictedflyer`
+
+OPENED 2026-09-10. A free mover's anchor is a window centre NEAR A SURFACE
+(09l: a change of medium is one), so open liquid away from any wall,
+floor or surface has no cells; `to cell 5907,1130 is not in the graph`
+for every fish out in the lava. Coarse nav takes the unit to the nearest
+coast cell and string-pull does the rest, which works when the line is
+clear. Anchors on the volume rather than the surface -- a grid at some
+stride through open liquid -- would let legs reach fish; it is a survey
+design change and not to be improvised.
+
+### The unit parks on the waterline to use a crate at the water's edge
+`todo.pathing.waterlinepark` -- see also `fact.pathing.waterlinestart`
+
+OPENED 2026-09-10. The resolver picks a spot for the crate that leaves the
+body straddling the lava line, and from there the engine's search cannot
+plan (`fact.pathing.waterlinestart`). Harmless when the coarse graph is
+present; the fix, if one is wanted, is the resolver preferring a spot on
+the crate's dry side for a body that has one.
+
+### A module that grants a liquid changes the profile string and so the store
+`todo.pathing.moduleprofile` -- see also `arch.pathing.coarsenav`, `arch.pathing.bridges`
+
+OPENED 2026-09-09. MEASURED 14:18:59 / 14:19:24: the unrestricted flyer
+spawned with `|l|` in its profile, the lava block took effect 27 s later
+and the profile became `|lcorelava+lava|` -- a different store, so the
+survey restarted from nothing. The otter never showed this because its
+block was socketed before it surveyed. The profile MUST key on the liquid
+set for the boundary walls to be right; the two stores could still share
+their dry cells. Either apply module effects before the first survey tick
+or let a profile inherit from its superset.
+
+### A swim leg to a surface cell is refused by the medium guard for a second
+`todo.pathing.surfacerefusal` -- see also `arch.pathing.executorguards`, `arch.pathing.mergedgraph`
+
+OPENED 2026-09-09. `coarse leg to [5857,1146] refused by the medium check
+for 1 s -- treating as a failed leg`, then `would not walk -- retrying one
+hop at a time`, then `re-probe says true -- stepping onto its start first`:
+a swim anchor at the surface reads mixed at the body and the guard holds the
+command for a second before the leg is retried. One second and a strike per
+occurrence, twice in three crossings. Cosmetic; the fix is either a surface
+swim anchor that sits one tile lower or the guard reading the anchor's own
+medium rather than the body's.
+
+### The coarsenav stamp clock runs two days ahead
+`todo.tooling.stampclock` -- see also `proc.tooling.session`
+
+**CLOSED 2026-09-10:** the first coarsenav build of the 10th was stamped
+`2026-09-10a` and the letter restarted; the clock is on the calendar again.
+
+OPENED 2026-09-09. `petports_coarsenav.lua` reached `2026-09-09s` on
+2026-09-07 (file mtime 14:51 that day, MEASURED times in its comments
+14:17..14:46), so today's builds are `09t` onward on the actual 9th. Harmless
+while the letter keeps climbing; it bites the first time a log is read
+against the calendar. Fix by stamping the next session's first build with its
+real date and letting the letter restart.
 
 ### Harvestables with a degenerate `activeTimeRange` are inert, and we only say so
 `todo.farming.trapagelock` -- see also `fact.farming.harvestable`, `arch.farming.traps`
@@ -14822,6 +15424,13 @@ from the last tested point) or by time. Measure a walker chase first.
 ### The amphibious chassis crashes the game on a dry target
 `todo.pathing.amphibiouscrash` -- see also `arch.pathing.executorguards`, `arch.pathing.boundarycells`, `dd.pathing.probeprofile`
 
+**CLOSED 2026-09-09, UNREPRODUCIBLE (Lofty).** It fired when the nav debug
+toggle was flipped on the ocean base's store, which had been through several
+iterations and has been wiped several times since; nothing in three hours of
+amphibious pathing today, dry targets included, came near it. Written off
+as new debug functions on legacy data. If it recurs it is a new entry with
+the log open.
+
 OPENED 2026-09-07, session end, NO LOG. A drop on amphibious-walkable ground
 on the far side of the base: the game "freaked out and died". FIRST THING
 NEXT SESSION: reproduce with the log open, read the last hundred lines
@@ -14834,7 +15443,10 @@ are gated on `petports_freeMover()`, but the otter's mode flips). Do not
 build anything else on this tree until this is read.
 
 ### Terrain changes invalidate nothing until the sweep TTL
-`todo.pathing.terrainchange` -- see also `arch.pathing.coarsenav`, `arch.pathing.boundarycells`, `todo.pathing.falsettl`
+`todo.pathing.terrainchange` -- see also `arch.pathing.coarsenav`, `arch.pathing.boundarycells`, `todo.pathing.falsettl`, `dd.pathing.cacherescan`
+
+**THE MECHANISM IS `dd.pathing.cacherescan`** (2026-09-09): every case below
+is "rescan this first".
 
 OPENED 2026-09-07 (Lofty: "a single block being placed should not break
 the cache for nine hours"). The engine reports no tile changes. The plan,
@@ -14847,7 +15459,10 @@ know re-samples that cell and its neighbours at once. Three places the
 existing survey is asked to look again sooner; no new pass.
 
 ### FALSE edges have the same six-hour TTL as TRUE ones
-`todo.pathing.falsettl` -- see also `todo.pathing.terrainchange`, `arch.pathing.executorguards`
+`todo.pathing.falsettl` -- see also `todo.pathing.terrainchange`, `arch.pathing.executorguards`, `dd.pathing.cacherescan`
+
+**THE RULE THAT REPLACES BOTH LIFETIMES IS `dd.pathing.cacherescan`**
+(2026-09-09, decided, not built).
 
 OPENED 2026-09-07. A wrongly contradicted edge stays gone for `NAV_SWEEP_TTL`
 (six hours); only a wipe restores it. The design note says false should
@@ -14859,7 +15474,8 @@ contradictions two-way, which removes the trap but not the six hours).
 `todo.pathing.boundarycells` -- see also `dd.pathing.boundarystore`, `todo.pathing.poisonocean`, `todo.pathing.amphibiousbridge`, `dd.pathing.probeprofile`, `arch.locomotion.dive`
 
 **RESOLVED 2026-09-07 BY `arch.pathing.boundarycells`** -- steps 1 to 3
-built and verified on the maze. Step 4 is `todo.pathing.amphibiousbridge`.
+built and verified on the maze. Step 4 is `todo.pathing.amphibiousbridge`,
+resolved 2026-09-09 by `arch.pathing.bridges`.
 
 OPENED 2026-09-06. THE NEXT BUILD, in this order: (1) the probe carries its
 profile (`dd.pathing.probeprofile`), so a gravity-switchable unit surveys
@@ -14874,6 +15490,11 @@ and debug-draw branches; `petports_navWipe` must clear it.
 
 ### Amphibious long-range motion needs the mode boundary as a hop in the route
 `todo.pathing.amphibiousbridge` -- see also `arch.pathing.mediummixed`, `arch.pathing.coarsenav`, `todo.pathing.poisonocean`, `todo.pathing.boundarycells`, `dd.pathing.boundarystore`
+
+**RESOLVED 2026-09-09 BY `arch.pathing.bridges` AND `arch.pathing.mergedgraph`**,
+in the shape restated below: adjacency, not an edge between meshes, with the
+dive and exit primitives as the leg executors and the leg as the destination.
+Kept for the reasoning.
 
 **RESTATED 2026-09-06: THE BRIDGE IS ADJACENCY TO A BOUNDARY CELL, NOT AN
 EDGE BETWEEN TWO MESHES.** With `todo.pathing.boundarycells` in the store, a

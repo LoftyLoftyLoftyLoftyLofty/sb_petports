@@ -1,0 +1,463 @@
+//  UNRESTRICTED FLYER
+//
+//  A COPY of petports_flyer.monstertype (2026-09-09, plan.unit.unrestrictedflyer)
+//  that differs in the medium: petports_canSwim is true, so water and air are
+//  one medium for it and the waterline is nothing. Gravity never turns on --
+//  this is NOT a switchable chassis like the otter (no dive, no exit, no
+//  bridges needed): it just goes. petports_mediumAllows accepts a body
+//  straddling the surface for a chassis that has both media, which is the
+//  one code change that made this possible. The name says what makes it
+//  special: the medium constraint is what was removed.
+//
+//  Denied liquids are the same list as the otter's, so the lava and poison
+//  block modules grant them exactly as they do there.
+//
+//  M.A.U.S. UTILITY UNIT -- FLYER
+//
+//  A COPY of drone/petports_drone.monstertype with a different locomotion
+//  class. Read that file for the modelled-on-petbunny reasoning, how parts and
+//  monsterparts bind, and why anchorName and metaBoundBox are what they are --
+//  all of that is identical and none of it is repeated here.
+//
+//  WHAT ACTUALLY DIFFERS FROM THE DRONE
+//
+//    type / categories        unique, or the two types wear each other's bodies
+//    animation                its own file, same content today
+//    movementSettings         gravityEnabled false, and the consequences below
+//    scripts                  one extra: petports_flyapproach.lua
+//
+//  Everything else -- the behavior fork, the contract, placement, thinking,
+//  sleep, the task action, resources, action params, status settings -- is the
+//  drone's, unchanged, on purpose. The whole point of the locomotion split is
+//  that it is a MOVEMENT change and not a behaviour one.
+//
+//  WHY THE GROUND MACHINERY DOES NOT NEED REMOVING
+//
+//  petportsTaskAction carries four recovery ladders built for a jumping unit:
+//  tryPlanDrop, the SURFACE clearance replan, the airborne-edge stall detector
+//  and the grounded-walk stall detector. Every one of them is gated on
+//  mcontroller.onGround(), which is permanently false here, so they are dead
+//  code for a flyer rather than hazards. The same is true of the replaced
+//  movers -- petportsJumpMover, petportsWalkMover, petportsArcMover,
+//  petportsTimedDrop, petportsKeepDropping -- which are only reachable from
+//  Walk, Jump, Arc, Drop and Land edges. A Fly plan has none, so they stay
+//  assigned in freshPather and are simply never called.
+//
+//  The cost of that is stated plainly: A FLYER HAS NO STALL DETECTION. What is
+//  left watching is vanilla's stuckTimer, the displacement reset in
+//  petportsTaskAction.update, and one change-gated line in
+//  petports_flyapproach.lua. See that file's header.
+
+{
+  "type" : "petports_unrestricted",
+  "shortdescription" : "Utility Unit",
+  "description" : "A M.A.U.S. utility unit fitted for flight. Small, tireless, and untroubled by floors.",
+
+  //  Binding key for this type's monsterpart pool. MUST DIFFER FROM THE DRONE'S
+  //  -- the engine picks at random from every monsterpart matching the category,
+  //  so a shared one means each type randomly wears the other's body.
+  "categories" : [ "petports_unrestricted" ],
+  "parts" : [ "body" ],
+
+  "animation" : "petports_unrestricted.animation",
+
+  "dropPools" : [ ],
+
+  "capturable" : false,
+
+  "baseParameters" : {
+    "persistent" : true,
+    //  FRIENDLY SINCE 2026-08-30. It was "ghostly", which sits OUTSIDE damage
+    //  resolution entirely -- useful while the fleet was being brought up and
+    //  wrong now. dd.unit.destructible always recorded units as MEANT to be
+    //  destructible and flagged the ghostly question as unverified; this is
+    //  that question being answered by changing the answer.
+    //
+    //  IT IS ALSO WHAT MAKES ALLY DETECTION POSSIBLE. The medic task picks a
+    //  patient by comparing damage teams, and a ghostly unit's team matches
+    //  nothing -- so every candidate would have failed the ally test and the
+    //  medic would never have found anyone to heal.
+    //
+    //  CONSEQUENCES ARE LIVE NOW, NOT HYPOTHETICAL: a unit can be killed
+    //  mid-task, its claim is left for the TTL to collect, and the port
+    //  respawns a replacement after RESPAWN_GRACE as though nothing happened.
+    //  dd.unit.destructible calls that last one arguably wrong and undecided.
+    "damageTeamType" : "friendly",
+
+    //  THE MARKER THAT SAYS "THIS IS A PETPORTS UNIT".
+    //
+    //  Read by petports_isUnitType. It exists because once these run on the
+    //  friendly damage team they are indistinguishable from a farm animal --
+    //  monster / friendly / team 2 describes a Mooshi exactly as well as it
+    //  describes this. The medic scan has to tell a wounded unit from a
+    //  wounded cow, and no engine field draws that line.
+    //
+    //  ANY THIRD-PARTY CHASSIS MUST DECLARE THIS. Checking for a
+    //  petports_ name prefix would have worked for the four types shipped
+    //  here and quietly failed for everyone building on top of this, which
+    //  is the intended path rather than an edge case.
+    "petports_unit" : true,
+
+    "scripts" : [
+      "/monsters/pets/groundPet.lua",
+      "/scripts/pathing.lua",
+      "/scripts/stateMachine.lua",
+      "/scripts/util.lua",
+      "/scripts/vec2.lua",
+
+      //  BEACHED FLOP -- LISTED BEFORE idleState AND wanderState ON PURPOSE.
+      //
+      //  A plain %a+State, so petports_petBehavior runs it only while no action
+      //  state holds the unit. That is why petportsTaskAction.update yields on
+      //  petports_outOfMedium AND petBehavior.run suppresses every action while
+      //  beached -- measured 2026-09-01: yielding alone produced 91 yields in 8
+      //  seconds and the flop was never reached once.
+      //
+      //  ORDER IS A HEDGE, NOT A GUARANTEE. If stateMachine.pickState takes the
+      //  first state whose enter() returns non-nil, being ahead of idle and
+      //  wander is what wins the pick. If it round-robins via moveStateToEnd
+      //  instead, order buys nothing and the forced pick in petBehavior.run is
+      //  what does the work. Both are in place because /scripts/stateMachine.lua
+      //  and /monsters/pets/groundPet.lua have not been read.
+      //
+      //  LOADED BY EVERY CHASSIS, INCLUDING WALKERS. petportsFlopState.enter
+      //  returns nil for anything petports_outOfMedium reports as unchecked, so
+      //  a ground or amphibious unit can never enter it.
+      "/monsters/lofty_petports/petportsFlopState.lua",
+      "/monsters/pets/idleState.lua",
+      "/monsters/pets/wanderState.lua",
+
+      "/monsters/pets/actions/followAction.lua",
+      "/monsters/pets/actions/inspectAction.lua",
+      "/monsters/pets/actions/pounceAction.lua",
+
+      "/scripts/lofty_petports/petports_work.lua",
+      "/scripts/lofty_petports/petports_habitat.lua",
+      "/scripts/lofty_petports/petports_flavors.lua",
+
+      //  COARSE NAVIGATION, v1. Defines globals only -- nothing in it runs
+      //  at load -- so its position in this list carries no ordering
+      //  requirement the way petports_flyapproach.lua does. Listed beside
+      //  the other shared scripts rather than after groundPet.lua for that
+      //  reason: it shadows nothing.
+      "/scripts/lofty_petports/petports_coarsenav.lua",
+      "/monsters/lofty_petports/petports_petBehavior.lua",
+      "/monsters/lofty_petports/petports_contract.lua",
+      "/monsters/lofty_petports/petports_placement.lua",
+      "/monsters/lofty_petports/petports_think.lua",
+
+      //  CHAT BUBBLE render layer. Defines globals only; nothing
+      //  in it runs at load, so its position here carries no
+      //  ordering requirement. Listed next to petports_think.lua
+      //  because it is the same kind of thing: an indicator that
+      //  drives its own animation state type.
+      "/monsters/lofty_petports/petports_bubble.lua",
+      "/monsters/lofty_petports/petportsSleepAction.lua",
+      "/monsters/lofty_petports/petportsTaskAction.lua",
+
+      //  FLYER ONLY, AND IT MUST COME AFTER groundPet.lua.
+      //
+      //  It shadows groundPet.lua's global approachPoint by capturing the
+      //  original at chunk-load time and delegating back to it whenever gravity
+      //  is on. Listed before groundPet.lua the capture binds nil and every
+      //  call raises. Deliberately not nil-guarded -- see the file header.
+      //
+      //  The drone's monstertype does NOT list this file, so the working ground
+      //  unit cannot be reached by anything in it.
+      "/monsters/lofty_petports/petports_flyapproach.lua"
+    ],
+
+    "petBehavior" : "petBehavior",
+
+    "anchorName" : "petports_petport",
+
+    "petports_allowSleep" : false,
+
+    //  FUEL BURNED PER SECOND OF WORK, and only of WORK -- a parked fleet
+    //  is free. 900 capacity at 1.0 is fifteen minutes of uptime on a full
+    //  tank. Per chassis so a heavier unit can cost more without touching
+    //  code; an efficiency module divides it.
+    "petports_fuelDrain" : 1.0,
+
+    "petResources" : {
+      "sleepy" : 10,
+      "hunger" : 60,
+      "petports_fuel" : 900,
+      "playful" : 10,
+      "curiosity" : 60
+    },
+    "petResourceDeltas" : {
+      "sleepy" : 1,
+      //  FUEL IS ITS OWN RESOURCE, AND VANILLA HUNGER IS PINNED DEAD.
+      //
+      //  hunger COUNTS UP and 900 counting DOWN is what a fuel bar is, so this
+      //  does not reuse it. Redefining hunger to mean fullness would leave
+      //  status.resource("hunger") returning its own opposite forever, for every
+      //  future reader, to save one resource declaration.
+      //
+      //  THE DELTA BELOW IS ZERO RATHER THAN THE LINE BEING DELETED. Absent means
+      //  groundPet.lua's tickResources never touches it, which is the same result
+      //  by accident instead of on purpose -- and a zero is where a reader looks
+      //  when asking why hunger never moves.
+      //
+      //  eatAction.lua and begAction.lua are gone from the scripts list above, so
+      //  hungerStarvingLevel and the eat / beg / starving actionParams below are
+      //  now INERT. Left in place rather than stripped: they are vanilla's shape
+      //  and the behaviour rewrite may want them back. Do not tune them expecting
+      //  the fuel system to answer.
+      "hunger" : 0,
+      "playful" : 1,
+      "curiosity" : 1
+    },
+
+    //  Identical to the drone's. Note that with strictPortTethering on, none of
+    //  the appetite actions can ever be picked: petports_leashTask never returns
+    //  nil for a tethered unit, it queues at LEASH_SCORE 120, and every appetite
+    //  caps at 100. Kept in step with the drone so the two do not silently
+    //  diverge before that changes.
+    "actionParams" : {
+      "hungerStarvingLevel" : 80,
+      "beg" : { "minScore" : 50, "cooldown" : 5, "distance" : 3, "emoteCooldown" : 2 },
+
+      "follow" : {
+        "minScore" : 70,
+        "cooldown" : 30,
+        "curiosityDelta" : -25,
+        "boredTime" : 1.5,
+        "startDistance" : 10,
+        "stopDistance" : 5,
+        "runDistance" : 20
+      },
+
+      "inspect" : { "minScore" : 20, "cooldown" : 8 },
+      "eat" : { "minScore" : 0, "minHunger" : 40, "cooldown" : 0, "distance" : 2 },
+      "play" : { "minScore" : 20, "cooldown" : 2 },
+      "sleep" : { "minScore" : 50, "minSleepy" : 75, "cooldown" : 10 },
+      "starving" : { "minScore" : 60, "cooldown" : 3 }
+    },
+
+    "pathing" : { "canOpenDoors" : false },
+
+    "metaBoundBox" : [-0.5, -0.75, 0.5, 0.6],
+    "scale" : 1.0,
+
+    "querySurroundingsCooldown" : 1,
+
+    "wander" : {
+      "wanderTime" : [5, 10],
+      "changeDirectionTime" : [5, 10],
+      "changeDirectionWait" : [1, 3]
+    },
+    "idle" : { "idleTime" : [4, 8], "standTime" : 2 },
+    "pounce" : { "maxRange" : 10, "minRange" : 5 },
+
+	//	go to the port and stay there when idle. do not wander
+	"strictPortTethering" : true,
+
+    //  LOCOMOTION MEDIA. Air only -- this chassis is not sealed. Stated rather
+    //  than left to the defaults in petports_media() so the flyer and the
+    //  aquatic chassis can be read side by side and differ in exactly one line.
+    //  SEARCH COSTS. WATER IS EXPENSIVE, AND THIS IS A FIX RATHER THAN A
+    //  PREFERENCE.
+    //
+    //  MEASURED: a flyer was routed through water on the way to an air target,
+    //  ended up submerged, and then A* returned zero edges to every target it
+    //  was given for twenty-one seconds. Plan validation now REFUSES wet routes
+    //  for this chassis -- but a refusal produces no motion, so if the search
+    //  keeps offering the same wet route the unit simply never goes anywhere.
+    //
+    //  Cost is what makes A* hand back a DRY route instead of one we reject.
+    //  High rather than infinite because there is no way to forbid an edge type
+    //  outright, and a merely expensive crossing still beats no path at all when
+    //  water is the only way through.
+    "petports_swimCost" : 1,
+
+    "petports_canFly" : true,
+    "petports_canSwim" : true,
+
+    //  DENIED LIQUIDS, so the block modules have something to grant. Absent on
+    //  the flyer because it never enters any liquid; this one enters all the
+    //  others.
+    "petports_avoidLiquids" : [ "lava", "corelava", "poison" ],
+
+    //  WHERE THIS CHASSIS TETHERS -- see petports_habitatTether.
+    //
+    //  strictPortTethering above decides WHETHER this unit comes home and holds.
+    //  This decides WHERE home is, and the two were one question only while
+    //  every chassis walked.
+    //
+    //  port / floor / ceiling. Absent reads as "floor", which is what every
+    //  chassis did before the field existed.
+    //  "port" FOR THE SAME REASON AS THE AQUATIC CHASSIS, mirrored: a flyer
+    //  holds station in air, and the ground beneath its port is a place it would
+    //  have to descend to and could not stand on anyway.
+    //
+    //  A CEILING-DWELLING FLYER IS THE CASE THIS FIELD WAS ADDED FOR and is not
+    //  this chassis. When one exists it declares "ceiling" here and nothing else
+    //  changes.
+    "petports_portTetheringLocationType" : "port",
+
+    "movementSettings" : {
+
+      //  THE ONE LINE THAT MAKES THIS A DIFFERENT LOCOMOTION CLASS.
+      //
+      //  It reaches further than it looks. PathFinder:start hands
+      //  mcontroller.baseParameters() straight to world.platformerPathStart, so
+      //  this is what makes the engine's search emit Fly edges instead of
+      //  Walk/Jump/Arc/Drop/Land. PathFinder:canPathfind is
+      //  `onGround() or not gravityEnabled`, so a flyer may also start a search
+      //  at any time rather than only while standing. And PathMover:new defaults
+      //  mustEndOnGround to this value -- which petports_pathOptions was
+      //  overriding with a hardcoded true, and no longer is.
+      "gravityEnabled" : false,
+
+      //  OURS, NOT THE REFERENCE FLYER'S 2x2 BOX. The 1.6 x 1.6 octagon is
+      //  tuned so the pathfinder rejects 1-tile-high tunnels while still
+      //  threading 2-tile gaps, and that reasoning survives the switch to Fly
+      //  edges unchanged -- a Fly edge needs clearance for the same body.
+      //
+      //  It also supplies the arrival radius. Every vertex here has magnitude
+      //  sqrt(0.64 + 0.36) = exactly 1.0, so the poly is inscribed in a unit
+      //  circle and FLY_ARRIVAL in petports_flyapproach.lua is measured rather
+      //  than guessed. CHANGE THIS POLY AND THAT CONSTANT MUST MOVE WITH IT.
+      "collisionPoly" :  [ [-0.8, -0.4], [-0.4, -0.8], [0.4, -0.8], [0.8, -0.4],
+                    [0.8, 0.4], [0.4, 0.8], [-0.4, 0.8], [-0.8, 0.4] ],
+      "mass" : 1.0,
+
+      //  Inert for a flyer -- nothing on a Fly edge reads either, and
+      //  PathMover:approachTargetPosition and moveX are both unreachable here.
+      //  Kept because groundPet.lua's init caches runSpeed, and there is no gain
+      //  in finding out the hard way what reads a nil.
+      "walkSpeed" : 6,
+      "runSpeed" : 9,
+
+      //  Known-good flyer values, not the drone's. The drone's flySpeed 15 and
+      //  airForce 50 were never tuned for flight, and its gravityMultiplier 1.5
+      //  is deliberately absent here rather than set to 1.0 -- a gravity knob on
+      //  a gravity-disabled actor implies something it does not do.
+      //
+      //  THE TUNING LADDER, MEASURED IN GAME ACROSS FOUR RUNS.
+      //
+      //    airForce 25   airFriction 0.25  the reference flyer's. Coasted well
+      //                                    past its stopping point; overshoot
+      //                                    produced visibly wrong behaviour.
+      //    airForce 25   airFriction 1.0   correct, and SHIPPABLE FOR A
+      //                                    BIOLOGICAL FLYER -- carried momentum
+      //                                    reads as a living thing with mass.
+      //    airForce 25   airFriction 2.0   a robot that stops where it meant to,
+      //                                    but still drifting off diagonals.
+      //    airForce 9999 airFriction 24    THIS. Straight lines, no overshoot.
+      //
+      //  THE LAST STEP IS A PAIR, NOT A FRICTION CHANGE. Friction 24 alone would
+      //  make the unit sluggish, because drag-limited speed is airForce divided
+      //  by airFriction -- at 25/2.0 that is 12.5, which was quietly the real
+      //  speed cap rather than flySpeed. At 9999/24 it is ~416, so flySpeed
+      //  governs and friction only kills residual drift. Move one, move both.
+      //
+      //  THE VALUE FOLLOWS FROM WHAT THE UNIT IS. Do not "correct" a future
+      //  biological flyer up to 24 on the strength of this file; that would be
+      //  the same mistake as taking 0.25 from a wandering monster and expecting
+      //  it to suit a unit that flies to a specific tile and holds there.
+      //
+      //  A NOTE ON airForce 9999. Full reversal of a 12-speed vector inside one
+      //  ~82ms script tick needs about 300, so this is ~30x more authority than
+      //  steering requires. Harmless for steering, but airForce answers EVERY
+      //  impulse -- knockback, liquid, collision response -- and units are
+      //  destructible. If knockback ever reads as a teleport, this is why.
+      //
+      //  Reported speed will look like flySpeed x (1 - airFriction/60): at 60Hz
+      //  physics, friction takes 40% of the velocity each engine tick and
+      //  airForce restores it, and the script samples post-friction. That is why
+      //  mcontroller.velocity() reads a rigid 7.2 while logged POSITIONS advance
+      //  a full tile per ~81ms. Trust the positions.
+      "flySpeed" : 9,
+      "airFriction" : 24.0,
+      "airForce" : 9999.0,
+
+      //  THE SAME NUMBERS IN LIQUID, 2026-09-09. MEASURED 14:19:41..52: the
+      //  first lava crossing ran at 4.5 tiles/s against flySpeed 9 -- the
+      //  engine's default liquidImpedance halves speed in liquid, and the
+      //  flyer never carried these because it never entered any. The aquatic
+      //  chassis's values, verbatim: water is air to this body.
+      "liquidForce" : 9999.0,
+      "liquidFriction" : 24.0,
+      "liquidImpedance" : 0.0,
+
+      //  A NUDGE OUT OF WATER RATHER THAN A FLOAT. The aquatic chassis pins this
+      //  to 0 and says why: buoyancy opposes gravity, and there is no gravity on
+      //  a gravityEnabled false actor, so it should compute to nothing. If that
+      //  holds, this is inert and harmless. If it does not, a flyer that barely
+      //  clips a waterline gets pushed clear before plan validation has to refuse
+      //  the position and re-home it -- which is the case this is here for.
+      //
+      //  0.25, not 1.0. Neutral is the fish's value; a quarter is a lean upward
+      //  that cannot fight the 9999 station-keeping if it turns out to apply.
+      //  0.0, NOT THE FLYER'S 0.25: that was a nudge OUT of water for a body
+      //  that should never be in it. This one lives there.
+      "liquidBuoyancy" : 0.0
+    },
+
+    "bodyMaterialKind" : "robotic",
+
+    "knockoutTime" : 0,
+    "knockoutEffect" : "blink",
+    "deathParticles" : "deathPoof",
+
+    "touchDamage" : { "poly" : [], "damage" : 0, "teamType" : "ghostly", "damageSourceKind" : "default" },
+
+    "statusSettings" : {
+      //  THE MATERIALISE / DEMATERIALISE COLOUR, read by
+      //  petports_unitfade.lua off the parent's status controller. A status
+      //  property rather than a spawn parameter or a message: it is already on
+      //  the controller before the effect is ever applied, so the effect script
+      //  stays generic and each chassis can differ with no code.
+      //
+      //  TEST VALUE. ff00ff is deliberately unmissable so the first in-game
+      //  check cannot confuse "the fade works" with "the colour is wrong".
+      //  Six hex digits, no alpha -- the directive is fade=RRGGBB=amount and
+      //  alpha is carried separately by ?multiply.
+      "statusProperties" : { "targetMaterialKind" : "robotic", "petports_fadeColor" : "e6e6e6" },
+
+      "appliesEnvironmentStatusEffects" : false,
+      //  TRUE SO THAT WEATHER CAN ACTUALLY HURT A UNIT. It was false, which made
+      //  every petport chassis accidentally immune to toxic rain -- not by any
+      //  design, but because a blanket flag suppressed the whole category. That
+      //  made the poison module a liquid-only feature and left the toxic-planet
+      //  deploy route protected for a reason nobody chose and nothing recorded.
+      //
+      //  THIS ADMITS EVERY WEATHER EFFECT, NOT JUST POISON. There is no per-type
+      //  gate -- the flag is all or nothing -- so electrical storms, blizzards
+      //  and ember fall now reach these units too, and only poison has a module
+      //  answering it. That surface is accepted deliberately rather than
+      //  overlooked; the alternative was a baseline immunity stats block on all
+      //  four chassis, which reads as arbitrary the moment this note is lost.
+      "appliesWeatherStatusEffects" : true,
+      "minimumLiquidStatusEffectPercentage" : 0.1,
+
+      "primaryScriptSources" : [ "/stats/monster_primary.lua" ],
+      "primaryScriptDelta" : 5,
+
+      "stats" : {
+        "knockbackStunTime" : { "baseValue" : 0.25 },
+        "knockbackThreshold" : { "baseValue" : 9 },
+        "maxHealth" : { "baseValue" : 72 },
+        "protection" : { "baseValue" : 1.0 },
+        "healthRegen" : { "baseValue" : 0.0 },
+        "powerMultiplier" : { "baseValue" : 1.0 }
+      },
+
+      "resources" : {
+        "stunned"   : { "deltaValue" : -1.0, "initialValue" : 0.0 },
+        "health"    : { "maxStat" : "maxHealth", "deltaStat" : "healthRegen", "defaultPercentage" : 100 },
+        "sleepy"    : { "maxValue" : 100, "defaultPercentage" : 10 },
+        "hunger"    : { "maxValue" : 100, "defaultPercentage" : 10 },
+        "petports_fuel" : { "maxValue" : 900, "defaultPercentage" : 100 },
+        "playful"   : { "maxValue" : 100, "defaultPercentage" : 10 },
+        "curiosity" : { "maxValue" : 100, "defaultPercentage" : 10 }
+      }
+    },
+
+    "mouthOffset" : [0, 0],
+    "feetOffset" : [0, -8]
+  }
+}
