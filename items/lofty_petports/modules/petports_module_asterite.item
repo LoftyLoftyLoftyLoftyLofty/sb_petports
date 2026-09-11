@@ -1,0 +1,62 @@
+//  PETPORTS -- ASTERITE MINING MODULE
+//
+//  THE FIRST MODULE THAT UNLOCKS WORK ON SOMEBODY ELSE'S CONTENT.
+//
+//  Falling Stars (starore, by Lemon Drops) rains asterite onto every exposed
+//  surface its weather touches, and over hours a base collects a crust of it
+//  that cannot be cleared without breaking the blocks underneath. That is the
+//  problem this solves, and the mod was built as a resource for other modders
+//  to expand on -- so a petports module that works with it is exactly what it
+//  was published for.
+//
+//  IT IS INERT WITHOUT THAT MOD INSTALLED, BY CONSTRUCTION AND NOT BY CHECK.
+//  The port latches its scan at init on whether the asterite matmod exists at
+//  all, so in a world without Falling Stars a socketed module gates work that
+//  is never generated, and no world.mod call is ever made. A player can still
+//  acquire the item and be disappointed by it; there is no way to hide an item
+//  conditionally, and the description says what it needs.
+//
+//  IT NEEDS NO CHECKBOX, WHICH IS THE ONE PLACE IT DIVERGES FROM DEFRAG AND
+//  FARMING. Those gate several generators that a player could reasonably want
+//  separately -- tidy without compact, harvest without watering. This gates
+//  exactly one thing. A box whose only setting is the module's own presence is
+//  a second switch for the first switch.
+//
+//  IT NEEDS NO petports_moduleEffects. Nothing about this changes the unit: it
+//  changes what the PORT is willing to dispatch, the same channel Oblivious,
+//  Medic and Defragmentation use.
+//
+//  ART IS THE LAVA BLOCK MODULE'S GEM RETINTED to asterite's own three colours
+//  plus one darker step derived from the mid gold. It reads close to the Lamp
+//  Module and that is known and accepted for now.
+
+{
+	"itemName" : "petports_module_asterite",
+
+	//  UNCOMMON, MATCHING THE BAND. Farming, Hydrator, Oblivious, Metabolism
+	//  II, Fuel Efficiency II and Poison Block all sit at Uncommon and 500.
+	"price" : 500,
+	"rarity" : "Uncommon",
+
+	//  Shared with the other modules, so the categories.config.patch label and
+	//  the petports_filtergroups.config subgroup that already exist cover this
+	//  item too. A new category would need both added or it sorts to Unsorted.
+	"category" : "petports_module",
+
+	"inventoryIcon" : "petports_module_asterite.png",
+
+	"description" : "Equip a pet with this module and it will ^green;scour asterite^reset; from the surfaces in its network, taking the ore without breaking the blocks beneath it. Requires the ^yellow;Falling Stars^reset; mod.",
+	"shortdescription" : "Asterite Mining Module",
+
+	//  petports_no_upcycling KEEPS IT OUT OF THE CONVERTER, or a unit hauling
+	//  surplus to an upcycler turns the player's modules into treats.
+	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],
+
+	//  MAXSTACK 1 IS A REQUIREMENT. The pane moves modules with
+	//  player.swapSlotItem(), which returns the whole cursor stack; it refuses
+	//  a stack rather than trusting this field, so a stackable module would be
+	//  refused forever and look broken.
+	"maxStack" : 1,
+
+	"petports_moduleFlags" : [ "asterite" ]
+}

@@ -1,0 +1,80 @@
+//  PETPORTS -- ASTERITE MINING SPARK
+//
+//  A COSMETIC BURST AT A TILE. It does no damage, changes no tile, and carries
+//  no effect. Its entire job is to make a noise and throw some particles where
+//  a unit's beam lands, once per swing.
+//
+//  WHY A PROJECTILE RATHER THAN THE UNIT'S OWN ANIMATOR.
+//
+//  animator.playSound needs the sound declared in a pool on the monstertype's
+//  .animation, which would mean editing five or six chassis files for a
+//  cosmetic -- and then editing all of them again for the next matmod that
+//  wants different sounds. A projectile takes its sounds as a PARAMETER, which
+//  means they can come off the matmod at runtime and nothing in this mod ever
+//  names an asterite noise.
+//
+//  IT ALSO PUTS THE EFFECT AT THE TILE RATHER THAN AT THE UNIT, which is where
+//  a player is looking. The unit may be eight tiles away.
+//
+//  SHIPPED DELIBERATELY INCOMPLETE, exactly like petports_watersprinkle.
+//  actionOnReap is EMPTY here; the caster fills it per swing from what it read
+//  off the matmod being mined:
+//
+//    world.spawnProjectile("petports_asteritespark", centre, entity.id(),
+//      {0, 0}, false, {
+//        actionOnReap = {
+//          { action = "loop", count = <n>, body = {
+//              { action = "particle", specification = <miningParticle> } } },
+//          { action = "sound", options = <miningSounds> }
+//        }
+//      })
+//
+//  IF PARAMETER OVERRIDE DOES NOT REACH actionOnReap this becomes a silent
+//  invisible projectile that lives a tenth of a second and does nothing, which
+//  is the failure to watch for and is why the caster logs what it passed.
+//
+//  physics "statuspod" AND speed 0, copied from petports_medicburst for the
+//  same reason it uses them: this is delivered where it is aimed and must not
+//  fall, drift or bounce off the tile it is decorating.
+//
+//  THE SPRITE IS INTENTIONALLY BLANK. DO NOT "FIX" IT BY DRAWING SOMETHING.
+//  Same argument petports_medicburst makes at length -- the projectile lives a
+//  tenth of a second, so anything drawn here is a single-frame flash that
+//  reads as a rendering glitch. THE VISUAL IS THE PARTICLE BURST, which is the
+//  matmod's own miningParticle and therefore already looks like that ore.
+//  OUR OWN BLANK, NOT A BORROWED ONE: todo.art.invisibleframe records what
+//  happens when a hide depends on somebody else's empty frame.
+
+{
+	"projectileName" : "petports_asteritespark",
+
+	"physics" : "statuspod",
+	"bounces" : -1,
+	"speed" : 0,
+
+	//  A TENTH OF A SECOND, AND IT HAS TO STAY UNDER THE SWING PERIOD.
+	//
+	//  actionOnReap fires when the projectile DIES, so this is the delay
+	//  between the swing and its noise. The unit swings every 0.25 s; at 0.1
+	//  the burst reads as part of the swing that spawned it, and anything
+	//  approaching 0.25 would start landing on top of the next one.
+	"timeToLive" : 0.1,
+
+	"image" : "petports_asteritespark.png",
+	"animationCycle" : 0.1,
+	"frameNumber" : 3,
+	"damageKindImage" : "icon.png",
+
+	"pointLight" : false,
+	"emitters" : [ ],
+
+	//  FILLED BY THE CASTER. See the header.
+	"actionOnReap" : [ ],
+
+	//  NO DAMAGE OF ANY KIND, and "hidden" so no floating number appears. A
+	//  mining spark is scenery; it must never be able to hurt the unit that
+	//  cast it, the player standing beside it, or the tile underneath.
+	"power" : 0.0,
+	"damageType" : "NoDamage",
+	"damageKind" : "hidden"
+}

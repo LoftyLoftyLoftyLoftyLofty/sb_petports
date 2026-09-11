@@ -36,6 +36,14 @@
 --  Entity ids are NOT stable across a reload, so nothing here may key on one.
 --  Owner and unit are uniqueIds, which we assign and persist.
 
+--  BUILD STAMP, AND IT IS LOGGED RATHER THAN MERELY WRITTEN.
+--
+--  A stamp exists so a log can say which build is loaded. This file is a
+--  library with no init of its own and printed nothing, so its stamp could
+--  only ever be read out of the working copy -- which is the one place the
+--  question never needs asking. The petport prints it beside its own.
+PETPORTS_WORK_BUILD_STAMP = "2026-09-11b removal is replacement: petports_cleared, because metamod:none is not a real mod"
+
 local CLAIM_KEY = "petports_claims"
 
 --------------------------------------------------------------------------------
@@ -925,4 +933,190 @@ function petports_chassisTeam(monsterType)
 
 	chassisTeamCache[key] = team
 	return team
+end
+
+
+--------------------------------------------------------------------------------
+--  ASTERITE DEPOSITS
+--------------------------------------------------------------------------------
+--
+--  "There is a minable surface mod on this tile, and somebody found it."
+--
+--  A MATMOD IS NOT AN ENTITY. There is no entityQuery for "tiles carrying a
+--  surface mod" and no batched read of a region, so nothing here can be
+--  discovered the way a crate or a crop or a fish is, and nothing can be
+--  claimed by entity id. The port walks its own coverage rect one tile per
+--  update and records what it finds here, so a unit dispatched by ANY port
+--  can take a deposit ANY port discovered -- discovery belongs to the port
+--  (dd.dispatch.portdiscovery) and the record belongs to the world.
+--
+--      world property "petports_asterite" = {
+--        [tileKey] = {
+--          position = {x, y}      -- floored, the tile itself
+--          mod      = <string>    -- the matmod name that was read there
+--          found    = <world.time()>
+--          finder   = <petport uniqueId>
+--        }
+--      }
+--
+--  KEYED BY petports_tileKey AND NOT BY NETWORK, for the reason the replant
+--  intents are keyed by tile (arch.farming.intents). Networks are geography
+--  first and their identity moves underneath them: two ports placed between
+--  existing rects merge two networks into one, and a port mined out of the
+--  middle splits one into two (arch.network.membership). A network-keyed
+--  store would orphan half of itself on every such event. Tile-keyed, two
+--  networks overlapping the same ground share every discovery, a split costs
+--  nothing, and an entry outlives the port that found it.
+--
+--  NOT A CLAIM, AND IT MUST NEVER GROW A TTL. Same argument the intents
+--  make: an entry records something PHYSICALLY PRESENT in the world, and it
+--  should survive a week of nobody visiting. A claim expires because an
+--  interrupted unit would otherwise poison a work item forever; there is no
+--  equivalent failure here. It is invalidated by STATE -- a unit mining it,
+--  or the tile reading as something else when the miner arrives -- and by
+--  nothing else.
+--
+--  THE MOD NAME IS STORED RATHER THAN ASSUMED. Nothing in this store is
+--  asterite-specific; the port is TOLD which matmod to look for and writes
+--  down which one it read. The mining step re-reads the tile before it
+--  touches anything, so an entry naming a mod the tile no longer carries is
+--  discarded rather than acted on.
+--
+--  READ WHOLE ON EVERY NOTE, WHICH IS AFFORDABLE HERE AND ONLY HERE.
+--  petports_asteriteNote runs once per tile that actually HAS a deposit,
+--  which is a few percent of a sweep -- well under one read a second across
+--  six ports. THE MOMENT A WORK GENERATOR STARTS ASKING PER DISPATCH this
+--  needs the per-tick snapshot the claims table has (petports_claimsMemoBegin),
+--  for exactly the reason fact.pathing.indexparse records: a whole-property
+--  parse on a hot path IS the lag, not a contributor to it. Written down here
+--  because the generator is a later build and the trap is invisible from
+--  inside it.
+local ASTERITE_KEY = "petports_asterite"
+
+--  THE MATMOD WE LOOK FOR, AND THE ONE WE LEAVE BEHIND.
+--
+--  HERE RATHER THAN IN EITHER CALLER, because both need them and they must
+--  agree. The port reads world.mod and compares against the first; the unit
+--  writes the second over the top of it. A copy in each context is a rename
+--  away from a port that scans for something no unit will remove.
+--
+--  THE SECOND ONE USED TO BE "metamod:none" AND THAT CANNOT WORK.
+--
+--  It is vanilla's own spelling for the absence of a mod and it resolves
+--  correctly through MaterialDatabase::modId -- but WorldImpl::canPlaceMod
+--  opens with `if (!isRealMod(mod)) return false;`, and NoModId is a meta mod.
+--  Measured 2026-09-11: placeMod ran from a monster, returned false, and left
+--  both the mod and the tile untouched, identically under allowOverlap true
+--  and false -- because that flag is never consulted on the PlaceMod branch
+--  at all.
+--
+--  SO REMOVAL IS REPLACEMENT. petports_cleared is a real mod that draws
+--  nothing, drops nothing, sounds like nothing and adds no health to its host.
+--  See tiles/mods/lofty_petports/petports_cleared.matmod for why each of those
+--  is true and which one to suspect first if a cleared tile misbehaves.
+--
+--  THE FIRST IS THE ONLY ASTERITE-SPECIFIC STRING IN THE FEATURE. Everything
+--  else -- what it drops, how much health it has, what it sounds like being
+--  mined -- is read off the matmod at runtime, so pointing this at another
+--  surface mod is the whole of what it would take to mine that one instead.
+PETPORTS_ASTERITE_MOD = "asterite"
+PETPORTS_ASTERITE_CLEARED = "petports_cleared"
+
+--  A CEILING, BECAUSE THIS FEEDS THE 30 s WORLD STORAGE FLUSH.
+--
+--  Retail serialises every world property on its per-world storage sync
+--  (fact.tooling.worldstorage), and the nav store is already most of that
+--  payload. A deposit store is genuinely small beside it -- a few hundred
+--  entries on a base that has been rained on for hours -- but "small next to
+--  the thing that is already too big" is precisely how the nav store started,
+--  so it gets a number before it needs one.
+--
+--  FULL REFUSES; IT DOES NOT EVICT. An entry names a deposit that is really
+--  out there, so dropping the oldest to make room would discard a real one in
+--  order to record a duplicate discovery. A full store means the fleet is
+--  behind rather than that the store is wrong, and mining anything at all
+--  frees a slot.
+local ASTERITE_CAP = 2000
+
+function petports_asteriteCap()
+	return ASTERITE_CAP
+end
+
+function petports_asteriteAll()
+	return world.getProperty(ASTERITE_KEY) or {}
+end
+
+function petports_asteriteGet(tileKey)
+	return petports_asteriteAll()[tileKey]
+end
+
+function petports_asteriteCount()
+	local n = 0
+	for _ in pairs(petports_asteriteAll()) do n = n + 1 end
+	return n
+end
+
+--  RECORD A DEPOSIT. Returns added, count, full.
+--
+--  `added` IS FALSE FOR A TILE ALREADY IN THE STORE, which is the ordinary
+--  result on every sweep after the first and is why the caller logs on
+--  `added` and not on the call (proc.tooling.gatereset). A deposit re-found
+--  is not news; a deposit found is.
+--
+--  THE COUNT IS RETURNED SO THE CALLER NEED NOT RE-READ. Counting means
+--  walking the table we already hold, and a caller that wanted the number
+--  would otherwise call petports_asteriteCount and parse the whole property
+--  a second time in the same tick.
+function petports_asteriteNote(position, modName, ownerId)
+	if type(position) ~= "table" or type(modName) ~= "string" then
+		return false, 0, false
+	end
+
+	local key = petports_tileKey(position)
+	local deposits = petports_asteriteAll()
+
+	local count = 0
+	for _ in pairs(deposits) do count = count + 1 end
+
+	if deposits[key] ~= nil then return false, count, false end
+	if count >= ASTERITE_CAP then return false, count, true end
+
+	deposits[key] = {
+		--  FLOORED, so the tile that was READ is the tile that gets recorded
+		--  rather than wherever a float rounded to. The scan already hands
+		--  integers; this is the guard for every later caller that will not.
+		position = { math.floor(position[1]), math.floor(position[2]) },
+		mod = modName,
+		found = world.time(),
+		finder = ownerId
+	}
+
+	world.setProperty(ASTERITE_KEY, deposits)
+	return true, count + 1, false
+end
+
+--  DROP ONE. The mining step's last act, and the state check's only lever.
+--
+--  Returns whether anything was actually removed, so a caller can tell
+--  "cleared" from "was not there" -- two ports racing the same deposit
+--  produce the second, and it is not a failure.
+function petports_asteriteClear(tileKey)
+	if tileKey == nil then return false end
+
+	local deposits = petports_asteriteAll()
+	if deposits[tileKey] == nil then return false end
+
+	deposits[tileKey] = nil
+	world.setProperty(ASTERITE_KEY, deposits)
+	return true
+end
+
+--  DROP EVERYTHING. For a test cycle, not for the game: there is no in-world
+--  event that should ever empty this store wholesale.
+function petports_asteriteWipe()
+	local n = petports_asteriteCount()
+	world.setProperty(ASTERITE_KEY, {})
+	sb.logInfo("PETPORTS asterite store WIPED, %s deposit(s) dropped",
+		sb.printJson(n))
+	return n
 end

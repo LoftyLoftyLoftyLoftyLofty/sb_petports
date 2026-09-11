@@ -1,0 +1,83 @@
+//  A SURFACE MOD THAT EXISTS FOR A FRACTION OF A SECOND.
+//
+//  WHY THIS FILE EXISTS AT ALL. There is no way for a script to take a surface
+//  mod OFF a tile in retail. Both direct routes are closed in the engine, and
+//  both were closed by reading the source rather than by guessing:
+//
+//    world.placeMod  ->  WorldImpl::canPlaceMod opens with
+//                        `if (!isRealMod(mod)) return false;` and NoModId is a
+//                        meta mod, so "metamod:none" can never be placed. The
+//                        allowOverlap flag is not even consulted on the
+//                        PlaceMod branch of validateTileModification, which is
+//                        why passing true and false gave identical refusals.
+//
+//    world.damageTiles -> WorldImpl::tileDamageParameters, for a mod with
+//                        breaksWithTile TRUE, returns
+//                        modDamageParameters(mod).sum(materialDamageParameters(target)).
+//                        The mod's health is an ADDEND to the block's, so
+//                        killing asterite kills the obsidian under it. That is
+//                        the ore-vein rule.
+//
+//  SO REMOVAL IS TWO STEPS, AND THIS IS THE THING IN THE MIDDLE. A real mod
+//  can be written over another one -- proven in game 2026-09-11, "gold" and
+//  "silver" both overwrote asterite from a monster script. And a mod with
+//  breaksWithTile FALSE takes the fourth branch of that same function:
+//
+//                        return modDamageParameters(mod);
+//
+//  its own damage pool, alone, with the tile untouched. So the unit places
+//  this over the deposit and then breaks it, and what is left is a bare tile
+//  carrying no mod at all -- which is what could not be done in one call.
+//
+//  MODELLED ON flowerygrass, which is what put us onto it: swapping asterite
+//  for it made the deposit breakable, and the only difference between them is
+//  this flag. Vanilla grass works the same way and always has -- the first
+//  swing strips the grass, the next breaks the dirt.
+//
+//  NOTHING OF OURS IS LEFT IN THE WORLD, and that is the point of the second
+//  step. An earlier version kept breaksWithTile true and simply left this mod
+//  on the tile forever: invisible, harmless, and permanent litter that also
+//  had to be tuned so it did not change how the host block mined by hand.
+//
+//  EVERY FIELD BELOW IS EITHER LOAD-BEARING OR DELIBERATELY ABSENT.
+//
+//  modId 58700, claimed on Modding:Matmods:Mods. Checked 2026-09-11: the
+//  highest claim on that table was 57051-57055 and nothing sat at 58700. Well
+//  clear of the meta mod ids at the top of the range, which is what isRealMod
+//  tests against.
+//
+//  breaksWithTile FALSE -- BY OMISSION, EXACTLY AS flowerygrass DOES IT. The
+//  default is false and writing it out would suggest the value had been
+//  weighed against something. It is the whole mechanism; if this file ever
+//  grows a `"breaksWithTile" : true` the removal silently becomes permanent
+//  litter again and the only symptom is cleared tiles keeping an invisible
+//  mod.
+//
+//  health 0, SO ANY DAMAGE AT ALL DESTROYS IT. flowerygrass ships the same
+//  value for the same reason. The unit still sizes its damage from this number
+//  rather than assuming it -- see the clearing damage in petportsTaskAction --
+//  so raising it here raises the blow that removes it.
+//
+//  NO renderTemplate, so no modRenderProfile is built and nothing is drawn.
+//  MaterialDatabase guards that read with `if (modConfig.contains(...))`, so
+//  its absence is a supported state rather than a gamble. It matters less than
+//  it did now that this exists for one frame, but a failed damage step leaves
+//  it visible and it should still be nothing.
+//
+//  NO itemDrop, so breaking it yields nothing. The ore the unit mined is
+//  synthesised into its cargo; this mod must never be a second source of it,
+//  and it is now something that actually gets broken.
+//
+//  NO miningSounds or miningParticle. MaterialDatabase::miningSound falls back
+//  to the HOST MATERIAL when the mod declares none, so breaking this plays
+//  whatever the block underneath sounds like -- which is the right noise for
+//  the last moment of a mine, and one we do not have to choose.
+
+{
+	"modId" : 58700,
+	"modName" : "petports_cleared",
+	"description" : "Nothing at all, and not for long.",
+
+	"health" : 0,
+	"harvestLevel" : 0
+}

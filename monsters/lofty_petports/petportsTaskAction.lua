@@ -178,7 +178,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-10a a leg that is not ready yet is asked for again next update, not reported as no leg"
+local BUILD_STAMP = "2026-09-11j the placeholder is broken after it is placed, so a cleared tile carries no mod at all"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -5312,6 +5312,188 @@ local function runAndMunch(dt, task)
   end
 end
 
+--------------------------------------------------------------------------------
+--  ASTERITE MINING EFFECTS
+--------------------------------------------------------------------------------
+--
+--  UP HERE BECAUSE THE ACT IS BELOW, AND THAT IS THE WHOLE REASON.
+--
+--  These were written beside the console probe at the end of the file, where
+--  petports_asteriteReach lives -- and that one is FINE there, because it is a
+--  global and a global resolves at call time. These are locals, and a local
+--  used above its own declaration is a nil GLOBAL that only throws when the
+--  path fires: in this case the first time a unit actually mined something.
+--  petports_localorder.py flags exactly this and flagged exactly this.
+--
+--  NOTE WHAT IT DID NOT FLAG: the three constants below. The linter tracks
+--  CALLS, so `asteriteEffects()` was caught and `ASTERITE_SWING_PERIOD` was
+--  not, even though both were equally broken.
+
+--  HOW LONG A SWING TAKES, AND HOW MANY SWINGS A DEPOSIT IS WORTH.
+--
+--  FOUR A SECOND. The count is not a constant at all -- it is the matmod's own
+--  `health`, which for asterite is 4 -- so a deposit takes health/4 seconds to
+--  mine and a tougher surface mod would take proportionally longer with no
+--  number changed here. That is the same principle as reading itemDrop,
+--  miningSounds and miningParticle off the matmod: the ore describes itself.
+--
+--  THE SWINGS ARE NOT DAMAGE. Nothing is being worn down -- the removal is a
+--  single placeMod at the end, and the swings exist so that mining LOOKS like
+--  mining rather than like a deposit blinking out of existence. If the mine is
+--  interrupted at swing three, nothing has happened and nothing needs undoing,
+--  which is a property worth keeping.
+--
+--  A FLOOR OF ONE, because a matmod with health 0 or no health at all would
+--  otherwise complete before a single spark was cast.
+local ASTERITE_SWING_PERIOD = 0.25
+local ASTERITE_SWINGS_MIN = 1
+
+--  Particles per swing. Enough to read as a burst, few enough that four of
+--  them in a second is not a smoke screen.
+local ASTERITE_SPARKS = 6
+
+--  HOW HARD TO HIT THE PLACEHOLDER TO MAKE IT GO.
+--
+--  ADDED TO ITS OWN health, which is 0, so the blow is normally 1 -- and any
+--  positive number would do. The margin exists so that raising the
+--  placeholder's health does not silently leave it standing, and so the
+--  damage-table factor for "blockish" cannot land the blow exactly on the
+--  threshold rather than past it.
+--
+--  OVERKILL IS FREE HERE, AND ONLY HERE. petports_cleared declares no
+--  breaksWithTile, so tileDamageParameters returns ITS pool alone -- the host
+--  block is not in the sum and cannot be hurt by this no matter how large the
+--  number. That is not true of any other tile this mod touches.
+local ASTERITE_CLEAR_MARGIN = 1
+
+--  WHAT THIS ORE SOUNDS AND LOOKS LIKE BEING MINED, READ OFF ITS OWN MATMOD.
+--
+--  Returns swings, particle, sounds. Nothing here names asterite, and that is
+--  the whole point: a second surface-mod ore gets its own noises for free.
+--
+--  MINING SOUNDS MAY BE RELATIVE TO THE MATMOD FILE. MaterialDatabase resolves
+--  them with AssetPath::relativeTo(file, _1) when it loads the mod, but
+--  root.modConfig hands back the RAW config -- so a matmod that wrote
+--  "ice_break1.ogg" beside itself gives us a path the sound action cannot
+--  find. asterite happens to use absolute paths and would never have shown
+--  this; the next mod along might not.
+local function asteriteEffects(modName)
+	local swings = ASTERITE_SWINGS_MIN
+	local particle = nil
+	local sounds = nil
+
+	local ok, mod = pcall(root.modConfig, modName)
+
+	if not ok or type(mod) ~= "table" or type(mod.config) ~= "table" then
+		return swings, particle, sounds
+	end
+
+	local health = tonumber(mod.config.health)
+	if health ~= nil and health > swings then swings = math.floor(health) end
+
+	if type(mod.config.miningParticle) == "string" then
+		particle = mod.config.miningParticle
+	end
+
+	if type(mod.config.miningSounds) == "table"
+	   and #mod.config.miningSounds > 0 then
+
+		--  THE DIRECTORY THE MATMOD LIVES IN, for resolving relative entries.
+		--  nil if the binding does not hand back a path, in which case a
+		--  relative sound is passed through unchanged and simply does not play
+		--  -- which is the right failure for a cosmetic.
+		local base = nil
+		if type(mod.path) == "string" then
+			base = mod.path:match("^(.*/)[^/]*$")
+		end
+
+		sounds = {}
+
+		for _, entry in ipairs(mod.config.miningSounds) do
+			if type(entry) == "string" then
+				if entry:sub(1, 1) == "/" or base == nil then
+					sounds[#sounds + 1] = entry
+				else
+					sounds[#sounds + 1] = base .. entry
+				end
+			end
+		end
+
+		if #sounds == 0 then sounds = nil end
+	end
+
+	return swings, particle, sounds
+end
+
+--  TELL EVERY CLIENT TO DRAW A BEAM AT THIS TILE.
+--
+--  ONE MESSAGE PER MINE. The endpoint is a FIXED TILE and the swing train is
+--  deterministic, so the whole animation is described in one send and the
+--  overlay runs it off its own clock. The relocator has to chase a moving
+--  monster and that is why its beam is a coroutine; ours does not.
+--
+--  NOTHING IS SENT TO STOP IT. The entry carries its own end time and the
+--  overlay drops it there, so a unit that dies or is retired mid-beam leaves
+--  no orphan drawable behind. That property is why there is no uninit half to
+--  this and no heartbeat.
+--
+--  world.players() AND NOT world.playerQuery, the same choice publishBubble
+--  makes: there is no distance argument to get wrong, and the overlay culls by
+--  range on the drawing side where the player's own position is known.
+--
+--  FAILURE IS LOGGED AND SWALLOWED. The beam is scenery. A mine that works
+--  invisibly is worth far more than a mine that fails because a cosmetic
+--  could not be published.
+local function publishBeam(centre, swings, period)
+	local ok, players = pcall(world.players)
+	if not ok or players == nil then return end
+
+	for _, id in ipairs(players) do
+		world.sendEntityMessage(id, "petports_beamShow", entity.id(), centre,
+			swings, period)
+	end
+end
+
+--  ONE SWING'S WORTH OF NOISE AND SPARKS, AT THE TILE.
+--
+--  AT THE TILE AND NOT AT THE UNIT, because the unit may be eight tiles away
+--  and the tile is what the player is looking at.
+--
+--  FAILURE IS LOGGED AND SWALLOWED. This is scenery; a mine that works
+--  silently is worth far more than a mine that reports failed because a
+--  cosmetic did not spawn.
+local function asteriteSwingEffect(centre, particle, sounds)
+	local reap = {}
+
+	if particle ~= nil then
+		reap[#reap + 1] =
+		{
+			action = "loop",
+			count = ASTERITE_SPARKS,
+			body = { { action = "particle", specification = particle } }
+		}
+	end
+
+	if sounds ~= nil then
+		--  ONE ACTION WITH ALL SIX OPTIONS, NOT SIX ACTIONS. A sound action
+		--  picks ONE of its options at random, which is exactly what six
+		--  interchangeable break noises are for -- petports_medicburst splits
+		--  them into two actions precisely because those two are meant to
+		--  LAYER, and these are not.
+		reap[#reap + 1] = { action = "sound", options = sounds }
+	end
+
+	if #reap == 0 then return end
+
+	local ok, err = pcall(world.spawnProjectile, "petports_asteritespark",
+		centre, entity.id(), { 0, 0 }, false, { actionOnReap = reap })
+
+	if not ok then
+		sb.logInfo("UNIT asterite swing effect failed at %s: %s",
+			sb.printJson(centre), tostring(err))
+	end
+end
+
 local function petportsTaskUpdateInner(dt, stateData)
   local task = stateData.task
 
@@ -8369,6 +8551,243 @@ local function petportsTaskUpdateInner(dt, stateData)
     return false
   end
 
+  if task.type == "asterite" then
+    local tile = task.tile
+
+    if type(tile) ~= "table" or tile[1] == nil or tile[2] == nil then
+      report(stateData, "failed", "asterite task carried no tile")
+      return true
+    end
+
+    local modName = task.mod or PETPORTS_ASTERITE_MOD
+    local centre = { tile[1] + 0.5, tile[2] + 0.5 }
+
+    --  READ BEFORE ANYTHING ELSE, because everything below is conditional on
+    --  the deposit still being there and nothing about the dispatch proves it.
+    --  A task can outlive the beat that created it, the store cache is five
+    --  seconds stale by design, and a player with a matter manipulator is
+    --  faster than a walking pet.
+    local okMod, before = pcall(world.mod, tile, "foreground")
+    local okMat, material = pcall(world.material, tile, "foreground")
+
+    if not okMod then
+      --  WE DO NOT KNOW, WHICH IS NOT THE SAME AS GONE. An unloaded region
+      --  reads as a failed call, and dropping a real deposit because we could
+      --  not see it is the worse error. Retryable, entry kept.
+      report(stateData, "failed", string.format(
+        "could not read the tile at %s on arrival", sb.printJson(tile)),
+        nil, true)
+      return true
+    end
+
+    if before ~= modName then
+      --  SOMEBODY GOT THERE FIRST, which is not a failure of anything. The
+      --  store is now lying and the entry goes, exactly as it does in the
+      --  console probe -- otherwise the port re-dispatches to it forever.
+      local cleared = petports_asteriteClear(task.target)
+
+      report(stateData, "failed", string.format(
+        "arrived to find %s at %s, not %s -- entry dropped: %s",
+        tostring(before), sb.printJson(tile), tostring(modName),
+        tostring(cleared)))
+      return true
+    end
+
+    local here = mcontroller.position()
+    local range = world.magnitude(here, centre)
+    local reach = petports_asteriteReach()
+
+    if range > reach then
+      --  RETRYABLE, AND THIS IS THE ONE THE PORT MOST WANTS TO SEE. The port
+      --  searched within ASTERITE_STAND_RADIUS and that number is supposed to
+      --  be inside every chassis's reach by construction -- so this firing at
+      --  all means the two have drifted, or the unit stopped short of the
+      --  standing point it was given.
+      report(stateData, "failed", string.format(
+        "arrived %s from the deposit at %s but reach is %s (unit at %s, "
+        .. "standing point was %s)", sb.printJson(math.floor(range * 100) / 100),
+        sb.printJson(tile), sb.printJson(reach), sb.printJson(here),
+        sb.printJson(task.position)), nil, true)
+      return true
+    end
+
+    --  THE SWINGS. EVERYTHING ABOVE THIS RUNS EVERY TICK OF THEM, DELIBERATELY.
+    --
+    --  The tile read, the mod comparison and the reach test are all re-done on
+    --  every tick of the mine rather than once at the start, which costs four
+    --  cheap engine calls a second and buys the case that actually happens: a
+    --  player mining the deposit out from under a unit mid-swing, or a unit
+    --  shoved out of reach by a door. Either aborts cleanly, because NOTHING
+    --  HAS HAPPENED YET -- the removal is a single placeMod after the last
+    --  swing, so an interrupted mine leaves no partial state to unwind.
+    --
+    --  COUNT AND EFFECTS RESOLVED ONCE, on the task rather than on stateData,
+    --  so re-entering the action state does not restart the beam from zero.
+    if task.asteriteSwings == nil then
+      local swings, particle, sounds = asteriteEffects(modName)
+
+      task.asteriteSwings = swings
+      task.asteriteParticle = particle
+      task.asteriteSounds = sounds
+      task.asteriteSwung = 0
+      task.asteriteTimer = 0
+
+      --  PUBLISHED HERE AND NOWHERE ELSE, in the same branch that decides how
+      --  many swings there are -- so the beam and the swings can never
+      --  disagree about how long the mine lasts.
+      publishBeam(centre, swings, ASTERITE_SWING_PERIOD)
+
+      sb.logInfo("UNIT asterite mining %s at %s: %s swing(s) at %ss, particle "
+        .. "%s, %s sound(s)", tostring(modName), sb.printJson(tile),
+        sb.printJson(swings), sb.printJson(ASTERITE_SWING_PERIOD),
+        tostring(particle or "none"),
+        sb.printJson(sounds ~= nil and #sounds or 0))
+    end
+
+    task.asteriteTimer = (task.asteriteTimer or 0) - dt
+
+    if task.asteriteTimer > 0 then return false end
+
+    if task.asteriteSwung < task.asteriteSwings then
+      task.asteriteSwung = task.asteriteSwung + 1
+      asteriteSwingEffect(centre, task.asteriteParticle, task.asteriteSounds)
+      task.asteriteTimer = ASTERITE_SWING_PERIOD
+
+      --  THE LAST SWING STILL WAITS OUT ITS PERIOD before the deposit goes, or
+      --  the final spark and the removal land on the same frame and the ore
+      --  appears to vanish a beat early.
+      return false
+    end
+
+    --  WHAT IT DROPS COMES OFF THE MATMOD, not off a constant and not off the
+    --  task. This is the last place the ore's identity is decided and it is
+    --  decided by the thing being mined, which is what makes the whole module
+    --  work on any surface-mod ore.
+    local okConfig, mod = pcall(root.modConfig, modName)
+    local drop = nil
+
+    if okConfig and type(mod) == "table" and type(mod.config) == "table" then
+      drop = mod.config.itemDrop
+    end
+
+    if type(drop) ~= "string" or drop == "" then
+      --  NOT RETRYABLE AND THE DEPOSIT IS LEFT ALONE. Removing a mod that
+      --  yields nothing is pure destruction of the player's terrain feature.
+      report(stateData, "failed", string.format(
+        "matmod %s names no itemDrop -- refusing to remove it for nothing",
+        tostring(modName)))
+      return true
+    end
+
+    --  REMOVAL IS REPLACEMENT. petports_cleared is a real mod that draws
+    --  nothing and adds no health to its host; "metamod:none" cannot be
+    --  placed, because canPlaceMod opens with an isRealMod guard. The matmod
+    --  file has the full reasoning.
+    local okPlace, placed = pcall(world.placeMod, tile, "foreground",
+      PETPORTS_ASTERITE_CLEARED, nil, true)
+
+    local _, after = pcall(world.mod, tile, "foreground")
+    local _, materialAfter = pcall(world.material, tile, "foreground")
+
+    if after == modName then
+      --  RETRYABLE. The call declined rather than the deposit being wrong, so
+      --  the entry stays and another unit may have better luck. If this ever
+      --  fires steadily it is the same class of refusal the placeMod harness
+      --  exists to diagnose.
+      report(stateData, "failed", string.format(
+        "placeMod at %s ok %s returned %s and the deposit is still there",
+        sb.printJson(tile), tostring(okPlace), tostring(placed)), nil, true)
+      return true
+    end
+
+    --  STEP TWO: BREAK THE PLACEHOLDER, LEAVING A BARE TILE.
+    --
+    --  placeMod cannot write "no mod" -- canPlaceMod refuses NoModId -- so the
+    --  deposit was replaced rather than removed, and what sits there now is
+    --  ours. petports_cleared declares no breaksWithTile, which puts it on the
+    --  fourth branch of WorldImpl::tileDamageParameters: its own damage pool,
+    --  alone, with the host material not in the sum. So damaging it destroys
+    --  it and cannot touch the obsidian, whatever the number.
+    --
+    --  SIZED FROM THE PLACEHOLDER'S OWN health rather than from a constant, so
+    --  the matmod stays the single place that decides how tough it is.
+    --
+    --  "blockish" IS THE TYPE FOR A SOLID SURFACE. Not "beamish", which is the
+    --  matter manipulator's and is a penetrating type -- and a penetrating
+    --  type takes the SECOND branch of that function, which returns the
+    --  MATERIAL's parameters and aims the blow at the player's block.
+    --
+    --  FAILURE HERE IS NOT A FAILED MINE. The deposit is already gone and the
+    --  ore is already owed; a placeholder that survives is invisible, inert,
+    --  and will be overwritten by the next asterite that lands on it. So this
+    --  is logged and carried on from, never reported.
+    local clearHealth = 0
+    local okCleared, cleared = pcall(root.modConfig, PETPORTS_ASTERITE_CLEARED)
+
+    if okCleared and type(cleared) == "table" and type(cleared.config) == "table" then
+      clearHealth = tonumber(cleared.config.health) or 0
+    end
+
+    local okClear, clearRan = pcall(world.damageTiles, { tile }, "foreground",
+      mcontroller.position(), "blockish", clearHealth + ASTERITE_CLEAR_MARGIN,
+      0, entity.id())
+
+    local _, bare = pcall(world.mod, tile, "foreground")
+    local _, bareMaterial = pcall(world.material, tile, "foreground")
+
+    if bare == PETPORTS_ASTERITE_CLEARED then
+      sb.logInfo("UNIT asterite could not break the placeholder at %s "
+        .. "(damageTiles ok %s returned %s, %s damage against health %s) -- "
+        .. "the tile keeps an invisible mod until something overwrites it",
+        sb.printJson(tile), tostring(okClear), tostring(clearRan),
+        sb.printJson(clearHealth + ASTERITE_CLEAR_MARGIN),
+        sb.printJson(clearHealth))
+    end
+
+    --  AND THE BLOW MUST NOT HAVE COST THE BLOCK EITHER. Separate from the
+    --  check below, which is about the placeMod: this one is about the damage,
+    --  and the two fail for entirely different reasons.
+    if okMat and bareMaterial ~= material then
+      sb.logInfo("UNIT asterite CLEARING DAMAGE DESTROYED THE TILE at %s: %s "
+        .. "became %s. breaksWithTile on petports_cleared is the first thing "
+        .. "to check", sb.printJson(tile), tostring(material),
+        tostring(bareMaterial))
+    end
+
+    --  THE ASSERTION THE WHOLE MODULE EXISTS FOR. Logged rather than reported,
+    --  because at this point the deposit IS gone and the ore IS owed -- but a
+    --  changed material means we have started eating the player's base and
+    --  that has to be findable in a log without anyone looking for it.
+    if okMat and materialAfter ~= material then
+      sb.logInfo("UNIT asterite DESTROYED THE TILE at %s: %s became %s. This "
+        .. "should be impossible via placeMod and the module must be pulled "
+        .. "until it is understood", sb.printJson(tile), tostring(material),
+        tostring(materialAfter))
+    end
+
+    --  THE ENTRY GOES BEFORE THE REPORT, because the deposit is already gone
+    --  from the world and a report that never lands must not leave the store
+    --  claiming otherwise. The ore is the thing at risk in that window, not
+    --  the record.
+    petports_asteriteClear(task.target)
+
+    --  ONE ORE, SYNTHESISED, AND NOTHING IS SPAWNED.
+    --
+    --  The engine drops a mod's itemDrop when the mod BREAKS; ours was
+    --  replaced rather than broken, so nothing was dropped and there is
+    --  nothing to collect. The descriptor travels on the report and the port
+    --  writes it into the unit item, which is the same path a collected stack
+    --  takes -- so it survives despawn, reload, and being carried to another
+    --  world.
+    report(stateData, "done", string.format(
+      "mined %s at %s in %s swing(s) (%s -> %s -> %s, %s intact)",
+      tostring(drop), sb.printJson(tile), sb.printJson(task.asteriteSwung or 0),
+      tostring(before), tostring(after), tostring(bare),
+      tostring(material)), { name = drop, count = 1 })
+
+    return true
+  end
+
   --  ON STATION. Do NOT report done.
   --
   --  Completing the task returns the unit to the state machine's idle branch,
@@ -8594,4 +9013,475 @@ function petportsTaskAction.update(dt, stateData)
   if petports_profTickEnd ~= nil then petports_profTickEnd() end
 
   return result
+end
+
+
+--------------------------------------------------------------------------------
+--  THE ASTERITE REMOVAL PROBE
+--------------------------------------------------------------------------------
+--
+--  A CONSOLE ENTRY POINT AND NOTHING ELSE. No task type, no dispatch, no
+--  claim, no beam.
+--
+--  IT NO LONGER REMOVES THE MOD, IT REPLACES IT, and that is not a compromise
+--  -- it is the only thing retail permits. canPlaceMod refuses NoModId and the
+--  damage path sums a breaksWithTile mod's health into its host, so there is
+--  no route to a bare tile from a script. petports_cleared is a real mod that
+--  is nothing, and writing it over the deposit is indistinguishable in play
+--  from taking the deposit off.
+--
+--  The two questions below are answered now, and the answers are kept because
+--  the next person will ask them again:
+--
+--      1  does world.placeMod with "metamod:none" remove a surface mod when a
+--         MONSTER calls it? The binding is cited in this mod from
+--         HarvesterBeam, which is a player-held activeitem and therefore the
+--         permissive case. Nothing here has ever called it.
+--
+--      2  does it need allowOverlap true? We are writing over an existing mod
+--         rather than onto a bare tile, which is the case that flag governs.
+--         If it is needed and missing, the call refuses SILENTLY and the
+--         symptom is a unit that mines nothing and reports success.
+--
+--  AND ONE ASSERTION THAT IS THE ENTIRE POINT OF THE FEATURE: THE TILE MUST
+--  STILL BE THERE AFTERWARDS.
+--
+--  asterite declares breaksWithTile true, which is why damaging it is not an
+--  option -- the block would go with the mod, and this whole module exists so
+--  that a moonbase roof can be cleared WITHOUT being demolished. So this reads
+--  world.material before and after and says which way it went, because "the
+--  mod is gone" and "the mod is gone and so is the roof" are indistinguishable
+--  in a log that only checks the first.
+--
+--  USAGE:
+--
+--      /entityeval petports_asteriteMine()              nearest known deposit
+--      /entityeval petports_asteriteMine(5854, 1160)    a named tile
+--      /entityeval petports_asteriteMine(nil, nil, false)   allowOverlap off
+--      /entityeval petports_asteriteMine(nil, nil, true, 99) ignore reach
+--
+--  IT REFUSES ANY TILE THAT IS NOT CARRYING THE TARGET MOD. A console function
+--  that strips whatever matmod it finds would cheerfully untill a farm or peel
+--  a vanilla ore vein off its rock, and the tile it is pointed at is chosen by
+--  hand from a log. The check costs one comparison.
+
+--  HOW CLOSE IS CLOSE ENOUGH, AND WHY THERE IS NO LINE-OF-SIGHT TEST.
+--
+--  Mining in Starbound is a beam from the player to a point that cuts through
+--  whatever lies between -- that is what the matter manipulator does, and it is
+--  what every player already expects mining to look like. A unit that stops a
+--  few tiles short and beams a deposit through a wall is not an oddity, it is
+--  the convention.
+--
+--  WHICH IS JUST AS WELL, BECAUSE THE OBVIOUS SIGHT TEST CANNOT WORK. A
+--  surface mod sits on a SOLID tile, so a line from the unit to that tile's
+--  centre terminates inside rock by definition and world.lineTileCollision
+--  would refuse every valid target this feature will ever have. Proximity is
+--  not a weaker substitute for sight here; sight is the wrong question.
+--
+--  SCALED BY THE BODY, because a large chassis reaching four tiles from its
+--  CENTRE is reaching much less than that from its edge, and the deposit is
+--  approached by the edge. The larger axis of the bound box is the honest
+--  measure of "how much of this unit is not its middle". Bound box rather than
+--  collision poly deliberately: the poly is for collision and the box is for
+--  size, and this is a size question.
+--
+--  THE CAP IS NOT DECORATION. Without it a future large chassis out-ranges the
+--  thing the number was chosen for, and "the pet mined it from across the
+--  room" stops reading as mining.
+local ASTERITE_REACH_BASE = 4
+local ASTERITE_REACH_MAX = 8
+
+function petports_asteriteReach()
+	local bounds = mcontroller.boundBox()
+	local body = 0
+
+	if type(bounds) == "table" and #bounds >= 4 then
+		body = math.max(math.abs(bounds[3] - bounds[1]),
+			math.abs(bounds[4] - bounds[2]))
+	end
+
+	return math.min(ASTERITE_REACH_BASE + body, ASTERITE_REACH_MAX)
+end
+
+--  THE NEAREST DEPOSIT THE STORE KNOWS ABOUT, so the probe can be called with
+--  no arguments at all and nobody has to copy coordinates out of a log.
+--
+--  world.magnitude AND NOT vec2, because worlds wrap: two points either side of
+--  the seam are adjacent in the world and very far apart in arithmetic.
+local function nearestDeposit()
+	local here = mcontroller.position()
+	local bestKey, bestEntry, bestRange
+
+	for key, entry in pairs(petports_asteriteAll()) do
+		if type(entry) == "table" and type(entry.position) == "table" then
+			local range = world.magnitude(here,
+				{ entry.position[1] + 0.5, entry.position[2] + 0.5 })
+
+			if bestRange == nil or range < bestRange then
+				bestKey, bestEntry, bestRange = key, entry, range
+			end
+		end
+	end
+
+	return bestKey, bestEntry, bestRange
+end
+
+local function round2(n)
+	return math.floor((tonumber(n) or 0) * 100) / 100
+end
+
+--  A RAW placeMod HARNESS. No store, no reach, no refusal, no drop.
+--
+--  MEASURED 2026-09-11, AND IT IS WHY THIS EXISTS:
+--
+--      placeMod ok true returned false -- mod asterite to asterite
+--      (STILL THERE), material obsidian to obsidian (INTACT)
+--
+--  ...with allowOverlap both true and false. READ THAT CAREFULLY. The pcall
+--  SUCCEEDED and the call RETURNED FALSE. A binding unavailable to a monster
+--  fails the pcall; this one ran and declined. So world.placeMod reaches the
+--  world from a monster perfectly well, and the thing it will not accept is an
+--  argument -- almost certainly "metamod:none" not resolving to a mod it is
+--  willing to place.
+--
+--  THAT IS A DIFFERENT QUESTION FROM "MINE THIS DEPOSIT", so it gets a
+--  different function. petports_asteriteMine is the mining path and its
+--  refusals are deliberate; this is an instrument and has none of them. It
+--  will write any mod onto any tile, which is exactly what makes it useful and
+--  exactly why it is not wired to anything.
+--
+--  WHAT TO TRY, AND WHAT EACH ANSWER MEANS:
+--
+--      ("goldore")       returns TRUE  -> the binding and the overlap are
+--                                         fine, and "metamod:none" is simply
+--                                         the wrong name to hand it
+--                        returns FALSE -> placeMod will not overwrite an
+--                                         existing mod at all, and removal has
+--                                         to come from somewhere else
+--
+--      on a BARE tile    whatever world.mod returns there is the engine's own
+--                        spelling for "no mod", and that spelling is the next
+--                        thing to pass as newMod
+--
+--  IT PUTS THINGS BACK. Placing goldore leaves goldore on the tile, and
+--  petports_asteriteMine would then refuse it for carrying the wrong mod.
+--  Call this again with "asterite" to restore before testing anything else.
+--
+--  USAGE:
+--
+--      /entityeval petports_asteriteSetMod(5788, 1159, "goldore")
+--      /entityeval petports_asteriteSetMod(5788, 1159, "asterite")
+--      /entityeval petports_asteriteSetMod(5788, 1159, "metamod:none", false)
+function petports_asteriteSetMod(x, y, newMod, allowOverlap)
+	if allowOverlap == nil then allowOverlap = true end
+
+	local tile = { math.floor(tonumber(x) or 0), math.floor(tonumber(y) or 0) }
+
+	local okMod, before = pcall(world.mod, tile, "foreground")
+	local okMat, material = pcall(world.material, tile, "foreground")
+
+	--  DOES THE NAME EVEN RESOLVE. root.modConfig on a name the material
+	--  database does not know is the cheapest way to tell "placeMod refused
+	--  this mod" from "placeMod was handed something that is not a mod".
+	local okConfig = pcall(root.modConfig, tostring(newMod))
+
+	sb.logInfo("UNIT placeMod harness at %s: mod %s, material %s -- asking for "
+		.. "%s (modConfig resolves: %s), allowOverlap %s",
+		sb.printJson(tile), tostring(okMod and before),
+		tostring(okMat and material), tostring(newMod), tostring(okConfig),
+		tostring(allowOverlap))
+
+	local okPlace, placed = pcall(world.placeMod, tile, "foreground",
+		tostring(newMod), nil, allowOverlap)
+
+	local _, after = pcall(world.mod, tile, "foreground")
+	local _, materialAfter = pcall(world.material, tile, "foreground")
+
+	sb.logInfo("UNIT placeMod harness RESULT: ok %s returned %s -- mod %s to "
+		.. "%s (%s), material %s to %s (%s)",
+		tostring(okPlace), tostring(placed),
+		tostring(before), tostring(after),
+		(after ~= before) and "CHANGED" or "UNCHANGED",
+		tostring(material), tostring(materialAfter),
+		(materialAfter == material) and "INTACT" or "CHANGED")
+
+	return placed
+end
+
+--  A RAW damageTiles HARNESS, AND THE READING THAT PUT IT HERE.
+--
+--  This was written off early on the grounds that asterite declares
+--  breaksWithTile true, so damaging it would take the obsidian with it. That
+--  reasoning was a guess. StarMaterialDatabase.cpp says otherwise:
+--
+--      mod.damageParameters = TileDamageParameters(...,
+--          modConfig.optFloat("health"), modConfig.optUInt("harvestLevel"));
+--
+--  A MOD CARRIES ITS OWN HEALTH AND ITS OWN HARVEST LEVEL, and
+--  modDamageParameters returns them independently of the material's. A mod
+--  that could only ever be destroyed alongside its tile would have no use for
+--  either number. asterite declares health 4 and harvestLevel 0, and obsidian
+--  is far tougher than 4 -- so if damage lands on the mod first, a small
+--  amount takes the deposit and leaves the roof.
+--
+--  breaksWithTile most likely means "when the TILE goes, this mod goes too",
+--  which is a statement about the tile dying, not about whether the mod can
+--  die by itself.
+--
+--  THE SIGNATURE, from StarWorldLuaBindings.cpp:
+--
+--      bool damageTiles(List<Vec2I> positions, String layer,
+--                       Vec2F sourcePosition, String damageType,
+--                       float damageAmount, Maybe<unsigned> harvestLevel,
+--                       Maybe<EntityId> sourceEntity)
+--
+--  "beamish" is the matter manipulator's damage type and therefore the honest
+--  default for something calling itself mining.
+--
+--  TILE DAMAGE ACCUMULATES AND THEN DECAYS, so a single call under the mod's
+--  health chips rather than breaks, and calling again shortly after continues
+--  where it left off. That is worth knowing before reading a first result as
+--  a refusal.
+--
+--  THE DEFAULT AMOUNT IS DELIBERATELY JUST OVER THE MOD AND FAR UNDER THE
+--  BLOCK. If the tile takes the damage instead of the mod, 5 should not be
+--  close to enough to break obsidian, so the failure mode of this probe is
+--  "nothing happened" rather than "a hole in the roof".
+--
+--  USAGE:
+--
+--      /entityeval petports_asteriteDamage(5788, 1159)
+--      /entityeval petports_asteriteDamage(5788, 1159, 5, "blockish")
+--      /entityeval petports_asteriteDamage(5788, 1159, 50)
+function petports_asteriteDamage(x, y, amount, damageType, harvestLevel)
+	local tile = { math.floor(tonumber(x) or 0), math.floor(tonumber(y) or 0) }
+
+	amount = tonumber(amount) or 5
+	damageType = tostring(damageType or "beamish")
+
+	local okMod, before = pcall(world.mod, tile, "foreground")
+	local okMat, material = pcall(world.material, tile, "foreground")
+
+	--  WHAT WE ARE AIMING AT. The mod's health is the number the amount above
+	--  is chosen against, and harvestLevel defaults to the mod's own so the
+	--  probe is not refused for being under-tooled.
+	local modHealth, modHarvest
+	local okConfig, mod = pcall(root.modConfig, tostring(okMod and before))
+
+	if okConfig and type(mod) == "table" and type(mod.config) == "table" then
+		modHealth = mod.config.health
+		modHarvest = mod.config.harvestLevel
+	end
+
+	if harvestLevel == nil then harvestLevel = modHarvest end
+
+	sb.logInfo("UNIT damageTiles harness at %s: mod %s (health %s, harvest "
+		.. "%s), material %s -- %s damage of type %s at harvestLevel %s",
+		sb.printJson(tile), tostring(okMod and before),
+		sb.printJson(modHealth), sb.printJson(modHarvest),
+		tostring(okMat and material), sb.printJson(amount), damageType,
+		sb.printJson(harvestLevel))
+
+	local okDamage, damaged = pcall(world.damageTiles, { tile }, "foreground",
+		mcontroller.position(), damageType, amount,
+		tonumber(harvestLevel) or 0, entity.id())
+
+	local _, after = pcall(world.mod, tile, "foreground")
+	local _, materialAfter = pcall(world.material, tile, "foreground")
+
+	--  THE TWO OUTCOMES THAT MATTER, AND THEY ARE NOT THE SAME RESULT.
+	--
+	--  mod gone + material intact  -> this is the primitive, and the feature
+	--                                 works as designed
+	--  mod gone + material gone    -> damage goes to the tile and takes the
+	--                                 mod with it, which is the thing this
+	--                                 whole module exists to avoid
+	sb.logInfo("UNIT damageTiles harness RESULT: ok %s returned %s -- mod %s "
+		.. "to %s (%s), material %s to %s (%s)",
+		tostring(okDamage), tostring(damaged),
+		tostring(before), tostring(after),
+		(after ~= before) and "CHANGED" or "UNCHANGED",
+		tostring(material), tostring(materialAfter),
+		(materialAfter == material) and "INTACT" or "GONE")
+
+	--  NOTHING IS SPAWNED AND NOTHING IS CLEARED FROM THE STORE. If the mod
+	--  broke, the engine dropped its itemDrop itself -- that is what an
+	--  itemDrop IS -- so look for the ore on the ground rather than in a log
+	--  line. An instrument that also tidied up would hide that.
+	return damaged
+end
+
+function petports_asteriteMine(x, y, allowOverlap, reachOverride)
+	--  DEFAULTS TRUE. false has to be passed explicitly, because that is the
+	--  variant being tested against rather than the one expected to work.
+	if allowOverlap == nil then allowOverlap = true end
+
+	local modName = PETPORTS_ASTERITE_MOD
+	local tile, key
+
+	if x ~= nil and y ~= nil then
+		tile = { math.floor(tonumber(x) or 0), math.floor(tonumber(y) or 0) }
+		key = petports_tileKey(tile)
+	else
+		local entry
+		key, entry = nearestDeposit()
+
+		if entry == nil then
+			sb.logInfo("UNIT asterite probe: the store holds no deposits. Let a "
+				.. "port scan one up first, or pass a tile by hand")
+			return false
+		end
+
+		tile = { entry.position[1], entry.position[2] }
+
+		--  THE ENTRY'S OWN MOD NAME WINS. Nothing about the store is
+		--  asterite-specific and an entry records what was actually read, so
+		--  taking the name from the record rather than the constant is what
+		--  makes a second surface-mod ore work with no change here.
+		modName = entry.mod or modName
+	end
+
+	local centre = { tile[1] + 0.5, tile[2] + 0.5 }
+	local here = mcontroller.position()
+	local range = world.magnitude(here, centre)
+
+	--  THE OVERRIDE EXISTS BECAUSE REACH IS NOT WHAT THIS BUILD TESTS.
+	--
+	--  The unit stands where its port put it and nothing here moves it -- that
+	--  is the dispatched build's job. Measured 2026-09-11: nearest deposit
+	--  8.23 away against a reach of 5.6, so the gate refused before the call
+	--  under test ever ran. A probe that cannot reach its subject measures
+	--  nothing.
+	--
+	--  IT IS NOT A BACKDOOR FOR THE REAL TASK. Nothing dispatched will ever
+	--  pass this; petports_asteriteReach stays the only number the task uses,
+	--  and the refusal path below is still exercised by calling with no
+	--  override.
+	local reach = tonumber(reachOverride) or petports_asteriteReach()
+
+	--  READ BOTH LAYERS OF STATE BEFORE TOUCHING ANYTHING. The mod is what is
+	--  being removed; the material is what has to survive. Neither is knowable
+	--  after the fact.
+	local okMod, before = pcall(world.mod, tile, "foreground")
+	local okMat, material = pcall(world.material, tile, "foreground")
+
+	sb.logInfo("UNIT asterite probe at %s: mod %s, material %s, range %s of "
+		.. "reach %s, allowOverlap %s",
+		sb.printJson(tile), tostring(okMod and before),
+		tostring(okMat and material), sb.printJson(round2(range)),
+		sb.printJson(reach), tostring(allowOverlap))
+
+	if not okMod or before ~= modName then
+		sb.logInfo("UNIT asterite probe REFUSED: that tile carries %s, not %s",
+			tostring(okMod and before), tostring(modName))
+
+		--  AND THE ENTRY GOES, BECAUSE THE STORE IS NOW LYING.
+		--
+		--  The store records what is PHYSICALLY THERE. It said asterite; the
+		--  tile disagrees. Refusing without dropping the entry leaves a
+		--  deposit nobody can ever mine sitting in the store forever --
+		--  nearestDeposit keeps choosing it, every attempt refuses, and the
+		--  dispatched version would walk a unit across the base to it on a
+		--  loop. This is the second half of the invalidation the store's own
+		--  comment promises, and the first half (a unit mining it) was the
+		--  only half implemented.
+		--
+		--  THE ORDINARY CAUSE IS A PLAYER GETTING THERE FIRST, which is not a
+		--  failure of anything and should cost one log line and nothing else.
+		--
+		--  ONLY WHEN THE READ SUCCEEDED. `okMod` false means we do not know
+		--  what is on that tile -- an unloaded region reads as a failure, not
+		--  as an absence -- and throwing away a real deposit because we could
+		--  not see it is worse than keeping a stale one we will re-check on
+		--  the next attempt.
+		if okMod and petports_asteriteClear(key) then
+			sb.logInfo("UNIT asterite dropped the stale entry for %s (store "
+				.. "now %s)", tostring(key),
+				sb.printJson(petports_asteriteCount()))
+		end
+
+		return false
+	end
+
+	if range > reach then
+		sb.logInfo("UNIT asterite probe REFUSED: out of reach by %s tiles. "
+			.. "Unit is at %s, tile centre is %s -- pass a fourth argument to "
+			.. "override the reach and test the removal from here",
+			sb.printJson(round2(range - reach)), sb.printJson(here),
+			sb.printJson(centre))
+		return false
+	end
+
+	--  THE CALL UNDER TEST.
+	local okPlace, placed = pcall(world.placeMod, tile, "foreground",
+		PETPORTS_ASTERITE_CLEARED, nil, allowOverlap)
+
+	local _, after = pcall(world.mod, tile, "foreground")
+	local _, materialAfter = pcall(world.material, tile, "foreground")
+
+	local removed = (after ~= modName)
+	local intact = (materialAfter == material)
+
+	sb.logInfo("UNIT asterite probe RESULT: placeMod ok %s returned %s -- mod "
+		.. "%s to %s (%s), material %s to %s (%s)",
+		tostring(okPlace), tostring(placed),
+		tostring(before), tostring(after),
+		removed and "REMOVED" or "STILL THERE",
+		tostring(material), tostring(materialAfter),
+		intact and "INTACT" or "CHANGED")
+
+	if not removed then
+		sb.logInfo("UNIT asterite probe FAILED: the mod survived. If this ran "
+			.. "with allowOverlap true, try false; if both fail then placeMod "
+			.. "is not reaching the world from a monster and the removal needs "
+			.. "the projectile route instead")
+		return false
+	end
+
+	if not intact then
+		--  THE ONE OUTCOME THAT INVALIDATES THE APPROACH RATHER THAN THE CALL.
+		sb.logInfo("UNIT asterite probe DESTROYED THE TILE: %s became %s. "
+			.. "placeMod is not a safe removal for a breaksWithTile mod and the "
+			.. "feature needs a different primitive",
+			tostring(material), tostring(materialAfter))
+	end
+
+	--  SPAWNED AS A WORLD DROP RATHER THAN PUT IN CARGO, AND ONLY IN THIS
+	--  BUILD.
+	--
+	--  Cargo reaches the port on a TASK REPORT and there is no task here, so
+	--  there is nowhere for it to go. Spawning proves the rest of the chain
+	--  anyway -- that the matmod's itemDrop names a real item, that it spawns,
+	--  that it is the thing we expected -- and it is visible in world, which a
+	--  log line is not. The dispatched version puts it in cargo and spawns
+	--  nothing.
+	local okConfig, mod = pcall(root.modConfig, modName)
+	local drop = nil
+
+	if okConfig and type(mod) == "table" and type(mod.config) == "table" then
+		drop = mod.config.itemDrop
+	end
+
+	if type(drop) == "string" and drop ~= "" then
+		local okSpawn = pcall(world.spawnItem, drop, centre, 1)
+		sb.logInfo("UNIT asterite probe dropped %s x1 at %s (spawn ok %s)",
+			tostring(drop), sb.printJson(centre), tostring(okSpawn))
+	else
+		sb.logInfo("UNIT asterite probe: matmod %s names no itemDrop, so "
+			.. "nothing was spawned", tostring(modName))
+	end
+
+	--  THE ENTRY GOES UNCONDITIONALLY ONCE THE MOD IS GONE.
+	--
+	--  The store records what is PHYSICALLY THERE, and it is not there any
+	--  more. A spawn that failed loses one ore; it does not bring the deposit
+	--  back, and leaving the entry would send the next unit to a bare tile and
+	--  have it report a refusal.
+	local cleared = petports_asteriteClear(key)
+
+	sb.logInfo("UNIT asterite probe cleared store entry %s: %s (store now %s)",
+		tostring(key), tostring(cleared), sb.printJson(petports_asteriteCount()))
+
+	return true
 end

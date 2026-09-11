@@ -35,7 +35,7 @@
 
 require "/scripts/lofty_petports/petports_work.lua"
 
-local PETPORTS_OVERLAY_BUILD_STAMP = "2026-09-08a bubble reader, blueprint slack"
+local PETPORTS_OVERLAY_BUILD_STAMP = "2026-09-11d beams are not culled at all; the renderer already does it and better"
 
 --------------------------------------------------------------------------------
 --  TUNING
@@ -990,6 +990,223 @@ local function addSegment(a, b, colour, origin)
 	end
 end
 
+--------------------------------------------------------------------------------
+--  MINING BEAMS
+--------------------------------------------------------------------------------
+--
+--  DRAWN ON THE PLAYER, NOT ON THE UNIT, for the reason arch.bubble.rendering
+--  already records: a monster has no client-side script context to draw from,
+--  so anything that appears over a unit is drawn here and positioned relative
+--  to the player.
+--
+--  THE RELOCATOR'S BEAM DOES NOT TRANSFER, AND THAT IS WHY THIS EXISTS.
+--  relocate.lua ends at activeItem.setScriptedAnimationParameter("chains"),
+--  consumed by /items/active/effects/chain.lua listed under the item's
+--  animationScripts. Both halves are activeitem-only: a monster has no
+--  activeItem table and a monstertype has no animationScripts field. What
+--  transfers is the GEOMETRY, which is what is reimplemented below.
+--
+--  WHAT WAS DELIBERATELY LEFT OUT OF THE PORT: testCollision and bounces (a
+--  mining beam cuts through, which is the whole convention), arcRadius (we are
+--  drawing a straight line), and drawPercentage (the beam appears at full
+--  length and fades rather than extending).
+--
+--  ONE MESSAGE PER MINE, NOT PER FRAME. The endpoint is a FIXED TILE and the
+--  swing train is deterministic, so the unit says "beaming at this tile, this
+--  many swings, this period, from now" exactly once and this side runs the
+--  whole animation off its own clock. No heartbeat, and the entry SELF-EXPIRES
+--  at swings * period -- so a unit that dies or is retired mid-beam leaves no
+--  orphan drawable on anybody's screen.
+
+--  Straight out of the art. 4px wide at 8 pixels per tile is half a tile; 0.48
+--  overlaps each segment slightly so no seam shows at an angle.
+local BEAM_BODY = "/monsters/lofty_petports/shared/beam/beam.png"
+local BEAM_END  = "/monsters/lofty_petports/shared/beam/beamend.png"
+local BEAM_SEGMENT = 0.48
+local BEAM_OVERDRAW = 0.2
+
+--  THE SPRITES ARE GREYSCALE AT FULL ALPHA so one ?multiply= directive carries
+--  both the colour and the fade. White leaves the art as drawn; asterite's own
+--  gold is "e3aa00" if the beam should read as the ore rather than as petports
+--  equipment.
+local BEAM_TINT = "ffffff"
+
+--  A SWING'S WORTH OF FADE: nothing, to full, to nothing, once per period.
+--  sin over half a cycle is exactly that shape and needs no easing table.
+local BEAM_WAVE_FREQ = 3.0
+local BEAM_WAVE_AMP = 0.12
+local BEAM_WAVE_MOVE = 6.0
+
+--  THERE IS NO BEAM DRAW RANGE, AND TWO ATTEMPTS AT ONE IS WHY.
+--
+--  The first copied BUBBLE_DRAW_RANGE's 25, which that constant's own header
+--  calls "an earshot, not a view frustum" -- it decides whether the player is
+--  close enough to be SPOKEN TO. A beam is not the unit talking; it is a thing
+--  happening in the world. Measured 2026-09-11, five mines in one session with
+--  the player at the port: 24.18, 24.51, 7.13 and 7.13 drew, and 26.60 did
+--  not, which is how that got found.
+--
+--  The second widened it to 60 and culled on the NEARER of the two endpoints,
+--  because a beam is a line and testing the unit alone is wrong by up to the
+--  unit's whole reach in both directions.
+--
+--  BOTH WERE ANSWERING A QUESTION THE RENDERER ALREADY ANSWERS. Off-screen
+--  drawables are culled by the engine, exactly, every frame, with the real
+--  viewport -- which no number here can know, because it changes with zoom and
+--  window size. A hand-rolled approximation of that can only ever be too tight
+--  (a missing beam) or too loose (no saving), and the first one is a bug.
+--
+--  THE WORK WAS NEVER UNBOUNDED, WHICH IS WHAT THE GUARD WAS FOR.
+--  self.petportsBeams holds an entry only while a unit is actually mining, for
+--  one second each, and a unit on another world fails world.entityExists below
+--  and is dropped. The ceiling is "units mining simultaneously", which is the
+--  fleet size, not the world.
+--
+--  WHAT IS KEPT IS CLEANUP, NOT CULLING: the expiry and existence tests below
+--  remove entries that should not exist at all, which is a different job from
+--  deciding whether something visible is worth drawing. BEAM_SEGMENT_CAP stays
+--  for the same reason -- it guards against a malformed message, not distance.
+
+
+--  HOW MANY SEGMENTS ONE BEAM MAY DRAW. At 0.48 a tile, the unit's maximum
+--  reach of 8 tiles is about 17 -- so this is a guard against a malformed
+--  message rather than a budget, and it is what stops a bad endpoint from
+--  asking for ten thousand drawables.
+local BEAM_SEGMENT_CAP = 32
+
+local function beamsToDraw(origin)
+	local out = {}
+	if self.petportsBeams == nil then return out end
+
+	local now = self.petportsBeamClock or 0
+
+	for id, beam in pairs(self.petportsBeams) do
+		--  SELF-EXPIRING, AND CHECKED BEFORE EXISTENCE. A beam whose time is up
+		--  goes whether or not its unit is still alive, which is what makes the
+		--  unit side able to send once and forget.
+		if type(beam) ~= "table" or now >= (beam.endsAt or 0) then
+			self.petportsBeams[id] = nil
+		elseif not world.entityExists(id) then
+			self.petportsBeams[id] = nil
+		else
+			local pos = world.entityPosition(id)
+
+			if pos ~= nil then
+				--  THE START IS THE UNIT, LIVE. It may drift a little while it
+				--  mines, and a beam anchored to where it stood when the
+				--  message arrived would detach.
+				--
+				--  world.distance AND NOT PLAIN SUBTRACTION, both ends. Worlds
+				--  wrap, and two points either side of the seam are adjacent
+				--  in the world and very far apart in arithmetic -- which
+				--  would draw a beam straight across the map.
+				out[#out + 1] =
+				{
+					from = world.distance(pos, origin),
+					to = world.distance(beam.tile, origin),
+					beam = beam
+				}
+			end
+		end
+	end
+
+	return out
+end
+
+local function addBeam(entry)
+	local beam = entry.beam
+	local now = self.petportsBeamClock or 0
+
+	local elapsed = now - (beam.startedAt or now)
+	if elapsed < 0 then return end
+
+	--  WHERE WE ARE INSIDE THE CURRENT SWING, 0 to 1. sin over that is the
+	--  fade: 0 at the start, 1 at the middle, 0 at the end.
+	local period = beam.period or 0.25
+	local phase = (elapsed % period) / period
+	local alpha = math.sin(phase * math.pi)
+
+	if alpha <= 0.01 then return end
+
+	local directive = string.format("?multiply=%s%02x", BEAM_TINT,
+		math.floor(alpha * 255))
+
+	local dx = entry.to[1] - entry.from[1]
+	local dy = entry.to[2] - entry.from[2]
+	local length = math.sqrt(dx * dx + dy * dy)
+
+	if length < 0.05 then return end
+
+	local count = math.floor(((length + BEAM_OVERDRAW) / BEAM_SEGMENT) + 0.5)
+	if count < 1 then return end
+	if count > BEAM_SEGMENT_CAP then count = BEAM_SEGMENT_CAP end
+
+	--  MIRRORED RATHER THAN ROTATED PAST VERTICAL, which is chain.lua's own
+	--  handling: a sprite rotated more than a right angle reads upside down,
+	--  so a leftward beam is drawn mirrored at the reflected angle instead.
+	local leftward = dx < 0
+
+	--  math.atan2 DOES NOT EXIST IN THIS LUA. Measured 2026-09-11, as a hard
+	--  error out of a player script:
+	--
+	--      attempt to call a nil value (field 'atan2')
+	--
+	--  math.atan is not used anywhere in this mod either, so it is not assumed
+	--  to be there. acos IS used, and gives the same answer: acos of the
+	--  normalised x component is the angle from the positive x axis over 0 to
+	--  pi, and the sign of dy picks the half.
+	--
+	--  CLAMPED, because dx/length can land a hair outside -1..1 on float error
+	--  and acos of 1.0000001 is nan -- which propagates silently into a
+	--  rotation and draws nothing rather than erroring.
+	local cosine = dx / length
+	if cosine > 1 then cosine = 1 elseif cosine < -1 then cosine = -1 end
+
+	local angle = math.acos(cosine)
+	if dy < 0 then angle = -angle end
+
+	if leftward then angle = math.pi - angle end
+
+	local stepX = (dx / length) * BEAM_SEGMENT
+	local stepY = (dy / length) * BEAM_SEGMENT
+
+	local baseX = entry.from[1] + stepX * 0.5
+	local baseY = entry.from[2] + stepY * 0.5
+
+	for i = 1, count do
+		local image = (i == count) and BEAM_END or BEAM_BODY
+
+		--  THE WAVEFORM IS PERPENDICULAR TO THE BEAM, so it is applied as an
+		--  offset in local space and then rotated with the segment -- the same
+		--  order chain.lua uses. Applied in world space it would wobble
+		--  vertically regardless of which way the beam pointed.
+		local wobble = math.sin(((i * BEAM_SEGMENT) - (now * BEAM_WAVE_MOVE))
+			/ (BEAM_WAVE_FREQ / math.pi)) * BEAM_WAVE_AMP * 0.5
+
+		local sway = leftward and -angle or angle
+		local offX = -math.sin(sway) * wobble
+		local offY = math.cos(sway) * wobble
+
+		local drawable = {
+			image = image .. directive,
+			position = { baseX + offX, baseY + offY },
+			centered = true,
+			mirrored = leftward,
+			rotation = angle,
+			fullbright = true
+		}
+
+		if self.petportsOverlayLayer ~= nil then
+			localAnimator.addDrawable(drawable, self.petportsOverlayLayer)
+		else
+			localAnimator.addDrawable(drawable)
+		end
+
+		baseX = baseX + stepX
+		baseY = baseY + stepY
+	end
+end
+
 --  ONE-TIME RENDER LAYER PROBE.
 --
 --  fact.art.renderlayerkey: an unknown render layer key is a hard failure, not
@@ -1064,6 +1281,39 @@ function init()
 		end
 	end)
 
+	--  MINING BEAMS. One message per mine; see the beam block above.
+	--
+	--  THE CLOCK IS OURS, NOT THE SENDER'S. Nothing here can read the unit's
+	--  time base, and os.clock is process time rather than game time -- so the
+	--  beam is anchored to this script's own dt accumulator, which starts
+	--  whenever this client did and is monotonic. Network latency shifts the
+	--  start by a frame or two and nothing else depends on it.
+	self.petportsBeams = {}
+	self.petportsBeamClock = 0
+
+	message.setHandler("petports_beamShow", function(_, _, unitId, tile, swings, period)
+		if type(unitId) ~= "number" then return end
+		if type(tile) ~= "table" or tile[1] == nil or tile[2] == nil then return end
+
+		local n = tonumber(swings) or 0
+		local p = tonumber(period) or 0
+
+		if n <= 0 or p <= 0 then
+			self.petportsBeams[unitId] = nil
+			return
+		end
+
+		local now = self.petportsBeamClock or 0
+
+		self.petportsBeams[unitId] =
+		{
+			tile = { tile[1], tile[2] },
+			period = p,
+			startedAt = now,
+			endsAt = now + (n * p)
+		}
+	end)
+
 	sb.logInfo("PETPORTS overlay build: %s", PETPORTS_OVERLAY_BUILD_STAMP)
 end
 
@@ -1079,11 +1329,16 @@ function update(dt)
 		probeRenderLayer()
 	end
 
+	--  ADVANCED BEFORE ANYTHING READS IT, and unconditionally -- a beam that
+	--  started while the player was out of range must still expire on time.
+	self.petportsBeamClock = (self.petportsBeamClock or 0) + dt
+
 	local origin = entity.position()
 	local wantCoverage = holdingPetport()
 	local bubbles = bubblesToDraw(origin)
+	local beams = beamsToDraw(origin)
 
-	if not wantCoverage and #bubbles == 0 then
+	if not wantCoverage and #bubbles == 0 and #beams == 0 then
 		--  CLEARED ONCE ON THE FALLING EDGE, NOT EVERY TICK.
 		--
 		--  clearDrawables wipes the WHOLE list on the player's animator, which
@@ -1110,6 +1365,38 @@ function update(dt)
 		for _, segment in ipairs(self.petportsOverlaySegments) do
 			addSegment(segment.a, segment.b, segment.colour, origin)
 		end
+	end
+
+	--  BEAMS UNDER BUBBLES AND OVER THE HATCHING. A beam is a thing happening
+	--  in the world; a bubble is the unit talking about it, and the talking
+	--  should never be hidden behind the doing.
+	--
+	--  WRAPPED, AND THE BLAST RADIUS IS WHY. This script's update runs inside a
+	--  chain of other mods' player-script wrappers -- the atan2 traceback went
+	--  through arcana, starforge, thea, neki and nebs-snails before it reached
+	--  us -- so an exception here does not just lose a beam, it takes every
+	--  one of those down for that frame. A beam is scenery and is already
+	--  logged-and-swallowed on the unit side; this is the same rule applied
+	--  where it matters most.
+	--
+	--  CHANGE-GATED, or a fault that fires every frame is sixty lines a second.
+	--  NOT SILENT: a broken beam still says so, once, with its reason.
+	local okBeams, beamErr = pcall(function()
+		for _, entry in ipairs(beams) do
+			addBeam(entry)
+		end
+	end)
+
+	if not okBeams then
+		local note = tostring(beamErr)
+		if self.petportsBeamFault ~= note then
+			self.petportsBeamFault = note
+			sb.logInfo("PETPORTS overlay beam draw FAILED and was skipped: %s",
+				note)
+		end
+	elseif self.petportsBeamFault ~= nil then
+		self.petportsBeamFault = nil
+		sb.logInfo("PETPORTS overlay beam draw recovered")
 	end
 
 	--  BUBBLES LAST, so they sit over the coverage hatching rather than under

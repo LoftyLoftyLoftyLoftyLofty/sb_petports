@@ -2108,6 +2108,35 @@ local function paintStats(stats)
 	addLine(petports_format("petport.stats.traveled", groupDigits(stats.traveled)))
 	addLine(petports_format("petport.stats.headpats", groupDigits(stats.headpats)))
 
+	--  THIRD-PARTY CONTENT LAST, AND GATED ON THE MOD BEING INSTALLED.
+	--
+	--  Every block above is vanilla work and is drawn ALWAYS, even at zero,
+	--  because a line reading 0 teaches a player that the capability exists.
+	--  That argument stops at content we do not ship: "Asterite Deposits
+	--  Mined: 0" in a world with no Falling Stars does not announce a feature,
+	--  it advertises a mod the player does not have and cannot act on.
+	--
+	--  THE SAME SENTINEL THE FILTER MANIFEST USES -- one item from the mod,
+	--  asked of root.itemConfig. See modInstalled in petports_filters.lua; the
+	--  test is duplicated rather than shared because that one is a local inside
+	--  the manifest builder and this pane does not require that file.
+	--
+	--  AT THE BOTTOM SO THE ORDER ITSELF SAYS SO. A player scrolling meets
+	--  everything petports does on its own before anything that depends on
+	--  somebody else's mod, and a second supported mod appends here rather
+	--  than interleaving with the vanilla blocks.
+	--
+	--  pcall BECAUSE A PANE THAT THROWS SHOWS NOTHING AT ALL. This is the last
+	--  block drawn, so an unguarded failure here would cost the whole stats
+	--  list rather than one line.
+	local okStars, starsConfig = pcall(root.itemConfig, "asteriteore")
+
+	if okStars and starsConfig ~= nil then
+		addSeparator()
+		addLine(petports_format("petport.stats.asteritedeposits",
+			groupDigits(stats.asteriteDepositsMined)))
+	end
+
 	--  REBUILD ONLY ON A COUNT CHANGE; see the header. clearListItems fires
 	--  the list's own callback mid-rebuild -- measured on the beacon panes --
 	--  which is why statsRowSelected below must tolerate being called with the

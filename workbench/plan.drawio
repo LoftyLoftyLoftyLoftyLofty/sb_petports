@@ -1,4 +1,4 @@
-<mxfile host="Electron" modified="2026-09-10T07:24:43.657Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.2.5 Chrome/120.0.6099.109 Electron/28.1.0 Safari/537.36" etag="B8p2wRpW8o2n7Uf0-YGu" version="24.2.5" type="device">
+<mxfile host="Electron" modified="2026-09-11T17:29:01.312Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.2.5 Chrome/120.0.6099.109 Electron/28.1.0 Safari/537.36" etag="uxskAVQrG_vpk9ASQOnF" version="24.2.5" type="device">
   <diagram name="Page-1" id="NveRE99YrSAUUvzC1UxD">
     <mxGraphModel dx="2390" dy="1407" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
       <root>
@@ -1113,6 +1113,30 @@
         </mxCell>
         <mxCell id="kWl2yqEFlSN1XD8LCRPn-64" value="UI / UX" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
           <mxGeometry x="2040" y="3280" width="160" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-65" value="The number of locals in the petport is close to 200 because the AI decided to put &#39;local&#39; in front of almost every function. Fix is easy" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="3360" width="640" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-66" value="Design" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2040" y="3360" width="160" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-67" value="Verify that coarse level node traversal actually uses coarse nodes once the unrestricted flyer is working" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="3440" width="640" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-68" value="Design" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2040" y="3440" width="160" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-69" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Update the wiki matmods page to change the entry from WIP to released&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2040" y="6050" width="320" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-70" value="Ground unit cannot find a good path to a crate that is fully submerged when the top of the crate is flush with the waterline - should be able to" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="3520" width="640" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-71" value="Locomotion" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2040" y="3520" width="160" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-73" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Make sure each pet has a mining position override and a mining beam color override&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2040" y="6160" width="320" height="80" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>

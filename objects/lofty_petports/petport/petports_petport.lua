@@ -75,9 +75,49 @@ require "/scripts/lofty_petports/petports_flavors.lua"
 --  plausibly own a global by it, and a collision on a debug flag fails
 --  silently in the worst direction.
 --
---  The local/global split still signals what it always did for FUNCTIONS:
---  global means "reachable from a handler registered in init". UPPER_CASE
---  already says "constant" without needing `local` to say it twice.
+--  AND AS OF 2026-09-11 IT SIGNALS NOTHING FOR FUNCTIONS EITHER.
+--
+--  It used to: global meant "reachable from a handler registered in init",
+--  and UPPER_CASE already said "constant" without needing `local` to say it
+--  twice. Build 2026-09-11a left the main chunk at 195 of 200 slots -- 175 of
+--  them local functions -- and the next feature does not fit in five. So the
+--  rule changed, and it changed in the cheap direction:
+--
+--      A FUNCTION HERE IS `local` UNTIL THE SLOT IS NEEDED, AND THEN IT IS
+--      NOT.
+--
+--  That is a worse signal than the old one and it is still the right trade.
+--  The ceiling is real, arbitrary, and enforced by the compiler; the
+--  convention was a convenience chosen by us. When the two disagree the
+--  convention loses, because deleting a keyword is a smaller and safer change
+--  than anything else that gets the file under the limit -- it touches no
+--  read site and it cannot be got wrong halfway.
+--
+--  CHECKED, NOT ASSUMED, on 2026-09-11: all 195 names in this chunk were
+--  compared against the 103 globals the five required petports scripts
+--  define and against util.lua and messageutil.lua. Zero collisions. That
+--  check is what makes de-localizing safe, and it has to be re-run rather
+--  than remembered the next time a required script is added.
+--
+--  WHAT THIS DOES NOT EXCUSE. The file is at 195 because 175 functions live
+--  in ONE CHUNK, and de-localizing treats the symptom: each conversion buys
+--  exactly one slot, and there are only so many keywords to delete before the
+--  file is entirely globals and the limit is reached anyway. THE FIX IS
+--  EXTRACTION to a required script, which removes a function from this chunk
+--  AND gives its internals a fresh 200 of their own -- which is how
+--  petports_work.lua and the other four already work. Cohesive candidates and
+--  their sizes, measured 2026-09-11: farming 36, machines 30, containers 26,
+--  targeting 16, pane mirror 15. Until one of those lands, this paragraph is
+--  the answer to "why is there a bare `function` here".
+--
+--  THE OTHER CEILING IS NOT CLOSE, AND IT IS WORTH KNOWING THAT IT EXISTS.
+--  Lua 5.1 also caps upvalues at 60 per closure, and every top-level local a
+--  function references is one of them -- so the same crowding that fills the
+--  local table also fills upvalue lists, and that failure is much harder to
+--  read than "too many local variables". Measured 2026-09-11: the worst in
+--  the file is findWork at 29, then updateInner at 19, and nothing else above
+--  13. De-localizing relieves this too, since a global is a table lookup and
+--  not an upvalue, but that is a side effect and not a reason.
 STATUS_INTERVAL = 2.0
 
 --  How often the port re-measures the liquid in its own footprint.
@@ -1553,7 +1593,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-10a the unit is told how many units the network has, for the survey stride"
+local PETPORT_BUILD_STAMP = "2026-09-11f the mined counter is named for what it counts and shown only where that mod exists"
 
 --  PORT PROFILER, 2026-09-07b. MEASURED 21:00: six ports on a small islet,
 --  59 port ticks over 30 ms in 39 s totalling 3.7 s, worst 268 ms, while
@@ -1626,8 +1666,309 @@ local function portProfReport()
   portProfPhases = {}
 end
 
+--------------------------------------------------------------------------------
+--  THE ASTERITE SCAN
+--------------------------------------------------------------------------------
+--
+--  WHY THIS IS A TILE WALK AND NOT A QUERY.
+--
+--  Asterite is a MATMOD -- a surface mod applied to somebody else's block by
+--  a falling meteor -- and a matmod is not an entity. There is no entityQuery
+--  for "tiles carrying a surface mod", no batched read of a region, and
+--  nothing to claim by id. Every other kind of work this port dispatches is
+--  discovered by asking the world for entities; this one can only be
+--  discovered by asking world.mod about tiles, one at a time.
+--
+--  SO IT IS ONE CALL PER UPDATE. At the object's scriptDelta of 5 that is
+--  twelve a second, and a 64x64 rect is 4,096 tiles, so a port walks its own
+--  coverage end to end in about five and three quarter minutes.
+--
+--  THAT IS FAST ENOUGH BY A WIDE MARGIN, and the margin is what makes the
+--  cheap version correct rather than merely cheap. Asterite arrives with a
+--  weather event; the shower runs on the order of once every thirty minutes.
+--  A sweep that completes five times between showers is not the bottleneck on
+--  anything, and the alternative -- a chunked region scan with a resumable
+--  cursor and a budget -- would buy latency nobody is waiting on and would owe
+--  dd.pathing.yieldrule a coroutine for the privilege.
+--
+--  THE CURSOR IS A PHASE, NOT A PARTITION.
+--
+--  Every port walks its OWN rect, start to finish. The only thing the network
+--  does is spread out WHERE IN THAT RECT each port happens to be at any
+--  moment. Partitioning the union instead would need the union's area -- which
+--  is NOT the port count times the rect area, because coverage rects overlap
+--  and on a small islet they overlap heavily -- plus a mapping from a global
+--  index back to a port and a tile, and that mapping changes every time a port
+--  is placed or mined. A phase needs no coordination whatsoever.
+--
+--  IT ALSO GENERALISES FOR FREE. A highway node with a smaller coverage rect
+--  drops straight in: same cursor, different modulus, no shared structure to
+--  extend. A union walk would have to be reworked to admit a second kind of
+--  covering object.
+--
+--  OVERLAP IS NOT WASTE. A tile covered by two ports is read twice per sweep
+--  for the cost of one extra world.mod, and the second reader finds it already
+--  in the store and does nothing. What the overlap buys is LATENCY, and it
+--  buys it in the right place: the tiles covered by the most ports are the
+--  ones nearest the middle of the network, which are exactly the ones a unit
+--  can most easily be sent to.
+--
+--  THE SEED IS OUR OWN uniqueId AND NOT OUR POSITION IN THE NETWORK. An index
+--  into self.petportsNetwork renumbers whenever a neighbour is placed, so
+--  every port would re-phase whenever ANY port was added -- and they would all
+--  re-phase at the same moment, which is the lockstep this exists to avoid
+--  (fact.tooling.lockstep). A hash of our own id is stable across reloads and
+--  needs nobody else to agree with it.
+
+--  THE THREE FUNCTIONS BELOW ARE GLOBAL AND THE MISSING `local` IS DELIBERATE.
+--
+--  Not because any of them is reachable from a message handler -- none is, and
+--  none is meant to be called from another script. Purely because the main
+--  chunk was at 195 of Lua's 200 local slots when this feature was written and
+--  these would have taken three of the last five. See the ceiling note at the
+--  top of this file for the rule and for what the actual fix is.
+--
+--  petports_asteriteDump is global for the ordinary reason instead: it is a
+--  console entry point, and it is prefixed because of it.
+
+--  The matmod name lives in petports_work.lua as PETPORTS_ASTERITE_MOD, beside
+--  the store it keys and where the UNIT can see it too. It used to be defined
+--  here, which was fine for exactly as long as the port was the only thing
+--  that needed it.
+
+--  THE LATCH. Resolved once, at init, and never asked again.
+--
+--  Installing a mod requires restarting Starbound, so the answer cannot change
+--  while this object is alive and there is nothing to invalidate. A port in a
+--  world without the Falling Stars mod does not scan AT ALL -- not a scan that
+--  finds nothing, not a world.mod call per tick that always answers nil.
+--
+--  THREE CHECKS RATHER THAN ONE, BECAUSE THEY FAIL FOR DIFFERENT REASONS AND
+--  THE LOG SHOULD SAY WHICH.
+--
+--    the matmod must exist       or world.mod can never return its name and
+--                                the scan is a guaranteed miss forever
+--    it must declare an itemDrop or there is nothing to mine it FOR
+--    that drop must be an item   or the unit ends up holding a descriptor for
+--                                something that does not exist
+--
+--  ONE OF THEM ALONE WOULD LATCH CORRECTLY. Three of them turn "the scan is
+--  off" from a fact into a reason, and the reason is what a player reports.
+--
+--  NOTE WHAT IS NOT READ HERE. The matmod's `health` is the mining beam's
+--  pulse count and belongs to the build that draws the beam; reading it now
+--  would be a value stored for nobody. It joins asteriteDrop when there is a
+--  caller for it.
+function asteriteLatch()
+  self.asteriteEnabled = false
+  self.asteriteDrop = nil
+
+  --  pcall throughout: root.modConfig is already pcall-wrapped everywhere else
+  --  in this file for the same reason, and a missing mod is the EXPECTED case
+  --  rather than an error.
+  local ok, mod = pcall(root.modConfig, PETPORTS_ASTERITE_MOD)
+
+  if not ok or type(mod) ~= "table" or type(mod.config) ~= "table" then
+    sb.logInfo("PETPORT asterite scan OFF: no matmod named %s in this asset "
+      .. "tree, so there is nothing for this port to look for",
+      PETPORTS_ASTERITE_MOD)
+    return
+  end
+
+  local drop = mod.config.itemDrop
+
+  if type(drop) ~= "string" or drop == "" then
+    sb.logInfo("PETPORT asterite scan OFF: matmod %s declares no itemDrop, so "
+      .. "mining it would yield nothing", PETPORTS_ASTERITE_MOD)
+    return
+  end
+
+  local okItem, item = pcall(root.itemConfig, drop)
+
+  if not okItem or item == nil then
+    sb.logInfo("PETPORT asterite scan OFF: matmod %s drops %s and no such item "
+      .. "exists", PETPORTS_ASTERITE_MOD, tostring(drop))
+    return
+  end
+
+  self.asteriteEnabled = true
+  self.asteriteDrop = drop
+
+  sb.logInfo("PETPORT asterite scan ON: matmod %s drops %s, %s tiles per sweep",
+    PETPORTS_ASTERITE_MOD, tostring(drop),
+    sb.printJson(math.floor(COVERAGE_SIZE) * math.floor(COVERAGE_SIZE)))
+end
+
+--  A STABLE NUMBER FROM OUR OWN ID, which is all the phase needs to be.
+--
+--  Not a hash anyone depends on: it needs to differ between two ports and to
+--  be the same for one port across a reload, and a Lua 5.1 number holds this
+--  comfortably without overflowing into a float.
+function asteriteCursorSeed()
+  local uniqueId = tostring(stationUniqueId() or "")
+  local h = 0
+
+  for i = 1, #uniqueId do
+    h = (h * 31 + string.byte(uniqueId, i)) % 1048576
+  end
+
+  return h
+end
+
+--  ONE TILE. Called from updateInner ABOVE EVERY EARLY RETURN, for the reason
+--  sweepReplants is: an empty port still holds its coverage rect, and
+--  discovery is the port's job rather than the pet's
+--  (dd.dispatch.portdiscovery). A port with nothing socketed must still find
+--  deposits, because the unit that eventually mines them may be socketed
+--  somewhere else entirely.
+function asteriteScanStep()
+  if not self.asteriteEnabled then return end
+
+  local size = math.floor(COVERAGE_SIZE)
+  if size < 1 then return end
+
+  local span = size * size
+
+  --  LAZY, AND DELIBERATELY NOT IN init(). The seed reads stationUniqueId,
+  --  which may call world.setUniqueId -- which is exactly why the id is
+  --  established on the first update rather than at init in the first place.
+  --  This function runs below that block, so by the time it is reached the id
+  --  exists.
+  if self.asteriteCursor == nil then
+    self.asteriteCursor = asteriteCursorSeed() % span
+    self.asteriteSweepAt = world.time()
+    self.asteriteSweepNew = 0
+    self.asteriteSweepSeen = 0
+
+    sb.logInfo("PETPORT asterite scan starting at index %s of %s",
+      sb.printJson(self.asteriteCursor), sb.printJson(span))
+  end
+
+  local rect = coverageRect()
+  local index = self.asteriteCursor
+
+  --  THE RECT IS FLOATS AND A TILE IS AN INTEGER. Flooring the rect's corner
+  --  and stepping from there means the walk covers exactly `span` tiles and
+  --  the same `span` tiles every sweep, which a rounded corner would not.
+  local tile =
+  {
+    math.floor(rect[1]) + (index % size),
+    math.floor(rect[2]) + math.floor(index / size)
+  }
+
+  --  pcall because this is the one engine call in the tick whose argument we
+  --  computed rather than received, and an unloaded tile is not worth taking
+  --  the port down for. A nil or a miss both fall through the comparison
+  --  below, so neither needs its own branch.
+  local ok, modName = pcall(world.mod, tile, "foreground")
+
+  if ok and modName == PETPORTS_ASTERITE_MOD then
+    self.asteriteSweepSeen = (self.asteriteSweepSeen or 0) + 1
+
+    local added, count, full =
+      petports_asteriteNote(tile, modName, stationUniqueId())
+
+    --  LOGGED ON `added`, NOT ON THE HIT. A deposit re-found on the next
+    --  sweep is the ordinary result and carries no information; on an
+    --  accumulated base it would be several lines a second, forever, saying
+    --  the same thing. The wrap line below carries the re-found count.
+    if added then
+      self.asteriteSweepNew = (self.asteriteSweepNew or 0) + 1
+
+      sb.logInfo("PETPORT asterite FOUND %s at %s (store now %s)",
+        tostring(modName), sb.printJson(tile), sb.printJson(count))
+    end
+
+    --  CHANGE-GATED, AND THE RESET IS BESIDE THE EVENT THAT MAKES IT STALE
+    --  (proc.tooling.gatereset). A full store is a CONDITION, not an event:
+    --  it stays true on every hit until a unit mines something.
+    if full ~= self.asteriteFullSaid then
+      self.asteriteFullSaid = full
+
+      if full then
+        sb.logInfo("PETPORT asterite store FULL at %s entries; new deposits "
+          .. "refused until something is mined", sb.printJson(count))
+      else
+        sb.logInfo("PETPORT asterite store has room again at %s entries",
+          sb.printJson(count))
+      end
+    end
+  end
+
+  index = index + 1
+
+  if index >= span then
+    index = 0
+
+    --  THE LINE THAT PROVES THE MECHANISM, AND IT IS THE ONLY ONE THAT HAS TO
+    --  BE READ. Six ports wrapping at six different times is the phase
+    --  working. Six wrapping together is the seed being wrong -- and nothing
+    --  else has to be inspected to tell those apart, which is the whole
+    --  reason the count and the elapsed time are on the same line as the
+    --  wrap.
+    local elapsed = world.time() - (self.asteriteSweepAt or world.time())
+    local seen = self.asteriteSweepSeen or 0
+    local new = self.asteriteSweepNew or 0
+
+    sb.logInfo("PETPORT asterite SCAN WRAP: %s tiles in %s s, %s deposit(s) "
+      .. "seen, %s new, %s already known, store %s",
+      sb.printJson(span), sb.printJson(math.floor(elapsed)),
+      sb.printJson(seen), sb.printJson(new), sb.printJson(seen - new),
+      sb.printJson(petports_asteriteCount()))
+
+    self.asteriteSweepAt = world.time()
+    self.asteriteSweepNew = 0
+    self.asteriteSweepSeen = 0
+  end
+
+  self.asteriteCursor = index
+end
+
+--  READ THE STORE FROM THE CONSOLE:
+--
+--    /entityeval <portId> petports_asteriteDump()
+--
+--  A world property cannot be enumerated from outside the game
+--  (fact.tooling.propertiesunlistable) and the log deliberately only says what
+--  CHANGED, so without this there is no way to answer "what does the store
+--  actually hold right now".
+--
+--  LIMITED, BECAUSE THE CAP IS 2,000. Dumping every entry of a full store
+--  would be two thousand lines into a log somebody then has to read past. The
+--  summary is the answer; the listing is the sample.
+function petports_asteriteDump(limit)
+  limit = tonumber(limit) or 40
+
+  local deposits = petports_asteriteAll()
+  local n = 0
+  local shown = 0
+
+  for _, entry in pairs(deposits) do
+    n = n + 1
+
+    if shown < limit then
+      shown = shown + 1
+
+      sb.logInfo("PETPORT asterite [%s] %s at %s, found at %s by %s",
+        sb.printJson(n), tostring(entry.mod), sb.printJson(entry.position),
+        sb.printJson(math.floor(tonumber(entry.found) or 0)),
+        tostring(entry.finder))
+    end
+  end
+
+  sb.logInfo("PETPORT asterite dump: %s deposit(s) of %s shown, cap %s, "
+    .. "this port's scan is %s, cursor %s",
+    sb.printJson(shown), sb.printJson(n),
+    sb.printJson(petports_asteriteCap()),
+    self.asteriteEnabled and "ON" or "OFF",
+    sb.printJson(self.asteriteCursor or -1))
+
+  return n
+end
+
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
+  sb.logInfo("PETPORT work build: %s", PETPORTS_WORK_BUILD_STAMP)
 
   --  ONE NUMBER, ONE HOME, AND EVERYTHING DOWNSTREAM ALREADY TAKES IT AS A
   --  PARAMETER. The registry rect comes from coverageRect(), the resident
@@ -1639,6 +1980,27 @@ function init()
   --  respawns it. That was already true of the constant and is unchanged.
   COVERAGE_SIZE = config.getParameter("petports_coverageSize", COVERAGE_SIZE)
   sb.logInfo("PETPORT coverage size: %s tiles", sb.printJson(COVERAGE_SIZE))
+
+  --  THE ASTERITE SCAN, LATCHED ONCE. See asteriteLatch for why this is asked
+  --  here and never again, and why it asks three questions rather than one.
+  --
+  --  BELOW COVERAGE_SIZE ON PURPOSE: the latch logs how many tiles a sweep
+  --  covers, and that number is this parameter squared.
+  --
+  --  The cursor is deliberately left nil -- it is seeded on the first scan
+  --  step, because seeding it needs stationUniqueId and that is not
+  --  established until the first update.
+  self.asteriteCursor = nil
+  self.asteriteSweepAt = nil
+  self.asteriteSweepNew = 0
+  self.asteriteSweepSeen = 0
+
+  --  FALSE AND NOT nil. The gate below compares against this to decide whether
+  --  a transition happened, and nil ~= false would announce "the store has
+  --  room again" on the first deposit ever found.
+  self.asteriteFullSaid = false
+
+  asteriteLatch()
 
   self.petId = nil
 
@@ -2847,6 +3209,25 @@ function init()
     if report.outcome == "done" and self.task ~= nil
        and self.task.type == "trap" and self.task.id == report.id then
       metrics.add("traps", 1)
+    end
+
+    --  A MINED DEPOSIT. Same counting rule as every harvest above: ONE PER
+    --  TASK EXECUTION, not one per item. Those are the same number today,
+    --  because a deposit yields exactly one ore, and they stop being the same
+    --  the moment a matmod drops a stack -- which is why the rule is what is
+    --  written down rather than the coincidence.
+    --
+    --  THE KEY NAMES THE THING IT COUNTS. An earlier version called this
+    --  `mined`, on the reasoning that nothing else in the feature names
+    --  asterite and a second surface-mod ore should count into the same
+    --  number. That is true of the CODE and wrong for the COUNTER: a player
+    --  reading "Deposits mined" cannot tell what was mined, and a stat key
+    --  lives in save data forever, so a rename later splits every existing
+    --  pet's history in two. Naming it for the ore is the reversible choice --
+    --  a second ore gets a second key, and nobody's total moves.
+    if report.outcome == "done" and self.task ~= nil
+       and self.task.type == "asterite" and self.task.id == report.id then
+      metrics.add("asteriteDepositsMined", 1)
     end
 
     --  A CAUGHT FISH, COUNTED TWICE ON PURPOSE.
@@ -5480,6 +5861,14 @@ CAMOUFLAGE_FLAG = "camouflage"
 --  has no opinion about its length, so there is nothing to push.
 HYDRATOR_FLAG = "hydrator"
 
+--  THE ASTERITE MINING MODULE'S FLAG.
+--
+--  ONE GENERATOR, NO CHECKBOX. Defrag gates three things a player could want
+--  separately and farming gates five; this gates asteriteWork and nothing
+--  else, so a box under it would be a second switch for the first switch. See
+--  the item file.
+ASTERITE_FLAG = "asterite"
+
 --  FUEL EFFICIENCY. THE ITEM SAYS WHICH TIER, THE PORT OWNS THE MINUTES --
 --  arch.module.hydrator's split, and the reason the item files carry a flag and
 --  no numbers at all.
@@ -5854,6 +6243,13 @@ end
 function petportHydrator()
   for _, flag in ipairs(petportModuleFlags()) do
     if flag == HYDRATOR_FLAG then return true end
+  end
+  return false
+end
+
+function petportAsterite()
+  for _, flag in ipairs(petportModuleFlags()) do
+    if flag == ASTERITE_FLAG then return true end
   end
   return false
 end
@@ -6314,6 +6710,14 @@ metrics.paneStats = function()
     harvested = math.floor(stats.harvested or 0),
     livestock = math.floor(stats.livestock or 0),
     traps = math.floor(stats.traps or 0),
+
+    --  WITHOUT THIS LINE THE STAT IS COUNTED AND NEVER SEEN. paneStats is a
+    --  WHITELIST, not a passthrough: a key missing here arrives at the pane as
+    --  nil, groupDigits renders it 0, and the result reads as a counter that
+    --  does not work rather than one that was never wired. That is precisely
+    --  how `dosed` stayed invisible from the medic shipping until somebody
+    --  went looking for it.
+    asteriteDepositsMined = math.floor(stats.asteriteDepositsMined or 0),
 
     --  FISHING. `fished` is the total; `fishedTiers` is a map of tier name to
     --  count, built by walking the stats table rather than naming the four
@@ -16206,6 +16610,221 @@ local function sortWork()
 	}
 end
 
+--------------------------------------------------------------------------------
+--  ASTERITE MINING WORK
+--------------------------------------------------------------------------------
+--
+--  UNGATED IN THIS BUILD, AND THAT IS TEMPORARY. The Asterite Mining Module is
+--  the next build; until it exists there is nothing to gate on, and shipping
+--  the gate and the generator together would leave a unit that does not move
+--  ambiguous between the two. One change, one log.
+--
+--  THE CANDIDATES COME FROM THE STORE, NOT FROM A SCAN, which is the one way
+--  this differs structurally from every generator above it. A crop or a crate
+--  is found by the port that dispatches it; a deposit was found by whichever
+--  port happened to sweep that tile, possibly minutes ago and possibly three
+--  ports away. That is the whole reason the store is tile-keyed and lives in
+--  world properties rather than in self.
+
+--  HOW FAR THE PORT SEARCHES FOR SOMEWHERE TO STAND, AND WHY IT IS NOT THE
+--  UNIT'S REACH.
+--
+--  petports_asteriteReach is 4 plus the larger axis of the unit's bound box,
+--  capped at 8 -- so it is NEVER LESS THAN 4, whatever the chassis. Searching
+--  within 4 here means anything this finds is inside every chassis's reach,
+--  without the port having to ask the unit what its reach is and without the
+--  two numbers being able to drift into a port that dispatches to spots the
+--  unit then refuses on arrival.
+--
+--  IF THE UNIT'S BASE REACH EVER DROPS BELOW 4, THIS DROPS WITH IT. That is
+--  the entire invariant and it is not enforced anywhere but here.
+ASTERITE_STAND_RADIUS = 4
+
+--  READING THE STORE IS A WHOLE-PROPERTY PARSE, so it is cached rather than
+--  done per beat. petports_work.lua says at the store's definition that the
+--  moment a generator asks per dispatch it needs this; this is that moment,
+--  and fact.pathing.indexparse is what it cost the last time it was skipped.
+--
+--  SHORT, BECAUSE THE LIST MOVES UNDER US. A unit mining clears an entry and a
+--  sweep adds one. Five seconds of staleness costs at most one wasted trip,
+--  and the unit drops the entry itself when it arrives to find nothing.
+ASTERITE_CACHE_TTL = 5.0
+
+--  HOW MANY STANDING SEARCHES ONE BEAT WILL PAY FOR.
+--
+--  THE SEARCH IS NOT IN THE CANDIDATE LOOP, and that is a departure from
+--  trapWork, which warns at length against exactly this -- refusing the winner
+--  declines the whole rung, so one unreachable deposit would stop a unit
+--  working the twenty behind it.
+--
+--  The answer here is neither of trapWork's options. Searching every candidate
+--  is a standable search per deposit per beat per port, which on an
+--  accumulated roof is hundreds; searching only the winner has trapWork's bug.
+--  So candidates are SORTED BY DISTANCE and searched in order until one
+--  resolves, and the cap bounds the cost of a cluster that is all unreachable.
+--
+--  A LOW CAP IS SAFE HERE IN A WAY IT WOULD NOT BE ELSEWHERE, because the
+--  deposits that fail are geographically clustered -- a ceiling overhang, a
+--  spire -- and the next beat re-sorts from wherever the unit now is.
+ASTERITE_STAND_TRIES = 6
+
+--  Pick a deposit to send the unit at.
+--
+--  GLOBAL, like the scan functions above and for the same reason: the main
+--  chunk is against Lua's 200-local ceiling and this is not worth one of the
+--  last slots. See the ceiling note at the top of this file.
+function asteriteWork()
+	--  THE CACHE IS FILLED HERE RATHER THAN ON A TIMER IN update(), so a port
+	--  that never runs this generator never pays for it at all. That matters
+	--  once the module gate lands and most ports are not mining.
+	if self.asteriteCacheAt == nil or world.time() >= self.asteriteCacheAt then
+		self.asteriteCacheAt = world.time() + ASTERITE_CACHE_TTL
+		self.asteriteCache = petports_asteriteAll()
+	end
+
+	local deposits = self.asteriteCache or {}
+
+	--  MEASURED FROM THE UNIT, NOT THE PORT. Same as every other generator:
+	--  the walk is the unit's, so nearest means nearest to it.
+	local from = entity.position()
+	if self.petId ~= nil and world.entityExists(self.petId) then
+		from = world.entityPosition(self.petId)
+	end
+
+	local seen = 0
+	local candidates = {}
+	local rejected = { outside = 0, claimed = 0, backedOff = 0, medium = 0 }
+
+	for key, entry in pairs(deposits) do
+		if type(entry) == "table" and type(entry.position) == "table" then
+			seen = seen + 1
+
+			--  TILE CENTRE, NOT TILE CORNER. Everything downstream -- the rect
+			--  test, the medium test, the distance sort, the standing search --
+			--  takes a world position, and the corner is half a tile off in
+			--  both axes from the thing being mined.
+			local centre = { entry.position[1] + 0.5, entry.position[2] + 0.5 }
+			local workId = "asterite:" .. tostring(key)
+
+			local failure = self.workFailures[workId]
+			local backedOff = failure ~= nil
+				and (failure["until"] or 0) > world.time()
+
+			if not inNetworkCoverage(centre) then
+				--  ANOTHER NETWORK'S GROUND. The store is keyed by tile and
+				--  shared by the world, so a deposit found by a base on the
+				--  other side of the planet is in here too.
+				rejected.outside = rejected.outside + 1
+			elseif backedOff then
+				rejected.backedOff = rejected.backedOff + 1
+			elseif not claimFree(workId) then
+				rejected.claimed = rejected.claimed + 1
+
+			--  IN THE LOOP, NOT ON THE WINNER, which is trapWork's rule and
+			--  applies unchanged: one deposit in a lava pool must not stop a
+			--  walker clearing the roof behind it.
+			elseif not targetEligible("asterite " .. tostring(key), centre) then
+				rejected.medium = rejected.medium + 1
+			else
+				candidates[#candidates + 1] = {
+					key = key,
+					entry = entry,
+					centre = centre,
+					workId = workId,
+					distance = world.magnitude(from, centre)
+				}
+			end
+		end
+	end
+
+	if #candidates == 0 then
+		local reason = string.format(
+			"%s deposit(s) known, none workable: %s outside network coverage, "
+			.. "%s claimed, %s backed off, %s in a medium this chassis cannot "
+			.. "work in", seen, rejected.outside, rejected.claimed,
+			rejected.backedOff, rejected.medium)
+
+		--  CHANGE-GATED. With no deposits at all this is the steady state on
+		--  every beat of every port forever, which is the loudest possible
+		--  line for the least possible information.
+		if reason ~= self.asteriteRejectReason then
+			self.asteriteRejectReason = reason
+			sb.logInfo("PETPORT %s asterite: %s", stationUniqueId(), reason)
+		end
+
+		return nil, reason
+	end
+
+	table.sort(candidates, function(a, b) return a.distance < b.distance end)
+
+	local tries = 0
+
+	for _, candidate in ipairs(candidates) do
+		if tries >= ASTERITE_STAND_TRIES then break end
+		tries = tries + 1
+
+		--  VOUCHED, AND ONLY BECAUSE targetEligible ALREADY RAN on this exact
+		--  position in the loop above. arch.dispatch.vouch: passing true where
+		--  targetSuits has not run is a lie that costs a hovering unit.
+		local stand = standingPointForTarget(candidate.centre, nil,
+			ASTERITE_STAND_RADIUS, true)
+
+		if stand ~= nil then
+			self.asteriteRejectReason = nil
+
+			sb.logInfo("PETPORT %s asterite deposit at %s, %s away -- "
+				.. "dispatching to stand at %s (%s of %s candidates tried)",
+				stationUniqueId(), sb.printJson(candidate.entry.position),
+				sb.printJson(math.floor(candidate.distance * 10) / 10),
+				sb.printJson(stand), sb.printJson(tries),
+				sb.printJson(#candidates))
+
+			return {
+				id = candidate.workId,
+				mediumVerified = true,
+
+				--  A TYPE petportsTaskAction DOES KNOW, unlike "sort" and
+				--  "tidy". The act is the unit's here -- it is the thing
+				--  holding the mining beam -- so this is not one of the types
+				--  that falls through to the generic walk-and-report path.
+				--
+				--  IT IS STILL NOT IN THE APPROACH RESOLVE LIST, because
+				--  `position` below is ALREADY a resolved standing point. The
+				--  types in that list carry a target position and resolve it
+				--  unit-side; this one is resolved here, like sort.
+				type = "asterite",
+				port = stationUniqueId(),
+
+				--  THE STORE KEY, so the unit can clear the entry without
+				--  recomputing it and without the two ends having to agree on
+				--  how a tile becomes a key.
+				target = candidate.key,
+
+				--  THE TILE ITSELF, integers, because the act writes to it.
+				tile = { candidate.entry.position[1], candidate.entry.position[2] },
+
+				--  WHICH MOD WAS RECORDED THERE. Carried rather than assumed,
+				--  so the act can refuse a tile that has changed under it and
+				--  so nothing in the dispatch path names asterite.
+				mod = candidate.entry.mod,
+
+				position = stand
+			}
+		end
+	end
+
+	local reason = string.format(
+		"%s workable deposit(s), nowhere to stand within %s tiles of the "
+		.. "nearest %s", #candidates, ASTERITE_STAND_RADIUS, tries)
+
+	if reason ~= self.asteriteRejectReason then
+		self.asteriteRejectReason = reason
+		sb.logInfo("PETPORT %s asterite: %s", stationUniqueId(), reason)
+	end
+
+	return nil, reason
+end
+
 local function findWork()
   --  PARTICIPATION, READ ONCE. Four config reads rather than fourteen, and
   --  every branch below reasons about the same snapshot -- a set that changed
@@ -16279,6 +16898,15 @@ local function findWork()
   local doAnimals = farming and petportFarmingDoes("animals")
   local doTraps = farming and petportFarmingDoes("traps")
   local doMachines = not oblivious and petportParticipates("machines")
+
+  --  ASTERITE IS MODULE-ONLY, WITH NO PARTICIPATION GROUP BEHIND IT. The four
+  --  groups are the port's switches and this is the unit's module, the same
+  --  shape fishing uses -- petportCanFish is the only gate on fishWork, and a
+  --  player who does not want it unsockets the module.
+  --
+  --  OBLIVIOUS STILL OVERRIDES IT, because oblivious means "take this unit off
+  --  the roster" and a module is not an exemption from that.
+  local doAsterite = not oblivious and petportAsterite()
 
   --  Before anything else: a unit that has strayed cannot reach work anyway.
   --
@@ -16519,6 +17147,31 @@ local function findWork()
   local trap, noTrap
   if doTraps then trap, noTrap = portProf("g.trap", trapWork) end
   if dispatchable(trap) ~= nil then return trap end
+
+  --  ASTERITE SITS WITH THE OTHER THREE THAT DO NOT PERISH, AND LAST AMONG
+  --  THEM.
+  --
+  --  A deposit is a mark on a rock. It will be exactly as minable in an hour,
+  --  it cannot be eaten by anything, and nothing in the world removes it but a
+  --  player or one of our units -- so it has less claim on a unit's time than
+  --  a crop, an animal or a trap, all of which are at least the result of
+  --  something the player set up on purpose.
+  --
+  --  BELOW THE CARGO GUARD, WHICH IS THE LOAD-BEARING PART OF THIS POSITION.
+  --  Mining ACQUIRES: it puts an ore into a unit that must then be empty. Above
+  --  that guard it would hand cargo to a unit already holding some, and the
+  --  deposit path has no merge rule the way collection does.
+  --
+  --  UNGATED UNTIL THE MODULE EXISTS -- see asteriteWork's header. When the
+  --  gate lands it goes here, as `if doAsterite then`, and nothing else on this
+  --  rung changes.
+  --  GATED, AND THE GATE IS THE CALL RATHER THAN THE RESULT -- the same rule
+  --  the participation snapshot's own header states. asteriteWork parses a
+  --  world property and sorts every deposit in coverage; a port with no module
+  --  socketed should not pay for an answer it will discard.
+  local ore, noOre
+  if doAsterite then ore, noOre = portProf("g.asterite", asteriteWork) end
+  if dispatchable(ore) ~= nil then return ore end
 
   --  Fetching is the lowest-priority thing a unit can do: it is the only work
   --  that MANUFACTURES cargo rather than clearing something. See withdrawWork.
@@ -17677,6 +18330,20 @@ local function updateInner(dt)
   --  Takes dt now rather than WORK_INTERVAL, because it is no longer riding a
   --  timer that has already fired. It gates itself on REPLANT_SWEEP_INTERVAL.
   portProf("sweepReplants", sweepReplants, dt)
+
+  --  ABOVE EVERY EARLY RETURN, FOR THE REASON THE TWO CALLS ABOVE IT ARE.
+  --
+  --  This is the fourth thing in this function that must not sit below the
+  --  no-item branch. A port with nothing socketed still holds its coverage
+  --  rect, and a deposit it finds is mined by whichever unit the network can
+  --  spare -- which may be socketed three ports away. An empty port that
+  --  stopped scanning would leave a hole in the network's coverage that
+  --  nothing else would ever fill in.
+  --
+  --  NO INTERVAL AND NO TIMER. The whole budget is one world.mod call, so
+  --  gating it on a timer would add a comparison to save nothing and would
+  --  stretch the sweep by whatever the interval was.
+  portProf("asteriteScan", asteriteScanStep)
 
   --  ABOVE EVERY EARLY RETURN IN THIS FUNCTION, AND THAT IS THE ONLY PLACE IT
   --  CAN GO.

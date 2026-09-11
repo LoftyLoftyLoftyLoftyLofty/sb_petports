@@ -142,18 +142,53 @@ function petports_filterManifest()
 	--
 	--  The id is copied onto each entry here so nothing downstream has to carry
 	--  the key alongside the value.
+	--  IS THE MOD THAT OWNS THIS ENTRY EVEN INSTALLED?
+	--
+	--  A group or subgroup may name a `sentinelItem`: one item from the mod its
+	--  rules describe. If that item does not exist, neither does the mod, and
+	--  the entry is dropped from the picker entirely.
+	--
+	--  DISPLAY ONLY, AND THAT IS SUFFICIENT. Matching is left alone deliberately
+	--  -- if the mod is absent then none of its items exist either, so its rules
+	--  cannot match anything and there is nothing to suppress. Filtering here,
+	--  in the one funnel both the group list and the subgroup lists pass
+	--  through, means one place rather than two.
+	--
+	--  THE REVERSE CASE IS ALREADY SAFE. A player who uninstalls a mod after
+	--  configuring a beacon leaves rules naming subgroup ids that no longer
+	--  exist, and a missing id matches nothing and is silently ignored -- which
+	--  is the same property that makes renaming an id dangerous and makes
+	--  removing one harmless.
+	--
+	--  pcall TO MATCH THE SURROUNDING STYLE. root.itemConfig returns nil for an
+	--  unknown name, so the bare call would do -- but every other use of it in
+	--  this mod is wrapped, a nil return passes through pcall unchanged, and a
+	--  filter manifest that throws takes the whole beacon pane with it.
+	local function modInstalled(name)
+		if type(name) ~= "string" or name == "" then return true end
+
+		local ok, config = pcall(root.itemConfig, name)
+		return ok and config ~= nil
+	end
+
 	local function ordered(container)
 		local list = {}
 
 		for id, entry in pairs(container or {}) do
-			if type(entry) == "table" then
+			if type(entry) == "table" and modInstalled(entry.sentinelItem) then
 				entry.id = id
 				table.insert(list, entry)
 			end
 		end
 
 		table.sort(list, function(a, b)
-			local ao, bo = a.order or 10000, b.order or 10000
+			--  100000 PUTS AN UNORDERED ENTRY DEAD LAST, BEHIND Unsorted.
+			--
+			--  This was 10000, which was safely past everything when the
+			--  highest real order was 3300. Third-party content now starts AT
+			--  10000, so an entry that forgot its order would have sorted into
+			--  the middle of the mod band rather than after it.
+			local ao, bo = a.order or 100000, b.order or 100000
 			if ao ~= bo then return ao < bo end
 			return tostring(a.id) < tostring(b.id)
 		end)
