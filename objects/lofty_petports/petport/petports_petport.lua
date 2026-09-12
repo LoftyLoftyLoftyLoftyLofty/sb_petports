@@ -1593,7 +1593,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-11g the standing search for a deposit reaches 8 tiles, matching the unit base reach"
+local PETPORT_BUILD_STAMP = "2026-09-11h a port that has spawned nothing still owns the unit that re-homed to it"
 
 --  PORT PROFILER, 2026-09-07b. MEASURED 21:00: six ports on a small islet,
 --  59 port ticks over 30 ms in 39 s totalling 3.7 s, worst 268 ms, while
@@ -2217,12 +2217,54 @@ function init()
     local position = payload.position
     if type(position) ~= "table" then return false end
 
-    if self.spawnedPetId == nil or payload.id ~= self.spawnedPetId then
+    --  TWO WAYS TO OWN A DEATH, AND THE SECOND ONE COST A PET'S CARGO.
+    --
+    --  The first is the original: this port SPAWNED that unit, this session.
+    --  self.spawnedPetId is written in exactly one place and is deliberately
+    --  not persisted, so it is the strongest claim available.
+    --
+    --  THE SECOND IS THE POST-RELOAD CASE, which the first silently refused.
+    --  Measured 2026-09-11, twice in one log, both within seconds of a world
+    --  load:
+    --
+    --      UNIT 16 died at [5824.59,1167.8] -- asking port 30 to spill
+    --      IGNORING ... this port spawned null (owns 16)
+    --
+    --  The port OWNED unit 16 -- it says so on its own refusal line -- because
+    --  the unit came back from the world save and re-homed through setPet. It
+    --  worked, it carried an ore, and it died, and the spill was refused by a
+    --  rule written for strangers.
+    --
+    --  AND IT STILL REFUSES EVERY STRANGER THE FIRST RULE CAUGHT. Both of the
+    --  leftovers this check was built against were measured on a port that had
+    --  ALREADY SPAWNED -- a recall in progress, and a teardown with a fresh
+    --  unit adopted after. On such a port spawnedPetId is set, so the second
+    --  clause below cannot be reached at all. It opens only on a port that has
+    --  spawned nothing this session, which after a reload is every port, and
+    --  it still demands that the reporter be the unit the port currently owns.
+    --
+    --  THE OLD REFUSAL WAS NOT LOSING THE CARGO, ONLY THE DROP. Ignoring the
+    --  death left the load in the unit item, where the replacement inherited
+    --  it -- the same log shows the ore written back intact and delivered
+    --  later. So this changes where a dead unit's load ends up, not whether it
+    --  survives, and the spill is the behaviour the player is shown.
+    local spawnedMine = self.spawnedPetId ~= nil and payload.id == self.spawnedPetId
+    local adoptedMine = self.spawnedPetId == nil and self.petId ~= nil
+      and payload.id == self.petId
+
+    if not (spawnedMine or adoptedMine) then
       sb.logInfo("PETPORT %s IGNORING a death report from unit %s at %s -- "
         .. "this port spawned %s (owns %s), so that load is not ours to spill",
         stationUniqueId(), sb.printJson(payload.id), sb.printJson(position),
         sb.printJson(self.spawnedPetId), sb.printJson(self.petId))
       return false
+    end
+
+    if adoptedMine then
+      sb.logInfo("PETPORT %s honouring a death report from unit %s at %s -- "
+        .. "this port has spawned nothing this session but OWNS that unit, "
+        .. "which is what a re-home after a world load looks like",
+        stationUniqueId(), sb.printJson(payload.id), sb.printJson(position))
     end
 
     --  THE TASK IS RELEASED FIRST, AND IT IS RELEASED EVEN WITH NO CARGO.
