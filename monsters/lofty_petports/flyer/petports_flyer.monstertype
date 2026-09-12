@@ -82,6 +82,28 @@
     //  petports_ name prefix would have worked for the four types shipped
     //  here and quietly failed for everyone building on top of this, which
     //  is the intended path rather than an edge case.
+    //  WHAT THIS CHASSIS WILL NOT WALK INTO, BY NAME.
+    //
+    //  ADDED 2026-09-11, AND ITS ABSENCE WAS THE BUG. A drone with no Lava
+    //  Blocker Module waded into lava, stood in it and died, and every
+    //  mechanism that should have stopped it was asking a question this file
+    //  never answered:
+    //
+    //    avoidedLiquids() built an EMPTY set, so petports_liquidDenied said
+    //    lava was fine -- to the nav layer, to the boundary store, and to the
+    //    wade watchdog that was written specifically to catch this.
+    //
+    //    AND THE LAVA BLOCKER MODULE UNLOCKED NOTHING. Module permissions
+    //    work by REMOVING names from this set, so on a chassis with an empty
+    //    set the grant is a no-op and the module's only real effect is its
+    //    status immunity.
+    //
+    //  petports_avoidLiquid, the blanket boolean above, is NOT a substitute.
+    //  It gates where the unit may STAND -- findGroundPosition and
+    //  validStandingPosition -- and says nothing about what it may walk
+    //  through on the way. Every other walking chassis already carries this
+    //  list; the two that did not are the two that had it left off.
+    "petports_avoidLiquids" : [ "lava", "corelava", "poison" ],
     "petports_unit" : true,
 
     "scripts" : [

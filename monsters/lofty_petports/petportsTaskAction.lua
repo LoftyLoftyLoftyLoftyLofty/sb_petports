@@ -207,7 +207,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-11s a unit balanced on a tile corner is nudged onto a real standing column"
+local BUILD_STAMP = "2026-09-11z a liquid hop replans on landing; a perch recovers in the direction it was facing"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -5897,6 +5897,203 @@ end
 --  enough that nobody watching reads it as a teleport. A perch with nothing
 --  standable within two tiles is a genuinely different problem and is left to
 --  the rungs below.
+--  LOOK AHEAD FOR LIQUID THIS CHASSIS MAY NOT ENTER.
+--
+--  Vanilla's platformer A* costs tile collision and nothing else, so a surface
+--  route across a lava pool is a good path as far as the search is concerned.
+--  This is the walking unit's own check: a few tiles in front, at foot level
+--  and one below, for anything petports_liquidDenied refuses.
+--
+--  FOOT LEVEL AND ONE BELOW, because a pool the unit is about to step down
+--  into does not register at the height it is currently standing at.
+--
+--  FROM THE LEADING EDGE OF THE BODY, not from its centre. The centre is most
+--  of a tile back from the part that goes in first.
+local LIQUID_LOOK_AHEAD = 3
+
+--  HOW FAR AHEAD THE SCAN LOOKS FOR THE FAR SIDE. A SEARCH BOUND, NOT A
+--  CAPABILITY LIMIT -- what a unit can actually clear is decided by its own
+--  jump ceiling below, and this only has to be wide enough not to give up
+--  before that does.
+local LIQUID_SCAN_SPAN = 10
+
+--  Fallback horizontal launch speed, used only when the chassis does not
+--  report one.
+--
+--  SPEED HELPS. A faster launch crosses the same gap in LESS airtime, so it
+--  needs LESS lift, so the jump ceiling stops it later rather than sooner.
+--  Reading the chassis value instead of picking a number is worth roughly half
+--  the range again: at 6 the ceiling allows about 4.5 tiles of travel, at 9 it
+--  allows about 6.75.
+local LIQUID_HOP_VX = 6
+
+local function deniedLiquidAt(point)
+	local ok, liquid = pcall(world.liquidAt, point)
+	if not ok or type(liquid) ~= "table" or liquid[1] == nil then return false end
+	return petports_liquidDenied(liquid[1]) == true
+end
+
+local function avoidLiquidAhead(stateData)
+	--  A HOP LEAVES THE PLAN BEHIND. The route was drawn through the pool --
+	--  vanilla A* costs collision only -- so after clearing it the current edge
+	--  targets a point on the far side, behind the unit. Left alone it turns
+	--  around and hops back to reach it, then forward again. A fresh search
+	--  from the landing spot goes the right way. Deferred to the first grounded
+	--  tick after being airborne, because the pather cannot search mid-air and
+	--  the launch tick itself is still grounded.
+	if stateData.liquidHopPending then
+		if not mcontroller.onGround() then
+			stateData.liquidHopAirborne = true
+		elseif stateData.liquidHopAirborne then
+			stateData.liquidHopPending = nil
+			stateData.liquidHopAirborne = nil
+			freshPather("landed a liquid hop; the old plan ran through the pool")
+		end
+	end
+
+	if not mcontroller.onGround() then return false end
+	if petports_freeMover ~= nil and petports_freeMover() then return false end
+
+	local vel = mcontroller.velocity()
+	local dir = 0
+	if vel[1] > 0.5 then dir = 1 elseif vel[1] < -0.5 then dir = -1 end
+	if dir == 0 then return false end
+
+	local here = mcontroller.position()
+	local bounds = mcontroller.boundBox()
+	if type(bounds) ~= "table" or #bounds < 4 then return false end
+
+	local feetY = here[2] + bounds[2] + 0.2
+	local nose = here[1] + (dir > 0 and bounds[3] or bounds[1])
+
+	--  WHERE THE LIQUID STARTS.
+	local entry = nil
+
+	for step = 0, LIQUID_LOOK_AHEAD do
+		local x = nose + dir * step
+
+		if deniedLiquidAt({ x, feetY }) or deniedLiquidAt({ x, feetY - 1 }) then
+			entry = x
+			break
+		end
+	end
+
+	if entry == nil then return false end
+
+	--  AND WHERE IT ENDS. One column past the span is checked so a pool that is
+	--  exactly too wide is recognised as too wide rather than as unbounded.
+	local exit = nil
+
+	for step = 1, LIQUID_SCAN_SPAN + 1 do
+		local x = entry + dir * step
+
+		if not (deniedLiquidAt({ x, feetY })
+		        or deniedLiquidAt({ x, feetY - 1 })) then
+			exit = x
+			break
+		end
+	end
+
+	--  SOMEWHERE TO LAND, resolved by the same resolver every other destination
+	--  uses -- so the far side is dry, standable, and not another pool.
+	local landing = nil
+
+	if exit ~= nil then
+		local okNear, spot = pcall(standableNear, { exit + dir * 0.5, here[2] },
+			2, 1, false, -3)
+		if okNear then landing = spot end
+	end
+
+	if landing ~= nil then
+		local parameters = mcontroller.baseParameters()
+		local gravity = world.gravity(here) * (parameters.gravityMultiplier or 1.0)
+
+		if gravity > 0 then
+			local dx = landing[1] - here[1]
+			local dy = landing[2] - here[2]
+
+			--  THE CHASSIS'S OWN RUN SPEED, because it is the fastest launch it
+			--  can honestly take and speed is what buys span here.
+			local speed = LIQUID_HOP_VX
+			local okSpeed, runSpeed = pcall(function()
+				return parameters.runSpeed
+			end)
+			if okSpeed and tonumber(runSpeed) ~= nil and runSpeed > 0 then
+				speed = runSpeed
+			end
+
+			if dx ~= 0 and ((dx > 0) == (dir > 0)) then
+				local vx = speed * dir
+				local t = math.abs(dx) / speed
+				local vy = (dy / t) + (0.5 * gravity * (t - PHYSICS_DT))
+
+				--  CLEARANCE OVER THE POOL, not merely a solution that reaches
+				--  the far side: the flat arc that lands exactly on the lip is
+				--  the one that clips into the liquid on the way.
+				vy = math.max(vy, discreteLaunchForRise(
+					math.max(dy, 0) + JUMP_ARC_CLEARANCE, gravity))
+
+				--  NO MORE THAN THE CHASSIS CAN ACTUALLY JUMP. The solve will
+				--  happily ask for whatever the geometry needs, and a pet that
+				--  clears a gap it could not clear under its own power is a
+				--  different bug wearing this one's clothes. A pool that needs
+				--  more than this is one to stop at, not to leap.
+				local ceiling = nil
+				local okJump, profile = pcall(function()
+					return parameters.airJumpProfile.jumpSpeed
+				end)
+				if okJump then ceiling = tonumber(profile) end
+
+				if vy > 0
+				   and (ceiling == nil or vy <= ceiling)
+				   and arcHitsTerrain(here, vx, vy, gravity, t, landing) == nil then
+					sb.logInfo("UNIT LIQUID AHEAD at %s (heading %s): hopping "
+						.. "from %s to %s, %s tiles across and %s up, at [%s,%s]",
+						sb.printJson(entry), sb.printJson(dir),
+						sb.printJson(here), sb.printJson(landing),
+						sb.printJson(dx), sb.printJson(dy),
+						sb.printJson(vx), sb.printJson(vy))
+
+					--  VERTICAL BY setVelocity, HORIZONTAL BY CONTROL. The walk
+					--  mover only ever drives x, through controlApproachXVelocity,
+					--  so a vertical set survives it; x has to be issued the same
+					--  way or the mover's own control wins the axis.
+					mcontroller.setVelocity({ vel[1], vy })
+					mcontroller.controlApproachXVelocity(vx,
+						parameters.airForce or parameters.groundForce)
+					stateData.liquidHopPending = true
+					stateData.liquidHopAirborne = nil
+					return true
+				end
+			end
+		end
+	end
+
+	--  NO HOP -- too wide, too high, nowhere dry to land, or the arc clips
+	--  something. STOP ANYWAY, which is the part that matters: the unit is one
+	--  step from walking into something that kills it, and standing still is a
+	--  strictly better outcome than any route this tick can offer.
+	--
+	--  The progress ladder is what gets it moving again -- no net displacement
+	--  strikes out into a coarse leg, then a vent -- and both of those route
+	--  around rather than through.
+	--  A CONTROL, NOT setVelocity. The engine applies control inputs at the
+	--  end of the tick and the LAST one on an axis wins; this function runs
+	--  after the mover precisely so that this is the last one.
+	mcontroller.controlApproachXVelocity(0, mcontroller.baseParameters().groundForce)
+
+	if stateData.liquidStopSaid ~= entry then
+		stateData.liquidStopSaid = entry
+
+		sb.logInfo("UNIT LIQUID AHEAD at %s (heading %s) and no hop available "
+			.. "-- stopping at %s rather than walking in (exit %s, landing %s)",
+			sb.printJson(entry), sb.printJson(dir), sb.printJson(here),
+			sb.printJson(exit), sb.printJson(landing))
+	end
+
+	return true
+end
+
 local UNPERCH_RADIUS = 2
 local UNPERCH_MAX = 2.5
 
@@ -5908,8 +6105,16 @@ local function unperchFromCorner(stateData)
 	local okHere, standable = pcall(validStandingPosition, here, false)
 	if not okHere or standable then return false end
 
-	local okNear, spot = pcall(standableNear, here, UNPERCH_RADIUS,
-		UNPERCH_RADIUS, false, -UNPERCH_RADIUS)
+	--  BIASED TOWARD THE WAY THE PET WAS GOING. standableNear ranks columns by
+	--  distance from the point it is given, so searching from a point one tile
+	--  ahead makes the forward column the nearest one whenever it exists at
+	--  all, and the column behind only wins when there is nothing ahead. Facing
+	--  is used because a perched unit has no velocity left to read.
+	local facing = mcontroller.facingDirection()
+	if facing ~= 1 and facing ~= -1 then facing = 1 end
+
+	local okNear, spot = pcall(standableNear, { here[1] + facing, here[2] },
+		UNPERCH_RADIUS, UNPERCH_RADIUS, false, -UNPERCH_RADIUS)
 
 	if not okNear or spot == nil then
 		sb.logInfo("UNIT UNPERCH: at %s onGround but not standable, and no "
@@ -5936,6 +6141,41 @@ local function unperchFromCorner(stateData)
 	mcontroller.setVelocity({ 0, 0 })
 
 	return true
+end
+
+--  THE PERCH IS A PHYSICAL STATE AND IS WATCHED AS ONE.
+--
+--  onGround-and-not-standable is true from the first tick the unit settles
+--  on a corner, so it does not need a progress window to prove the unit is
+--  stuck. What it needs is a DEBOUNCE, because the same pair is also briefly
+--  true at the end of an ordinary landing or while stepping across a corner.
+--  A second of it held continuously is a perch; a few ticks is a landing.
+--
+--  Sitting this on the progress ladder cost ten to fifteen seconds per perch:
+--  two five-second windows of no net displacement before the first attempt.
+local UNPERCH_DEBOUNCE = 1.0
+
+local function unperchWatch(dt, stateData)
+	local perched = mcontroller.onGround()
+	if perched then
+		local ok, standable = pcall(validStandingPosition, mcontroller.position(), false)
+		perched = ok and not standable
+	end
+
+	if not perched then
+		stateData.perchTime = 0
+		return
+	end
+
+	stateData.perchTime = (stateData.perchTime or 0) + (dt or 0)
+	if stateData.perchTime < UNPERCH_DEBOUNCE then return end
+
+	stateData.perchTime = 0
+
+	if unperchFromCorner(stateData) then
+		stateData.progressStrikes = 0
+		freshPather("unperched from a corner")
+	end
 end
 
 local function petportsTaskUpdateInner(dt, stateData)
@@ -7759,16 +7999,6 @@ local function petportsTaskUpdateInner(dt, stateData)
           --  walking over ground a probe already proved, a vent hop is a
           --  teleport plus a route search of its own. Only fall through to
           --  vents when the graph has nothing to offer.
-          --  OFF THE CORNER FIRST. A perched unit has no route out at all, so
-          --  every rung below this one is wasted on it. Cleared to zero rather
-          --  than held, because unlike the rungs below this one CHANGED THE
-          --  UNIT'S POSITION -- there is real new state to give a window to.
-          if unperchFromCorner(stateData) then
-            stateData.progressStrikes = 0
-            freshPather("unperched from a corner")
-            return false
-          end
-
           --  THE STRIKES ARE NOT CLEARED HERE, AND THAT IS THE FIX.
           --
           --  This used to zero them on a coarse leg being STARTED, which is a
@@ -9518,6 +9748,13 @@ function petportsTaskAction.update(dt, stateData)
   if petports_profBegin ~= nil then petports_profBegin("update") end
 
   local result = petportsTaskUpdateInner(dt, stateData)
+
+  --  AFTER THE INNER UPDATE, DELIBERATELY. Everything that moves the unit --
+  --  approachPoint, the movers, the arc consumer -- has issued its controls by
+  --  now. This is the only position from which a stop cannot be overwritten in
+  --  the same tick.
+  avoidLiquidAhead(stateData)
+  unperchWatch(dt, stateData)
 
   if petports_profEnd ~= nil then petports_profEnd("update") end
   if petports_profTickEnd ~= nil then petports_profTickEnd() end
