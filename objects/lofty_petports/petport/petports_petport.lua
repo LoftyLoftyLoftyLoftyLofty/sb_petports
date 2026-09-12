@@ -1593,7 +1593,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-11f the mined counter is named for what it counts and shown only where that mod exists"
+local PETPORT_BUILD_STAMP = "2026-09-11g the standing search for a deposit reaches 8 tiles, matching the unit base reach"
 
 --  PORT PROFILER, 2026-09-07b. MEASURED 21:00: six ports on a small islet,
 --  59 port ticks over 30 ms in 39 s totalling 3.7 s, worst 268 ms, while
@@ -16638,7 +16638,7 @@ end
 --
 --  IF THE UNIT'S BASE REACH EVER DROPS BELOW 4, THIS DROPS WITH IT. That is
 --  the entire invariant and it is not enforced anywhere but here.
-ASTERITE_STAND_RADIUS = 4
+ASTERITE_STAND_RADIUS = 8
 
 --  READING THE STORE IS A WHOLE-PROPERTY PARSE, so it is cached rather than
 --  done per beat. petports_work.lua says at the store's definition that the
