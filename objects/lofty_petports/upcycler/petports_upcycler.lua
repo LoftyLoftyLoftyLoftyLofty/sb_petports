@@ -168,7 +168,7 @@ local FUEL_ITEM = "petports_petfuel"
 --  in this mod. Pet Treats carry the tag too, so output can never be laundered
 --  back into output -- the value floor means even a zero-price item is worth a
 --  point, so price alone would not have closed that loop.
-local OBJECT_BUILD_STAMP = "2026-09-08b blank treats are flavored while the charge holds"
+local OBJECT_BUILD_STAMP = "2026-09-11b a multi-treat yield blocks when it cannot fit whole, and never destroys the part that would not"
 
 local EXEMPT_TAG = "petports_no_upcycling"
 
@@ -389,9 +389,30 @@ end
 --  one at a time rather than swallowing the stack. Forty meat in the slot is
 --  thirty-nine meat the player can still pull back out.
 
+--  THE QUEUE MUST BE A SEQUENCE, AND AFTER A RELOAD IT MAY NOT BE. A saved
+--  {"plain","plain"} has come back as {"1":"plain","2":"plain"}: # reads 0,
+--  [1] reads nil, the machine emits unflavored and spends nothing while the
+--  pane shows a full charge. Read either form into a jarray so it also
+--  SERIALISES as an array from here on.
 local function blipQueue()
-	if type(storage.blips) ~= "table" then storage.blips = {} end
-	return storage.blips
+	local q = storage.blips
+	if type(q) ~= "table" then
+		storage.blips = (jarray and jarray()) or {}
+		return storage.blips
+	end
+
+	if q[1] == nil and q["1"] ~= nil then
+		local fixed = (jarray and jarray()) or {}
+		local index = 1
+		while q[tostring(index)] ~= nil do
+			fixed[index] = q[tostring(index)]
+			index = index + 1
+		end
+		storage.blips = fixed
+		return fixed
+	end
+
+	return q
 end
 
 --  Take the next flavor off the charge, or nil if it is empty.
@@ -1017,12 +1038,33 @@ local function emitFuel()
 			item = petports_flavorItem(flavor) or FUEL_ITEM
 		end
 
+		--  HOW MANY TREATS THIS BLIP IS WORTH. 1 unless the manifest says
+		--  otherwise; plain says 2.
+		local yield = flavor ~= nil and petports_flavorYield(flavor) or 1
+
+		--  ALL OR NOTHING, CHECKED BEFORE PLACING. A yield that only half fits
+		--  must not be placed at all: containerPutItemsAt would put what fits
+		--  and hand the rest back, and the rest is output the player paid for.
+		--  So the machine blocks at 999 for a two-treat yield exactly as it
+		--  blocks at 1000 for one. crateHasRoom on the port is the precedent
+		--  for this call.
+		if yield > 1 and world.containerItemsCanFit ~= nil then
+			local okFit, fits = pcall(world.containerItemsCanFit, entity.id(),
+				{ name = item, count = yield })
+			if okFit and type(fits) == "number" and fits < yield then
+				state(string.format("output blocked: %s point(s) banked, cannot place %s %s",
+					tostring(storage.points), tostring(yield), item))
+				storage.blocked = true
+				return false
+			end
+		end
+
 		local leftover = world.containerPutItemsAt(entity.id(),
-			{ name = item, count = 1 }, SLOT_OUTPUT)
+			{ name = item, count = yield }, SLOT_OUTPUT)
 
 		--  A DESCRIPTOR COMES BACK, NOT A COUNT. Anything with a positive count
 		--  means the slot would not take it -- full, or holding something else
-		--  the player parked there.
+		--  the player parked there. Nothing has been spent.
 		if type(leftover) == "table" and (leftover.count or 0) > 0 then
 			state(string.format("output blocked: %s point(s) banked, cannot place a %s",
 				tostring(storage.points), item))
@@ -1035,8 +1077,8 @@ local function emitFuel()
 
 		storage.points = storage.points - self.pointsPerFuel
 		storage.blocked = false
-		dbg("emitted 1 %s%s, %s point(s) left banked, %s blip(s) left",
-			item, flavor ~= nil and " (flavored)" or "",
+		dbg("emitted %s %s%s, %s point(s) left banked, %s blip(s) left",
+			tostring(yield), item, flavor ~= nil and " (flavored)" or "",
 			tostring(storage.points), tostring(#blipQueue()))
 	end
 

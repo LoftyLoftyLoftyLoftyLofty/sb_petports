@@ -38,7 +38,7 @@ require "/scripts/lofty_petports/petports_strings.lua"
 local DEBUG = true
 
 --  Bump on every change to this file. See the log line in init().
-local PANE_BUILD_STAMP = "2026-09-08d status reads the input slot instead of a nil global"
+local PANE_BUILD_STAMP = "2026-09-11b the blip queue is read by string key as well as integer, since the message may deliver either"
 
 --  sb.logInfo accepts %s and nothing else. Pre-format through string.format,
 --  which has no such limit, and hand the logger one string.
@@ -1032,8 +1032,27 @@ local PROGRESS_INTERVAL = 0.25
 --
 --  CHANGE-GATED PER CELL. Eight setImage calls a tick would be harmless and
 --  pointless; comparing the tint we last wrote costs one string compare.
+--  THE QUEUE MAY ARRIVE KEYED BY STRING. A sequence built in-session crosses
+--  the entity message as a JSON array; one restored from storage after a
+--  reload has been seen arriving as {"1":...,"2":...}. Measured 2026-09-11:
+--  eight "plain" entries under string keys, eight cells painted BLIP_EMPTY.
+--  Read both forms into a plain sequence once, here, and nothing below has
+--  to know.
+local function blipSequence(queue)
+	if type(queue) ~= "table" then return {} end
+
+	local out = {}
+	for index = 1, BLIP_COUNT do
+		local flavor = queue[index]
+		if flavor == nil then flavor = queue[tostring(index)] end
+		if flavor == nil then break end
+		out[index] = flavor
+	end
+	return out
+end
+
 local function refreshBlips(queue)
-	if type(queue) ~= "table" then queue = {} end
+	queue = blipSequence(queue)
 
 	for index = 1, BLIP_COUNT do
 		local flavor = queue[index]
@@ -1115,7 +1134,7 @@ local function refreshProgress(dt)
 			--  charge is empty to tell "this blank treat is waiting for a
 			--  reagent" apart from "this item can never be upcycled", and those
 			--  two sentences point a player in opposite directions.
-			self.blipCount = type(result.blips) == "table" and #result.blips or 0
+			self.blipCount = #blipSequence(result.blips)
 
 			--  PUBLISHED BY THE MACHINE, not read off the grid.
 			--

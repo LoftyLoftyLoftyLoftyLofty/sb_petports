@@ -1593,7 +1593,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-11h a port that has spawned nothing still owns the unit that re-homed to it"
+local PETPORT_BUILD_STAMP = "2026-09-11i a flavor marked preference false is not on the restock wanted list"
 
 --  PORT PROFILER, 2026-09-07b. MEASURED 21:00: six ports on a small islet,
 --  59 port ticks over 30 ms in 39 s totalling 3.7 s, worst 268 ms, while
@@ -13853,7 +13853,7 @@ local function fuelTreatOrder(preferred)
 
   for _, flavor in ipairs(petports_flavors()) do
     local item = petports_flavorItem(flavor.id)
-    if item ~= nil and flavor.id ~= preferred then
+    if item ~= nil and flavor.id ~= preferred and flavor.preference ~= false then
       table.insert(wanted, { name = item, value = PETPORTS_FUEL_PLAIN })
     end
   end

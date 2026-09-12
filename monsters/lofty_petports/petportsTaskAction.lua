@@ -183,7 +183,7 @@ local TASK_TRACE_MOVES = false
 --  and it now refuses any arc of its own that flies through terrain. Confirmed
 --  over a full round trip -- 51 jumps, no repeated takeoff-landing pair, three
 --  refusals all distinct.
-local FLIGHT_TRACE = false
+local FLIGHT_TRACE = true
 
 --  BUILD STAMP.
 --
@@ -207,7 +207,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-11aa reaching a coarse leg asks for the next one until the graph answers, instead of abandoning the route on not-ready"
+local BUILD_STAMP = "2026-09-12c the narrow-landing arc is only as tall as it needs to be, never vertical, and the sweep sees platforms on the way down"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -469,6 +469,11 @@ local JUMP_VELOCITY_MARGIN = 1.02
 --  asks for something absurd is a broken path, and it should fail visibly
 --  rather than fling the unit across the room.
 local JUMP_VELOCITY_CAP = 1.25
+
+--  Horizontal speed at which a landing on a one-wide surface still settles
+--  rather than skids. Measured 2026-09-12: 11.7 slid off, and the arc that
+--  landed at ~8 held.
+local NARROW_LANDING_VX = 8.0
 
 --  HOW FAR ABOVE THE LANDING THE ARC MUST TOP OUT.
 --
@@ -1897,6 +1902,8 @@ end
 --  petports_bodyHitsAt IS THE BODY TEST. What hits the floor is the whole
 --  unit, not a point, and that predicate already handles the poly and the
 --  bound-box fallback.
+local ARC_DESCENT_SOLIDS = { "Null", "Block", "Slippery", "Dynamic", "Platform" }
+
 local function arcHitsTerrain(source, vx, vy, gravity, airtime, landing)
 	if gravity == nil or gravity <= 0 then return nil end
 
@@ -1935,8 +1942,13 @@ local function arcHitsTerrain(source, vx, vy, gravity, airtime, landing)
 		local movedX = x - source[1]
 		local movedY = y - source[2]
 
+		--  PLATFORMS COUNT ON THE WAY DOWN. The default collision set excludes
+		--  them, and rising through one is correct; descending onto one is a
+		--  landing, and an arc that does so never reaches its target.
+		local set = (v < 0) and ARC_DESCENT_SOLIDS or nil
+
 		if (movedX * movedX) + (movedY * movedY) > 0.25
-		   and petports_bodyHitsAt({ x, y }) then
+		   and petports_bodyHitsAt({ x, y }, set) then
 			return { x, y }, i
 		end
 	end
@@ -1964,6 +1976,20 @@ local function traceLaunchTerrain(source, vx, vy, gravity, landing, airtime)
 		sb.printJson(landing and (landing[1] - source[1])))
 end
 
+--  IS THERE ROOM TO BE WRONG AT THE LANDING? A landing with a standable tile on
+--  each side absorbs the half-tile a fast arc overshoots by. A one-wide
+--  platform absorbs nothing: measured 2026-09-12, an accurate arc arriving at
+--  vx 11.7 caught the far edge on its leading chamfer and slid off inside one
+--  update. Either neighbour missing means the arrival has to be slow.
+local function landingIsNarrow(landing)
+	for _, side in ipairs({ -1, 1 }) do
+		local ok, standable = pcall(validStandingPosition,
+			{ landing[1] + side, landing[2] }, false)
+		if not ok or not standable then return true end
+	end
+	return false
+end
+
 local function solveLaunch(pather, edge, source)
   local plannedVx = edge.jumpVelocity[1]
   local plannedVy = edge.jumpVelocity[2]
@@ -1988,7 +2014,12 @@ local function solveLaunch(pather, edge, source)
   --  Guarded on the sign matching as well as on being non-zero: a plan whose vx
   --  points away from its own landing is malformed, and dividing by it would
   --  produce a negative time.
-  if plannedVx ~= 0 and dx ~= 0 and ((dx > 0) == (plannedVx > 0)) then
+  --  A NARROW LANDING SKIPS THE KEPT-vx BRANCH. That branch keeps the plan's
+  --  horizontal and is the fastest arrival the geometry allows; branch 2 is
+  --  told to use the tallest arc the cap permits instead, which is the slowest.
+  local narrow = landingIsNarrow(landing)
+
+  if not narrow and plannedVx ~= 0 and dx ~= 0 and ((dx > 0) == (plannedVx > 0)) then
     local t = math.abs(dx) / math.abs(plannedVx)
 
     --  DESCENDING AT THE TARGET, on the DISCRETE trajectory: the continuous
@@ -2041,6 +2072,37 @@ local function solveLaunch(pather, edge, source)
     --  needs to clear its own takeoff lip before it falls.
     local rise = math.max(planRise, dy + JUMP_ARC_CLEARANCE, JUMP_ARC_CLEARANCE)
 
+    --  NARROW: RAISE THE ARC UNTIL THE LANDING IS SLOW ENOUGH, AND NO
+    --  FURTHER. More height is more airtime is less vx for the same dx. The
+    --  first version aimed at the cap outright and a vertical launch went up
+    --  13.65 for a 7-up target -- there is no vx to reduce on a vertical arc,
+    --  so it gets nothing here, and a horizontal one stops at the first rise
+    --  that lands under NARROW_LANDING_VX. Bounded by what the chassis can
+    --  actually jump, not by the multiplier cap below.
+    if narrow and plannedVx ~= 0 and dx ~= 0 then
+      local ceiling = nil
+      local okJump, jumpSpeed = pcall(function()
+        return mcontroller.baseParameters().airJumpProfile.jumpSpeed
+      end)
+      if okJump then ceiling = tonumber(jumpSpeed) end
+
+      local tallRise = rise
+      for _ = 1, 12 do
+        local tryVy = discreteLaunchForRise(tallRise, gravity) * JUMP_VELOCITY_MARGIN
+        if ceiling ~= nil and tryVy > ceiling then break end
+        local tb = tryVy + ((gravity * PHYSICS_DT) / 2)
+        local tdisc = (tb * tb) - (2 * gravity * dy)
+        if tdisc < 0 then break end
+        local tt = (tb + math.sqrt(tdisc)) / gravity
+        if tt > 0 and math.abs(dx / tt) <= NARROW_LANDING_VX then
+          rise = tallRise
+          branch = "tall arc for a narrow landing"
+          break
+        end
+        tallRise = tallRise + 0.5
+      end
+    end
+
     vy = discreteLaunchForRise(rise, gravity) * JUMP_VELOCITY_MARGIN
 
     --  Descending root of  v0*t - g*t*(t - dt)/2 = dy, which rearranges to
@@ -2053,7 +2115,7 @@ local function solveLaunch(pather, edge, source)
     if time <= 0 then return plannedVx, plannedVy, nil end
 
     vx = dx / time
-    branch = "lowered vx"
+    if branch == nil then branch = "lowered vx" end
   end
 
   --  Never out-reach the planner horizontally, and keep the old cap on a raise.

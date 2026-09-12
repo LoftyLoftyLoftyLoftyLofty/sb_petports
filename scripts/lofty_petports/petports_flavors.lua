@@ -215,6 +215,15 @@ end
 --  The treat item a flavor produces. nil is a MANIFEST ERROR rather than an
 --  ordinary absence -- a flavor that names no item cannot be made, so the
 --  reagent for it would be accepted and then produce nothing.
+--  Treats one blip of this flavor produces. 1 unless the manifest says
+--  otherwise.
+function petports_flavorYield(flavorId)
+	local flavor = petports_flavor(flavorId)
+	local n = flavor and tonumber(flavor.yield) or 1
+	if n < 1 then n = 1 end
+	return math.floor(n)
+end
+
 function petports_flavorItem(flavorId)
 	local flavor = petports_flavor(flavorId)
 	if flavor == nil then return nil end
@@ -263,7 +272,8 @@ function petports_preferredFlavor(seed, eligible)
 
 	local candidates = {}
 	for _, flavor in ipairs(petports_flavors()) do
-		if flavor.id ~= nil and (allowed == nil or allowed[flavor.id]) then
+		if flavor.id ~= nil and flavor.preference ~= false
+		   and (allowed == nil or allowed[flavor.id]) then
 			table.insert(candidates, flavor.id)
 		end
 	end
