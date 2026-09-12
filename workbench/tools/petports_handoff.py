@@ -150,7 +150,7 @@ TOPICS = {
 	'port', 'unit', 'locomotion', 'pathing', 'dispatch',
 	'network', 'vent', 'cargo', 'filter', 'beacon',
 	'farming', 'fishing', 'upcycler', 'fuel', 'module', 'pane',
-	'item', 'art', 'tooling',
+	'item', 'art', 'tooling', 'bubble', 'mining',
 }
 
 TAG_RE = re.compile(r'`([a-z]+)\.([a-z]+)\.([a-z0-9]+)`')

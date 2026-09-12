@@ -50,108 +50,69 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-10 (the bridge, the unrestricted flyer, and the survey made to fit in a tick)
+### What is built, as of 2026-09-11 (asterite mining, and the walker fixes it exposed)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-**LOFTY'S VERDICT, END OF 2026-09-10, AND THE NEXT SESSION OPENS ON IT:
-THE PERFORMANCE IS NOT ACCEPTABLE.** With six units socketed the world
-hitches; with the pets unsocketed it does not. That is the control, and it
-says the remaining stalls are ours whatever the profiler attributes them
-to. Per-unit script cost is down an order of magnitude (below) and is no
-longer the source; what is left, in the order the player feels it:
+**THE PERFORMANCE VERDICT OF 2026-09-10 STILL STANDS AND IS STILL THE NEXT
+THING.** Nothing in this session touched the flush stall or the port tick.
+The order on re-entry is unchanged: `plan.pathing.cityscale` item 2 (chunked
+dense shards) first, `todo.port.tickyield` second, and only then the
+unrestricted flyer. Everything that "collapses into the flyer working" sits
+behind those two.
 
-1. **The 30 s freeze grew with the store** (`fact.tooling.worldstorage`,
-   `todo.pathing.storesize`): retail's per-world storage sync serialises
-   every world property, our per-cell edge shards across six profiles are
-   now most of that payload, and the floor the tree measured with ports
-   only has doubled. Lever: bytes in the store -- chunk-keyed shards with a
-   dense encoding (`plan.pathing.cityscale` item 2, promoted to FIRST;
-   `todo.pathing.freeradius` is the same item from 09-06),
-   stale-shard purge, claims off the property store if they are on it.
-2. **The every-few-seconds hitch is the port script** (`todo.port.tickyield`):
-   `findWork` runs every generator in one call (avg 14 ms, max 135;
-   `g.sort` alone 101), `mirrorPaneState` max 93, `refreshBeacons` max 72,
-   `crosshairRefresh` 44, `refreshFarmables` 59, on six ports. Every one
-   of these runs to completion and is owed `dd.pathing.yieldrule`.
-3. **The units' steady load** is six x 100-330 ms per 5 s (`10r` log,
-   named per unit) and falls as each survey completes (`10q` idle gate).
-   Fops' one 638 ms update was the flush landing inside his harvest swing.
+**WHAT THIS SESSION WAS.** A detour: the Asterite Mining Module, end to end,
+for Lemon Drops' Falling Stars mod (`starore`). Built in five gated builds
+and all five are in and working: scan and store (port 11a), removal probe
+(unit 11a-f), dispatch and act (port 11c, unit 11g), module gate (port 11d),
+swings, sound and beam (unit 11h-i, overlay 11a-d), filters (no stamp). Plus
+the stat (port 11e-f). See `arch.mining.*`.
 
-NOTHING FROM 09-09 OR 09-10 IS COMMITTED. Lofty's standard for committing
-the unrestricted flyer is "it stops lagging the game"; by the control
-above that standard is not met yet, and the items above are what meets it.
+**WHAT IT EXPOSED, ALL FIXED, ALL CONFIRMED IN GAME.** The feature drove the
+walker across a crusted roof, a lava edge, stepped ledges and a poison maze
+in one afternoon, and every one of these was already there:
 
-**TWO DAYS, ONE ARC.** 09-09 built the amphibious bridge and the unrestricted
-flyer; 09-10 discovered that the survey plumbing those exposed was stalling
-the game, and fixed it build by build against the profiler until the tick
-histogram sat under 50 ms. Everything in this block is VERIFIED by a log
-unless marked otherwise. NOTHING FROM 09-09 OR 09-10 IS COMMITTED YET (Lofty:
-"it's not going to be if the unrestricted flyer doesn't stop lagging the
-game"); the 13:00 profile is the one to commit against.
+    unit 11m-n   solveLaunch replaced the planner's validated arc with a
+                 flat one that clipped the lip; now vetoes any arc of its own
+                 that flies through terrain (`dd.locomotion.arcveto`)
+    unit 11q     a landing that overshot walked back to the waypoint it
+                 passed; consumed instead (`arch.locomotion.overshoot`)
+    unit 11r-s   a unit balanced on a chamfer corner sat for a minute;
+                 detected in ~1 s and placed on a real column
+                 (`arch.locomotion.unperch`)
+    monstertype  drone and flyer declared no `petports_avoidLiquids`, so
+                 nothing was ever denied and the lava module unlocked
+                 nothing (`fact.locomotion.avoidlist`)
+    unit 11u-z   a walker scans a few tiles ahead for denied liquid and hops
+                 it at run speed or stops; replans on landing
+                 (`arch.locomotion.liquidscan`)
+    unit 11aa    reaching a coarse leg read the route search's "more" as
+                 "no route" and abandoned a route it had been following --
+                 the swimmer's poison-maze regression, fixed
+                 (`dd.locomotion.notready`)
+    port 11h     a death report from a unit that re-homed after a reload was
+                 refused as a stranger; honoured (`arch.dispatch.deathowner`)
 
-**THE AMPHIBIOUS CHASSIS ROUTES THROUGH WATER, BOTH WAYS, ANY TASK.**
-`arch.pathing.bridges` (a third store of dive/wade/exit edges, discovered
-from the boundary flood, which also SEEDS THE SURVEY ACROSS EVERY SHORELINE
-since 09x), `arch.pathing.mergedgraph` (one graph for a switchable chassis),
-`arch.pathing.targetside` (a target is resolved as its own side),
-`dd.pathing.routeswims`, `dd.pathing.bothsideswade`. Nine tasks through the
-lava in the verifying log, zero failures.
+**STILL OPEN FROM THIS SESSION**, in the order they are likely to bite:
+`todo.locomotion.laddermore` (same bare-`if` on `tryCoarseLeg` in the strike
+ladder), `todo.locomotion.lefthop` (the plan.drawio vertical-launch case is a
+different bug from 11m and is untouched), `todo.port.localslots` (192 of 200,
+the asterite functions went global under `dd.tooling.delocalise`).
 
-**THE UNRESTRICTED FLYER IS BUILT AND FAST** (`plan.unit.unrestrictedflyer`,
-option A: one free-mover profile, gravity never on, the waterline is nothing
-to it). Files under `monsters/lofty_petports/unrestricted/`. It surveyed the
-ocean base to radius 4 in under a minute and routes over it.
+**BUILD STAMPS IN PLAY:** port `2026-09-11h`, taskAction `2026-09-11aa`,
+work `2026-09-11b`, overlay `2026-09-11d`, coarsenav `2026-09-10r`,
+contract `2026-09-10a`, flyapproach `2026-09-10c`, habitat `2026-09-07a`.
 
-**THE SURVEY WAS THE LAG, NOT THE FLYER.** The 09-10 profile arc, each step
-from a number (`arch.pathing.tickbudget` has the table): a free mover's
-survey was rationed to 3.5 probes/s by a per-port stride, a two-step cap and
-a turn-stretched timer (10c); its frontier queue and widening list were
-per-instance and ring-bounded, so far cells were never swept and `survey
-COMPLETE` lied (10d, 10e); the graph build was chunk-constant and took 24 s
-on a 2,000-cell store (10f, 10g); one sweep step ran a whole cell's probes
-before yielding (10h); the index -- one property for the whole profile --
-was PARSED EVERY UPDATE THAT TOUCHED IT, 10-20 ms charged to whichever probe
-asked first (10j, `fact.pathing.indexparse`); the route BFS had a fixed
-2,000-node budget that a 2,915-cell graph exhausted a third of the way
-across and reported as "no path" (10i, `dead.pathing.flatbudget`); the
-free-mover waypoint swept every in-reach node (10k); the candidate recompute
-ran to completion (10l/10m, the first build under `dd.pathing.yieldrule`);
-and the string-pull line was swept to any distance (flyapproach 10c).
-Result, 12:53..13:00 on the ocean base with two units: update avg 5.2 ms,
-navTick max 59, 92 of 99 windows under 50 ms.
+**NOTHING FROM THIS SESSION IS COMMITTED.** Last commit is `6cd4efc`
+(2026-09-10, the flyer prototype). Working tree carries the whole day.
+Commit standard: asterite as a unit of work is done and clean; commit it
+before the performance work so a rollback of that does not take this with
+it.
 
-**THE RULE THAT NOW GOVERNS EVERY BUILD** is `dd.pathing.yieldrule` (Lofty):
-nothing a unit does may stall a server tick; anything that can take longer
-than its clock budget is a coroutine, and not-ready is a result. Applied
-to the candidate recompute (10l/m), the route search and the waypoint
-sweeps (10n, taskAction 10a), the bridge seeding and pairing (10o/10p); the
-flood and bridge ticks idle when the survey is complete (10q); the PROFILE
-line names its unit (10r). Owed: everything in the PORT (above).
-
-**THE CITY-SCALE PLAN** is `plan.pathing.cityscale`: chunk-keyed index AND
-edges (one property per 32-tile chunk per profile, one migration, one
-generation -- Lofty), hierarchical routing on the coarse levels that were
-built for it and never wired to it (the drift is named there), a chunk
-loader in place of the whole-profile graph, and per-chunk frontier and
-candidate structures. Everything else -- cell size, probe, executor, walls,
-bridges -- rides on top unchanged.
-
-**CLOSED THIS SESSION:** `todo.pathing.amphibiouscrash` (unreproducible),
-`todo.tooling.stampclock` (today's stamps are today's date; the letter
-restarted). **OPENED:** `todo.pathing.indexshrink` (guarded by 10a/10b,
-cause not yet named -- no `INDEX SHRANK` line in any log since),
-`todo.pathing.moduleprofile`, `todo.pathing.surfacerefusal`,
-`todo.pathing.openliquid`, `todo.pathing.waterlinepark`.
-
-**AMBIENT, UNCHANGED:** `PETPORTS_NAV_VERBOSE = true` and the four other debug
-flags, all on the release-preflight sweep. `.gitattributes` says LF and
-`petports_petport.lua` and this document are still CRLF
-(`todo.tooling.crlfstale`). The debug overlay costs 1.4-1.9 s of every 5 s
-when on (`draw` in the profile) and is the first thing to turn off when the
-game feels slow.
+The draw overlay remains the first thing to turn off when the game feels
+slow.
 
 ## ARCHITECTURE
 
@@ -6215,6 +6176,86 @@ thousand of them, because it tells the player to take the stack out. The new
 cause is `inputNoCharge`, severity `waiting`, and it names no item: the blanks
 are fine exactly where they are.
 
+### Asterite mining: a port walks its own rect one tile per tick and records deposits in a tile-keyed world store
+`arch.mining.scan` -- see also `dd.mining.phase`, `dd.mining.tilekeyed`, `fact.mining.placemod`, `dd.dispatch.portdiscovery`
+
+BUILT 2026-09-11 (port 11a). A matmod is not an entity, so discovery is a
+tile walk: one `world.mod` per update over the port's own 64x64 rect, cursor
+seeded from a hash of its uniqueId, ~5.7 min per sweep at scriptDelta 5. The
+scan latches OFF at init unless `root.modConfig("asterite")` resolves, names
+an `itemDrop`, and that item exists. Hits go to `petports_asterite`, keyed by
+`petports_tileKey`, capped at 2000 and refusing rather than evicting when
+full. `FOUND` logs on new entries only; `SCAN WRAP` carries the counts.
+Console: `petports_asteriteDump()`, `petports_asteriteWipe()`.
+
+### Asterite mining: dispatch reads the store, stands within reach, and the unit replaces the mod then breaks the placeholder
+`arch.mining.act` -- see also `arch.mining.scan`, `dd.mining.placeholder`, `dd.mining.standradius`, `fact.mining.damageasync`
+
+BUILT 2026-09-11 (port 11c-d, unit 11g-j). `asteriteWork` sits below traps
+and below the cargo guard, gated on the module flag `asterite`, reads the
+store through a 5 s cache, screens candidates in the loop (coverage, claim,
+backoff, medium), sorts by distance and tries up to six standing searches
+within `ASTERITE_STAND_RADIUS`. The act re-reads the tile every tick, refuses
+a changed mod and drops the entry, swings `health` times at 0.25 s each,
+then `placeMod(petports_cleared)` followed by 1 blockish damage to break it.
+The ore is `itemDrop` off the matmod, reported as cargo; nothing is spawned.
+Reach is 8 plus the body axis, capped 12; no sight test, because a mining
+beam cuts through by convention.
+
+### Asterite mining: effects are a cosmetic projectile at the tile and a beam drawn on the player
+`arch.mining.effects` -- see also `arch.bubble.rendering`, `fact.tooling.noatan2`
+
+BUILT 2026-09-11 (unit 11h-i, overlay 11a-d). `petports_asteritespark` is a
+blank statuspod projectile whose `actionOnReap` is filled per swing with the
+matmod's own `miningSounds` (one action, six options) and `miningParticle`.
+The beam is one `petports_beamShow` message per mine -- tile, swings, period
+-- and the overlay draws a `chain.lua`-style segment run from the unit's live
+position to the fixed tile off its own dt clock, self-expiring at
+swings*period, fade `sin(phase*pi)` via one `?multiply=` on greyscale sprites.
+Not culled: the renderer already does that, and two attempts at a range
+were both wrong.
+
+### A jump that overshot its landing consumes the waypoint it passed
+`arch.locomotion.overshoot` -- see also `arch.pathing.arcmover`
+
+BUILT 2026-09-11 (unit 11q). The arc skip loop breaks on the first non-Arc
+edge and the landing check measures y only, so a landing 0.1-0.5 past its
+Land edge held a waypoint behind the unit and walked back to it. A GROUNDED
+skip now also consumes a Land/Walk edge when the unit is past it IN THE
+DIRECTION THE FOLLOWING EDGE CONTINUES, on the same surface, and never the
+last edge.
+
+### A unit balanced on a chamfer corner is detected within a second and placed on a real column
+`arch.locomotion.unperch` -- see also `fact.pathing.platformdrop`
+
+BUILT 2026-09-11 (unit 11s, 11y, 11z). `onGround` true with
+`validStandingPosition` false is a corner perch -- one chamfer point on a
+tile corner. Watched every tick from the update wrapper with a 1.0 s
+debounce, then `standableNear` from one tile ahead in the facing direction
+and `setPosition`, capped at 2.5 tiles. Was a rung on the progress ladder
+and cost 10-15 s per perch.
+
+### A walker looks ahead for denied liquid and hops it or stops
+`arch.locomotion.liquidscan` -- see also `fact.locomotion.avoidlist`, `fact.tooling.velocitycontrol`
+
+BUILT 2026-09-11 (unit 11u-11x, 11z). Vanilla A* costs collision only, so a
+route through lava is a route. `avoidLiquidAhead` runs from the update
+wrapper after the movers, scans 3 tiles from the body's leading edge at
+foot level and one below, finds the far edge within 10, resolves a dry
+landing via `standableNear`, solves a hop at the chassis `runSpeed` capped
+by `airJumpProfile.jumpSpeed` and checked with `arcHitsTerrain`; otherwise
+`controlApproachXVelocity(0)`. A hop sets `liquidHopPending` and replans on
+the first grounded tick after being airborne, or the stale plan hops back.
+
+### A port that has spawned nothing this session still owns the unit that re-homed to it
+`arch.dispatch.deathowner` -- see also `arch.unit.death`, `dd.cargo.portowns`
+
+BUILT 2026-09-11 (port 11h). `petports_unitDied` honours two owners: the
+unit this port spawned (`spawnedPetId`), or -- when `spawnedPetId` is nil --
+the unit it currently owns (`petId`). The second clause is unreachable on a
+port that has spawned, so both measured leftovers are still refused. The
+refusal was not losing cargo, only the drop; the load stayed in the item.
+
 ## DESIGN DECISIONS
 
 ### Nothing a unit does may stall a server tick: anything longer than its budget yields
@@ -8416,6 +8457,85 @@ the pane, `machineAt` on the port -- or the pane draws one thing and the fleet
 does another. An existing machine has no parameter and so reads as ON from the
 next load, which is the intended migration and is a behaviour change in worlds
 nobody touched.
+
+### Asterite removal is replacement: place a breakable placeholder, then break it
+`dd.mining.placeholder` -- see also `fact.mining.placemod`, `fact.mining.damagesum`, `fact.mining.damageasync`
+
+DECIDED 2026-09-11 (Lofty, after both direct routes were closed in the
+source). `petports_cleared` (modId 58700, claimed on the wiki) has no
+`breaksWithTile`, `health` 0, no render, no drop, no sounds. `placeMod` over
+the deposit, one blockish damage to break it, bare tile. `metamod:none`
+cannot be placed and damaging asterite takes the block with it.
+
+### The asterite store is keyed by tile, not by network
+`dd.mining.tilekeyed` -- see also `arch.farming.intents`, `arch.network.membership`
+
+DECIDED 2026-09-11. Same reason as replant intents: networks merge and split
+under their ids. Tile-keyed, a split orphans nothing and overlapping
+networks share discoveries. Invalidated by state -- mined, or the tile
+reading differently on arrival -- never by TTL.
+
+### Each port scans its own rect; the network only sets the phase
+`dd.mining.phase` -- see also `todo.port.censusshared`
+
+DECIDED 2026-09-11. Port count times rect area is the SUM of the rects, not
+the union; a partition would need the union and a mapping that moves on
+every placement. A phase from the port's own uniqueId needs no coordination,
+costs one extra `world.mod` per overlapping tile, and a highway node with a
+smaller rect drops in unchanged.
+
+### The port's standing-search radius never exceeds the unit's base reach
+`dd.mining.standradius` -- see also `arch.mining.act`
+
+DECIDED 2026-09-11. `ASTERITE_STAND_RADIUS` (8) and `ASTERITE_REACH_BASE`
+(8) are one number in two files. Reach is base plus body, so anything the
+port finds within the radius is inside every chassis's reach without the
+port asking. Raise one, raise both; the failure otherwise is a refusal on
+arrival, every time.
+
+### A filter group may name a sentinel item, and is hidden when that item does not exist
+`dd.filter.sentinel` -- see also `dd.filter.modband`
+
+DECIDED 2026-09-11 (Lofty). `sentinelItem` on a group or subgroup; `ordered()`
+in `petports_filters.lua` drops the entry when `root.itemConfig` cannot find
+it. Display only -- matching against absent items is vacuous. First tenant:
+Falling Stars, sentinel `asteriteore`, five subgroups listed by name.
+
+### Vanilla groups sit at 100-3200, mod content from 10000, Unsorted at 99000, unordered at 100000
+`dd.filter.modband` -- see also `dd.filter.sentinel`
+
+DECIDED 2026-09-11 (Lofty). A declared band, because the manifest is meant to
+be patched. `ordered()`'s missing-order default moved from 10000 to 100000
+in the same change, or an unordered entry sorted into the middle of mod
+content.
+
+### When Lua's 200-local ceiling and the local/global convention disagree, the convention loses
+`dd.tooling.delocalise` -- see also `todo.port.localslots`, `fact.tooling.upvalues`
+
+DECIDED 2026-09-11 (Lofty): "the fix is the simple removal of a keyword from
+a handful of function declarations... standard convention loses." Verified
+zero collisions across the 103 globals of the five required scripts before
+doing it. De-localising buys one slot per keyword; the real fix is
+extraction to a required script (farming 36, machines 30, containers 26).
+
+### solveLaunch refuses any arc of its own that flies through terrain, and flies the plan instead
+`dd.locomotion.arcveto` -- see also `arch.pathing.arcmover`
+
+DECIDED 2026-09-11 (unit 11m-n). Vanilla A* collision-checks its arcs when
+it builds them; solveLaunch substituted an unchecked one. `arcHitsTerrain`
+sweeps the discrete integrator to the landing (stopping on arrival, ignoring
+the takeoff floor) and vetoes branch 1, then the clamped final solution;
+on veto the planner's own velocity is flown. Measured: the same hop 37
+times, planner arc apex 4.76, substitute apex 0.81, floor at 0.217 s.
+
+### "More" from a coarse-leg request means ask again next tick, at every call site
+`dd.locomotion.notready` -- see also `dd.pathing.yieldrule`, `todo.locomotion.laddermore`
+
+DECIDED 2026-09-11 (unit 11aa). `tryCoarseLeg` returns `false, "more"` while
+the resumable route search is mid-work. The chain-on-arrival branch read the
+bare false as "no route" and abandoned a route it had just followed; a
+swimmer on a 1411-cell graph lost that race at its first corner every time.
+Any caller that discards the second return has this bug.
 
 ## DESIGN INTENT -- PLANNED
 
@@ -12491,6 +12611,68 @@ and Lua has no way to ask for one.
 `saplingitem` that does not exist. The list was quoted by a developer and was
 still not the enum -- `proc.pathing.readsource`.
 
+### placeMod cannot place "no mod", and allowOverlap is never consulted for mods
+`fact.mining.placemod` -- see also `dd.mining.placeholder`
+
+READ 2026-09-11, `WorldImpl::canPlaceMod`: `if (!isRealMod(mod)) return false;`
+then `existingMod != mod && supportsMod(mat, mod)`. `metamod:none` resolves
+to NoModId through `m_metaModIndex` and is refused there. The PlaceMod
+branch of `validateTileModification` passes no overlap flag. Measured from a
+monster: `gold` and `silver` overwrite asterite; `metamod:none` and `""`
+return false.
+
+### A breaksWithTile mod's health is summed with its host's; a mod without it is damaged alone
+`fact.mining.damagesum` -- see also `dd.mining.placeholder`
+
+READ 2026-09-11, `WorldImpl::tileDamageParameters`: penetrating damage
+returns the material's parameters; `modBreaksWithTile` returns
+`modDamageParameters(mod).sum(materialDamageParameters(target))`; otherwise
+the mod's alone. Asterite (breaksWithTile true) cannot be removed by damage
+without the block. `flowerygrass` (no flag, health 0) breaks on any hit and
+leaves the dirt.
+
+### placeMod applies immediately; damageTiles is queued to the engine update
+`fact.mining.damageasync` -- see also `dd.mining.placeholder`
+
+MEASURED 2026-09-11. The console harness reads a placed mod back inside the
+same call. A tile re-read in the same tick as `damageTiles` shows the state
+before the damage, always; the placeholder read as present on 100% of mines
+and was gone when checked by hand.
+
+### Drone and flyer declared no avoided liquids, so nothing was ever denied for them
+`fact.locomotion.avoidlist` -- see also `arch.locomotion.liquidscan`
+
+FOUND 2026-09-11. `petports_avoidLiquids` is the named set `avoidedLiquids()`
+is built from and module permissions subtract from. Four chassis had
+`[lava, corelava, poison]`; drone and flyer had nothing, so
+`petports_liquidDenied` returned false for lava and the Lava Blocker
+Module's liquid grant was a no-op. `petports_avoidLiquid` (singular) gates
+standing resolution only. Both monstertypes now carry the list.
+
+### A stop issued by setVelocity before the movers is overwritten in the same tick
+`fact.tooling.velocitycontrol` -- see also `arch.locomotion.liquidscan`
+
+MEASURED 2026-09-11. The walk path drives x through `controlApproachXVelocity`,
+a control the engine applies at end of tick; the last control on an axis
+wins. Anything that must have the final say runs from the update wrapper
+after `petportsTaskUpdateInner` and speaks in controls. A vertical
+`setVelocity` survives because the mover never drives y.
+
+### math.atan2 does not exist in this Lua
+`fact.tooling.noatan2`
+
+MEASURED 2026-09-11, a hard error from a player script. `math.acos` of the
+normalised x with the sign of y is the same angle. The tree's own `math.*`
+usage is the list of what is safe.
+
+### Lua 5.1 caps upvalues at 60 per closure, and the port is not close
+`fact.tooling.upvalues` -- see also `dd.tooling.delocalise`
+
+MEASURED 2026-09-11 on `petports_petport.lua`: worst is `findWork` at 29,
+`updateInner` at 19, nothing else above 13. A global is a table lookup, not
+an upvalue, so de-localising relieves this too. Recorded because the failure
+reads nothing like "too many local variables".
+
 ## DISPROVEN
 
 ### A fixed search budget on a graph that grows
@@ -15778,6 +15960,28 @@ finally exposed it -- with the output full, which produces no verdict of its own
 because a slot full of treats is fuel-tagged and `outputBlocked` only fires on
 something that is not. Both conditions had to hold to reach the line with
 something in the slot.
+
+### The strike ladder's tryCoarseLeg call discards "more"
+`todo.locomotion.laddermore` -- see also `dd.locomotion.notready`
+
+OPENED 2026-09-11. Same bare-`if` shape as the chain-arrival bug fixed in
+unit 11aa. It falls through to the vent route rather than abandoning a
+route, so it is the milder case; fix when a log shows a stuck unit skipping
+the coarse leg for no reason.
+
+### The vertical-launch hop from plan.drawio is untouched
+`todo.locomotion.lefthop` -- see also `dd.locomotion.arcveto`, `arch.pathing.arcmover`
+
+CARRIED 2026-09-11. The drawio entry (vx 0 launch, horizontal only at the
+turnover) is a different bug from 11m, which fixed solveLaunch flattening a
+good arc. The mover's turnover gate has not been changed.
+
+### The port's main chunk is at 192 of 200 local slots
+`todo.port.localslots` -- see also `dd.tooling.delocalise`
+
+MEASURED 2026-09-11. 175 of the locals are functions. Cohesive extraction
+candidates by slot count: farming 36, machines 30, containers 26, targeting
+16, pane mirror 15. Any one of them is a session.
 
 ## PROCESS
 

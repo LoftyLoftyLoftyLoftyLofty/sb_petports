@@ -207,7 +207,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-11z a liquid hop replans on landing; a perch recovers in the direction it was facing"
+local BUILD_STAMP = "2026-09-11aa reaching a coarse leg asks for the next one until the graph answers, instead of abandoning the route on not-ready"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -7873,11 +7873,43 @@ local function petportsTaskUpdateInner(dt, stateData)
       --  direct search is only tried again once the graph has run out.
       local reachedCell = stateData.navLegTo
 
-      if remaining > 0
-         and tryCoarseLeg(stateData, routeTarget, nil, reachedCell) then
+      --  "MORE" IS NOT "NO", HERE TOO. tryCoarseLeg answers false, "more"
+      --  while the resumable route search is mid-work (10n), and this branch
+      --  read the bare false as "the graph has nothing" -- then abandoned a
+      --  route it had been following seconds earlier and went for the target
+      --  directly. The one caller that honoured "more" is the coarse-first
+      --  gate; this one did not. A swimmer on a large graph lost that race at
+      --  its first corner every time; a drone on a small one finished in a
+      --  tick and never showed it.
+      --
+      --  Hold the leg state and ask again next tick. The unit is stationary
+      --  at a cell it has already reached, which is exactly where waiting
+      --  costs nothing.
+      local chained, notYet = false, nil
+      if remaining > 0 then
+        chained, notYet = tryCoarseLeg(stateData, routeTarget, nil, reachedCell)
+      end
+
+      if chained then
+        stateData.navChainWait = nil
         sb.logInfo("UNIT reached coarse leg %s with %s hop(s) left -- chaining "
           .. "into the next", tostring(reachedCell), sb.printJson(remaining))
+      elseif notYet == "more" then
+        --  Keep what the arrival cleared so the next tick can retry from the
+        --  same cell with the same remaining count.
+        stateData.navLegTo = reachedCell
+        stateData.navRemaining = remaining
+        stateData.navLegArrived = true
+        stateData.navWaypoint = mcontroller.position()
+
+        if stateData.navChainWait ~= reachedCell then
+          stateData.navChainWait = reachedCell
+          sb.logInfo("UNIT reached coarse leg %s with %s hop(s) left -- next leg "
+            .. "not ready, asking again next tick",
+            tostring(reachedCell), sb.printJson(remaining))
+        end
       else
+        stateData.navChainWait = nil
         sb.logInfo("UNIT reached coarse leg, %s hop(s) were left -- resuming "
           .. "for the real target", sb.printJson(remaining))
         freshPather("coarse leg reached")
