@@ -147,6 +147,30 @@ local TASK_TRACE_MOVES = false
 --  tick of every flight, which is the densest logging in this mod and is meant
 --  to be switched on for a specific question and switched off again.
 --
+--  BACK ON 2026-09-11 FOR THE SHORT DESCENDING HOP. Measured over a night's
+--  soak: the same jump 37 times, [5884,1169] vx 6 for [5886,1168]. solveLaunch
+--  solved it correctly -- dx 2, dy -2, vx 6 gives t 0.333 and vy 13, and the
+--  logged apex 0.81 matches that vy -- and the unit then travelled ONE tile
+--  across instead of two and landed back on its own floor. Three candidates
+--  survive that log and want different fixes:
+--
+--    FLOOR RE-ENTRY   a descending parabola must pass back through takeoff
+--                     height, and solveLaunch branch 1 never tests the terrain
+--                     between here and the landing. Returns to launch height
+--                     at t 0.217, reaching the drop-off needs t 0.333.
+--    HORIZONTAL GATE  the arc mover turns horizontal on at the turnover, which
+--                     plan.drawio already records as wrong for short hops.
+--    AIR-CONTROL CAP  1.0 tile in 0.217 s is 4.6 tiles/s against a planned 6,
+--                     and 4.6 is a speed other units in the same log fly at. If
+--                     vx is capped there, solveLaunch's t = |dx| / |plannedVx|
+--                     is computed from a speed the unit cannot hold and EVERY
+--                     airtime it produces is short.
+--
+--  READ `moved` AND NOT `vel` TO TELL THEM APART -- see the velocitysample note
+--  on flightTrace itself. moved/dt holding near 6 with an early landing is
+--  floor re-entry; starting low and rising at the turnover is the gate; pinned
+--  at 4.6 from tick 1 is the cap.
+--
 --  ANSWERED AND SWITCHED BACK OFF 2026-09-04. The question was the amphibious
 --  water exit; the answer is arch.locomotion.exitdefer. What the trace supplied
 --  that nothing else could was the pair of lines that separated the two prices
@@ -154,6 +178,11 @@ local TASK_TRACE_MOVES = false
 --  against `vel [-8,20.18]` on a dry one -- which is the whole distinction the
 --  fix rests on. It also carried the ladder stall, though the pre-move and
 --  post-move pair would have been enough for that one on its own.
+--  OFF AGAIN 2026-09-11. The short descending hop is answered: solveLaunch was
+--  substituting an unvalidated flat arc for the planner's validated tall one,
+--  and it now refuses any arc of its own that flies through terrain. Confirmed
+--  over a full round trip -- 51 jumps, no repeated takeoff-landing pair, three
+--  refusals all distinct.
 local FLIGHT_TRACE = false
 
 --  BUILD STAMP.
@@ -178,7 +207,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-11j the placeholder is broken after it is placed, so a cleared tile carries no mod at all"
+local BUILD_STAMP = "2026-09-11s a unit balanced on a tile corner is nudged onto a real standing column"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -1774,6 +1803,167 @@ end
 --  JUMP_ARC_CLEARANCE, and only in the pathological case -- where the plan's
 --  apex was the landing itself and the real trajectory was going five tiles
 --  higher anyway. Every other case comes out at or below what the plan drew.
+--------------------------------------------------------------------------------
+--  FLIGHT TRACE (TEMPORARY -- DELETE WITH ARCPLAN)
+--------------------------------------------------------------------------------
+--
+--  WHAT THIS EXISTS TO SEPARATE. Measured over a night's soak, 2026-09-11:
+--  the same hop attempted 37 times, [5884,1169] vx 6 heading for [5886,1168].
+--  solveLaunch solved it correctly -- dx 2, dy -2, vx 6 gives t 0.333 and
+--  vy 13, and the logged apex 0.81 matches that vy exactly. The unit then
+--  travelled ONE tile horizontally instead of two and landed back on its own
+--  floor.
+--
+--  Three candidates survive that log, and they need different fixes:
+--
+--    FLOOR RE-ENTRY   a descending jump's parabola must pass back through
+--                     takeoff height, and branch 1 of solveLaunch never tests
+--                     the terrain between here and the landing. If the floor
+--                     continues, the unit lands on it at t 0.217 rather than
+--                     reaching the drop-off at t 0.333.
+--
+--    HORIZONTAL GATE  the arc mover turns the horizontal on at the turnover,
+--                     which plan.drawio already records as wrong for short
+--                     hops. 1.0 tile in 0.217 s is 4.6 tiles/s against a
+--                     planned 6.
+--
+--    AIR-CONTROL CAP  4.6 is not an arbitrary number -- other units in the
+--                     same log fly at exactly vx 4.6. If vx is capped there in
+--                     the air, then solveLaunch's t = |dx| / |plannedVx| is
+--                     computed from a speed the unit can never hold and EVERY
+--                     airtime it has ever produced is short. That would make
+--                     this a general error that only breaks visibly on short
+--                     descending hops.
+--
+--  THE DISCRIMINATOR IS vx ON THE FIRST AIRBORNE TICK, and that is why the
+--  trace is per-tick rather than per-edge. ARC tick only fires when the
+--  current edge is already an Arc, which is exactly the part of the flight
+--  where the answer is not.
+--
+--    vx holds 6, unit stops early at the predicted height   -> floor re-entry
+--    vx starts low and rises at the turnover                -> horizontal gate
+--    vx is pinned at 4.6 from the first tick                -> air-control cap
+--
+--  THE PER-TICK HALF OF THIS ALREADY EXISTS. flightTrace, near the top of this
+--  file, logs position, `moved`, dt, velocity, onGround, liquid and the held
+--  edge once per airborne tick, and it is better than the replacement that was
+--  written here before anybody looked: its header records
+--  proc.pathing.velocitysample -- a reported velocity is a FRICTION SAMPLING
+--  ARTIFACT and the round numbers in every arc log are planner values rather
+--  than measurements. A probe comparing mcontroller.velocity()[1] against the
+--  solved vx would have been reading the artifact and calling it the answer.
+--
+--  SO ONLY TWO THINGS ARE ADDED: this terrain sweep, and the SOLVED LAUNCH on
+--  self so flightTrace can print where the unit should be on each tick.
+--  flightTrace already prints planX, but the plan is known fiction on every
+--  jump -- that is the finding this whole probe exists to act on -- so the
+--  solved arc is the only honest reference.
+
+--  PROBE A -- WALK THE SOLVED PARABOLA INTO THE TERRAIN, AT LAUNCH.
+--
+--  Turns "did it hit the floor on the way" from an inference into a stated
+--  fact, and it is the same sweep branch 1 would need if floor re-entry is the
+--  answer -- so if it is, this code moves into solveLaunch rather than being
+--  thrown away.
+--
+--  THE DISCRETE INTEGRATOR, NOT THE CONTINUOUS ONE. discreteRise already
+--  exists in this file because the engine's half-step lift is worth half a
+--  tile on a short hop; sampling a continuous parabola here would report a
+--  collision the unit does not have, or miss one it does.
+--
+--  THE BODY AND NOT A POINT, because what hits the floor is the whole unit and
+--  the unit is most of a tile across. That is what petports_bodyHitsAt is for.
+--  DOES THIS ARC FLY THROUGH ANYTHING? Returns the first colliding position and
+--  the step it happened on, or nil for a clear arc.
+--
+--  THE ASYMMETRY THIS EXISTS TO CLOSE. Vanilla's A* collision-checks its arcs
+--  when it builds them, so a plan is validated by construction. solveLaunch
+--  then throws that arc away and substitutes one of its own, and until now
+--  validated nothing -- so it was free to turn a plan that would have landed
+--  into one that cannot. Measured 2026-09-11, thirteen identical attempts:
+--  the planner drew an arc rising 4.76 tiles over the lip, solveLaunch
+--  replaced it with a flat skim apexing 0.81, and the flat one clips the floor
+--  at t 0.217 having travelled 1.3 of the 2 tiles it needed.
+--
+--  THIS IS NOT A NEW IDEA HERE. ARCPROBE was a temporary version of exactly
+--  this sweep, and what it found -- branch 2's invented horizontal cutting
+--  through the ledge the plan climbed to avoid -- is written up below. It was
+--  removed once that was fixed. It should not have been.
+--
+--  THE DISCRETE INTEGRATOR, matching discreteRise, because the engine's
+--  half-step lift is worth half a tile on a short hop and a continuous
+--  parabola would report collisions the unit does not have.
+--
+--  petports_bodyHitsAt IS THE BODY TEST. What hits the floor is the whole
+--  unit, not a point, and that predicate already handles the poly and the
+--  bound-box fallback.
+local function arcHitsTerrain(source, vx, vy, gravity, airtime, landing)
+	if gravity == nil or gravity <= 0 then return nil end
+
+	local x, y = source[1], source[2]
+	local v = vy
+
+	--  A SMALL TOLERANCE AND NOT A MARGIN. The first version swept TWELVE
+	--  ticks past the intended airtime "so an arc that lands late is still
+	--  caught", which guaranteed a false positive on every arc that worked --
+	--  those twelve steps carry the trajectory THROUGH its landing and into
+	--  the ground. Measured 2026-09-11: twelve refusals in one session, one of
+	--  them a vertical launch (vx 0) reported hitting terrain 0.13 tiles BELOW
+	--  its own takeoff, which a vertical arc can only do by coming back down.
+	local steps = math.ceil((airtime or 1) / PHYSICS_DT) + 2
+
+	for i = 1, steps do
+		v = v - gravity * PHYSICS_DT
+		x = x + vx * PHYSICS_DT
+		y = y + v * PHYSICS_DT
+
+		--  ARRIVED. Descending through the landing's height ends the sweep:
+		--  past that point the arc is inside whatever it is landing ON, and
+		--  anything it touches there is the destination rather than an
+		--  obstruction. `v < 0` is what keeps this from firing at takeoff on a
+		--  jump UP to a ledge, where y starts below the landing already.
+		if landing ~= nil and v < 0 and y <= landing[2] then
+			return nil
+		end
+
+		--  AND NOT THE GROUND WE ARE STANDING ON. The body is most of a tile
+		--  across and it is resting on something at takeoff, so the first few
+		--  samples of a LOW launch are still inside the floor's neighbourhood.
+		--  Half a tile of displacement is the cheapest way to say "this is a
+		--  sample of somewhere else". A real obstruction within half a tile is
+		--  still caught, because the arc keeps travelling into it.
+		local movedX = x - source[1]
+		local movedY = y - source[2]
+
+		if (movedX * movedX) + (movedY * movedY) > 0.25
+		   and petports_bodyHitsAt({ x, y }) then
+			return { x, y }, i
+		end
+	end
+
+	return nil
+end
+
+local function traceLaunchTerrain(source, vx, vy, gravity, landing, airtime)
+	if not FLIGHT_TRACE then return end
+	if gravity == nil or gravity <= 0 then return end
+
+	local hit, step = arcHitsTerrain(source, vx, vy, gravity, airtime, landing)
+
+	if hit == nil then
+		sb.logInfo("UNIT TRACE-A solved arc is CLEAR -- nothing between %s and "
+			.. "%s obstructs it", sb.printJson(source), sb.printJson(landing))
+		return
+	end
+
+	sb.logInfo("UNIT TRACE-A solved arc hits terrain at step %s (t %s) at "
+		.. "[%s,%s] -- intended landing %s at t %s. dx travelled %s of %s",
+		sb.printJson(step), sb.printJson(step * PHYSICS_DT),
+		sb.printJson(hit[1]), sb.printJson(hit[2]), sb.printJson(landing),
+		sb.printJson(airtime), sb.printJson(hit[1] - source[1]),
+		sb.printJson(landing and (landing[1] - source[1])))
+end
+
 local function solveLaunch(pather, edge, source)
   local plannedVx = edge.jumpVelocity[1]
   local plannedVy = edge.jumpVelocity[2]
@@ -1822,7 +2012,25 @@ local function solveLaunch(pather, edge, source)
       --  did it again every tick for a minute. A jump goes up.
       if candidate > 0
          and discreteRise(candidate, gravity) >= dy + JUMP_ARC_CLEARANCE then
-        vx, vy, time, branch = plannedVx, candidate, t, "kept vx"
+
+        --  AND IT MUST NOT FLY THROUGH ANYTHING. This branch LOWERS the arc --
+        --  same vx, whatever vy reaches the landing -- and a lowered arc is
+        --  precisely the one that clips a lip the planner's taller arc went
+        --  over. Every other test above is about the arithmetic; this is the
+        --  only one about the world.
+        --
+        --  VETOED RATHER THAN CORRECTED, so branch 2 gets its turn and, if
+        --  that is blocked too, the plan is flown unchanged.
+        local hit = arcHitsTerrain(source, plannedVx, candidate, gravity, t,
+          landing)
+
+        if hit == nil then
+          vx, vy, time, branch = plannedVx, candidate, t, "kept vx"
+        else
+          sb.logInfo("UNIT launch REFUSED kept-vx: solved [%s,%s] would hit "
+            .. "terrain at %s before reaching %s", sb.printJson(plannedVx),
+            sb.printJson(candidate), sb.printJson(hit), sb.printJson(landing))
+        end
       end
     end
   end
@@ -1889,6 +2097,30 @@ local function solveLaunch(pather, edge, source)
   end
   if plannedVy > 0 then
     vy = math.min(vy, plannedVy * JUMP_VELOCITY_CAP)
+  end
+
+  --  LAST GATE: THE FINISHED SOLUTION, AFTER THE CLAMPS.
+  --
+  --  Here rather than inside branch 2 because the two clamps above CHANGE the
+  --  arc -- capping vx or vy moves where it goes -- so a sweep run before them
+  --  would have validated a trajectory that is not the one flown.
+  --
+  --  FALLING BACK TO THE PLAN AND NOT TO A THIRD GUESS. The planner's arc is
+  --  the only trajectory in this function that anything has already
+  --  collision-checked: vanilla's A* validates its arcs when it builds them.
+  --  When our substitute is blocked, the thing it was substituting for is the
+  --  best remaining option, and flying it is what this function's own contract
+  --  says -- it exists to fix plans that MISS, never to break plans that would
+  --  have landed.
+  local finalHit = arcHitsTerrain(source, vx, vy, gravity, time, landing)
+
+  if finalHit ~= nil then
+    sb.logInfo("UNIT launch REFUSED %s: solved [%s,%s] would hit terrain at "
+      .. "%s -- flying the planner's own [%s,%s] instead",
+      tostring(branch), sb.printJson(vx), sb.printJson(vy),
+      sb.printJson(finalHit), sb.printJson(plannedVx), sb.printJson(plannedVy))
+
+    return plannedVx, plannedVy, nil
   end
 
   return vx, vy, {
@@ -2789,6 +3021,33 @@ function petportsJumpMover(pather)
     end
 
     mcontroller.setVelocity({vx, vy})
+
+    --  BOTH PROBES ARM HERE, AFTER THE VELOCITY IS SET AND FROM THE VELOCITY
+    --  THAT WAS SET. Not from edge.jumpVelocity: the whole point is to measure
+    --  the unit against what it was actually given, so that a divergence means
+    --  "it did not fly what we told it" rather than "the plan was wrong",
+    --  which is already known to be true on every jump.
+    if FLIGHT_TRACE then
+      local traceParams = mcontroller.baseParameters()
+      local traceGravity = world.gravity(source)
+        * (traceParams.gravityMultiplier or 1.0)
+
+      traceLaunchTerrain(source, vx, vy, traceGravity,
+        solved and solved.landing, solved and solved.time)
+
+      --  WHAT WE ACTUALLY TOLD THE UNIT TO DO, for flightTrace to measure
+      --  against. Not edge.jumpVelocity: the plan disagrees with the launch on
+      --  every jump, so measuring against the plan only re-reports that.
+      self.petportsLaunchSolve =
+      {
+        source = { source[1], source[2] },
+        vx = vx,
+        vy = vy,
+        gravity = traceGravity,
+        landing = solved and solved.landing,
+        airtime = solved and solved.time
+      }
+    end
 
     --  THE LAUNCHED vx, NOT THE PLANNED ONE. deltaX is what the movers read for
     --  direction and magnitude after takeoff, and leaving it at a value the unit
@@ -5044,6 +5303,32 @@ local function flightTrace(dt, stateData)
 
   local moved = prev and prev.pos and world.distance(here, prev.pos) or nil
   local planX = flightPlanX(finder, here[2])
+
+  --  WHERE THE SOLVED LAUNCH SAYS WE SHOULD BE ON THIS TICK.
+  --
+  --  planX above answers against the PLAN, and the plan is fiction on every
+  --  jump -- measured 2026-09-11, solveLaunch overrode the planner's velocity
+  --  on 95 of 95 launches. This answers against what the unit was actually
+  --  given, so a gap here means the unit is not flying its own launch.
+  --
+  --  INTEGRATED THE SAME WAY THE ENGINE DOES, in PHYSICS_DT steps from tick 1,
+  --  because discreteRise exists in this file precisely because the half-step
+  --  lift is worth half a tile on a short hop.
+  local solveX, solveY, solveDrift = nil, nil, nil
+  local launch = self.petportsLaunchSolve
+
+  if launch ~= nil and launch.gravity ~= nil and tick >= 1 then
+    local sx, sy, sv = launch.source[1], launch.source[2], launch.vy
+
+    for _ = 1, tick do
+      sv = sv - launch.gravity * PHYSICS_DT
+      sx = sx + launch.vx * PHYSICS_DT
+      sy = sy + sv * PHYSICS_DT
+    end
+
+    solveX, solveY = sx, sy
+    solveDrift = here[1] - sx
+  end
   local bounds = mcontroller.boundBox()
   local feet = world.liquidAt({ here[1], here[2] + bounds[2] + 0.5 })
   local mid = world.liquidAt(here)
@@ -5065,6 +5350,33 @@ local function flightTrace(dt, stateData)
     sb.printJson(edge and edge.target and edge.target.position),
     sb.printJson(planX),
     sb.printJson(planX and (planX - here[1])))
+
+  --  SEPARATE LINE RATHER THAN MORE FIELDS ON THE ONE ABOVE, which is already
+  --  fourteen values wide. This one is only emitted while a launch is armed, so
+  --  a fall that nobody solved for stays as quiet as it was.
+  if solveX ~= nil then
+    sb.logInfo("UNIT TRACE #%s.%s solved: should be [%s,%s], is [%s,%s], "
+      .. "drift x %s y %s | launch vx %s, actual vx (moved.x/dt) %s "
+      .. "| landing %s airtime %s",
+      sb.printJson(flight), sb.printJson(tick),
+      sb.printJson(solveX), sb.printJson(solveY),
+      sb.printJson(here[1]), sb.printJson(here[2]),
+      sb.printJson(solveDrift), sb.printJson(here[2] - solveY),
+      sb.printJson(launch.vx),
+
+      --  moved IS A VECTOR. world.distance returns a DELTA, not a scalar --
+      --  world.magnitude is the scalar one -- and dividing the table by dt
+      --  threw on the first traced jump. flightTrace's own header says
+      --  "divide them and that is the only honest velocity" without saying
+      --  component-wise, and the line above only ever printJson'd it, so
+      --  nothing had made the shape matter before.
+      --
+      --  x ALONE, AND NOT THE MAGNITUDE, which is the better number anyway:
+      --  the three candidates differ in HORIZONTAL speed, and a magnitude
+      --  would fold the fall into the one value meant to separate them.
+      sb.printJson(moved and dt and dt > 0 and (moved[1] / dt) or nil),
+      sb.printJson(launch.landing), sb.printJson(launch.airtime))
+  end
 
   --  THE CHASSIS NUMBERS, ONCE PER FLIGHT. These are what the arc mover's
   --  controlParameters zeroing is trying to override, so a decay measured
@@ -5492,6 +5804,138 @@ local function asteriteSwingEffect(centre, particle, sounds)
 		sb.logInfo("UNIT asterite swing effect failed at %s: %s",
 			sb.printJson(centre), tostring(err))
 	end
+end
+
+--  HAVE WE ALREADY GONE PAST THIS WAYPOINT?
+--
+--  A jump lands where the physics puts it, not where the plan drew it, and the
+--  miss is usually a fraction of a tile in either direction. Measured over one
+--  round trip, 2026-09-11:
+--
+--      at [5853.32,1185.8]  Land targets [5853,1185.8]   0.32 behind
+--      at [5847.18,1181.8]  Land targets [5847,1181.8]   0.18 behind
+--      at [5884.92,1167.8]  Land targets [5885,1167.8]   0.08 short
+--
+--  The arc skip loop consumes only Arc edges and breaks on the Land, and the
+--  landing check that follows measures the gap IN Y ONLY. So an overshoot is
+--  never noticed: the unit holds a waypoint that is now behind it, walks back
+--  to it, then turns around and carries on. Consistently, on every jump that
+--  went slightly long.
+--
+--  PAST IT IN THE DIRECTION THE PATH CONTINUES, which is the whole test. Not
+--  "past it in the direction we were moving" -- a unit that lands moving
+--  right on a path that turns left has not overshot anything. The following
+--  edge is where the route goes next, so the sign of its offset from this
+--  waypoint IS the forward direction, and it comes from the plan rather than
+--  from the unit's momentary velocity.
+--
+--  ON THE SAME SURFACE ONLY. A Land edge a real step below is a drop the unit
+--  still has to make, and consuming it would skip the descent rather than a
+--  redundant walk. PLAN_SURFACE_TOLERANCE is the same number the landing check
+--  uses to decide the plan is still reachable from here.
+--
+--  AND NEVER THE LAST EDGE. With no following edge there is no forward
+--  direction to be past, and the final waypoint is the destination -- arriving
+--  near it is exactly what the unit is for.
+local function arcPastWaypoint(edges, index, here)
+	local edge = edges[index]
+	local following = edges[index + 1]
+
+	if edge == nil or edge.target == nil or edge.target.position == nil then
+		return false
+	end
+	if following == nil or following.target == nil
+	   or following.target.position == nil then
+		return false
+	end
+
+	local target = edge.target.position
+	local onward = following.target.position
+
+	if math.abs(here[2] - target[2]) > PLAN_SURFACE_TOLERANCE then
+		return false
+	end
+
+	local forward = onward[1] - target[1]
+	if forward == 0 then return false end
+
+	return ((here[1] - target[1]) * forward) > 0
+end
+
+--  BALANCED ON A CORNER, WHICH IS A POSITION NOTHING CAN PATH OUT OF.
+--
+--  SEEN 2026-09-11, and the screenshot is the whole explanation: the chassis
+--  poly is a chamfered octagon, and a drone came to rest with ONE CHAMFER
+--  CORNER touching the corner of a stepped ledge. Both of the things the unit
+--  reports about itself were true and they contradict each other:
+--
+--      onGround  true    there IS a contact, so the engine is satisfied
+--      standable false   there is no COLUMN under the body, so we are not
+--
+--  Everything downstream then behaves correctly and uselessly. A* snaps the
+--  route's origin to the surface below -- 1.19 tiles down, measured -- so every
+--  plan's first move is a descent the unit is already refusing; the drop path
+--  declines it because a solid step is not a platform to pass through; and the
+--  jump stalls because the Jump edge's source is not where the unit is. The
+--  recovery ladder then ran a coarse leg over and over at a unit that could not
+--  travel a single tile.
+--
+--  SO THE FIX IS PHYSICAL AND IT BELONGS FIRST. No route exists from a corner,
+--  so nothing further up the ladder can work until the unit is off it. This
+--  runs before the coarse leg for that reason.
+--
+--  setPosition AND NOT A CONTROL INPUT. dd.pathing.setposition: controlDown
+--  starts an unobservable engine fall-through state, and steering is exactly
+--  what does not work here -- a corner perch has no direction that is downhill.
+--  Placing the body is the only thing that reliably ends it.
+--
+--  THE DESTINATION IS A REAL STANDING COLUMN, resolved by the same resolver
+--  every other target uses, so the unit cannot be nudged from one bad perch
+--  onto another.
+--
+--  AND IT IS CAPPED SHORT. Two tiles is enough to step off any corner and small
+--  enough that nobody watching reads it as a teleport. A perch with nothing
+--  standable within two tiles is a genuinely different problem and is left to
+--  the rungs below.
+local UNPERCH_RADIUS = 2
+local UNPERCH_MAX = 2.5
+
+local function unperchFromCorner(stateData)
+	if not mcontroller.onGround() then return false end
+
+	local here = mcontroller.position()
+
+	local okHere, standable = pcall(validStandingPosition, here, false)
+	if not okHere or standable then return false end
+
+	local okNear, spot = pcall(standableNear, here, UNPERCH_RADIUS,
+		UNPERCH_RADIUS, false, -UNPERCH_RADIUS)
+
+	if not okNear or spot == nil then
+		sb.logInfo("UNIT UNPERCH: at %s onGround but not standable, and no "
+			.. "standing column within %s tiles -- leaving it to the ladder",
+			sb.printJson(here), sb.printJson(UNPERCH_RADIUS))
+		return false
+	end
+
+	local gap = world.magnitude(spot, here)
+
+	if gap > UNPERCH_MAX then
+		sb.logInfo("UNIT UNPERCH: nearest standing column to %s is %s at %s, "
+			.. "further than the %s cap -- not moving it",
+			sb.printJson(here), sb.printJson(gap), sb.printJson(spot),
+			sb.printJson(UNPERCH_MAX))
+		return false
+	end
+
+	sb.logInfo("UNIT UNPERCH: %s was onGround but not standable -- placing on "
+		.. "the standing column at %s, %s tiles away",
+		sb.printJson(here), sb.printJson(spot), sb.printJson(gap))
+
+	mcontroller.setPosition(spot)
+	mcontroller.setVelocity({ 0, 0 })
+
+	return true
 end
 
 local function petportsTaskUpdateInner(dt, stateData)
@@ -6054,31 +6498,46 @@ local function petportsTaskUpdateInner(dt, stateData)
         end
 
         if edge.action ~= "Arc" then
-          stopReason = "edge " .. tostring(index) .. " is a " .. tostring(edge.action)
-          break
+          --  A NON-ARC EDGE NORMALLY ENDS THE SKIP -- unless the unit is
+          --  standing past it already. See arcPastWaypoint.
+          if arcMode ~= "GROUNDED"
+             or not arcPastWaypoint(edges, index, mcontroller.position()) then
+            stopReason = "edge " .. tostring(index) .. " is a " .. tostring(edge.action)
+            break
+          end
+
+          sb.logInfo("UNIT ARC consuming edge %s of %s in GROUNDED mode: it is "
+            .. "a %s to %s and the unit at %s is already past it toward %s",
+            tostring(index), tostring(#edges), tostring(edge.action),
+            sb.printJson(edge.target.position),
+            sb.printJson(mcontroller.position()),
+            sb.printJson(edges[index + 1].target.position))
+
+          arcFinder:advance()
+          skipped = skipped + 1
+        else
+          if edge.target == nil or edge.target.position == nil then
+            stopReason = "edge " .. tostring(index) .. " has no target position"
+            break
+          end
+
+          local above = edge.target.position[2] > mcontroller.position()[2]
+
+          --  FALLING keeps the descending half. GROUNDED keeps nothing.
+          if arcMode == "FALLING" and not above then
+            stopReason = "descending half reached -- target is below us and still flyable"
+            break
+          end
+
+          sb.logInfo("UNIT ARC consuming edge %s of %s in %s mode: target %s is %s the unit at %s",
+            tostring(index), tostring(#edges), arcMode,
+            sb.printJson(edge.target.position),
+            above and "ABOVE" or "BELOW",
+            sb.printJson(mcontroller.position()))
+
+          arcFinder:advance()
+          skipped = skipped + 1
         end
-
-        if edge.target == nil or edge.target.position == nil then
-          stopReason = "edge " .. tostring(index) .. " has no target position"
-          break
-        end
-
-        local above = edge.target.position[2] > mcontroller.position()[2]
-
-        --  FALLING keeps the descending half. GROUNDED keeps nothing.
-        if arcMode == "FALLING" and not above then
-          stopReason = "descending half reached -- target is below us and still flyable"
-          break
-        end
-
-        sb.logInfo("UNIT ARC consuming edge %s of %s in %s mode: target %s is %s the unit at %s",
-          tostring(index), tostring(#edges), arcMode,
-          sb.printJson(edge.target.position),
-          above and "ABOVE" or "BELOW",
-          sb.printJson(mcontroller.position()))
-
-        arcFinder:advance()
-        skipped = skipped + 1
       end
 
       sb.logInfo("UNIT ARC skip done: mode %s, skipped %s, stopped because %s -- now on edge %s of %s at %s",
@@ -7300,17 +7759,51 @@ local function petportsTaskUpdateInner(dt, stateData)
           --  walking over ground a probe already proved, a vent hop is a
           --  teleport plus a route search of its own. Only fall through to
           --  vents when the graph has nothing to offer.
-          if tryCoarseLeg(stateData, routeTarget) then
+          --  OFF THE CORNER FIRST. A perched unit has no route out at all, so
+          --  every rung below this one is wasted on it. Cleared to zero rather
+          --  than held, because unlike the rungs below this one CHANGED THE
+          --  UNIT'S POSITION -- there is real new state to give a window to.
+          if unperchFromCorner(stateData) then
             stateData.progressStrikes = 0
+            freshPather("unperched from a corner")
+            return false
+          end
+
+          --  THE STRIKES ARE NOT CLEARED HERE, AND THAT IS THE FIX.
+          --
+          --  This used to zero them on a coarse leg being STARTED, which is a
+          --  different claim from the unit having MOVED. Measured 2026-09-11,
+          --  a drone wedged 1.19 tiles above the surface every plan assumed it
+          --  was on: thirteen strikes in sixty seconds, cycling 1, 2, 1, 2
+          --  forever. Each strike 2 started a leg, the leg cleared the count,
+          --  the unit did not travel a single tile, and the ladder below --
+          --  the vent route, and the failure report under it -- was never
+          --  reached even once.
+          --
+          --  STRIKES ARE CLEARED BY MOVING. The else branch at the bottom of
+          --  this window does exactly that, on the only evidence that counts:
+          --  net displacement over PROGRESS_WINDOW. A remedy that works clears
+          --  its own strikes there on the next window, one tick's delay later
+          --  and for the right reason. A remedy that does nothing now
+          --  escalates instead of resetting, which is the entire point of
+          --  having more than one rung.
+          --
+          --  THE COUNTER IS HELD, NOT ADVANCED, so a leg gets its window to
+          --  work before the next rung is tried rather than being overtaken
+          --  mid-attempt.
+          if tryCoarseLeg(stateData, routeTarget) then
+            stateData.progressStrikes = PROGRESS_STRIKES
             return false
           end
 
           --  Try a vent before giving up: a route the unit cannot jump may be
           --  reachable another way.
+          --  SAME RULE FOR THE VENT. A route that is started and does not
+          --  move the unit must not buy itself an unlimited number of retries.
           local routing = tryVentRoute(stateData, routeTarget)
           if routing ~= "none" then
             stateData.routing = true
-            stateData.progressStrikes = 0
+            stateData.progressStrikes = PROGRESS_STRIKES
             return false
           end
 
@@ -8728,31 +9221,45 @@ local function petportsTaskUpdateInner(dt, stateData)
       clearHealth = tonumber(cleared.config.health) or 0
     end
 
-    local okClear, clearRan = pcall(world.damageTiles, { tile }, "foreground",
+    local okClear = pcall(world.damageTiles, { tile }, "foreground",
       mcontroller.position(), "blockish", clearHealth + ASTERITE_CLEAR_MARGIN,
       0, entity.id())
 
-    local _, bare = pcall(world.mod, tile, "foreground")
-    local _, bareMaterial = pcall(world.material, tile, "foreground")
-
-    if bare == PETPORTS_ASTERITE_CLEARED then
-      sb.logInfo("UNIT asterite could not break the placeholder at %s "
-        .. "(damageTiles ok %s returned %s, %s damage against health %s) -- "
-        .. "the tile keeps an invisible mod until something overwrites it",
-        sb.printJson(tile), tostring(okClear), tostring(clearRan),
-        sb.printJson(clearHealth + ASTERITE_CLEAR_MARGIN),
-        sb.printJson(clearHealth))
+    --  THE ONE THING HERE THAT IS KNOWABLE SYNCHRONOUSLY. A pcall that FAILS
+    --  failed now -- bad arguments, a missing binding -- and that is worth a
+    --  line. The call's RETURN value is not kept, because "the damage was
+    --  accepted" and "the placeholder is gone" are different claims and only
+    --  the first is answerable in this tick.
+    if not okClear then
+      sb.logInfo("UNIT asterite clearing damage THREW at %s -- the placeholder "
+        .. "stays until something overwrites it", sb.printJson(tile))
     end
 
-    --  AND THE BLOW MUST NOT HAVE COST THE BLOCK EITHER. Separate from the
-    --  check below, which is about the placeMod: this one is about the damage,
-    --  and the two fail for entirely different reasons.
-    if okMat and bareMaterial ~= material then
-      sb.logInfo("UNIT asterite CLEARING DAMAGE DESTROYED THE TILE at %s: %s "
-        .. "became %s. breaksWithTile on petports_cleared is the first thing "
-        .. "to check", sb.printJson(tile), tostring(material),
-        tostring(bareMaterial))
-    end
+    --  AND THE TILE IS NOT READ BACK. THAT IS THE FIX, NOT AN OMISSION.
+    --
+    --  MEASURED 2026-09-11. This used to re-read world.mod immediately after
+    --  the damage and report "could not break the placeholder" when it still
+    --  saw petports_cleared -- which it did on every mine. Checking the same
+    --  tile by hand afterwards read `mod nil`: the placeholder HAD been
+    --  destroyed and the read was simply too early.
+    --
+    --  THE TWO CALLS ARE NOT THE SAME SHAPE, and that is the whole lesson:
+    --
+    --    world.placeMod    applies immediately. The console harness sets a mod
+    --                      and reads the new value back inside the same call,
+    --                      which is why the before/after check around the
+    --                      placeMod above is meaningful and is kept.
+    --
+    --    world.damageTiles is QUEUED. It returns true to mean the damage was
+    --                      accepted, and the tile changes on the engine's own
+    --                      update. Anything this script reads in the same tick
+    --                      is the state BEFORE the damage, always.
+    --
+    --  SO THERE IS NOTHING HONEST TO ASSERT HERE. A deferred check could be
+    --  built -- remember the tile, look next update -- but it would exist to
+    --  catch a failure that has never been observed, on a step whose only
+    --  failure mode is an invisible mod that the next asterite overwrites. The
+    --  false alarm cost more than the check was ever going to.
 
     --  THE ASSERTION THE WHOLE MODULE EXISTS FOR. Logged rather than reported,
     --  because at this point the deposit IS gone and the ore IS owed -- but a
@@ -8780,9 +9287,12 @@ local function petportsTaskUpdateInner(dt, stateData)
     --  takes -- so it survives despawn, reload, and being carried to another
     --  world.
     report(stateData, "done", string.format(
-      "mined %s at %s in %s swing(s) (%s -> %s -> %s, %s intact)",
+      --  TWO ARROWS AND NOT THREE. The third was the same-tick read of the
+      --  tile after the clearing damage, which always showed the placeholder
+      --  still in place and never meant anything.
+      "mined %s at %s in %s swing(s) (%s -> %s, cleared, %s intact)",
       tostring(drop), sb.printJson(tile), sb.printJson(task.asteriteSwung or 0),
-      tostring(before), tostring(after), tostring(bare),
+      tostring(before), tostring(after),
       tostring(material)), { name = drop, count = 1 })
 
     return true
@@ -9089,8 +9599,20 @@ end
 --  THE CAP IS NOT DECORATION. Without it a future large chassis out-ranges the
 --  thing the number was chosen for, and "the pet mined it from across the
 --  room" stops reading as mining.
-local ASTERITE_REACH_BASE = 4
-local ASTERITE_REACH_MAX = 8
+--  DOUBLED 2026-09-11, AND THE PORT'S SEARCH RADIUS MOVED WITH IT.
+--
+--  These two numbers are one decision. ASTERITE_STAND_RADIUS on the port is
+--  what a deposit's standing point is searched within, and the invariant that
+--  makes the port able to dispatch without asking the unit anything is that
+--  the radius NEVER EXCEEDS THE SMALLEST POSSIBLE REACH -- which is this base,
+--  before any body is added. Raising the port's radius to 8 while this stayed
+--  4 would dispatch a drone (reach 5.6) to stand 8 tiles out and have it
+--  refuse on arrival, every time.
+--
+--  THE CAP MOVES TOO, or it would clamp every chassis back to 8 and erase the
+--  body scaling this exists for. 12 is 8 plus the largest body axis in play.
+local ASTERITE_REACH_BASE = 8
+local ASTERITE_REACH_MAX = 12
 
 function petports_asteriteReach()
 	local bounds = mcontroller.boundBox()
