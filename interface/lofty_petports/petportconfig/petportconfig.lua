@@ -64,7 +64,7 @@ local DEBUG = true
 --  Bump on every change to this file. A pane has no visible version and a stale
 --  copy is indistinguishable from an unfixed one -- which cost a cycle on the
 --  upcycler before the stamp existed.
-local PANE_BUILD_STAMP = "2026-09-08i placeholder cogs for the unit-level help rows"
+local PANE_BUILD_STAMP = "2026-09-13d source rows read in scan order, restock first"
 
 local PANE_STATE_KEY = "petports_paneState"
 
@@ -328,6 +328,20 @@ local SETTING_ROWS = {
 	{ key = "unit", owner = "medic", needs = "medic",
 	  label = "petport.setting.medicunit", tip = "petport.tip.medicunit" },
 
+	--  LAST IN THE BLOCK, AND NOT A PATIENT CLASS. It says where the dose comes
+	--  FROM rather than who gets one.
+	--
+	--  owner = "toggles", NOT "medic". petports_setMedic rebuilds its table by
+	--  walking MEDIC_CLASSES and would drop a key that is not a class -- silently,
+	--  and absent reads as ON. The defrag rows take this same route.
+	--  RESTOCK ABOVE DEPOSIT, WHICH IS THE ORDER THE SCAN RUNS IN. Same rule the
+	--  defragmentation rows follow: a player reading top to bottom is reading the
+	--  order the crates are actually asked.
+	{ key = "medicrestock", owner = "toggles", needs = "medic", default = true,
+	  label = "petport.setting.medicrestock", tip = "petport.tip.medicrestock" },
+	{ key = "medicdeposit", owner = "toggles", needs = "medic", default = true,
+	  label = "petport.setting.medicdeposit", tip = "petport.tip.medicdeposit" },
+
 	{ sep = true, needs = "farming", label = "petport.setting.farmingblock" },
 
 	{ key = "harvest", owner = "farming", needs = "farming",
@@ -347,6 +361,17 @@ local SETTING_ROWS = {
 	--  and the modded population is the reason the box exists.
 	{ key = "traps", owner = "farming", needs = "farming",
 	  label = "petport.setting.farmtraps", tip = "petport.tip.farmtraps" },
+
+	--  owner = "toggles", NOT "farming", for the reason the medic row above gives
+	--  -- petports_setFarming walks FARMING_CLASSES and this is not one.
+	{ key = "farmrestock", owner = "toggles", needs = "farming", default = true,
+	  label = "petport.setting.farmrestock", tip = "petport.tip.farmrestock" },
+	{ key = "farmdeposit", owner = "toggles", needs = "farming", default = true,
+	  label = "petport.setting.farmdeposit", tip = "petport.tip.farmdeposit" },
+	{ key = "waterrestock", owner = "toggles", needs = "farming", default = true,
+	  label = "petport.setting.waterrestock", tip = "petport.tip.waterrestock" },
+	{ key = "waterdeposit", owner = "toggles", needs = "farming", default = true,
+	  label = "petport.setting.waterdeposit", tip = "petport.tip.waterdeposit" },
 
 	--  ---- RGB LIGHT ---------------------------------------------------------
 	--
@@ -1677,6 +1702,29 @@ local function paintSettings()
 				--  -- which also avoids setData on a textbox, unverified here.
 				widget.setData(rowPath .. ".settingCheck", i)
 				widget.setData(rowPath .. ".rowButton", i)
+
+				--  SEEDED HERE, for the reason the colour field below is.
+				--
+				--  A ROW ARRIVES FROM A POOL WEARING THE LAST STATE THAT USED IT
+				--  -- the note above says so for its KIND, and the checked flag
+				--  travels the same way. Painting was left entirely to the steady
+				--  state, which runs only on a poll where the PORT's state moved,
+				--  so between building the list and the next such poll every box
+				--  read whatever its pooled widget last held.
+				--
+				--  THAT WINDOW IS WRITABLE, WHICH IS WHAT MADE IT A BUG RATHER
+				--  THAN A FLICKER. settingsRowClicked commits the whole owner by
+				--  reading every box back, so one click in that window stored a
+				--  neighbour's leftover value as the player's choice. OBSERVED
+				--  2026-09-13: a farming row inherited an unticked `nametag` and
+				--  wrote false over a setting defaulting true.
+				--
+				--  INSERTING A ROW IS WHEN IT BITES. Every row below the new one
+				--  shifts by one and re-pairs with a different pooled widget, so
+				--  adding a setting is exactly the change that exposes it.
+				if isCheck then
+					widget.setChecked(rowPath .. ".settingCheck", settingValue(row))
+				end
 
 				if isRgb then
 					widget.setData(rowPath .. ".settingDown", i)

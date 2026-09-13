@@ -361,7 +361,13 @@ PET_TOGGLES =
   compact = true,
   defrag = true,
   sort = true,
-  chill = true
+  chill = true,
+  medicdeposit = true,
+  medicrestock = true,
+  farmdeposit = true,
+  farmrestock = true,
+  waterdeposit = true,
+  waterrestock = true
 }
 
 function petportParticipates(group)
@@ -1632,7 +1638,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-13a depositWork honours the backoff it is given, like every other generator"
+local PETPORT_BUILD_STAMP = "2026-09-13e restock beacons are checked before deposit beacons"
 
 --  PORT PROFILER, 2026-09-07b. MEASURED 21:00: six ports on a small islet,
 --  59 port ticks over 30 ms in 39 s totalling 3.7 s, worst 268 ms, while
@@ -13617,7 +13623,7 @@ local function sweepReplants(dt)
 end
 
 --  Does any networked container hold this seed?
-local function containerWithSeed(seedName)
+local function containerWithSeed(seedName, wantDeposit, wantRestock)
 	--  SEEDS COME OUT OF THE SAME CRATES THEY WENT INTO. Deposit beacons are
 	--  the network's storage as far as this mod is concerned, and reusing that
 	--  list means a player who moves their storage does not also have to tell
@@ -13626,7 +13632,32 @@ local function containerWithSeed(seedName)
 	--  containerAvailable answers "how many could be consumed", which is a
 	--  stronger test than reading containerItems and matching names -- it is
 	--  the same question containerConsume will ask when the unit arrives.
-	for _, beacon in ipairs(petports_beaconsFor("deposit")) do
+	--
+	--  RESTOCK BEACONS ARE CHECKED FIRST, deposit second. A restock crate holds
+	--  what a player deliberately stationed where it is wanted; deposit is the
+	--  bulk store. Spending the stationed copy is the shorter trip and the
+	--  restock system puts it back from deposit on its own schedule.
+	--
+	--  STATED AT EVERY CALL, NOT DEFAULTED -- tidySources' rule, same reason.
+	--
+	--  BOTH SIDES OFF IS A LEGITIMATE ANSWER, not a state to guard against. An
+	--  empty source list returns nil and the caller says nothing is reachable,
+	--  which is what a player who unticked both asked for.
+	local sources = {}
+
+	if wantRestock then
+		for _, beacon in ipairs(petports_beaconsFor("restock")) do
+			table.insert(sources, beacon)
+		end
+	end
+
+	if wantDeposit then
+		for _, beacon in ipairs(petports_beaconsFor("deposit")) do
+			table.insert(sources, beacon)
+		end
+	end
+
+	for _, beacon in ipairs(sources) do
 		if world.entityExists(beacon.id) then
 			local available = world.containerAvailable(beacon.id,
 				{ name = seedName, count = 1 })
@@ -13797,6 +13828,25 @@ local function withdrawWaterWork()
 	local runs = waterRuns()
 	if #runs == 0 then return nil, "no dry soil needing water" end
 
+	--  ONE LIST FOR EVERY RUN AND EVERY LIQUID. The scan below is nested two
+	--  deep and petports_beaconsFor sorts on every call, so resolving this per
+	--  iteration re-sorted the same crates once per wanted liquid per run.
+	--
+	--  RESTOCK FIRST, DEPOSIT AFTER -- containerWithSeed's rule, same reason.
+	local sources = {}
+
+	if petportParticipates("waterrestock") then
+		for _, beacon in ipairs(petports_beaconsFor("restock")) do
+			table.insert(sources, beacon)
+		end
+	end
+
+	if petportParticipates("waterdeposit") then
+		for _, beacon in ipairs(petports_beaconsFor("deposit")) do
+			table.insert(sources, beacon)
+		end
+	end
+
 	for _, run in ipairs(runs) do
 		--  Already carrying the right thing? Then this is waterWork's problem,
 		--  not ours.
@@ -13818,7 +13868,7 @@ local function withdrawWaterWork()
 				local wanted = math.min(#run.tiles, petportWaterCarry())
 
 				for _, want in ipairs(run.wants) do
-					for _, beacon in ipairs(petports_beaconsFor("deposit")) do
+					for _, beacon in ipairs(sources) do
 						if world.entityExists(beacon.id) then
 							local available = world.containerAvailable(beacon.id,
 								{ name = want.item, count = 1 })
@@ -14597,7 +14647,9 @@ local function withdrawWork()
 			end
 
 			if free then
-				local containerId = containerWithSeed(intent.name)
+				local containerId = containerWithSeed(intent.name,
+					petportParticipates("farmdeposit"),
+					petportParticipates("farmrestock"))
 
 				if containerId ~= nil then
 					return {
@@ -14780,7 +14832,9 @@ local function medicWork()
   --  unit holding a medical good it has nobody to give to, blocking the cargo
   --  slot that hauling and harvesting need.
   if carried == nil then
-    local containerId = containerWithSeed(MEDIC_ITEM)
+    local containerId = containerWithSeed(MEDIC_ITEM,
+      petportParticipates("medicdeposit"),
+      petportParticipates("medicrestock"))
 
     --  "NONE THIS UNIT CAN GET TO", NOT "NONE". containerWithSeed skips a crate
     --  the chassis cannot reach, so a nil here covers both cases and the old
