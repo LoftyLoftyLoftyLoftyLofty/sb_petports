@@ -50,79 +50,86 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-13 evening (walker across lava; the flyer day did not happen)
+### What is built, as of 2026-09-14 early morning (session closed on Fable usage; resume 2026-09-16)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-Lofty's plan for the day was the unrestricted flyer. The day went to the
-plain walker in the lava pocket instead: six hours, ten builds, every one of
-them read off a log before it was written. What landed is a routing change
-and a set of arrival rules; nothing about the flyer moved.
+The 13th went to the plain walker in the lava pocket; the 14th's first hour
+went to the otter with a lava block. The session ended on usage, not on a
+clean state: the last log shows the two builds below working and several
+new otter behaviours nobody has read a log for yet.
 
-**VERIFIED IN GAME TODAY, IN ORDER:**
-- coarsenav 13a: the stretch refusal is gone; every TRUE edge carries `d`,
-  the tiles its proving path travelled, and the router is Dijkstra over
-  it (arch.pathing.edgelength). The climb out of the pocket is a stored
-  edge and the pet leaves the pocket. Store stride 5, `_f` on the edge
-  property, one wipe done.
-- taskAction 13c/13d: a body past its waypoint has arrived
-  (arch.locomotion.legarrival): the free mover by projection onto the leg
-  line, the walker on the ground by x with a height between the waypoint
-  and the next anchor; a leg the body already stands at chains from that
-  cell instead of dropping the route. The pool hop is one hop each way.
-- taskAction 13e: a grounded walker within arrival distance of a route
-  cell PAST its waypoint has reached that cell (same entry). The pocket's
-  jump-up-then-back-down is gone.
-- taskAction 13f: the grounded arc skip kills horizontal velocity when it
-  consumes or halts on a Land (dd.locomotion.touchdownstop). Thirteen
-  landings in the last log, all stopped.
+**VERIFIED IN GAME:**
+- coarsenav 13a: stretch refusal gone, `d` on every TRUE edge, Dijkstra
+  router (arch.pathing.edgelength).
+- taskAction 13c/13d/13e/13f: overshoot arrival, already-there chains,
+  later-route-cell arrival, touchdown stop (arch.locomotion.legarrival,
+  dd.locomotion.touchdownstop).
+- port 13a: depositWork honours the failure backoff
+  (dd.dispatch.depositbackoff). MEASURED 03:18: before it, one
+  SEARCH_LIMIT search per 6.5 s with the survey yielding to each; after it,
+  the survey runs uninterrupted and the crate is skipped for its 30 s.
 
-**DO NOT REPEAT** (each cost a build and was wrong or incomplete):
-- Arriving at a waypoint from the liquid-hop landing (taskAction 13a, 13b,
-  both removed): right verdict, wrong spot. The mover had already planned
-  back to the waypoint on the touchdown tick, and the chained leg was then
-  DECLINED as "already there" and abandoned for a direct search east
-  through the pool. Arrival belongs in the leg test; the decline belongs
-  chained. See arch.locomotion.legarrival.
-- A leash grace after a task report (taskAction/port 13e, reverted before
-  it ran): built on a misread of the log's tail. The backtrack was
-  BEFORE the mining. The report-to-dispatch window is real (leash leg
-  taken 80 ms after the report, dispatch 320 ms later, 21:34:56.75) and is
-  recorded below as an observation, not a defect.
-- "The pet slides off the one-wide platform" at [5853,1185.8] after 13f:
-  it does not; the plan walks off it. Read the Walk edge after the Land
-  before blaming the landing (todo.pathing.legdetour).
+**BUILT, NOT VERIFIED:**
+- coarsenav 13b: bridge `k`/`board`/`float`/`hole` survive the flush in an
+  `x` side map on the edge property (todo.pathing.bridgeextras, now
+  built). Needs an otter to learn a dive, flush, and reload.
+- coarsenav 13c: an A* probe learns under the profile it was started
+  under (`probe.profile`), so a module socketed mid-probe cannot write the
+  verdict into the wrong store (todo.pathing.moduleprofile, partial). Needs
+  a module swap during a survey and a store read to confirm.
+
+**OBSERVED IN THE LAST LOG, NOT READ, NOT FILED:** (Lofty, 2026-09-14)
+the amphibious unit backtracks out of the water after launching into it,
+"among other things". No timestamps, no analysis. The FIRST thing next
+session is that log: read before any build. Suspects, in order of what the
+code says rather than what is measured: the leg test's walker branch
+(arch.locomotion.legarrival case 1) running on a body that has just
+switched to the swim side; the 13f touchdown stop firing on a dive Land;
+`0 bridge(s)` in the merged graph with `no pair crosses` at 5813,1146
+while the crate sits in the water at [5838,1146.8].
+
+**DO NOT REPEAT** (from the 13th, still standing):
+- Arriving at a waypoint from the liquid-hop landing (taskAction 13a/13b,
+  removed): right verdict, wrong spot. Arrival belongs in the leg test.
+- A leash grace after a task report (reverted before it ran): misread of a
+  log tail. The report-to-dispatch window is real and is an observation.
+- "The pet slides off the one-wide platform" after 13f: it does not; the
+  plan walks off (todo.pathing.legdetour).
 - Stating elapsed time between messages: Claude has no clock on Lofty's
   side; the only times are the log's.
+- Blaming a slow probe for a slow survey: in the 03:18 log every r2 probe
+  resolved on its own tick; the gaps were the survey yielding to the unit's
+  own SEARCH_LIMIT search. Look at what is between the probe lines.
 
-**OBSERVED, NOT FILED AS DEFECTS:** (1) a unit that reports done starts
-its leash leg the same tick and the port answers within a beat -- up to
-WORK_INTERVAL without cargo; harmless so far. (2) standing on a platform
-flush with a lava surface reads a small liquid percentage and blends liquid
-friction (the deposit crates at [5833..5836,1181.8]); the lever, if any, is
-a movement parameter -- read StarActorMovementController.cpp in the
-baseline before naming one. (3) the 12b chunk codec drops a bridge's `k`,
-`board` and `hole` at flush and the merged loader reads it back as "wade"
-(todo.pathing.bridgeextras); additive to fix, needs no wipe.
+**OBSERVED, NOT DEFECTS:** (1) a unit that reports done starts its leash leg
+the same tick and the port answers within a beat -- up to WORK_INTERVAL
+without cargo. (2) standing on a platform flush with a lava surface reads a
+small liquid percentage and blends liquid friction; the lever, if any, is a
+movement parameter -- read StarActorMovementController.cpp in the baseline
+before naming one. (3) a stuck unit on task keeps munching: real, and the
+03:18 case was the deposit loop above rather than a munch defect. If a
+stalled-and-eating unit appears with the backoff honoured, gate the munch on
+the progress window (todo.unit.munchwhilestuck, not yet filed).
 
-**BUILD STAMPS IN PLAY:** coarsenav `2026-09-13a`, taskAction
-`2026-09-13f`, port `2026-09-12b` (unchanged today), contract
-`2026-09-12d`, flyapproach `2026-09-10c`, work `2026-09-11b`, overlay
-`2026-09-11d`. FLIGHT_TRACE off. PETPORTS_NAV_VERBOSE on.
+**BUILD STAMPS IN PLAY:** coarsenav `2026-09-13c`, taskAction
+`2026-09-13f`, port `2026-09-13a`, contract `2026-09-12d`, flyapproach
+`2026-09-10c`, work `2026-09-11b`, overlay `2026-09-11d`. FLIGHT_TRACE
+off. PETPORTS_NAV_VERBOSE on.
 
-**NEXT, IN ORDER:** (1) the unrestricted flyer, which was today's plan
-(plan.unit.unrestrictedflyer); (2) todo.pathing.legdetour, the picker
-handing the engine a seven-tile leg it detours over the route's own cells;
-(3) todo.locomotion.dropstack, now understood as a crate-stack descent, not
-one drop; (4) plan.pathing.cityscale item 1, route on the coarse levels --
-the Dijkstra rewrite is the moment to make it a corridor search; (5)
-todo.pathing.bridgeextras before the otter is next exercised; (6)
+**NEXT, IN ORDER:** (1) read the last otter log end to end before touching
+anything; file what it shows; (2) verify coarsenav 13b and 13c from it if
+the events are there; (3) the unrestricted flyer
+(plan.unit.unrestrictedflyer), which was the 13th's plan and is still the
+plan; (4) todo.pathing.legdetour; (5) todo.locomotion.dropstack, now a
+crate-stack descent; (6) plan.pathing.cityscale item 1; (7)
 todo.dispatch.roundtrip.
 
 **COMMIT STATE:** bab1bc9 is still the last commit. Everything above is in
-the working tree and verified; this is a commit point.
+the working tree. Two of the builds are unverified; commit the tree as
+"walker across lava; otter groundwork unverified" rather than waiting.
 
 ## ARCHITECTURE
 
@@ -6412,6 +6419,21 @@ blank into plain and keeps the blip.
 
 
 ## DESIGN DECISIONS
+
+### depositWork honours the failure backoff, like every other generator
+`dd.dispatch.depositbackoff` -- see also `arch.dispatch.eligibility`, `arch.port.reporthandler`, `todo.dispatch.sourcebackoff`
+
+DECIDED AND VERIFIED 2026-09-14 (port 13a). `depositWork` asked the crate
+about room and asked `fullContainers`, and never asked `workFailures` -- so
+`noteFailure` wrote a 30 s unroutable backoff under
+`deposit:<crate>@<port>` that nothing read, and the same deposit was
+re-dispatched 0.4 s later. MEASURED 03:18:06..35 on the amphibious unit
+with a crate in water it could not reach: six SEARCH_LIMIT searches at one
+per 6.5 s, `navTickInner` yielding the survey to each (12a, by design), the
+unit standing on task and eating between them. The generator now reads the
+failure record first for each beacon, skips with the drop generator's
+`SKIPPED: backed off until` line, and falls through to the next beacon.
+After: survey uninterrupted, crate skipped for its 30 s, leash between.
 
 ### A Land means stop, on the ground too: the grounded arc skip kills x when it passes one
 `dd.locomotion.touchdownstop` -- see also `fact.pathing.arcmoverthrottle`, `todo.pathing.brakefloor`, `todo.locomotion.arrival`, `dd.locomotion.narrowlanding`
@@ -14176,6 +14198,13 @@ tall-arc launch both fired correctly on this jump.
 ### The chunk codec drops a bridge's kind and points
 `todo.pathing.bridgeextras` -- see also `arch.pathing.chunkstore`, `arch.pathing.bridges`, `arch.pathing.mergedgraph`
 
+BUILT 2026-09-14 (coarsenav 13b), NOT VERIFIED: the edge property gains
+`x["<id>:<dx>,<dy>"] = { k, b, f, h }` for any edge carrying a kind, written
+only when one does, folded back onto the entry as `k`, `board`, `float`,
+`hole` on decode. Stride and `_f` unchanged; no wipe. Bridges learned
+before 13b have no `x` and read as wade until relearned. Verify by: otter
+learns a dive, flush, relog, `UNIT coarse leg is a dive bridge` instead of
+`wade`.
 READ 2026-09-13 from the code, not measured: navBridgeLearn merges `k`,
 `board`, `float`, `hole` onto the pending entry, and the 12b edge array
 `[dx, dy, r, t, d]` encodes none of them, so after a flush the merged
@@ -14307,7 +14336,14 @@ OPENED 2026-09-09. MEASURED 14:18:59 / 14:19:24: the unrestricted flyer
 spawned with `|l|` in its profile, the lava block took effect 27 s later
 and the profile became `|lcorelava+lava|` -- a different store, so the
 survey restarted from nothing. The otter never showed this because its
-block was socketed before it surveyed. The profile MUST key on the liquid
+block was socketed before it surveyed.
+PARTIAL 2026-09-14 (coarsenav 13c, not verified): the A* probe record
+carries `profile`, stamped when the search is built, and the verdict is
+learned under it -- so a module socketed mid-probe cannot write a lava-wall
+FALSE into the lava-proof store. The sweep record already pinned its own
+profile. The free-mover line sweep and the forbidden-wall check decide on
+the tick they start and need no pin. The restart-from-nothing half of this
+entry is untouched. The profile MUST key on the liquid
 set for the boundary walls to be right; the two stores could still share
 their dry cells. Either apply module effects before the first survey tick
 or let a profile inherit from its superset.

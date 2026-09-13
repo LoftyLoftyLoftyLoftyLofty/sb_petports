@@ -1,10 +1,53 @@
-# COARSE NAV -- SESSION HANDOFF (as of coarsenav 12i / taskAction 12m / petport 12b / flyapproach 10c / contract 12d / habitat 07a)
+# COARSE NAV -- SESSION HANDOFF (as of coarsenav 13c / taskAction 13f / petport 13a / flyapproach 10c / contract 12d / habitat 07a)
 
 Read this before proposing anything. MEASURED means read out of a
 starbound.log or an engine `.luaprofile`; FACT means read out of retail 1.4.4
 source pasted into a session. Retail Starbound 1.4.4 only; never propose an
 OpenStarbound or fork binding. The OpenStarbound repo's first commit is
 unmodified retail source and may be READ for facts (StarLuaRoot.cpp was).
+
+**2026-09-13/14 -- EDGE LENGTH, ARRIVAL, THE OTTER; CLOSED ON USAGE, RESUME
+09-16.** Read V2 STATUS first. The stretch refusal is GONE (13a,
+`arch.pathing.edgelength`): every TRUE edge carries `d`, the tiles its
+proving path travelled (`aStar:result()` summed edge by edge; a free
+mover's line; `navCellSpan` for a bridge or a contradiction), the chunk
+edge array is `[dx, dy, r, t, d]` with `_f = 5` on the property, and
+`navRouteStep` / `petports_navPath` are Dijkstra over `graph.len` with a
+binary heap (`navHeap`), same job/yield/budget contract as the BFS they
+replaced. MEASURED: the pocket climb (37 engine edges for 6.1 tiles) is a
+stored edge and the pet leaves; the lap home is 60 hops, 156 tiles, 287
+expanded. `NAV route A -> B: N hop(s), T tile(s) by edge length, E
+expanded` once per pair under PETPORTS_NAV_VERBOSE. 12i never ran. One
+wipe done. THEN THE ARRIVAL RULES (taskAction 13c..13e,
+`arch.locomotion.legarrival`): a body past its waypoint has arrived (free
+mover by projection onto the leg line from `navLegStart`; walker on the
+ground by x, height within 2 of the waypoint or between it and
+`navLegNext`), a chained leg the body already stands at re-takes from that
+cell instead of dropping the route, and a grounded walker within
+ARRIVAL_DISTANCE of one of the next NAV_ROUTE_LOOKAHEAD (6) route cells has
+reached that cell. Each measured off a log before it was built; the pool
+is one hop each way and the pocket's jump-up-then-down is gone. The
+grounded arc skip kills x when it passes a Land (13f,
+`dd.locomotion.touchdownstop`). THE OTTER, 09-14: bridge `k`/`board`/
+`float`/`hole` survive the flush in an `x` side map on the edge property
+(13b, additive, no wipe, UNVERIFIED -- the 12b codec had dropped them and
+the merged loader read every flushed dive as wade); an A* probe learns
+under the profile it was started under, `probe.profile` (13c, UNVERIFIED;
+`todo.pathing.moduleprofile` partial). Port 13a: `depositWork` never read
+`workFailures`, so an unreachable crate in the water was re-dispatched 0.4
+s after its 30 s backoff was written -- six SEARCH_LIMIT searches at one
+per 6.5 s with the survey yielding to each (12a is by design; the yield
+was correct, the loop was not). VERIFIED: survey uninterrupted, crate
+skipped. UNREAD: the last log has the otter backtracking out of the water
+after launching into it, "among other things"; read it before any build.
+Filed this session: `todo.pathing.legdetour` (a seven-tile leg the engine
+detoured over the route's own cells), `todo.locomotion.dropstack`
+corrected to a crate-stack descent, `todo.pathing.bridgeextras` (built).
+DO NOT REPEAT: arriving from the hop landing (13a/13b taskAction, removed
+-- right verdict, wrong spot); a leash grace on a misread log tail
+(reverted); "slides off the one-wide platform" (the plan walks off it);
+blaming a slow probe for a slow survey (every r2 probe resolved on its
+tick; the gaps were the yield).
 
 **2026-09-12 -- THE CHUNK STORE AND THE WALKER'S DAY; SESSION RETIRED.**
 Read V2 STATUS and `proc.tooling.retired12` first. The store is keyed by
@@ -404,9 +447,13 @@ is deep enough. Rares have shallow variants, which is why they appear.
 
 ## OPEN, NOT SCHEDULED
 
-- **Edge cost, not edge refusal** (`fact.pathing.stretchclimb`) -- record
-  travelled length on the edge, router costs by it, TOO LONG stops being a
-  verdict. With the next wipe.
+- **Edge cost, not edge refusal** -- DONE 2026-09-13 (`arch.pathing.edgelength`,
+  coarsenav 13a); `fact.pathing.stretchclimb` superseded.
+- **Bridge extras through the codec** (`todo.pathing.bridgeextras`) -- built
+  13b, unverified: needs an otter dive learned, flushed, reloaded.
+- **A leg the engine detours** (`todo.pathing.legdetour`) -- shorten the leg
+  when the engine's plan is far longer than the route's own `d` across the
+  same cells.
 - **Round trip before dispatch** (`todo.dispatch.roundtrip`) -- route
   target->home before handing a walker a task; the recall is the backstop.
 - **Lazy per-cell decode and `t` delta** (STATUS item 2) -- chunkDecode 57 ms
@@ -475,7 +522,15 @@ first` / `no in-reach node is clear`, `UNIT NUDGE ... (picker step)`, `coarse
 leg ... (a step onto the route)`, `NAV probe ... GAVE UP after N tick(s)`,
 `NAV probe path walks a denied span ... HOPPABLE from` / `not hoppable ...:
 <why>`, `UNIT LIQUID AHEAD ... hopping from` / `no hop available ... (exit X,
-<why>)`, `TOO LONG: N tile(s) travelled over M edge(s)`, wall rejections
+<why>)`, `REACHABLE after N tick(s), M edge(s), T tile(s) travelled` (13a;
+TOO LONG is gone), `NAV route A -> B: N hop(s), T tile(s) by edge length`,
+`NAV edge chunk ... has stride S and this build reads 5 -- run
+petports_navWipe()`, `UNIT coarse leg W is behind us at P (t of the leg from
+S) -- arrived`, `coarse leg W is where we already are -- taking the next leg
+from C`, `standing on route cell C at P, n cell(s) past the waypoint W --
+reached it instead`, `ARC touchdown at P vel V reached the Land -- killing
+horizontal velocity`, `PETPORT ... deposit target N SKIPPED: backed off
+until`, wall rejections
 ending `-- <Action> edge N of M at [..]; path Walk>Jump>...`, the `no leg`
 diagnostic's `seam A <-> B ... store says A->B false, B->A ABSENT` (read this
 FIRST when a unit cannot get somewhere: it names the pair). Profiler sections:

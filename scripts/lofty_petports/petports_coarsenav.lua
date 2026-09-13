@@ -61,7 +61,7 @@
 --  are unprobeable and time-varying and nobody's fault -- are allowed to
 --  produce optimistic-wrong answers. They fail in the cheap direction.
 
-local COARSENAV_BUILD_STAMP = "2026-09-13a every TRUE edge carries the tiles its path travels and the router costs by it; the stretch refusal is gone"
+local COARSENAV_BUILD_STAMP = "2026-09-13c a probe learns under the profile it was started under, not the one live when it finishes"
 
 local navStamped = false
 
@@ -2243,7 +2243,8 @@ end
 --      petports_navindex                    the profile registry (unchanged)
 --      petports_navindex:<profile>          { _g, chunks = { "<chx>,<chy>" = true } }
 --      petports_navchunk:<profile>:<ck>     { _g, _n, c = [ id, at, radius, ... ] }
---      petports_navchunkedges:<profile>:<ck>  { _g, _f, e = { "<id>" = [ dx, dy, r, t, d, ... ] } }
+--      petports_navchunkedges:<profile>:<ck>  { _g, _f, e = { "<id>" = [ dx, dy, r, t, d, ... ] },
+--                                               x = { "<id>:<dx>,<dy>" = { k, b, f, h } } }
 --
 --  A chunk is navChunk.TILES on a side (Starbound's own 32), keyed by its
 --  chunk coordinates in cell space. `id` is the cell's slot in the chunk;
@@ -2251,7 +2252,10 @@ end
 --  NAV_MAX_DISTANCE, so it fits), `r` is 0/1, `t` is whole seconds and `d`
 --  is whole tiles travelled along the path that proved the edge. `_f` is
 --  the edge array's stride; a property with another stride is read as
---  empty and the store wants a wipe.
+--  empty and the store wants a wipe. `x` is what a bridge edge carries
+--  beyond the array -- its kind `k` and the `board`, `float` and `hole`
+--  points, as `b`, `f`, `h` -- keyed by the edge's id and delta; absent on
+--  every other profile, and additive, so it is not part of the stride.
 --  Flat arrays, because the engine's JSON-to-Lua conversion is native and
 --  an array is the cheapest thing it converts. The generation is ONE
 --  number per property (`_g`) instead of one per entry: a property from
@@ -2421,6 +2425,7 @@ function navChunk.edgesDecode(profile, chunkKey)
 	petports_profBegin("chunkDecode")
 
 	local stride = navStride()
+	local extras = type(raw.x) == "table" and raw.x or nil
 	for id, flat in pairs(raw.e) do
 		local cellKey = navChunk.cellKey(chunkKey, id)
 		if cellKey ~= nil and type(flat) == "table" then
@@ -2429,8 +2434,13 @@ function navChunk.edgesDecode(profile, chunkKey)
 			for i = 1, #flat - 4, 5 do
 				local dx, dy = flat[i], flat[i + 1]
 				local toKey = tostring(cx + dx) .. "," .. tostring(cy + dy)
-				edges[toKey] = { r = (flat[i + 2] == 1), t = flat[i + 3], g = gen,
+				local entry = { r = (flat[i + 2] == 1), t = flat[i + 3], g = gen,
 					d = flat[i + 4] or math.max(1, math.floor(math.sqrt(dx * dx + dy * dy) * stride + 0.5)) }
+				local x = extras ~= nil and extras[tostring(id) .. ":" .. tostring(dx) .. "," .. tostring(dy)] or nil
+				if type(x) == "table" then
+					entry.k, entry.board, entry.float, entry.hole = x.k, x.b, x.f, x.h
+				end
+				edges[toKey] = entry
 			end
 			chunk[cellKey] = edges
 		end
@@ -2442,6 +2452,7 @@ end
 
 function navChunk.edgesEncode(chunk)
 	local e, n = {}, 0
+	local x = nil
 	for cellKey, edges in pairs(chunk) do
 		local _, id = navChunk.of(cellKey)
 		local cx, cy = navKeyCoords(cellKey)
@@ -2456,12 +2467,17 @@ function navChunk.edgesEncode(chunk)
 					flat[#flat + 1] = math.floor(entry.t or 0)
 					flat[#flat + 1] = math.max(1, math.floor((entry.d or navCellSpan(cellKey, toKey)) + 0.5))
 					n = n + 1
+					if entry.k ~= nil then
+						x = x or {}
+						x[tostring(id) .. ":" .. tostring(tx - cx) .. "," .. tostring(ty - cy)] =
+							{ k = entry.k, b = entry.board, f = entry.float, h = entry.hole }
+					end
 				end
 			end
 			if #flat > 0 then e[tostring(id)] = flat end
 		end
 	end
-	return { _g = navGenNow(), _f = navChunk.EDGE_FORMAT, e = e }, n
+	return { _g = navGenNow(), _f = navChunk.EDGE_FORMAT, e = e, x = x }, n
 end
 
 --  ------------------------------------------------------------ THE INDEX
@@ -3603,6 +3619,11 @@ function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 			aStar = aStar,
 			fromKey = fromKey,
 			toKey = toKey,
+			--  THE PROFILE THAT CONFIGURED THIS SEARCH. A module socketed
+			--  while the probe runs flips the live profile; the verdict
+			--  belongs to the rules the search was built with, and lands in
+			--  that store (todo.pathing.moduleprofile).
+			profile = petports_navProfile(),
 			--  KEPT FOR THE DEBUG DRAW, which runs on a later tick than this
 			--  and cannot re-derive them cheaply -- an anchor is up to four
 			--  validStandingPosition calls and re-running it per frame would
@@ -3707,7 +3728,7 @@ function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 			petports_profCount("falseTicks", probe.ticks or 0)
 		end
 
-		petports_navLearn(petports_navProfile(), fromKey, toKey, result, travelled)
+		petports_navLearn(probe.profile or petports_navProfile(), fromKey, toKey, result, travelled)
 
 		self.petportsNavProbes[slot] = nil
 		return result

@@ -1632,7 +1632,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-12b a work family that strands the unit three times running is held for two minutes; defrag says why it did nothing"
+local PETPORT_BUILD_STAMP = "2026-09-13a depositWork honours the backoff it is given, like every other generator"
 
 --  PORT PROFILER, 2026-09-07b. MEASURED 21:00: six ports on a small islet,
 --  59 port ticks over 30 ms in 39 s totalling 3.7 s, worst 268 ms, while
@@ -9854,12 +9854,30 @@ local function depositWork()
   self.fullContainers = self.fullContainers or {}
 
   for _, beacon in ipairs(targets) do
+    --  THE FAILURE BACKOFF FIRST, 2026-09-13a. This generator asked the crate
+    --  about room and never asked workFailures, so a crate the unit could
+    --  not reach was re-dispatched 0.4 s after the 30 s backoff was written.
+    --  MEASURED 03:18:06..35 on the amphibious unit: six SEARCH_LIMIT
+    --  searches in a row at one per 6.5 s, the survey yielding to each,
+    --  the unit standing on task and eating. Same test the drop generator
+    --  runs; same key noteFailure wrote.
+    local workId = "deposit:" .. tostring(beacon.id) .. "@" .. stationUniqueId()
+    local failure = self.workFailures[workId]
+    local failureBackedOff = failure ~= nil and (failure["until"] or 0) > now
+    if failureBackedOff then
+      sb.logInfo("PETPORT %s deposit target %s SKIPPED: backed off until %s (now %s, failures %s)",
+        stationUniqueId(), sb.printJson(beacon.id),
+        sb.printJson(failure["until"]), sb.printJson(now), sb.printJson(failure.count))
+    end
+
     --  Ask the crate directly. Only if the engine will not answer do we fall
     --  back to the blunt time-based backoff.
     local takesAny = containerTakesAny(beacon.id, beacon.filter)
     local backedOff
 
-    if takesAny == nil then
+    if failureBackedOff then
+      backedOff = true
+    elseif takesAny == nil then
       backedOff = (self.fullContainers[beacon.id] or 0) > now
       if backedOff then
         sb.logInfo("PETPORT %s deposit target %s SKIPPED: was full, retrying in %s (no containerItemsCanFit)",

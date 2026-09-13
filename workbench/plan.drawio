@@ -1,4 +1,4 @@
-<mxfile host="Electron" modified="2026-09-13T03:07:34.650Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.2.5 Chrome/120.0.6099.109 Electron/28.1.0 Safari/537.36" etag="Spe25lVW5PAGteZOMLp7" version="24.2.5" type="device">
+<mxfile host="Electron" modified="2026-09-13T09:17:50.278Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.2.5 Chrome/120.0.6099.109 Electron/28.1.0 Safari/537.36" etag="v1txOxtcoJGjN-MMOKTj" version="24.2.5" type="device">
   <diagram name="Page-1" id="NveRE99YrSAUUvzC1UxD">
     <mxGraphModel dx="1687" dy="993" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
       <root>
@@ -1419,6 +1419,81 @@
         </mxCell>
         <mxCell id="kWl2yqEFlSN1XD8LCRPn-169" value="Medium" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
           <mxGeometry x="2440" y="3840" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-175" value="Amphibious backtracks after jumping into the water from a higher tile" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="3920" width="640" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-176" value="Locomotion" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2040" y="3920" width="160" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-177" value="Medium" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2200" y="3920" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-178" value="Medium" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2320" y="3920" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-179" value="Medium" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2440" y="3920" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-180" value="What are all these yellow lines for amphibious" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="4000" width="640" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-181" value="Locomotion" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2040" y="4000" width="160" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-182" value="Medium" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2200" y="4000" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-183" value="Medium" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2320" y="4000" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-184" value="Medium" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2440" y="4000" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-185" value="A pet on the clock that isn&#39;t moving shouldn&#39;t be burning treats" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="4080" width="640" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-186" value="Locomotion" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2040" y="4080" width="160" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-187" value="Medium" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2200" y="4080" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-188" value="Medium" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2320" y="4080" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-189" value="Medium" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2440" y="4080" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-190" value="Amphibious is withdrawing and depositing items in a loop if it&#39;s trying to defrag into a backed off crate" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="4160" width="640" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-191" value="Behavior" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2040" y="4160" width="160" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-192" value="Medium" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2200" y="4160" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-193" value="Medium" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2320" y="4160" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-194" value="Medium" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2440" y="4160" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-195" value="Amphibious patrols on top of submerged crate instead of depositing into the submerged crate - any reachable tile should count" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="4240" width="640" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-196" value="Behavior" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2040" y="4240" width="160" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-197" value="Medium" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2200" y="4240" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-198" value="Medium" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2320" y="4240" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="kWl2yqEFlSN1XD8LCRPn-199" value="Medium" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="2440" y="4240" width="120" height="80" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>
