@@ -1,10 +1,39 @@
-# COARSE NAV -- SESSION HANDOFF (as of coarsenav 10r / taskAction 10a / petport 10a / flyapproach 10c / contract 10a / habitat 07a)
+# COARSE NAV -- SESSION HANDOFF (as of coarsenav 12i / taskAction 12m / petport 12b / flyapproach 10c / contract 12d / habitat 07a)
 
 Read this before proposing anything. MEASURED means read out of a
 starbound.log or an engine `.luaprofile`; FACT means read out of retail 1.4.4
 source pasted into a session. Retail Starbound 1.4.4 only; never propose an
 OpenStarbound or fork binding. The OpenStarbound repo's first commit is
 unmodified retail source and may be READ for facts (StarLuaRoot.cpp was).
+
+**2026-09-12 -- THE CHUNK STORE AND THE WALKER'S DAY; SESSION RETIRED.**
+Read V2 STATUS and `proc.tooling.retired12` first. The store is keyed by
+32-tile chunk (`arch.pathing.chunkstore`, 12b): two properties per chunk per
+profile, flat arrays, one generation per property, read-fresh-merge-write on
+flush, legacy shards cleared on sight. MEASURED at full size: 3,879 cells at
+1,072 KB in 48 chunk pairs against 3,698 at 1,712 KB in ~3,700 shards; 30 s
+bursts 250..317 ms against 372..509. The tall ticks are now ours:
+`chunkDecode max 57`, `chunkSet max 31`, `chunkGet 6` -- the Lua decode
+loop and the serialised size, not the engine's parse. The nav tick runs
+everything but the survey while the pather searches (12a). The picker's step
+leg (`arch.pathing.stepleg`, 12c..12f + taskAction 12e..12h) closed the lava
+crate loop. A walker probe gives up at NAV_PROBE_MAX_TICKS (60) and a cell
+is not swept twice at once (12g). A walk through a denied liquid the chassis
+can hop is not a refusal (`dd.locomotion.hoppable`, 12h + taskAction 12l):
+the probe asks the executor's own `petports_liquidHopFrom`; verified on the
+upper pool, 6.19 tiles. THEN THE FINDING THAT RETIRED THE SESSION
+(`fact.pathing.stretchclimb`): the plain walker reached the ore pocket and
+could not leave because TOO LONG refused the climb the engine had found (37
+edges for 6.1 tiles). 12i measures tiles travelled instead -- UNVERIFIED --
+and the rule is still a reachability check when it should be a router cost
+carried on the edge (Lofty: "why does the tool for going long distances have
+a distance check"). That, `t` relative to a per-chunk base, and lazy
+per-cell decode are the next store change, as one wipe. Drone swimCost was
+raised to 50 on a theory and ROLLED BACK: the planner walks a one-deep pool
+as ground; cost never entered into it. `dd.pathing.profilebyinputs` is
+decided, with the walker parameter list read from StarPlatformerAStar.cpp.
+`fact.pathing.astarcycle`: retail's A* can loop forever on a self-crossing
+path; walker probes are exposed by volume; nothing from Lua can catch it.
 
 **2026-09-10 EVENING -- THE VERDICT.** Lofty: performance is not
 acceptable; unsocketing the pets removes the hitching, so the remaining
@@ -375,6 +404,14 @@ is deep enough. Rares have shallow variants, which is why they appear.
 
 ## OPEN, NOT SCHEDULED
 
+- **Edge cost, not edge refusal** (`fact.pathing.stretchclimb`) -- record
+  travelled length on the edge, router costs by it, TOO LONG stops being a
+  verdict. With the next wipe.
+- **Round trip before dispatch** (`todo.dispatch.roundtrip`) -- route
+  target->home before handing a walker a task; the recall is the backstop.
+- **Lazy per-cell decode and `t` delta** (STATUS item 2) -- chunkDecode 57 ms
+  is the Lua loop building 4k tables; keep the raw chunk, decode a cell on
+  touch, re-encode only touched cells.
 - **Poison inside the ocean** (`todo.pathing.poisonocean`) -- closed by
   `todo.pathing.boundarycells` step 3, which is BEFORE amphibious in the
   build order decided later on 2026-09-06 (boundary cells first, then the
@@ -429,7 +466,23 @@ is deep enough. Rares have shallow variants, which is why they appear.
 
 `petports_navProgress()`, `petports_navVerify(from, to)`, `petports_navSelfTest()`,
 `petports_navLevelReport()`, `petports_navStats()`, `petports_navDebugToggle()`,
-`petports_navVerboseToggle()`, `petports_profToggle()`, `petports_navWipe()`.
+`petports_navVerboseToggle()`, `petports_profToggle()`, `petports_navWipe()`,
+`petports_navDumpStore()` (run it BEFORE a wipe for the size baseline).
+Lines added 2026-09-12: `NAV STORE <profile>: N cell(s), M chunk(s) ... KB`,
+`NAV legacy store ... cleared`, `NAV flushed N edge(s) across M chunk(s)`,
+`UNIT leg pick from <cell>: first hop ... NOT clear ... stepping onto it
+first` / `no in-reach node is clear`, `UNIT NUDGE ... (picker step)`, `coarse
+leg ... (a step onto the route)`, `NAV probe ... GAVE UP after N tick(s)`,
+`NAV probe path walks a denied span ... HOPPABLE from` / `not hoppable ...:
+<why>`, `UNIT LIQUID AHEAD ... hopping from` / `no hop available ... (exit X,
+<why>)`, `TOO LONG: N tile(s) travelled over M edge(s)`, wall rejections
+ending `-- <Action> edge N of M at [..]; path Walk>Jump>...`, the `no leg`
+diagnostic's `seam A <-> B ... store says A->B false, B->A ABSENT` (read this
+FIRST when a unit cannot get somewhere: it names the pair). Profiler sections:
+`flushBounds`/`flushIndex`/`flushEdges`, `chunkGet`/`chunkDecode`/
+`chunkEncode`/`chunkSet`, counters `edgeChunkReads`, `indexChunkReads`,
+`probeGaveUp`. The debug overlay: nav text starts at +2.2 and grows down; the
+NO ROUTE reason is cut to 48 chars (the log has it all).
 Log lines: `NAV surveying`, `NAV sweep of ... COMPLETE`, `NAV pass at radius`,
 `TOO LONG`, `UNIT coarse first`, `UNIT coarse leg from`, `reached coarse leg
 ... chaining`, `would not walk`, `re-probe says`, `CONTRADICTED`, `refused by

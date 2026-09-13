@@ -61,7 +61,7 @@
 --  are unprobeable and time-varying and nobody's fault -- are allowed to
 --  produce optimistic-wrong answers. They fail in the cheap direction.
 
-local COARSENAV_BUILD_STAMP = "2026-09-10r the PROFILE line names its unit"
+local COARSENAV_BUILD_STAMP = "2026-09-13a every TRUE edge carries the tiles its path travels and the router costs by it; the stretch refusal is gone"
 
 local navStamped = false
 
@@ -137,7 +137,7 @@ local NAV_BLOCK_CELLS = 8
 local NAV_DRAW_RANGE = 32
 
 local navFamilies = {}
-local navEdgeFamilyEnumerate = nil  --  assigned below navCellProperty
+local navEdgeFamilyEnumerate = nil  --  assigned in the chunk store; called from navIndexRegister above it
 
 --  LIQUID BOUNDARY CELLS -- THE SHARED STORE, 2026-09-07x.
 --
@@ -558,20 +558,11 @@ local NAV_MAX_DISTANCE = 32
 
 --  maxDistance IS NOT PATH LENGTH. MEASURED 2026-09-05 03:56: a probe under
 --  this cap proved 994,1039 -> 999,1036 (five tiles apart, the deck below,
---  through the floor) with a 166-EDGE path -- west along the deck, down the
---  ladder, back east underneath. The cap bounds how far the search wanders
---  from its start, not how long the route is. So "reachable" meant "there is
---  SOME route", and the hop-counting router took one 166-edge hop over ten
---  short ones, and the unit walked twenty seconds the wrong way and timed
---  out. The comments above that say "within 32 tiles of path" were wrong.
---
---  SO A TRUE VERDICT ALSO NEEDS A SHORT PATH: at most this many edges per
---  tile of anchor distance, plus a constant for the odd step or jump. A
---  route longer than that is recorded FALSE for the pair -- which is the
---  design's own argument: a long detour belongs in the graph as the chain of
---  short hops it is made of, not as one edge that hides it.
-local NAV_EDGE_STRETCH = 3
-local NAV_EDGE_SLACK = 8
+--  through the floor) with a 166-edge path round the deck. The cap bounds
+--  how far the search wanders from its start, not how long the route is.
+--  So every TRUE edge carries `d`, the tiles the found path travels, and
+--  the router costs by it (navRouteStep): a long detour is an expensive
+--  edge, never a deleted one (fact.pathing.stretchclimb).
 
 --  PUBLIC, 2026-09-05, BECAUSE A LEG MUST BE WALKED WITH THE SAME CAP IT WAS
 --  PROVED WITH. A probe with maxDistance 32 searches a bounded box and can
@@ -978,6 +969,9 @@ local function navDropMemos(generation)
 	self.petportsNavIndexMine = nil
 	self.petportsNavIndexSeen = nil
 	self.petportsNavIndexLastRaw = nil
+	self.petportsNavIndexShort = nil
+	self.petportsNavIndexShortTries = nil
+	self.petportsNavChunkKnown = nil
 	self.petportsNavForbidden = nil
 	self.petportsNavForbiddenAt = nil
 	self.petportsNavBoundsDraw = nil
@@ -1339,6 +1333,33 @@ local function navEdgeKey(fromKey, toKey)
 	return fromKey .. ">" .. toKey
 end
 
+--  MOVED UP FROM THE SCHEDULER, 2026-09-12b: the chunk store keys on it.
+--  A CELL KEY'S COORDINATES, PARSED ONCE, 2026-09-10k. The queue purge, the
+--  frontier rebuild and the widening list each ran string.match over every
+--  key they touched, thousands at a time (`candidates max 128 ms`). Keys are
+--  stable strings; the table is bounded by the number of distinct cells
+--  this unit has ever ranked.
+local navKeyCoordsCache = {}
+local function navKeyCoords(key)
+	local held = navKeyCoordsCache[key]
+	if held ~= nil then return held[1], held[2] end
+	local kx, ky = string.match(key, "^(-?%d+),(-?%d+)$")
+	if kx == nil then return nil, nil end
+	kx, ky = tonumber(kx), tonumber(ky)
+	navKeyCoordsCache[key] = { kx, ky }
+	return kx, ky
+end
+
+--  THE STRAIGHT-LINE TILES BETWEEN TWO CELLS: the length an edge carries
+--  when nothing measured its path (a bridge, a contradiction).
+local function navCellSpan(fromKey, toKey)
+	local fx, fy = navKeyCoords(fromKey)
+	local tx, ty = navKeyCoords(toKey)
+	if fx == nil or tx == nil then return 1 end
+	local dx, dy = tx - fx, ty - fy
+	return math.max(1, math.sqrt(dx * dx + dy * dy) * navStride())
+end
+
 --  INDEX WRITES ARE BATCHED, 2026-09-06. MEASURED: a free mover's sweeps
 --  complete in one step (body sweep), so 490 sweeps in a short window meant
 --  490 whole-index world.setProperty calls plus two claim writes each --
@@ -1351,7 +1372,7 @@ end
 --  EVERY profile's cells, so on a multi-chassis base that is a JSON-to-Lua
 --  conversion of a thousand-entry table, twice, on a two-second beat, which
 --  is the idle spike at that cadence. Memoised on world.time(); a write
---  through navIndexFlush or navIndexWrite drops the memo.
+--  through navIndexFlush or navChunk.indexDrop drops the memo.
 --  ONE PROPERTY PER PROFILE, 2026-09-07k. MEASURED 19:39: a freshly
 --  socketed unit's first two updates took ~1 s each, entirely in the first
 --  index read -- every profile's cells in one property, converted whole on
@@ -2138,11 +2159,58 @@ local function navPathForbidden(edges)
 
 	local bounds = mcontroller.boundBox()
 
-	for _, edge in ipairs(edges) do
+	--  A SPAN THE CHASSIS CAN HOP IS NOT A WALL, 2026-09-12h (dd.locomotion
+	--  .hoppable). MEASURED 18:00 (Lofty): every probe across the one-deep
+	--  upper pool came back `Walk>Walk>Walk>Walk` -- the engine walks a
+	--  shallow puddle as ground -- and was refused here, so no far-side
+	--  cell ever entered the graph, while the executor's avoidLiquidAhead
+	--  could have hopped the pool on arrival. The probe now asks the
+	--  executor's own question, petports_liquidHopFrom, from the last dry
+	--  node before the span in the path's direction; a landing means the
+	--  span is cleared and the check continues past it. Same function,
+	--  same numbers, so the probe predicts the walk.
+	local hopLo, hopHi = nil, nil
+	local lastDry = nil  --  the last node that passed; the hop is asked from it
+
+	for i, edge in ipairs(edges) do
 		for _, node in ipairs({ edge.source, edge.target }) do
 			if type(node) == "table" and type(node.position) == "table" then
 				local key, bucket = navBoxForbidden(forbidden, node.position, bounds)
-				if key ~= nil then return key, bucket end
+				if key ~= nil and hopLo ~= nil and node.position[1] >= hopLo
+				   and node.position[1] <= hopHi then
+					key = nil
+				end
+				if key ~= nil and tostring(edge.action) == "Walk"
+				   and petports_liquidHopFrom ~= nil and lastDry ~= nil then
+					local dry = lastDry
+					local dir = node.position[1] >= dry[1] and 1 or -1
+					local okHop, landing, _, _, entry, exit, why = pcall(petports_liquidHopFrom, dry, dir)
+					if okHop and landing ~= nil then
+						hopLo = math.min(dry[1], landing[1])
+						hopHi = math.max(dry[1], landing[1])
+						if PETPORTS_NAV_VERBOSE then
+							sb.logInfo("NAV probe path walks a denied span at %s -- HOPPABLE from %s "
+								.. "to %s (entry %s, exit %s), not a wall",
+								tostring(key), sb.printJson(dry), sb.printJson(landing),
+								sb.printJson(entry), sb.printJson(exit))
+						end
+						key = nil
+					elseif okHop then
+						sb.logInfo("NAV probe path walks a denied span at %s -- not hoppable from %s: %s",
+							tostring(key), sb.printJson(dry), tostring(why))
+					end
+				end
+				if key == nil then lastDry = node.position end
+				if key ~= nil then
+					--  WHAT KIND OF EDGE PUT IT THERE, 2026-09-12g. The rejection
+					--  named only the tile; whether the planner swam or jumped
+					--  low across is the whole question at the upper pool.
+					local actions = {}
+					for j, e in ipairs(edges) do actions[j] = tostring(e.action) end
+					return key, bucket, string.format("%s edge %s of %s at %s; path %s",
+						tostring(edge.action), sb.printJson(i), sb.printJson(#edges),
+						sb.printJson(node.position), table.concat(actions, ">"))
+				end
 			end
 		end
 	end
@@ -2162,6 +2230,242 @@ local function navIndexRegister(profile)
 	pcall(world.setProperty, NAV_INDEX, registry)
 end
 
+--  ------------------------------------------------------- THE CHUNK STORE
+--
+--  ONE PROPERTY PER CHUNK, NOT PER CELL, 2026-09-12b (plan.pathing.cityscale
+--  item 2, Lofty: "per chunk rather than per tile"). MEASURED 2026-09-10
+--  (todo.pathing.storesize): the world's 30 s storage flush rewrites its
+--  whole metadata blob and our share of it was the property store -- one
+--  property per swept CELL for the edges (2,078 reads to build a graph)
+--  and one whole-profile table for the index, every edge a string key
+--  and a three-key table. The only lever is bytes, so the store is now:
+--
+--      petports_navindex                    the profile registry (unchanged)
+--      petports_navindex:<profile>          { _g, chunks = { "<chx>,<chy>" = true } }
+--      petports_navchunk:<profile>:<ck>     { _g, _n, c = [ id, at, radius, ... ] }
+--      petports_navchunkedges:<profile>:<ck>  { _g, _f, e = { "<id>" = [ dx, dy, r, t, d, ... ] } }
+--
+--  A chunk is navChunk.TILES on a side (Starbound's own 32), keyed by its
+--  chunk coordinates in cell space. `id` is the cell's slot in the chunk;
+--  an edge names its target RELATIVE to its source (no edge is longer than
+--  NAV_MAX_DISTANCE, so it fits), `r` is 0/1, `t` is whole seconds and `d`
+--  is whole tiles travelled along the path that proved the edge. `_f` is
+--  the edge array's stride; a property with another stride is read as
+--  empty and the store wants a wipe.
+--  Flat arrays, because the engine's JSON-to-Lua conversion is native and
+--  an array is the cheapest thing it converts. The generation is ONE
+--  number per property (`_g`) instead of one per entry: a property from
+--  another generation is empty. `_n` is the chunk's cell count and is the
+--  10b short-read guard moved down to the chunk.
+--
+--  THE READERS ABOVE THIS LAYER DO NOT CHANGE. navCellRead still hands back
+--  `{ [toKey] = { r, t, g } }` for one cell and navIndexRead()[profile]
+--  still hands back `{ [cellKey] = { at, radius, g } }` for a profile; both
+--  are decoded from the chunk on first touch and memoised, so one chunk
+--  read fills every cell of the chunk at once.
+--
+--  A WRITE IS READ-FRESH, MERGE, WRITE, PER CHUNK. The old per-cell flush
+--  merged onto the MEMO, which was safe only because the survey claim
+--  makes a cell single-writer; a chunk is not, so a flush reads the chunk
+--  back from the world, applies only this unit's deltas and writes. The
+--  three happen inside one Lua call, entity scripts do not interleave and
+--  world properties are synchronous, so another unit's edges in the same
+--  chunk always survive (Lofty, 2026-09-12: no claim needed for that).
+--
+--  THE EDGE PROPERTY HAS ITS OWN PREFIX so a chunk key can never collide
+--  with a legacy per-cell shard of the same name. Legacy shards are found
+--  through a legacy-shaped per-profile index and cleared on first sight
+--  (navChunk.legacyClear); what the legacy index did not list is unlistable and
+--  waits for a wipe, as it always did.
+--  ONE TABLE, NOT TWENTY LOCALS: the main chunk was at 199 of Lua's 200
+--  local slots (fact.port.localceiling, dd.tooling.delocalise).
+local navChunk = {}
+navChunk.TILES = 32
+navChunk.INDEX_PREFIX = "petports_navchunk:"
+navChunk.EDGES_PREFIX = "petports_navchunkedges:"
+navChunk.EDGE_FORMAT = 5
+
+function navChunk.side()
+	return math.max(1, math.floor(navChunk.TILES / navStride()))
+end
+
+--  A cell key to its chunk key and its slot in the chunk.
+function navChunk.of(cellKey)
+	local cx, cy = navKeyCoords(cellKey)
+	if cx == nil then return nil, nil end
+	local side = navChunk.side()
+	local chx, chy = math.floor(cx / side), math.floor(cy / side)
+	return tostring(chx) .. "," .. tostring(chy),
+		(cx - chx * side) + (cy - chy * side) * side
+end
+
+--  The reverse: a chunk key and a slot to the cell key.
+function navChunk.cellKey(chunkKey, id)
+	local chx, chy = string.match(chunkKey, "^(-?%d+),(-?%d+)$")
+	if chx == nil then return nil end
+	local side = navChunk.side()
+	id = math.floor(tonumber(id) or 0)
+	return tostring(tonumber(chx) * side + (id % side)) .. ","
+		.. tostring(tonumber(chy) * side + math.floor(id / side))
+end
+
+function navChunk.indexProperty(profile, chunkKey)
+	return navChunk.INDEX_PREFIX .. profile .. ":" .. chunkKey
+end
+
+function navChunk.edgesProperty(profile, chunkKey)
+	return navChunk.EDGES_PREFIX .. profile .. ":" .. chunkKey
+end
+
+--  THE PER-PROFILE REGISTRY: which chunks this profile has. Read cold; the
+--  callers memoise. A legacy-shaped one (a cell map) is cleared and read
+--  as empty.
+function navChunk.registryRead(profile)
+	local ok, registry = pcall(world.getProperty, navIndexProperty(profile))
+	if not ok or type(registry) ~= "table" then return {} end
+
+	if type(registry.chunks) ~= "table" then
+		navChunk.legacyClear(profile, registry)
+		return {}
+	end
+
+	return registry.chunks
+end
+
+function navChunk.registryAdd(profile, chunkKey)
+	self.petportsNavChunkKnown = self.petportsNavChunkKnown or {}
+	self.petportsNavChunkKnown[profile] = self.petportsNavChunkKnown[profile] or {}
+	if self.petportsNavChunkKnown[profile][chunkKey] then return end
+
+	local chunks = navChunk.registryRead(profile)
+	self.petportsNavChunkKnown[profile] = chunks
+	if chunks[chunkKey] == true then return end
+
+	chunks[chunkKey] = true
+	navIndexRegister(profile)
+	pcall(world.setProperty, navIndexProperty(profile), { _g = navGenNow(), chunks = chunks })
+end
+
+function navChunk.registryDrop(profile, chunkKey)
+	local chunks = navChunk.registryRead(profile)
+	if chunks[chunkKey] == nil then return end
+	chunks[chunkKey] = nil
+	self.petportsNavChunkKnown = self.petportsNavChunkKnown or {}
+	self.petportsNavChunkKnown[profile] = chunks
+	pcall(world.setProperty, navIndexProperty(profile), { _g = navGenNow(), chunks = chunks })
+end
+
+--  DECODE ONE INDEX CHUNK to { [cellKey] = { at, radius, g } }. Returns the
+--  cells, whether the read succeeded, and the count the writer recorded.
+function navChunk.indexDecode(profile, chunkKey)
+	local ok, raw = pcall(world.getProperty, navChunk.indexProperty(profile, chunkKey))
+	local readOk = ok and type(raw) == "table"
+	local cells = {}
+	if not readOk then return cells, false, nil end
+
+	local gen = navGenNow()
+	if raw._g ~= gen then return cells, true, 0 end
+
+	local flat = raw.c
+	if type(flat) == "table" then
+		for i = 1, #flat - 2, 3 do
+			local cellKey = navChunk.cellKey(chunkKey, flat[i])
+			if cellKey ~= nil then
+				cells[cellKey] = { at = flat[i + 1], radius = flat[i + 2], g = gen }
+			end
+		end
+	end
+
+	return cells, true, tonumber(raw._n)
+end
+
+function navChunk.indexEncode(chunkKey, cells)
+	local flat, n = {}, 0
+	for cellKey, entry in pairs(cells) do
+		if type(entry) == "table" then
+			local ck, id = navChunk.of(cellKey)
+			if ck == chunkKey then
+				flat[#flat + 1] = id
+				flat[#flat + 1] = entry.at or 0
+				flat[#flat + 1] = entry.radius or 0
+				n = n + 1
+			end
+		end
+	end
+	return { _g = navGenNow(), _n = n, c = flat }, n
+end
+
+--  DECODE ONE EDGE CHUNK to { [cellKey] = { [toKey] = { r, t, g } } }.
+function navChunk.edgesDecode(profile, chunkKey)
+	--  PARSE AND DECODE TIMED APART, 2026-09-12d: `flushEdges max 95`,
+	--  `graphFor max 124` on the full store; which half is tall decides
+	--  whether the property splits or the decode goes per cell.
+	petports_profBegin("chunkGet")
+	local ok, raw = pcall(world.getProperty, navChunk.edgesProperty(profile, chunkKey))
+	petports_profEnd("chunkGet")
+	local chunk = {}
+	if not ok or type(raw) ~= "table" then return chunk end
+
+	local gen = navGenNow()
+	if raw._g ~= gen or type(raw.e) ~= "table" then return chunk end
+
+	if raw._f ~= navChunk.EDGE_FORMAT then
+		if not self.petportsNavFormatNoted then
+			self.petportsNavFormatNoted = true
+			sb.logInfo("NAV edge chunk %s:%s has stride %s and this build reads %s -- run petports_navWipe()",
+				tostring(profile), tostring(chunkKey), tostring(raw._f), sb.printJson(navChunk.EDGE_FORMAT))
+		end
+		return chunk
+	end
+
+	petports_profBegin("chunkDecode")
+
+	local stride = navStride()
+	for id, flat in pairs(raw.e) do
+		local cellKey = navChunk.cellKey(chunkKey, id)
+		if cellKey ~= nil and type(flat) == "table" then
+			local cx, cy = navKeyCoords(cellKey)
+			local edges = {}
+			for i = 1, #flat - 4, 5 do
+				local dx, dy = flat[i], flat[i + 1]
+				local toKey = tostring(cx + dx) .. "," .. tostring(cy + dy)
+				edges[toKey] = { r = (flat[i + 2] == 1), t = flat[i + 3], g = gen,
+					d = flat[i + 4] or math.max(1, math.floor(math.sqrt(dx * dx + dy * dy) * stride + 0.5)) }
+			end
+			chunk[cellKey] = edges
+		end
+	end
+	petports_profEnd("chunkDecode")
+
+	return chunk
+end
+
+function navChunk.edgesEncode(chunk)
+	local e, n = {}, 0
+	for cellKey, edges in pairs(chunk) do
+		local _, id = navChunk.of(cellKey)
+		local cx, cy = navKeyCoords(cellKey)
+		if id ~= nil and type(edges) == "table" and next(edges) ~= nil then
+			local flat = {}
+			for toKey, entry in pairs(edges) do
+				local tx, ty = navKeyCoords(toKey)
+				if tx ~= nil and type(entry) == "table" then
+					flat[#flat + 1] = tx - cx
+					flat[#flat + 1] = ty - cy
+					flat[#flat + 1] = entry.r == true and 1 or 0
+					flat[#flat + 1] = math.floor(entry.t or 0)
+					flat[#flat + 1] = math.max(1, math.floor((entry.d or navCellSpan(cellKey, toKey)) + 0.5))
+					n = n + 1
+				end
+			end
+			if #flat > 0 then e[tostring(id)] = flat end
+		end
+	end
+	return { _g = navGenNow(), _f = navChunk.EDGE_FORMAT, e = e }, n
+end
+
+--  ------------------------------------------------------------ THE INDEX
+
 --  THE INDEX NEVER SHRINKS ON A FLUSH, 2026-09-10a. MEASURED 22:01..22:40
 --  (Lofty's hour after a wipe): `of N in the graph` went 77->37, 155->111,
 --  346->305, 477->329, 521->396, 1306->581 -- six collapses, five of them on
@@ -2176,15 +2480,22 @@ end
 --  on every flush, and a read that comes back smaller than the last one is
 --  logged with both counts. Entries leave the index only through forget
 --  and purge, which remove them from Seen too.
+--  KEYED BY CHUNK SINCE 12b -- `[profile][chunkKey][cellKey]` -- so a chunk
+--  read restores from its own chunk's memory instead of scanning all of it.
 local function navIndexRemember(profile, cellKey, entry)
+	local chunkKey = navChunk.of(cellKey)
+	if chunkKey == nil then return end
 	self.petportsNavIndexSeen = self.petportsNavIndexSeen or {}
-	self.petportsNavIndexSeen[profile] = self.petportsNavIndexSeen[profile] or {}
-	self.petportsNavIndexSeen[profile][cellKey] = entry
+	local byProfile = self.petportsNavIndexSeen[profile] or {}
+	self.petportsNavIndexSeen[profile] = byProfile
+	byProfile[chunkKey] = byProfile[chunkKey] or {}
+	byProfile[chunkKey][cellKey] = entry
 end
 
 local function navIndexForgetSeen(profile, cellKey)
+	local chunkKey = navChunk.of(cellKey)
 	local seen = self.petportsNavIndexSeen and self.petportsNavIndexSeen[profile]
-	if seen ~= nil then seen[cellKey] = nil end
+	if chunkKey ~= nil and seen ~= nil and seen[chunkKey] ~= nil then seen[chunkKey][cellKey] = nil end
 end
 
 --  THE COUNT TRAVELS WITH THE PROPERTY, 2026-09-10b (Lofty: "so he's going
@@ -2196,34 +2507,22 @@ end
 --  and a flush whose read was short DOES NOT WRITE -- it keeps its pending
 --  entries and tries again next flush, up to NAV_INDEX_SHORT_TRIES, after
 --  which it writes anyway and says so, because a property that really did
---  shrink must not wedge every writer forever. `_n` is a number, so the
---  generation filter below already drops it from the cell set.
-local NAV_INDEX_COUNT_KEY = "_n"
+--  shrink must not wedge every writer forever.
+--  PER CHUNK SINCE 12b: the count, the last-raw memory and the short flag
+--  are all keyed on profile and chunk, so one short chunk holds only its
+--  own pending entries.
 local NAV_INDEX_SHORT_TRIES = 12
 
-local function navIndexProfileRead(profile)
-	local ok, cells = pcall(world.getProperty, navIndexProperty(profile))
-	local readOk = ok and type(cells) == "table"
-	if not readOk then cells = {} end
-	local expected = readOk and tonumber(cells[NAV_INDEX_COUNT_KEY]) or nil
-
-	--  ONLY THIS GENERATION, 2026-09-08y: a key whose entry is from another
-	--  generation is dropped here, so the candidate scan, the overlay and
-	--  the flush's merge never see it.
-	local gen = navGenNow()
-	local raw, droppedGen = 0, 0
-	cells[NAV_INDEX_COUNT_KEY] = nil
-	for cellKey, entry in pairs(cells) do
-		raw = raw + 1
-		if type(entry) ~= "table" or entry.g ~= gen then
-			cells[cellKey] = nil
-			droppedGen = droppedGen + 1
-		end
-	end
+function navChunk.indexRead(profile, chunkKey)
+	local cells, readOk, expected = navChunk.indexDecode(profile, chunkKey)
+	local raw = 0
+	for _ in pairs(cells) do raw = raw + 1 end
 
 	--  THE UNION WITH EVERYTHING THIS INSTANCE HAS SEEN, and the count check.
 	local seen = self.petportsNavIndexSeen and self.petportsNavIndexSeen[profile]
+	seen = seen ~= nil and seen[chunkKey] or nil
 	local restored = 0
+	local gen = navGenNow()
 	if type(seen) == "table" then
 		for cellKey, entry in pairs(seen) do
 			if cells[cellKey] == nil and type(entry) == "table" and entry.g == gen then
@@ -2234,30 +2533,44 @@ local function navIndexProfileRead(profile)
 	end
 	for cellKey, entry in pairs(cells) do navIndexRemember(profile, cellKey, entry) end
 
+	local slot = profile .. ":" .. chunkKey
 	self.petportsNavIndexLastRaw = self.petportsNavIndexLastRaw or {}
 	self.petportsNavIndexShort = self.petportsNavIndexShort or {}
-	local last = self.petportsNavIndexLastRaw[profile]
-	--  ABSENT IS EMPTY, NOT SHORT, 2026-09-10p. MEASURED 13:38..13:42: `INDEX
-	--  SHRANK for petports_amphibious|fb| ... property read 0 (ok false),
-	--  recorded nil` every twenty seconds -- a profile with no index yet on
-	--  this base, its flushes held for up to twelve tries by a guard written
-	--  for a property that had been there. A failed read is short only when
-	--  something was recorded or read before.
+	local last = self.petportsNavIndexLastRaw[slot]
+	--  ABSENT IS EMPTY, NOT SHORT, 2026-09-10p: a failed read is short only
+	--  when something was recorded or read before.
 	local short = (expected ~= nil and raw < expected * 0.9)
 		or (last ~= nil and (not readOk or raw < last * 0.9))
-	self.petportsNavIndexShort[profile] = short
+	self.petportsNavIndexShort[slot] = short
 	if short then
-		sb.logInfo("NAV INDEX SHRANK for %s: property read %s cell(s) (ok %s), it recorded %s at its last "
-			.. "write, %s last read here; %s dropped by generation (gen %s), %s restored from this "
-			.. "unit's memory -- this read will NOT be written back",
-			profile, sb.printJson(raw), tostring(readOk), tostring(expected), tostring(last),
-			sb.printJson(droppedGen), sb.printJson(gen), sb.printJson(restored))
-	elseif droppedGen > 0 and self.petportsNavIndexGenNoted ~= droppedGen then
-		self.petportsNavIndexGenNoted = droppedGen
-		sb.logInfo("NAV index for %s: %s of %s entries dropped by generation (gen %s)",
-			profile, sb.printJson(droppedGen), sb.printJson(raw), sb.printJson(gen))
+		sb.logInfo("NAV INDEX SHRANK for %s chunk %s: property read %s cell(s) (ok %s), it recorded %s at its last "
+			.. "write, %s last read here; %s restored from this unit's memory -- this read will NOT be written back",
+			profile, chunkKey, sb.printJson(raw), tostring(readOk), tostring(expected), tostring(last),
+			sb.printJson(restored))
 	end
-	if readOk then self.petportsNavIndexLastRaw[profile] = raw end
+	if readOk then self.petportsNavIndexLastRaw[slot] = raw end
+
+	return cells
+end
+
+--  A PROFILE'S CELLS: every chunk the registry names, decoded and merged
+--  into one table, with this unit's pending entries on top. Callers get
+--  the same shape they always did; item 4 of plan.pathing.cityscale is
+--  where they stop asking for all of it.
+local function navIndexProfileRead(profile)
+	local cells = {}
+	local chunks = navChunk.registryRead(profile)
+	self.petportsNavChunkKnown = self.petportsNavChunkKnown or {}
+	self.petportsNavChunkKnown[profile] = chunks
+
+	local n = 0
+	for chunkKey in pairs(chunks) do
+		n = n + 1
+		for cellKey, entry in pairs(navChunk.indexRead(profile, chunkKey)) do
+			cells[cellKey] = entry
+		end
+	end
+	petports_profCount("indexChunkReads", n)
 
 	local pending = self.petportsNavIndexPending
 	if type(pending) == "table" and type(pending[profile]) == "table" then
@@ -2322,13 +2635,72 @@ local function navIndexQueue(profile, cellKey, entry)
 	--  KEPT AFTER THE FLUSH TOO, 2026-09-08n: see navBoundsQueue for the
 	--  read-merge-write race between two units of one chassis. The edge
 	--  index re-asserts this unit's own entries on every flush.
-	self.petportsNavIndexMine = self.petportsNavIndexMine or {}
-	self.petportsNavIndexMine[profile] = self.petportsNavIndexMine[profile] or {}
-	self.petportsNavIndexMine[profile][cellKey] = entry
+	local chunkKey = navChunk.of(cellKey)
+	if chunkKey ~= nil then
+		self.petportsNavIndexMine = self.petportsNavIndexMine or {}
+		local mine = self.petportsNavIndexMine[profile] or {}
+		self.petportsNavIndexMine[profile] = mine
+		mine[chunkKey] = mine[chunkKey] or {}
+		mine[chunkKey][cellKey] = entry
+	end
 	navIndexRemember(profile, cellKey, entry)
 end
 
---  Write the queued entries, one property per profile that has any.
+--  WRITE ONE INDEX CHUNK: read it fresh, apply `updates` (an entry sets a
+--  cell, false removes it), re-assert this unit's own entries for the
+--  chunk, write with the count. Returns false when the read was short and
+--  the write was held.
+function navChunk.indexApply(profile, chunkKey, updates, force)
+	local cells = navChunk.indexRead(profile, chunkKey)
+	local slot = profile .. ":" .. chunkKey
+
+	self.petportsNavIndexShortTries = self.petportsNavIndexShortTries or {}
+	if self.petportsNavIndexShort and self.petportsNavIndexShort[slot] and not force then
+		local tries = (self.petportsNavIndexShortTries[slot] or 0) + 1
+		self.petportsNavIndexShortTries[slot] = tries
+		if tries <= NAV_INDEX_SHORT_TRIES then
+			sb.logInfo("NAV index write for %s chunk %s HELD: read was short (try %s of %s)",
+				profile, chunkKey, sb.printJson(tries), sb.printJson(NAV_INDEX_SHORT_TRIES))
+			return false
+		end
+		sb.logInfo("NAV index write for %s chunk %s: read short %s times running, writing anyway",
+			profile, chunkKey, sb.printJson(tries))
+	else
+		self.petportsNavIndexShortTries[slot] = 0
+	end
+
+	--  RE-ASSERT EVERYTHING THIS UNIT EVER CONTRIBUTED, 2026-09-08n. An
+	--  entry another unit's interleaved write dropped comes back here;
+	--  a newer entry already in the index is left as it is.
+	local mine = self.petportsNavIndexMine and self.petportsNavIndexMine[profile]
+	for cellKey, entry in pairs(mine ~= nil and mine[chunkKey] or {}) do
+		if cells[cellKey] == nil then cells[cellKey] = entry end
+	end
+
+	for cellKey, entry in pairs(updates) do
+		if entry == false then cells[cellKey] = nil else cells[cellKey] = entry end
+	end
+
+	local encoded, wrote = navChunk.indexEncode(chunkKey, cells)
+	if wrote == 0 then
+		pcall(world.setProperty, navChunk.indexProperty(profile, chunkKey), nil)
+		navChunk.registryDrop(profile, chunkKey)
+	else
+		navChunk.registryAdd(profile, chunkKey)
+		local okSet, err = pcall(world.setProperty, navChunk.indexProperty(profile, chunkKey), encoded)
+		if not okSet then
+			sb.logInfo("NAV INDEX WRITE FAILED for %s chunk %s (%s cells): %s", profile,
+				chunkKey, sb.printJson(wrote), tostring(err))
+		end
+	end
+	--  nil, NOT 0, FOR A DELETED CHUNK, or the next read of the absent
+	--  property would count as short against it.
+	self.petportsNavIndexLastRaw[slot] = wrote > 0 and wrote or nil
+
+	return true
+end
+
+--  Write the queued entries, one chunk property per chunk that has any.
 local NAV_INDEX_FLUSH_INTERVAL = 30.0  --  seconds; the edge flush stays at 5
 local NAV_INDEX_FLUSH_BACKLOG = 200    --  ...unless this many entries are waiting
 
@@ -2350,63 +2722,34 @@ local function navIndexFlush()
 	self.petportsNavIndexFlushedAt = now
 
 	local pending = self.petportsNavIndexPending or {}
-	local index = navIndexRead()
+	local held, heldCount, wroteChunks = {}, 0, 0
 
-	local held, heldCount = {}, 0
-	for profile in pairs(pending) do
-		local cells = index[profile]
+	for profile, entries in pairs(pending) do
+		local byChunk = {}
+		for cellKey, entry in pairs(entries) do
+			local ck = navChunk.of(cellKey)
+			if ck ~= nil then
+				byChunk[ck] = byChunk[ck] or {}
+				byChunk[ck][cellKey] = entry
+			end
+		end
 
-		--  A SHORT READ IS NOT WRITTEN BACK, 2026-09-10b. Pending for this
-		--  profile is kept for the next flush, up to NAV_INDEX_SHORT_TRIES.
-		self.petportsNavIndexShortTries = self.petportsNavIndexShortTries or {}
-		local skip = false
-		if self.petportsNavIndexShort and self.petportsNavIndexShort[profile] then
-			local tries = (self.petportsNavIndexShortTries[profile] or 0) + 1
-			self.petportsNavIndexShortTries[profile] = tries
-			if tries <= NAV_INDEX_SHORT_TRIES then
-				local kept = 0
-				for _ in pairs(pending[profile]) do kept = kept + 1 end
-				held[profile] = pending[profile]
-				heldCount = heldCount + kept
-				skip = true
-				sb.logInfo("NAV index flush for %s HELD: read was short (try %s of %s), %s entries kept pending",
-					profile, sb.printJson(tries), sb.printJson(NAV_INDEX_SHORT_TRIES), sb.printJson(kept))
+		for ck, updates in pairs(byChunk) do
+			if navChunk.indexApply(profile, ck, updates, false) then
+				wroteChunks = wroteChunks + 1
 			else
-				sb.logInfo("NAV index flush for %s: read short %s times running, writing anyway",
-					profile, sb.printJson(tries))
-			end
-		else
-			self.petportsNavIndexShortTries[profile] = 0
-		end
-
-		if not skip then
-			--  RE-ASSERT EVERYTHING THIS UNIT EVER CONTRIBUTED, 2026-09-08n. An
-			--  entry another unit's interleaved write dropped comes back here;
-			--  a newer entry already in the index is left as it is.
-			for cellKey, entry in pairs((self.petportsNavIndexMine or {})[profile] or {}) do
-				if cells[cellKey] == nil then cells[cellKey] = entry end
-			end
-
-			navIndexRegister(profile)
-			local wrote = 0
-			for cellKey, entry in pairs(cells) do
-				if type(entry) == "table" then wrote = wrote + 1 end
-			end
-			--  THE COUNT RIDES IN THE PROPERTY, 2026-09-10b. See navIndexProfileRead.
-			cells[NAV_INDEX_COUNT_KEY] = wrote
-			local okSet, err = pcall(world.setProperty, navIndexProperty(profile), cells)
-			cells[NAV_INDEX_COUNT_KEY] = nil
-			if not okSet then
-				sb.logInfo("NAV INDEX WRITE FAILED for %s (%s cells): %s", profile,
-					sb.printJson(wrote), tostring(err))
-			end
-			self.petportsNavIndexWroteNoted = self.petportsNavIndexWroteNoted or {}
-			if self.petportsNavIndexWroteNoted[profile] ~= wrote and PETPORTS_NAV_VERBOSE then
-				self.petportsNavIndexWroteNoted[profile] = wrote
-				sb.logInfo("NAV index flush for %s: %s cell(s) written (%s queued this flush)",
-					profile, sb.printJson(wrote), sb.printJson(self.petportsNavIndexPendingCount or 0))
+				held[profile] = held[profile] or {}
+				for cellKey, entry in pairs(updates) do
+					held[profile][cellKey] = entry
+					heldCount = heldCount + 1
+				end
 			end
 		end
+	end
+
+	if PETPORTS_NAV_VERBOSE then
+		sb.logInfo("NAV index flush: %s chunk(s) written, %s entr(ies) held",
+			sb.printJson(wroteChunks), sb.printJson(heldCount))
 	end
 
 	self.petportsNavIndexPending = next(held) ~= nil and held or nil
@@ -2414,41 +2757,74 @@ local function navIndexFlush()
 	self.petportsNavIndexMemo = nil
 end
 
---  Write back every profile the caller touched in this index table (the
---  ones loaded through the metatable, i.e. rawly present).
-local function navIndexWrite(index)
-	for profile, cells in pairs(index) do
-		if type(profile) == "string" and type(cells) == "table" then
-			navIndexRegister(profile)
-			local n = 0
-			for _, entry in pairs(cells) do if type(entry) == "table" then n = n + 1 end end
-			cells[NAV_INDEX_COUNT_KEY] = n
-			pcall(world.setProperty, navIndexProperty(profile), cells)
-			cells[NAV_INDEX_COUNT_KEY] = nil
+--  REMOVE CELLS FROM THE INDEX, eagerly, one chunk write per chunk touched.
+--  Forget and purge call this; it replaces the whole-profile write-back.
+function navChunk.indexDrop(profile, cellKeys)
+	local byChunk = {}
+	for _, cellKey in ipairs(cellKeys) do
+		local ck = navChunk.of(cellKey)
+		if ck ~= nil then
+			byChunk[ck] = byChunk[ck] or {}
+			byChunk[ck][cellKey] = false
 		end
+		navIndexForgetSeen(profile, cellKey)
+		local mine = self.petportsNavIndexMine and self.petportsNavIndexMine[profile]
+		if ck ~= nil and mine ~= nil and mine[ck] ~= nil then mine[ck][cellKey] = nil end
+		if self.petportsNavIndexPending and self.petportsNavIndexPending[profile]
+		   and self.petportsNavIndexPending[profile][cellKey] ~= nil then
+			self.petportsNavIndexPending[profile][cellKey] = nil
+			self.petportsNavIndexPendingCount = math.max((self.petportsNavIndexPendingCount or 1) - 1, 0)
+		end
+	end
+
+	for ck, updates in pairs(byChunk) do
+		navChunk.indexApply(profile, ck, updates, true)
 	end
 
 	self.petportsNavIndexMemo = nil
 end
 
-local function navCellProperty(profile, cellKey)
-	return NAV_EDGES .. profile .. ":" .. cellKey
+--  ------------------------------------------------------------ THE EDGES
+
+--  THE LEGACY STORE, CLEARED ON SIGHT. A per-profile index of the old
+--  shape (a cell map with `_n`) names every per-cell shard the old build
+--  wrote under `petports_navedges:<profile>:<cell>`; each is cleared along
+--  with the index itself. The new registry is written by the first flush.
+navChunk.legacyClear = function(profile, legacy)
+	local cleared = 0
+	for cellKey, entry in pairs(legacy) do
+		if type(entry) == "table" then
+			pcall(world.setProperty, NAV_EDGES .. profile .. ":" .. cellKey, nil)
+			cleared = cleared + 1
+		end
+	end
+	pcall(world.setProperty, navIndexProperty(profile), nil)
+	sb.logInfo("NAV legacy store for %s cleared: %s per-cell shard(s) and its index (12b chunk migration)",
+		profile, sb.printJson(cleared))
 end
 
---  ENUMERATE THE EDGE FAMILY: the profile registry, every profile's cell
---  index, every cell shard. Reads the store cold; only the wipe calls it.
+--  ENUMERATE THE EDGE FAMILY: the profile registry, every profile's chunk
+--  registry, every chunk's two properties. Reads the store cold; only the
+--  wipe calls it. A legacy-shaped registry lists its shards instead.
 navEdgeFamilyEnumerate = function()
 	local names = {}
 
 	local ok, registry = pcall(world.getProperty, NAV_INDEX)
 	if not ok or type(registry) ~= "table" then registry = {} end
 
-	for profile in pairs(registry) do
-		local okCells, cells = pcall(world.getProperty, navIndexProperty(profile))
-		if okCells and type(cells) == "table" then
-			for cellKey, entry in pairs(cells) do
-				if type(entry) == "table" then
-					table.insert(names, navCellProperty(profile, cellKey))
+	for profile in pairs(type(registry.profiles) == "table" and registry.profiles or {}) do
+		local okReg, perProfile = pcall(world.getProperty, navIndexProperty(profile))
+		if okReg and type(perProfile) == "table" then
+			if type(perProfile.chunks) == "table" then
+				for chunkKey in pairs(perProfile.chunks) do
+					table.insert(names, navChunk.indexProperty(profile, chunkKey))
+					table.insert(names, navChunk.edgesProperty(profile, chunkKey))
+				end
+			else
+				for cellKey, entry in pairs(perProfile) do
+					if type(entry) == "table" then
+						table.insert(names, NAV_EDGES .. profile .. ":" .. cellKey)
+					end
 				end
 			end
 		end
@@ -2459,13 +2835,13 @@ navEdgeFamilyEnumerate = function()
 	return names
 end
 
-
---  ONE CELL'S OUTGOING EDGES, memoised on the unit.
+--  ONE CHUNK'S EDGES, memoised on the unit, decoded on first touch.
 --
---  THE MEMO IS WHAT MAKES SHARDING PAY. Without it, rebuilding the graph would
---  be one property read per cell where it used to be one read total. With it, a
---  rebuild after our own write re-reads exactly the cell we wrote.
-local function navCellRead(profile, cellKey)
+--  THE MEMO IS WHAT MAKES THE STORE PAY. One property read fills every
+--  cell of the chunk; a rebuild after our own write re-reads exactly the
+--  chunk we wrote, and everything else comes back from the cache until
+--  NAV_CACHE_TTL lapses.
+function navChunk.cache()
 	self.petportsNavCellCache = self.petportsNavCellCache or {}
 	self.petportsNavCacheAt = self.petportsNavCacheAt or world.time()
 
@@ -2477,33 +2853,67 @@ local function navCellRead(profile, cellKey)
 		self.petportsNavVersion = (self.petportsNavVersion or 0) + 1
 	end
 
-	local key = navCellProperty(profile, cellKey)
-	local held = self.petportsNavCellCache[key]
+	return self.petportsNavCellCache
+end
 
+function navChunk.edgesRead(profile, chunkKey)
+	local cache = navChunk.cache()
+	local key = navChunk.edgesProperty(profile, chunkKey)
+	local held = cache[key]
 	if held ~= nil then return held end
 
-	local ok, edges = pcall(world.getProperty, key)
-	if not ok or type(edges) ~= "table" then edges = {} end
+	held = navChunk.edgesDecode(profile, chunkKey)
+	cache[key] = held
+	petports_profCount("edgeChunkReads")
+	return held
+end
 
-	--  ONLY THIS GENERATION, 2026-09-08v. An entry without `g` is from
-	--  before generations existed and is stale by definition.
-	local gen = navGenNow()
-	for to, entry in pairs(edges) do
-		if type(entry) ~= "table" or entry.g ~= gen then edges[to] = nil end
+--  ONE CELL'S OUTGOING EDGES, the shape every reader above expects.
+local function navCellRead(profile, cellKey)
+	local chunkKey = navChunk.of(cellKey)
+	if chunkKey == nil then return {} end
+
+	local chunk = navChunk.edgesRead(profile, chunkKey)
+	local edges = chunk[cellKey]
+	if edges == nil then
+		edges = {}
+		chunk[cellKey] = edges
 	end
-
-	self.petportsNavCellCache[key] = edges
-
 	return edges
 end
 
-local function navCellWrite(profile, cellKey, edges)
-	local key = navCellProperty(profile, cellKey)
+--  WRITE CELLS INTO ONE EDGE CHUNK: read fresh, apply, write, refresh the
+--  memo. `updates` maps cellKey to edges; with `replace` a cell's edges are
+--  set outright (a sealed cell writes {}), otherwise they are merged over
+--  what the store holds.
+function navChunk.edgesApply(profile, chunkKey, updates, replace)
+	local chunk = navChunk.edgesDecode(profile, chunkKey)
 
-	pcall(world.setProperty, key, edges)
+	for cellKey, edges in pairs(updates) do
+		if replace then
+			chunk[cellKey] = edges
+		else
+			local stored = chunk[cellKey] or {}
+			local merged = {}
+			for to, entry in pairs(stored) do merged[to] = entry end
+			for to, entry in pairs(edges) do merged[to] = entry end
+			chunk[cellKey] = merged
+		end
+	end
 
-	self.petportsNavCellCache = self.petportsNavCellCache or {}
-	self.petportsNavCellCache[key] = edges
+	petports_profBegin("chunkEncode")
+	local encoded, n = navChunk.edgesEncode(chunk)
+	petports_profEnd("chunkEncode")
+	petports_profBegin("chunkSet")
+	if n == 0 then
+		pcall(world.setProperty, navChunk.edgesProperty(profile, chunkKey), nil)
+	else
+		pcall(world.setProperty, navChunk.edgesProperty(profile, chunkKey), encoded)
+	end
+	petports_profEnd("chunkSet")
+	petports_profCount("chunkEdges", n)
+
+	navChunk.cache()[navChunk.edgesProperty(profile, chunkKey)] = chunk
 
 	--  THE MEMOISED GRAPH SURVIVES OUR OWN WRITES, 2026-09-06. PROFILED:
 	--  graphFor n=176..428 per 5 s, 2.1-2.5 s of every 5 -- the graph was
@@ -2521,6 +2931,16 @@ local function navCellWrite(profile, cellKey, edges)
 	if self.petportsNavGraph ~= nil then
 		self.petportsNavGraph.version = self.petportsNavVersion
 	end
+
+	return n
+end
+
+--  One cell set outright; forget uses it. The flush goes through
+--  navChunk.edgesApply directly, grouped by chunk.
+local function navCellWrite(profile, cellKey, edges)
+	local chunkKey = navChunk.of(cellKey)
+	if chunkKey == nil then return end
+	navChunk.edgesApply(profile, chunkKey, { [cellKey] = edges }, true)
 end
 
 --  self.petportsNavVersion IS BUMPED BY navCellWrite AND IS WHAT MAKES THE
@@ -2572,8 +2992,15 @@ local function navPendingFor(profile)
 end
 
 function petports_navFlush()
+	--  BY PART, 2026-09-12c: `flush max 85..92 ms` in the 12b soak with the
+	--  three writers under one section.
+	petports_profBegin("flushBounds")
 	navBoundsFlush()
+	petports_profEnd("flushBounds")
+	petports_profBegin("flushIndex")
 	navIndexFlush()
+	petports_profEnd("flushIndex")
+	petports_profBegin("flushEdges")
 
 	local pending = self.petportsNavPending
 
@@ -2583,34 +3010,29 @@ function petports_navFlush()
 
 	local written, shards = 0, 0
 
-	--  GROUPED BY SOURCE CELL, so a flush spanning three cells is three small
-	--  writes rather than one whole-tree rewrite. A sweep almost always
-	--  produces exactly one group, since every edge it learns leaves the cell
-	--  being swept.
+	--  GROUPED BY SOURCE CELL AND THEN BY CHUNK, 2026-09-12b: a sweep's edges
+	--  all leave the cell being swept, so a flush is almost always one chunk
+	--  read and one chunk write. navChunk.edgesApply reads the chunk fresh and
+	--  merges only these deltas over it.
 	for profile, edges in pairs(pending) do
-		local byCell = {}
+		local byChunk = {}
 
 		for key, entry in pairs(edges) do
 			local from, to = string.match(key, "^(.-)>(.*)$")
 
 			if from ~= nil then
-				byCell[from] = byCell[from] or {}
-				byCell[from][to] = entry
-				written = written + 1
+				local ck = navChunk.of(from)
+				if ck ~= nil then
+					byChunk[ck] = byChunk[ck] or {}
+					byChunk[ck][from] = byChunk[ck][from] or {}
+					byChunk[ck][from][to] = entry
+					written = written + 1
+				end
 			end
 		end
 
-		for cellKey, learned in pairs(byCell) do
-			local stored = navCellRead(profile, cellKey)
-
-			--  A COPY, because navCellRead hands back the memoised table and
-			--  mutating it in place would leave the cache correct only by luck
-			--  if the write below failed.
-			local merged = {}
-			for to, entry in pairs(stored) do merged[to] = entry end
-			for to, entry in pairs(learned) do merged[to] = entry end
-
-			navCellWrite(profile, cellKey, merged)
+		for ck, updates in pairs(byChunk) do
+			navChunk.edgesApply(profile, ck, updates, false)
 			shards = shards + 1
 		end
 	end
@@ -2618,10 +3040,11 @@ function petports_navFlush()
 	self.petportsNavPending = {}
 	self.petportsNavPendingCount = 0
 	self.petportsNavFlushAt = world.time() + NAV_FLUSH_INTERVAL
+	petports_profEnd("flushEdges")
 
 	petports_profCount("edgesFlushed", written)
 
-	sb.logInfo("NAV flushed %s edge(s) across %s cell(s)",
+	sb.logInfo("NAV flushed %s edge(s) across %s chunk(s)",
 		sb.printJson(written), sb.printJson(shards))
 
 	return written
@@ -2714,8 +3137,7 @@ function petports_navForget(profile, cellKey)
 
 	if type(index[profile]) == "table" and index[profile][cellKey] ~= nil then
 		index[profile][cellKey] = nil
-		navIndexForgetSeen(profile, cellKey)
-		navIndexWrite(index)
+		navChunk.indexDrop(profile, { cellKey })
 	end
 
 	if dropped > 0 or index[profile] ~= nil then
@@ -2731,7 +3153,9 @@ function petports_navForget(profile, cellKey)
 	return dropped
 end
 
-function petports_navLearn(profile, fromKey, toKey, reachable)
+--  `travelled` is the tiles the proving path covers; absent, the straight
+--  line between the cells stands in.
+function petports_navLearn(profile, fromKey, toKey, reachable, travelled)
 	self.petportsNavPending = self.petportsNavPending or {}
 	self.petportsNavPending[profile] = self.petportsNavPending[profile] or {}
 
@@ -2755,7 +3179,8 @@ function petports_navLearn(profile, fromKey, toKey, reachable)
 			key, tostring(profile), tostring(previous.r), tostring(reachable))
 	end
 
-	self.petportsNavPending[profile][key] = { r = reachable, t = world.time(), g = navGenNow() }
+	local length = math.max(1, math.floor((travelled or navCellSpan(fromKey, toKey)) + 0.5))
+	self.petportsNavPending[profile][key] = { r = reachable, t = world.time(), g = navGenNow(), d = length }
 
 	--  A TRUE EDGE TO A CELL NEVER SWEPT IS FRONTIER, 2026-09-09z, for the
 	--  profile this unit is surveying (the queue is per side: a walker's
@@ -2798,6 +3223,9 @@ function petports_navLearn(profile, fromKey, toKey, reachable)
 				table.remove(graph.fine[fromKey], i)
 			end
 		end
+		if graph.len ~= nil and graph.len[fromKey] ~= nil then
+			graph.len[fromKey][toKey] = nil
+		end
 	end
 
 	if reachable == true then
@@ -2825,6 +3253,10 @@ function petports_navLearn(profile, fromKey, toKey, reachable)
 			for _, to in ipairs(graph.fine[fromKey]) do
 				if to == toKey then present = true break end
 			end
+
+			graph.len = graph.len or {}
+			graph.len[fromKey] = graph.len[fromKey] or {}
+			graph.len[fromKey][toKey] = length
 
 			if not present then
 				table.insert(graph.fine[fromKey], toKey)
@@ -3082,7 +3514,7 @@ function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 
 				petports_profCount("sweepTrue")
 
-				petports_navLearn(petports_navProfile(), fromKey, toKey, true)
+				petports_navLearn(petports_navProfile(), fromKey, toKey, true, edges)
 
 				--  AND THE RECIPROCAL, 2026-09-09z. MEASURED 15:10..15:15
 				--  (Lofty's laps): every "both known, no path" in the log was a
@@ -3093,7 +3525,7 @@ function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 				--  a dead end. 09g made a free mover's CONTRADICTION two-way for
 				--  the same reason and left the TRUE one-way. A swept line is the
 				--  same line both ways.
-				petports_navLearn(petports_navProfile(), toKey, fromKey, true)
+				petports_navLearn(petports_navProfile(), toKey, fromKey, true, edges)
 				self.petportsNavProbes[slot] = nil
 				return true
 			end
@@ -3190,10 +3622,26 @@ function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 
 	local result = probe.aStar:explore(exploreRate or 300)
 
+	--  A PROBE THAT WILL NOT ANSWER IS RECORDED AS NOT-KNOWN, 2026-09-12g.
+	--  MEASURED 14:50..14:52 (the plain drone at the upper pool): probes from
+	--  5841,1162 across the lava started five times over fourteen minutes and
+	--  never returned a verdict -- the engine A* has no cap of its own but
+	--  maxDistance, and a walker search around liquid can chew for hundreds
+	--  of ticks. False here means "not by what is known" (see navRouteFor's
+	--  header), the same reading TOO LONG already takes, and the contradict
+	--  scan can revisit it. NAV_PROBE_MAX_TICKS * 300 nodes is the budget.
+	if result ~= true and result ~= false and probe.ticks >= NAV_PROBE_MAX_TICKS then
+		sb.logInfo("NAV probe %s -> %s GAVE UP after %s tick(s) (%s node(s) explored) -- recorded as unreachable",
+			fromKey, toKey, sb.printJson(probe.ticks), sb.printJson(probe.ticks * (exploreRate or 300)))
+		petports_profCount("probeGaveUp")
+		result = false
+	end
+
 	--  THE PATH LENGTH, ON A TRUE. aStar:result() is the engine's edge list
 	--  for the solved search; read through pcall so a binding surprise is a
 	--  logged unknown rather than a dead probe.
 	local edgeCount = nil
+	local travelled = nil
 
 	if result == true then
 		local ok, edges = pcall(function() return probe.aStar:result() end)
@@ -3209,32 +3657,28 @@ function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 		--  found path is checked node by node against the forbidden set
 		--  before it counts. 2026-09-07y.
 		if ok and type(edges) == "table" then
-			local wall, wallBucket = navPathForbidden(edges)
+			local wall, wallBucket, wallHow = navPathForbidden(edges)
 			if wall ~= nil then
 				sb.logInfo("NAV probe %s -> %s UNREACHABLE: the path puts the body on tile "
-					.. "%s (%s), a liquid this chassis will not enter",
-					fromKey, toKey, tostring(wall), tostring(wallBucket))
+					.. "%s (%s), a liquid this chassis will not enter -- %s",
+					fromKey, toKey, tostring(wall), tostring(wallBucket), tostring(wallHow))
 				petports_profCount("wallFalse")
 				result = false
 				edgeCount = nil
 			end
 		end
 
-		if edgeCount ~= nil and probe.fromAnchor ~= nil
-		   and probe.toAnchor ~= nil then
-			local span = world.magnitude(probe.fromAnchor, probe.toAnchor)
-			local limit = span * NAV_EDGE_STRETCH + NAV_EDGE_SLACK
-
-			if edgeCount > limit then
-				sb.logInfo("NAV probe %s -> %s TOO LONG: %s edge(s) for %s "
-					.. "tile(s) apart (limit %s) -- recorded as unreachable",
-					fromKey, toKey, sb.printJson(edgeCount),
-					sb.printJson(math.floor(span * 10 + 0.5) / 10),
-					sb.printJson(math.floor(limit)))
-				result = false
-				petports_profCount("tooLong")
-				petports_profCount("tooLongTicks", probe.ticks or 0)
+		--  THE TILES THE PATH TRAVELS, summed edge by edge, is the edge's
+		--  length in the store; the router costs by it.
+		if edgeCount ~= nil then
+			local sum = 0
+			for _, e in ipairs(edges) do
+				if type(e.source) == "table" and type(e.target) == "table"
+				   and type(e.source.position) == "table" and type(e.target.position) == "table" then
+					sum = sum + world.magnitude(e.source.position, e.target.position)
+				end
 			end
+			if sum > 0 then travelled = sum end
 		end
 	end
 
@@ -3249,10 +3693,11 @@ function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 		--  field that is structurally always zero is worse than no field, so it
 		--  is gone. Wall-clock cost is read off the log timestamps instead:
 		--  measured 2026-09-04, ~1ms for a TRUE and ~162ms for a FALSE.
-		sb.logInfo("NAV probe %s -> %s %s after %s tick(s), %s edge(s)",
+		sb.logInfo("NAV probe %s -> %s %s after %s tick(s), %s edge(s), %s tile(s) travelled",
 			fromKey, toKey,
 			result and "REACHABLE" or "UNREACHABLE",
-			sb.printJson(probe.ticks), tostring(edgeCount))
+			sb.printJson(probe.ticks), tostring(edgeCount),
+			travelled ~= nil and sb.printJson(math.floor(travelled * 10 + 0.5) / 10) or "-")
 
 		if result == true then
 			petports_profCount((probe.ticks or 0) <= 1 and "true1" or "trueN")
@@ -3262,7 +3707,7 @@ function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 			petports_profCount("falseTicks", probe.ticks or 0)
 		end
 
-		petports_navLearn(petports_navProfile(), fromKey, toKey, result)
+		petports_navLearn(petports_navProfile(), fromKey, toKey, result, travelled)
 
 		self.petportsNavProbes[slot] = nil
 		return result
@@ -3321,6 +3766,7 @@ NAV_BRIDGE_PAIRS = 3             --  dives kept per boundary cell, best first
 NAV_BRIDGE_WADE_REACH = 3.0      --  tiles between a land anchor and a swim anchor
 NAV_BRIDGE_EXIT_RATE = 300       --  A* explores per tick for an exit probe
 NAV_BRIDGE_EXIT_TICKS = 40       --  ticks before an exit probe is given up on
+NAV_PROBE_MAX_TICKS = 60         --  ticks before a walker probe is given up on (12g)
 NAV_BRIDGE_RETRY = 30.0          --  a cell with nothing to pair is looked at again this soon...
 NAV_BRIDGE_RETRIES = 10          --  ...this many times, doubling each time, then it waits out NAV_BRIDGE_SEEN_TTL
 
@@ -3961,6 +4407,7 @@ local function navGraphBuildStep(profile)
 			if type(entry) == "table" and entry.r == true then
 				build.pairs[#build.pairs + 1] = cellKey
 				build.pairs[#build.pairs + 1] = to
+				build.pairs[#build.pairs + 1] = entry.d or navCellSpan(cellKey, to)
 			end
 		end
 		k = k + 1
@@ -3990,6 +4437,7 @@ local function navGraphBuildStep(profile)
 				if from ~= nil and to ~= nil then
 					build.pairs[#build.pairs + 1] = from
 					build.pairs[#build.pairs + 1] = to
+					build.pairs[#build.pairs + 1] = entry.d or navCellSpan(from, to)
 				end
 			end
 			build.edges[key] = entry
@@ -3997,6 +4445,7 @@ local function navGraphBuildStep(profile)
 
 		build.edgeAt = 1
 		build.fine = {}
+		build.len = {}
 		build.coarse = {}
 		build.blocks = {}
 		for _, tiles in ipairs(NAV_LEVELS) do build.coarse[tiles] = {} end
@@ -4014,16 +4463,19 @@ local function navGraphBuildStep(profile)
 	end
 
 	local total = #build.pairs
-	local edgeStop = math.min(total, build.edgeAt + NAV_BUILD_CHUNK * 16 - 1)
+	local edgeStop = math.min(total, build.edgeAt + NAV_BUILD_CHUNK * 24 - 1)
 	local began = navTickClock()
 	local k = build.edgeAt
-	local fine, coarse = build.fine, build.coarse
+	local fine, len, coarse = build.fine, build.len, build.coarse
 	while k < total and (k <= edgeStop or not navBuildOverBudget(began)) do
-		local from, to = build.pairs[k], build.pairs[k + 1]
+		local from, to, d = build.pairs[k], build.pairs[k + 1], build.pairs[k + 2]
 
 		local list = fine[from]
 		if list == nil then list = {} fine[from] = list end
 		list[#list + 1] = to
+		local row = len[from]
+		if row == nil then row = {} len[from] = row end
+		row[to] = d
 
 		local fa, fb = blocksOf(from), blocksOf(to)
 		for i = 1, #levels do
@@ -4035,7 +4487,7 @@ local function navGraphBuildStep(profile)
 				row[b] = true
 			end
 		end
-		k = k + 2
+		k = k + 3
 	end
 
 	build.edgeAt = k
@@ -4047,6 +4499,7 @@ local function navGraphBuildStep(profile)
 		version = self.petportsNavVersion or 0,
 		builtAt = world.time(),
 		fine = build.fine,
+		len = build.len,
 		coarse = build.coarse
 	}
 	self.petportsNavGraphBuild = nil
@@ -4154,6 +4607,7 @@ local function navMergedBuildStep()
 		for key in pairs(build.edges) do table.insert(build.edgeKeys, key) end
 		build.edgeAt = 1
 		build.fine = {}
+		build.len = {}
 		build.coarse = {}
 		for _, tiles in ipairs(NAV_LEVELS) do build.coarse[tiles] = {} end
 	end
@@ -4170,6 +4624,8 @@ local function navMergedBuildStep()
 			if from ~= nil and to ~= nil then
 				build.fine[from] = build.fine[from] or {}
 				table.insert(build.fine[from], to)
+				build.len[from] = build.len[from] or {}
+				build.len[from][to] = entry.d or navCellSpan(from, to)
 
 				for _, tiles in ipairs(NAV_LEVELS) do
 					local a = navBlockKey(from, tiles)
@@ -4195,7 +4651,7 @@ local function navMergedBuildStep()
 		profile = bridgeProfile,
 		version = build.version,
 		builtAt = world.time(),
-		fine = build.fine, coarse = build.coarse,
+		fine = build.fine, len = build.len, coarse = build.coarse,
 		side = build.side, bridge = build.bridge
 	}
 	self.petportsNavMergedBuild = nil
@@ -4230,7 +4686,7 @@ local function navMergedGraphFor()
 
 	if cached ~= nil then return cached end
 
-	return { profile = navBridgeProfile(), version = -1, fine = {}, coarse = {},
+	return { profile = navBridgeProfile(), version = -1, fine = {}, len = {}, coarse = {},
 		side = {}, bridge = {}, building = true }
 end
 
@@ -4268,7 +4724,7 @@ local function navGraphForInner(profile)
 
 	if cached ~= nil and cached.profile == profile then return cached end
 
-	return { profile = profile, version = -1, fine = {}, coarse = {}, building = true }
+	return { profile = profile, version = -1, fine = {}, len = {}, coarse = {}, building = true }
 end
 
 local function navGraphFor(profile)
@@ -4589,18 +5045,86 @@ end
 
 --  THE ROUTE SEARCH IS RESUMABLE, 2026-09-10n (dd.pathing.yieldrule).
 --  MEASURED 13:05..13:09, three units: `coarseLeg max 111`, `waypoint max
---  106` -- the flat BFS and then every sweep of the bisection, in one
+--  106` -- the flat search and then every sweep of the bisection, in one
 --  update, on the longest routes. navRouteStep keeps one search on self
 --  keyed by (profile, from, to, graph version), expands nodes until
 --  NAV_ROUTE_BUDGET_MS have gone by, and returns the path or nil, "more".
 --  petports_navPath stays synchronous for any caller that wants it.
+--
+--  COSTED BY TILES TRAVELLED, 2026-09-13a: Dijkstra over `graph.len`, the
+--  length each edge's proving path covered, so a 166-tile detour recorded
+--  as one edge loses to ten short ones and a staircase that is the only
+--  way out is taken (fact.pathing.stretchclimb). An edge with no length
+--  costs its straight line.
 local NAV_ROUTE_BUDGET_MS = 3.0
 local NAV_WAYPOINT_SWEEPS_PER_CALL = 2
+
+--  A BINARY MIN-HEAP OF { cost, key }, for the two searches below.
+local navHeap = {}
+
+function navHeap.push(heap, cost, key)
+	local n = #heap + 1
+	heap[n] = { cost, key }
+	while n > 1 do
+		local parent = math.floor(n / 2)
+		if heap[parent][1] <= heap[n][1] then break end
+		heap[parent], heap[n] = heap[n], heap[parent]
+		n = parent
+	end
+end
+
+function navHeap.pop(heap)
+	local n = #heap
+	if n == 0 then return nil end
+	local top = heap[1]
+	heap[1] = heap[n]
+	heap[n] = nil
+	n = n - 1
+	local i = 1
+	while true do
+		local l, r = i * 2, i * 2 + 1
+		local small = i
+		if l <= n and heap[l][1] < heap[small][1] then small = l end
+		if r <= n and heap[r][1] < heap[small][1] then small = r end
+		if small == i then break end
+		heap[i], heap[small] = heap[small], heap[i]
+		i = small
+	end
+	return top[1], top[2]
+end
+
+--  ONE EXPANSION OF A COSTED SEARCH. Returns the path when `node` is the
+--  target, nil otherwise. `job` holds dist, cameFrom and the heap.
+local function navRouteExpand(job, adjacency, lengths, node, cost, toKey)
+	if node == toKey then
+		local path = { toKey }
+		local step = job.cameFrom[node]
+		while step do
+			table.insert(path, 1, step)
+			step = job.cameFrom[step]
+		end
+		return path
+	end
+	local row = lengths ~= nil and lengths[node] or nil
+	for _, neighbour in ipairs(adjacency[node] or {}) do
+		local d = row ~= nil and row[neighbour] or nil
+		if d == nil then d = navCellSpan(node, neighbour) end
+		local total = cost + d
+		local held = job.dist[neighbour]
+		if held == nil or total < held then
+			job.dist[neighbour] = total
+			job.cameFrom[neighbour] = node
+			navHeap.push(job.heap, total, neighbour)
+		end
+	end
+	return nil
+end
 
 local function navRouteStep(profile, fromKey, toKey, budget)
 	if fromKey == toKey then return { fromKey } end
 	local graph = navGraphFor(profile)
 	local adjacency = graph.fine
+	local lengths = graph.len
 	budget = budget or PETPORTS_NAV_SEARCH_BUDGET
 
 	local job = self.petportsNavRouteJob
@@ -4608,48 +5132,46 @@ local function navRouteStep(profile, fromKey, toKey, budget)
 	   or job.version ~= graph.version then
 		job = {
 			profile = profile, from = fromKey, to = toKey, version = graph.version,
-			cameFrom = { [fromKey] = false }, frontier = { fromKey }, nextFrontier = {},
-			at = 1, expanded = 0
+			cameFrom = { [fromKey] = false }, dist = { [fromKey] = 0 }, heap = {},
+			settled = {}, expanded = 0
 		}
+		navHeap.push(job.heap, 0, fromKey)
 		self.petportsNavRouteJob = job
 	end
 
 	local began = navTickClock()
 	while true do
-		if job.at > #job.frontier then
-			if #job.nextFrontier == 0 then
-				self.petportsNavRouteJob = nil
-				return nil, job.expanded, "none"
-			end
-			job.frontier, job.nextFrontier, job.at = job.nextFrontier, {}, 1
-		end
-		local node = job.frontier[job.at]
-		job.at = job.at + 1
-		job.expanded = job.expanded + 1
-		if job.expanded > budget then
+		local cost, node = navHeap.pop(job.heap)
+		if node == nil then
 			self.petportsNavRouteJob = nil
-			return nil, job.expanded, "budget"
+			return nil, job.expanded, "none"
 		end
-		for _, neighbour in ipairs(adjacency[node] or {}) do
-			if job.cameFrom[neighbour] == nil then
-				job.cameFrom[neighbour] = node
-				if neighbour == toKey then
-					local path = { toKey }
-					local step = node
-					while step do
-						table.insert(path, 1, step)
-						step = job.cameFrom[step]
-					end
-					self.petportsNavRouteJob = nil
-					return path, job.expanded
-				end
-				job.nextFrontier[#job.nextFrontier + 1] = neighbour
+		if not job.settled[node] then
+			job.settled[node] = true
+			job.expanded = job.expanded + 1
+			if job.expanded > budget then
+				self.petportsNavRouteJob = nil
+				return nil, job.expanded, "budget"
 			end
-		end
-		if began ~= nil and job.expanded % 64 == 0 then
-			local now = navTickClock()
-			if now ~= nil and (now - began) * 1000 >= NAV_ROUTE_BUDGET_MS then
-				return nil, job.expanded, "more"
+			local path = navRouteExpand(job, adjacency, lengths, node, cost, toKey)
+			if path ~= nil then
+				self.petportsNavRouteJob = nil
+				if PETPORTS_NAV_VERBOSE then
+					local routeKey = fromKey .. ">" .. toKey
+					if self.petportsNavRouteNoted ~= routeKey then
+						self.petportsNavRouteNoted = routeKey
+						sb.logInfo("NAV route %s -> %s: %s hop(s), %s tile(s) by edge length, %s expanded",
+							fromKey, toKey, sb.printJson(#path - 1), sb.printJson(math.floor(cost + 0.5)),
+							sb.printJson(job.expanded))
+					end
+				end
+				return path, job.expanded
+			end
+			if began ~= nil and job.expanded % 64 == 0 then
+				local now = navTickClock()
+				if now ~= nil and (now - began) * 1000 >= NAV_ROUTE_BUDGET_MS then
+					return nil, job.expanded, "more"
+				end
 			end
 		end
 	end
@@ -4658,48 +5180,25 @@ end
 function petports_navPath(profile, fromKey, toKey, budget)
 	if fromKey == toKey then return { fromKey } end
 
-	local adjacency = navGraphFor(profile).fine
-	local cameFrom = { [fromKey] = false }
-	local frontier = { fromKey }
+	local graph = navGraphFor(profile)
+	local job = { cameFrom = { [fromKey] = false }, dist = { [fromKey] = 0 }, heap = {} }
+	local settled = {}
 	local expanded = 0
 
 	budget = budget or PETPORTS_NAV_SEARCH_BUDGET
+	navHeap.push(job.heap, 0, fromKey)
 
-	while #frontier > 0 do
-		local nextFrontier = {}
-
-		for _, node in ipairs(frontier) do
+	while true do
+		local cost, node = navHeap.pop(job.heap)
+		if node == nil then return nil, expanded end
+		if not settled[node] then
+			settled[node] = true
 			expanded = expanded + 1
 			if expanded > budget then return nil, expanded, "budget" end
-
-			for _, neighbour in ipairs(adjacency[node] or {}) do
-				if cameFrom[neighbour] == nil then
-					cameFrom[neighbour] = node
-
-					if neighbour == toKey then
-						--  WALKED BACKWARD, THEN REVERSED. Storing forward
-						--  links instead would need a second pass to prune the
-						--  branches that went nowhere.
-						local path = { toKey }
-						local at = node
-
-						while at do
-							table.insert(path, 1, at)
-							at = cameFrom[at]
-						end
-
-						return path, expanded
-					end
-
-					table.insert(nextFrontier, neighbour)
-				end
-			end
+			local path = navRouteExpand(job, graph.fine, graph.len, node, cost, toKey)
+			if path ~= nil then return path, expanded end
 		end
-
-		frontier = nextFrontier
 	end
-
-	return nil, expanded
 end
 
 --  ONE LEG OF THAT PATH: how far along it a unit should walk next.
@@ -4724,7 +5223,7 @@ end
 --  apart, inside the caller's arrival radius, and a waypoint the unit is
 --  already "at" was being declined -- which handed the leg back to the direct
 --  search it had just failed.
-function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdvance)
+function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdvance, allowStep)
 	--  A SWEEP JOB IN FLIGHT FOR THIS PAIR RESUMES BELOW WITHOUT A SEARCH,
 	--  2026-09-10n; otherwise the resumable search, which may say "more".
 	local sweepJob = self.petportsNavWaypointJob
@@ -4812,26 +5311,52 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdva
 	--  hop is not clear from the body but the body's own cell anchor is, the
 	--  leg is that anchor: a short line inside the unit's own cell, after
 	--  which the first hop is judged from the route, not beside it.
+	--  AT ANY DISTANCE, 2026-09-12c. MEASURED 13:16:17..13:18:14 (Lofty:
+	--  "lava peekaboo"): the unrestricted flyer settled 0.79 tiles off
+	--  5836,1150's anchor -- inside the loose arrival radius -- and from
+	--  there the line to the next hop clipped a corner the anchor's line
+	--  clears. The gate below was minAdvance (2.0), so no step; the first
+	--  in-reach node went out untested (see the bisection), the executor's
+	--  own sweep refused it, the release re-picked the same leg, and the
+	--  engine A* could not plan from the waterline: 93 identical cycles
+	--  until the graph happened to grow a different route. Now the step
+	--  is taken at any distance and the executor lands on it tight (or
+	--  nudges, 07r); the caller says whether a step is still allowed.
+	local hopClear, hop = nil, nil
 	if freeMover and petports_flyPathClear ~= nil and #path >= 2 then
-		local hopX = tonumber(string.match(path[2], "^(-?%d+),"))
-		local hopY = tonumber(string.match(path[2], ",(-?%d+)$"))
-		local hop = anchorOf(path[2])
+		hop = anchorOf(path[2])
 
 		if hop ~= nil then
-			local okHop, hopClear = pcall(petports_flyPathClear, origin, hop)
-			if not (okHop and hopClear == true)
-			   and world.magnitude(origin, cellAnchor) > (minAdvance or 0) then
+			local okHop, verdict = pcall(petports_flyPathClear, origin, hop)
+			hopClear = okHop and verdict == true
+			if not hopClear then
+				local gap = world.magnitude(origin, cellAnchor)
 				local okStep, stepClear = pcall(petports_flyPathClear, origin, cellAnchor)
-				if okStep and stepClear == true then
+				stepClear = okStep and stepClear == true
+				sb.logInfo("UNIT leg pick from %s: first hop %s is NOT clear from the body %s; "
+					.. "own anchor %s is %s tiles off and %s -- %s",
+					tostring(path[1]), sb.printJson(hop), sb.printJson(origin),
+					sb.printJson(cellAnchor), sb.printJson(math.floor(gap * 100 + 0.5) / 100),
+					stepClear and "clear" or "NOT clear",
+					(stepClear and allowStep ~= false) and "stepping onto it first"
+						or (stepClear and "step budget spent, handing out the hop"
+							or "no step possible, handing out the hop"))
+				if stepClear and allowStep ~= false then
 					self.petportsNavLastRoute.leg = path[1]
 					self.petportsNavLastRoute.waypoint = cellAnchor
-					return cellAnchor, #path - 1, path[1], 0, path[1], path[1]
+					--  THE HOP IS WHAT COMES AFTER THE STEP, 12e, so the turn
+					--  the executor measures is the real one and not a stale
+					--  next anchor from the previous leg.
+					self.petportsNavLastRoute.nextAnchor = hop
+					self.petportsNavLastRoute.turn = nil
+					return cellAnchor, #path - 1, path[1], 0, path[1], path[1], "step"
 				end
 			end
 		end
 	end
 
 	local chosen, chosenAt = nil, 2
+	local legKind = nil
 
 	--  THE NEAREST IN-REACH CELL PAST minAdvance, 2026-09-09i, kept as the
 	--  free mover's fallback. MEASURED 20:40:45: in a corridor nothing past
@@ -4919,8 +5444,12 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdva
 		local job = self.petportsNavWaypointJob
 		if job == nil or job.profile ~= profile or job.from ~= fromKey or job.to ~= toKey
 		   or job.count ~= #inReach then
+			--  THE FIRST NODE IS KNOWN CLEAR ONLY WHEN IT IS THE HOP JUST
+			--  SWEPT ABOVE, 2026-09-12c; otherwise it is swept before it is
+			--  handed out, below.
 			job = { profile = profile, from = fromKey, to = toKey, path = path,
-				count = #inReach, lo = 1, hi = #inReach, farTried = false, sweeps = 0 }
+				count = #inReach, lo = 1, hi = #inReach, farTried = false, sweeps = 0,
+				loClear = (inReach[1].at == 2 and hopClear == true) }
 			self.petportsNavWaypointJob = job
 		end
 		local budgetLeft = NAV_WAYPOINT_SWEEPS_PER_CALL
@@ -4929,7 +5458,7 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdva
 			if job.hi > 1 then
 				job.sweeps = job.sweeps + 1
 				budgetLeft = budgetLeft - 1
-				if clearTo(inReach[job.hi]) then job.lo = job.hi end
+				if clearTo(inReach[job.hi]) then job.lo = job.hi job.loClear = true end
 			end
 		end
 		while job.hi - job.lo > 1 do
@@ -4937,9 +5466,36 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdva
 			local mid = math.floor((job.lo + job.hi) / 2)
 			job.sweeps = job.sweeps + 1
 			budgetLeft = budgetLeft - 1
-			if clearTo(inReach[mid]) then job.lo = mid else job.hi = mid end
+			if clearTo(inReach[mid]) then job.lo = mid job.loClear = true else job.hi = mid end
 		end
-		chosen, chosenAt = inReach[job.lo].anchor, inReach[job.lo].at
+		if not job.loClear then
+			if budgetLeft <= 0 then return nil, "more" end
+			job.sweeps = job.sweeps + 1
+			job.loClear = clearTo(inReach[job.lo])
+			if not job.loClear then
+				--  NOTHING IN REACH IS CLEAR FROM THE BODY. The hop is the
+				--  leg (clear, or the step above would have been taken):
+				--  one graph edge from the body's own cell, the shortest
+				--  thing that moves the unit off this spot.
+				sb.logInfo("UNIT leg pick from %s: no in-reach node is clear from %s "
+					.. "(nearest %s at hop %s) -- the first hop %s is the leg",
+					tostring(path[1]), sb.printJson(origin), sb.printJson(inReach[job.lo].anchor),
+					sb.printJson(inReach[job.lo].at), sb.printJson(hop))
+				job.lo = nil
+			end
+		end
+		if job.lo ~= nil then
+			chosen, chosenAt = inReach[job.lo].anchor, inReach[job.lo].at
+		elseif hop ~= nil then
+			--  AS A STEP, 2026-09-12f. MEASURED 14:31:32..46: the hop was 0.6
+			--  tiles away, inside the executor's arrival radius, and was
+			--  declined as "where we already are" -- no leg, the engine A*
+			--  could not plan from the waterline, four task timeouts. A step
+			--  leg is landed on exactly and the next pick runs from its anchor,
+			--  where the following hop is clear by construction.
+			chosen, chosenAt = hop, 2
+			legKind = "step"
+		end
 		petports_profCount("waypointSweeps", job.sweeps)
 		self.petportsNavWaypointJob = nil
 	end
@@ -4969,7 +5525,7 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdva
 	--  fails to walk the leg can retry it one hop at a time and, when a single
 	--  hop fails, contradict exactly that edge.
 	return chosen, #path - chosenAt, path[chosenAt], chosenAt - 1, path[1],
-		path[chosenAt - 1]
+		path[chosenAt - 1], legKind
 end
 
 --  THE GRAPH CELL NEAREST A POSITION, 2026-09-05.
@@ -5369,6 +5925,16 @@ function petports_navSweepStart(cx, cy, ownerId, index)
 	end
 
 	local workId = "nav:" .. profile .. ":" .. cellKey
+
+	--  NOT TWICE AT ONCE, 2026-09-12g. MEASURED 14:50..14:52: the same cell
+	--  taken six times in different slots with one COMPLETE between, each
+	--  new sweep re-probing the pairs the last one had in flight. The claim
+	--  cannot catch it -- this unit is the owner both times.
+	for _, live in pairs(self.petportsNavSweeps or {}) do
+		if live.workId == workId then
+			return nil, "already being swept by this unit"
+		end
+	end
 
 	if not petports_claimTake(workId, ownerId, entity.id(), "nav",
 		mcontroller.position(), NAV_CLAIM_TTL) then
@@ -6075,6 +6641,9 @@ PETPORTS_NAV_DEBUG = false
 --  section so the range can be traded against the tick rate on purpose.
 local NAV_DRAW_FRESH = 10.0
 
+--  Characters of the no-route reason shown on the overlay; see navDrawLive.
+local NAV_DRAW_WHY_CHARS = 48
+
 --  Toggle from a console: /entityeval return petports_navDebugToggle()
 --  The store's records within NAV_DRAW_RANGE of `here`, memoised per
 --  NAV_ANCHOR_TTL. A cold pass reads every bucket index and every record
@@ -6224,9 +6793,14 @@ local function navDrawLive(here, line)
 				tostring(route.from), tostring(route.to), sb.printJson(#route.path - 1),
 				tostring(route.leg))
 		else
+			--  THE REASON, SHORTENED, AND ONCE, 2026-09-12a (Lofty). why is the
+			--  whole petports_navWhyNoRoute diagnostic and it was drawn twice,
+			--  here and on its own line, off the right of the screen. The log
+			--  has the full text.
+			local why = tostring(route.why)
+			if #why > NAV_DRAW_WHY_CHARS then why = string.sub(why, 1, NAV_DRAW_WHY_CHARS) .. ".." end
 			routeText = string.format("NO ROUTE %s -> %s: %s",
-				tostring(route.from), tostring(route.to), tostring(route.why))
-			navDrawSafely(world.debugText, tostring(route.why), { here[1] + 2, here[2] - 1.5 }, "red")
+				tostring(route.from), tostring(route.to), why)
 		end
 	end
 
@@ -6251,9 +6825,13 @@ local function navDrawLive(here, line)
 		{ routeText, route ~= nil and route.path ~= nil and "green" or "red" }
 	}
 
+	--  BELOW THE TASK TEXT, 2026-09-12a (Lofty): petports_drawRouteDebug
+	--  stacks its lines UP from +3 at the unit's x, and this stack started
+	--  at +3 two tiles to its right, so the two overlapped on the first
+	--  row. This stack starts at +2.2 and grows down.
 	for i, entry in ipairs(lines) do
 		navDrawSafely(world.debugText, entry[1],
-			{ here[1] + 2, here[2] + 3 - (line + i - 1) * 0.7 }, entry[2])
+			{ here[1] + 2, here[2] + 2.2 - (line + i - 1) * 0.7 }, entry[2])
 	end
 end
 
@@ -6430,7 +7008,7 @@ function petports_navDebugDraw()
 					tostring(level.tiles),
 					tostring(math.floor(level.percent + 0.5)),
 					tostring(level.complete), tostring(level.blocks)),
-				{ here[1] + 2, here[2] + 3 - line * 0.7 }, "cyan")
+				{ here[1] + 2, here[2] + 2.2 - line * 0.7 }, "cyan")
 
 			line = line + 1
 		end
@@ -6598,21 +7176,6 @@ local NAV_CANDIDATE_FROMS = 200  --  600 -> 200, 2026-09-09q: 59 ms in one top-u
 local NAV_FRONTIER_CAP = 2000  --  keys held; beyond this the oldest are dropped, never the newest
 local NAV_FRONTIER_HEAD = 32   --  oldest entries handed to the top-up per recompute (10l)
 
---  A CELL KEY'S COORDINATES, PARSED ONCE, 2026-09-10k. The queue purge, the
---  frontier rebuild and the widening list each ran string.match over every
---  key they touched, thousands at a time (`candidates max 128 ms`). Keys are
---  stable strings; the table is bounded by the number of distinct cells
---  this unit has ever ranked.
-local navKeyCoordsCache = {}
-local function navKeyCoords(key)
-	local held = navKeyCoordsCache[key]
-	if held ~= nil then return held[1], held[2] end
-	local kx, ky = string.match(key, "^(-?%d+),(-?%d+)$")
-	if kx == nil then return nil, nil end
-	kx, ky = tonumber(kx), tonumber(ky)
-	navKeyCoordsCache[key] = { kx, ky }
-	return kx, ky
-end
 local NAV_FRONTIER_REBUILD = 10.0  --  seconds between rebuilds of an empty queue from the graph
 
 --  CANDIDATES ARE CACHED FOR NAV_CANDIDATE_CACHE SECONDS, 2026-09-10h.
@@ -7162,6 +7725,7 @@ local function navPurgeDeadzonesInner(profile)
 
 	local now = world.time()
 	local dropped = 0
+	local gone = {}
 
 	for cellKey, entry in pairs(cells) do
 		if dropped >= NAV_PURGE_PER_PASS then break end
@@ -7173,19 +7737,25 @@ local function navPurgeDeadzonesInner(profile)
 		   and (now - sweptAt) > NAV_SWEEP_TTL
 		   and not navInCoverage(tonumber(bx), tonumber(by)) then
 
-			pcall(world.setProperty, navCellProperty(profile, cellKey), nil)
 			cells[cellKey] = nil
-			navIndexForgetSeen(profile, cellKey)
-
-			self.petportsNavCellCache = self.petportsNavCellCache or {}
-			self.petportsNavCellCache[navCellProperty(profile, cellKey)] = nil
-
+			gone[#gone + 1] = cellKey
 			dropped = dropped + 1
 		end
 	end
 
 	if dropped > 0 then
-		navIndexWrite(index)
+		--  THE EDGES AND THE INDEX, ONE CHUNK WRITE EACH PER CHUNK TOUCHED,
+		--  2026-09-12b.
+		local byChunk = {}
+		for _, cellKey in ipairs(gone) do
+			local ck = navChunk.of(cellKey)
+			if ck ~= nil then
+				byChunk[ck] = byChunk[ck] or {}
+				byChunk[ck][cellKey] = {}
+			end
+		end
+		for ck, updates in pairs(byChunk) do navChunk.edgesApply(profile, ck, updates, true) end
+		navChunk.indexDrop(profile, gone)
 		self.petportsNavGraph = nil
 
 		sb.logInfo("NAV purged %s stale out-of-coverage cell(s) for %s",
@@ -7704,7 +8274,7 @@ local function navTopUp(ownerId)
 	return false
 end
 
-local function navTickInner(dt, ownerId)
+local function navTickInner(dt, ownerId, searching)
 	navGenerationCheck()
 	navIndexTick()
 
@@ -7739,6 +8309,22 @@ local function navTickInner(dt, ownerId)
 	local idleDue = (now - (self.petportsNavIdleTickAt or -1e9)) >= NAV_IDLE_TICK_INTERVAL
 	local exitsPending = self.petportsNavBridgeExit ~= nil
 		or (type(self.petportsNavBridgeExits) == "table" and #self.petportsNavBridgeExits > 0)
+	--  BEFORE THE STEP, so the pair currently in flight is drawn even on the
+	--  tick it resolves and clears itself.
+	petports_profBegin("draw")
+	petports_navDebugDraw()
+	petports_profEnd("draw")
+
+	--  THE UNIT'S OWN A* IS THE ONLY THING A PROBE COMPETES WITH, 2026-09-12a
+	--  (Lofty). The caller used to skip this whole tick while its pather
+	--  was searching, which also stopped the flush, the graph build, the
+	--  contradict scan and the overlay for the length of every search --
+	--  and a search that will never resolve runs to SEARCH_LIMIT. Only what
+	--  drives an explore call yields: the survey and the bridge probes.
+	if searching then
+		return petports_navSweepCount() > 0
+	end
+
 	if not sideDone or idleDue or exitsPending then
 		if idleDue then self.petportsNavIdleTickAt = now end
 		petports_profBegin("flood")
@@ -7748,11 +8334,6 @@ local function navTickInner(dt, ownerId)
 		navBridgeTick()
 		petports_profEnd("bridge")
 	end
-	--  BEFORE THE STEP, so the pair currently in flight is drawn even on the
-	--  tick it resolves and clears itself.
-	petports_profBegin("draw")
-	petports_navDebugDraw()
-	petports_profEnd("draw")
 
 	--  NOT THIS UNIT'S TURN: nothing below runs. Returns true when sweeps are
 	--  alive so the caller reads it as "surveying", which it still is.
@@ -7816,22 +8397,32 @@ local function navTickInner(dt, ownerId)
 	return result == true
 end
 
-function petports_navTick(dt, ownerId)
+function petports_navTick(dt, ownerId, searching)
 	petports_profInstall()
 	petports_profBegin("navTick")
-	local result = navTickInner(dt, ownerId)
+	local result = navTickInner(dt, ownerId, searching)
 	petports_profEnd("navTick")
 	return result
 end
 
 --  SUB-SECTIONS OF navTick, 2026-09-06: wrapped by reassignment so the
 --  bodies stay untouched. Removed with the profiler when it goes.
+--  EVERY RETURN VALUE, 2026-09-12d. Six named slots dropped the seventh
+--  (petports_navWaypoint's leg kind) and every step leg of 12c was
+--  declined as "already there".
+local function profPack(...)
+	return { n = select("#", ...), ... }
+end
+
 local function profWrap(name, fn)
 	return function(...)
 		petports_profBegin(name)
-		local a, b, c, d, e, f = fn(...)
+		--  THE COUNT TRAVELS WITH THE VALUES: a `nil, "more"` return has a
+		--  hole that # would stop at. table.unpack, never a global unpack
+		--  (see navWithSide).
+		local results = profPack(fn(...))
 		petports_profEnd(name)
-		return a, b, c, d, e, f
+		return table.unpack(results, 1, results.n)
 	end
 end
 
@@ -7921,28 +8512,34 @@ function petports_navDumpStore()
 		local okIdx, idxJson = pcall(sb.printJson, cells)
 		if okIdx then bytes = bytes + #idxJson end
 
-		for cellKey in pairs(type(cells) == "table" and cells or {}) do
+		for _ in pairs(type(cells) == "table" and cells or {}) do
 			cellCount = cellCount + 1
+		end
 
-			local ok, shard = pcall(world.getProperty, navCellProperty(profile, cellKey))
-
-			if ok and type(shard) == "table" then
-				shards = shards + 1
-
-				for _, entry in pairs(shard) do
-					if type(entry) == "table" then
-						if entry.r == true then trues = trues + 1 else falses = falses + 1 end
-					end
-				end
-
-				local okJ, json = pcall(sb.printJson, shard)
+		--  PER CHUNK SINCE 12b: both properties of every chunk the registry
+		--  names, measured as the JSON the engine would store.
+		for chunkKey in pairs(navChunk.registryRead(profile)) do
+			shards = shards + 1
+			local okI, idx = pcall(world.getProperty, navChunk.indexProperty(profile, chunkKey))
+			if okI and type(idx) == "table" then
+				local okJ, json = pcall(sb.printJson, idx)
 				if okJ then bytes = bytes + #json end
+			end
+			local okE, edgesRaw = pcall(world.getProperty, navChunk.edgesProperty(profile, chunkKey))
+			if okE and type(edgesRaw) == "table" then
+				local okJ, json = pcall(sb.printJson, edgesRaw)
+				if okJ then bytes = bytes + #json end
+			end
+			for _, edges in pairs(navChunk.edgesDecode(profile, chunkKey)) do
+				for _, entry in pairs(edges) do
+					if entry.r == true then trues = trues + 1 else falses = falses + 1 end
+				end
 			end
 		end
 
 		grand = grand + bytes
 
-		sb.logInfo("NAV STORE %s: %s cell(s), %s shard(s), %s true / %s false edge(s), %s KB",
+		sb.logInfo("NAV STORE %s: %s cell(s), %s chunk(s), %s true / %s false edge(s), %s KB",
 			profile, sb.printJson(cellCount), sb.printJson(shards),
 			sb.printJson(trues), sb.printJson(falses),
 			sb.printJson(math.floor(bytes / 1024)))
@@ -7997,12 +8594,20 @@ function petports_navWipe()
 		own[3] = petports_navBridgeProfile()
 	end
 	for _, profile in ipairs(own) do
-		local okCells, cells = pcall(world.getProperty, navIndexProperty(profile))
-		if okCells and type(cells) == "table" then
-			for cellKey, entry in pairs(cells) do
-				if type(entry) == "table" then
-					pcall(world.setProperty, navCellProperty(profile, cellKey), nil)
-					cleared = cleared + 1
+		local okReg, perProfile = pcall(world.getProperty, navIndexProperty(profile))
+		if okReg and type(perProfile) == "table" then
+			if type(perProfile.chunks) == "table" then
+				for chunkKey in pairs(perProfile.chunks) do
+					pcall(world.setProperty, navChunk.indexProperty(profile, chunkKey), nil)
+					pcall(world.setProperty, navChunk.edgesProperty(profile, chunkKey), nil)
+					cleared = cleared + 2
+				end
+			else
+				for cellKey, entry in pairs(perProfile) do
+					if type(entry) == "table" then
+						pcall(world.setProperty, NAV_EDGES .. profile .. ":" .. cellKey, nil)
+						cleared = cleared + 1
+					end
 				end
 			end
 		end

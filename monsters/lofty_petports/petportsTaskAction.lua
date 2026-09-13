@@ -183,7 +183,7 @@ local TASK_TRACE_MOVES = false
 --  and it now refuses any arc of its own that flies through terrain. Confirmed
 --  over a full round trip -- 51 jumps, no repeated takeoff-landing pair, three
 --  refusals all distinct.
-local FLIGHT_TRACE = true
+local FLIGHT_TRACE = false
 
 --  BUILD STAMP.
 --
@@ -207,7 +207,7 @@ local FLIGHT_TRACE = true
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-12c the narrow-landing arc is only as tall as it needs to be, never vertical, and the sweep sees platforms on the way down"
+local BUILD_STAMP = "2026-09-13f the grounded arc skip kills horizontal velocity when it passes the Land, so a touchdown at speed does not skid off a narrow platform"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -1111,6 +1111,10 @@ local NAV_LEG_STEP_ARRIVAL = 0.15
 --  brakes to land exactly on the point.
 local NAV_LEG_ARRIVAL_THROUGH = 1.0
 local NAV_LEG_SHARP_TURN = 75
+
+--  HOW MANY ROUTE CELLS PAST THE WAYPOINT A GROUNDED WALKER IS CHECKED
+--  AGAINST, 2026-09-13e. See the lookahead in petportsTaskUpdateInner.
+local NAV_ROUTE_LOOKAHEAD = 6
 local NAV_LEG_BRAKE_TURN = 45
 
 --  WALK THE NEXT LEG OF A COARSE ROUTE, WHEN THERE IS ONE.
@@ -1217,9 +1221,12 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
 
   if freeMover and reach == NAV_LEG_REACH then reach = NAV_FLYER_LEG_REACH end
 
-  local waypoint, remaining, legCell, legHops, legFrom, legPrev =
+  --  THE STEP BUDGET IS THE PICKER'S TOO, 2026-09-12e: navStepFor counts
+  --  steps onto the route per leg (07q) and resets when a real leg is
+  --  reached; past two, the picker hands out the hop instead.
+  local waypoint, remaining, legCell, legHops, legFrom, legPrev, legKind =
     petports_navWaypoint(profile, fromKey, toKey, reach, freeMover,
-      ARRIVAL_DISTANCE + 0.5)
+      ARRIVAL_DISTANCE + 0.5, (stateData.navStepFor or 0) < 2)
 
   --  NOT READY IS NOT NO LEG, 2026-09-10a (dd.pathing.yieldrule): the
   --  route search and the waypoint sweeps are resumable now (coarsenav
@@ -1242,18 +1249,50 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
   --  ALREADY THERE. The graph offered a waypoint the unit is standing on,
   --  which means the leg is not what is stopping it -- and retargeting would
   --  spin. Hand back to whatever comes next.
-  if world.magnitude(waypoint, mcontroller.position()) < ARRIVAL_DISTANCE then
+  --  A STEP LEG IS NEVER "ALREADY THERE", 2026-09-12e: it exists because
+  --  the body is a fraction off its own anchor and the next hop clips a
+  --  corner from there. Under NAV_LEG_ARRIVAL_FREE it is the 07r nudge and
+  --  the leg is asked for again from the anchor; otherwise it is flown to
+  --  NAV_LEG_STEP_ARRIVAL like the 07q step.
+  if legKind == "step" then
+    stateData.navStepFor = (stateData.navStepFor or 0) + 1
+    local gap = world.magnitude(waypoint, mcontroller.position())
+    if gap <= NAV_LEG_ARRIVAL_FREE then
+      sb.logInfo("UNIT NUDGE %s onto the route at %s (%s tiles, picker step) and re-taking the leg",
+        sb.printJson(mcontroller.position()), sb.printJson(waypoint),
+        sb.printJson(math.floor(gap * 100 + 0.5) / 100))
+      mcontroller.setPosition(waypoint)
+      mcontroller.setVelocity({ 0, 0 })
+      stateData.coarseFirstFor = nil
+      return tryCoarseLeg(stateData, target, reach, legFrom)
+    end
+  elseif world.magnitude(waypoint, mcontroller.position()) < ARRIVAL_DISTANCE then
+    --  AHEAD OF SCHEDULE, 2026-09-13c. MEASURED 21:15:30.500: the hop over
+    --  the pool landed the body at 5826.4, the chained leg from 5830,1181
+    --  offered 5825.5, and declining it dropped the sixty-hop route for a
+    --  direct search -- east, back through the pool. A waypoint we stand
+    --  at is a cell we have reached: take the leg from THAT cell, so the
+    --  route continues from where the body is. Recursion advances one route
+    --  cell per call and stops when the graph offers the same cell twice.
+    if legCell ~= nil and legCell ~= fromKey then
+      sb.logInfo("UNIT coarse leg %s is where we already are -- taking the next leg from %s",
+        sb.printJson(waypoint), tostring(legCell))
+      return tryCoarseLeg(stateData, target, reach, legCell)
+    end
     sb.logInfo("UNIT coarse leg %s is where we already are -- declining",
       sb.printJson(waypoint))
     return false
   end
 
-  sb.logInfo("UNIT coarse leg from %s to %s: heading for %s, %s hop(s) left",
-    fromKey, toKey, sb.printJson(waypoint), sb.printJson(remaining))
+  sb.logInfo("UNIT coarse leg from %s to %s: heading for %s, %s hop(s) left%s",
+    fromKey, toKey, sb.printJson(waypoint), sb.printJson(remaining),
+    legKind == "step" and " (a step onto the route)" or "")
 
   stateData.navWaypoint = waypoint
   stateData.navRemaining = remaining
   stateData.navLegArrived = nil
+  stateData.navLegStart = mcontroller.position()
+  stateData.navLegStep = (legKind == "step") or nil
   stateData.navLegFrom = legFrom
   stateData.navLegTo = legCell
   stateData.navLegPrev = legPrev
@@ -5995,6 +6034,82 @@ local function deniedLiquidAt(point)
 	return petports_liquidDenied(liquid[1]) == true
 end
 
+--  THE HOP TEST, ONE FUNCTION, 2026-09-12l (dd.locomotion.hoppable; Lofty:
+--  "when we receive a path from the planner, if it has an obstacle we can
+--  reasonably jump over, we detect that and jump over it"). This is the
+--  decision avoidLiquidAhead used to make inline, taken out so the survey
+--  probe can ask exactly the same question of a planner path that walks
+--  through a denied liquid: from `here` (a standing position) heading
+--  `dir`, is there a denied span within reach, a dry landing past it, and
+--  an arc within this chassis's jump that clears it? Returns landing, vx,
+--  vy, entry, exit; or nil, nil, nil, entry, exit, reason when there is a
+--  span but no hop; or all nil when there is no span ahead at all. The
+--  probe and the walk use the same numbers by construction.
+function petports_liquidHopFrom(here, dir)
+	local bounds = mcontroller.boundBox()
+	if type(bounds) ~= "table" or #bounds < 4 then return nil end
+
+	local feetY = here[2] + bounds[2] + 0.2
+	local nose = here[1] + (dir > 0 and bounds[3] or bounds[1])
+
+	local entry = nil
+	for step = 0, LIQUID_LOOK_AHEAD do
+		local x = nose + dir * step
+		if deniedLiquidAt({ x, feetY }) or deniedLiquidAt({ x, feetY - 1 }) then
+			entry = x
+			break
+		end
+	end
+	if entry == nil then return nil end
+
+	local exit = nil
+	for step = 1, LIQUID_SCAN_SPAN + 1 do
+		local x = entry + dir * step
+		if not (deniedLiquidAt({ x, feetY }) or deniedLiquidAt({ x, feetY - 1 })) then
+			exit = x
+			break
+		end
+	end
+	if exit == nil then return nil, nil, nil, entry, nil, "no far edge within the scan span" end
+
+	local okNear, landing = pcall(standableNear, { exit + dir * 0.5, here[2] }, 2, 1, false, -3)
+	if not okNear or landing == nil then return nil, nil, nil, entry, exit, "nowhere dry to land" end
+
+	local parameters = mcontroller.baseParameters()
+	local gravity = world.gravity(here) * (parameters.gravityMultiplier or 1.0)
+	if gravity <= 0 then return nil, nil, nil, entry, exit, "no gravity" end
+
+	local dx = landing[1] - here[1]
+	local dy = landing[2] - here[2]
+	local speed = LIQUID_HOP_VX
+	local okSpeed, runSpeed = pcall(function() return parameters.runSpeed end)
+	if okSpeed and tonumber(runSpeed) ~= nil and runSpeed > 0 then speed = runSpeed end
+
+	if dx == 0 or ((dx > 0) ~= (dir > 0)) then
+		return nil, nil, nil, entry, exit, "landing is not ahead"
+	end
+
+	local vx = speed * dir
+	local t = math.abs(dx) / speed
+	local vy = (dy / t) + (0.5 * gravity * (t - PHYSICS_DT))
+	vy = math.max(vy, discreteLaunchForRise(math.max(dy, 0) + JUMP_ARC_CLEARANCE, gravity))
+
+	local ceiling = nil
+	local okJump, profile = pcall(function() return parameters.airJumpProfile.jumpSpeed end)
+	if okJump then ceiling = tonumber(profile) end
+
+	if vy <= 0 then return nil, nil, nil, entry, exit, "arc needs no rise" end
+	if ceiling ~= nil and vy > ceiling then
+		return nil, nil, nil, entry, exit, string.format("needs %s up, chassis jumps %s",
+			sb.printJson(math.floor(vy * 10) / 10), sb.printJson(ceiling))
+	end
+	if arcHitsTerrain(here, vx, vy, gravity, t, landing) ~= nil then
+		return nil, nil, nil, entry, exit, "arc clips terrain"
+	end
+
+	return landing, vx, vy, entry, exit
+end
+
 local function avoidLiquidAhead(stateData)
 	--  A HOP LEAVES THE PLAN BEHIND. The route was drawn through the pool --
 	--  vanilla A* costs collision only -- so after clearing it the current edge
@@ -6022,113 +6137,28 @@ local function avoidLiquidAhead(stateData)
 	if dir == 0 then return false end
 
 	local here = mcontroller.position()
-	local bounds = mcontroller.boundBox()
-	if type(bounds) ~= "table" or #bounds < 4 then return false end
-
-	local feetY = here[2] + bounds[2] + 0.2
-	local nose = here[1] + (dir > 0 and bounds[3] or bounds[1])
-
-	--  WHERE THE LIQUID STARTS.
-	local entry = nil
-
-	for step = 0, LIQUID_LOOK_AHEAD do
-		local x = nose + dir * step
-
-		if deniedLiquidAt({ x, feetY }) or deniedLiquidAt({ x, feetY - 1 }) then
-			entry = x
-			break
-		end
-	end
-
-	if entry == nil then return false end
-
-	--  AND WHERE IT ENDS. One column past the span is checked so a pool that is
-	--  exactly too wide is recognised as too wide rather than as unbounded.
-	local exit = nil
-
-	for step = 1, LIQUID_SCAN_SPAN + 1 do
-		local x = entry + dir * step
-
-		if not (deniedLiquidAt({ x, feetY })
-		        or deniedLiquidAt({ x, feetY - 1 })) then
-			exit = x
-			break
-		end
-	end
-
-	--  SOMEWHERE TO LAND, resolved by the same resolver every other destination
-	--  uses -- so the far side is dry, standable, and not another pool.
-	local landing = nil
-
-	if exit ~= nil then
-		local okNear, spot = pcall(standableNear, { exit + dir * 0.5, here[2] },
-			2, 1, false, -3)
-		if okNear then landing = spot end
-	end
+	local landing, vx, vy, entry, exit, reason = petports_liquidHopFrom(here, dir)
+	if landing == nil and entry == nil then return false end
 
 	if landing ~= nil then
+		sb.logInfo("UNIT LIQUID AHEAD at %s (heading %s): hopping "
+			.. "from %s to %s, %s tiles across and %s up, at [%s,%s]",
+			sb.printJson(entry), sb.printJson(dir),
+			sb.printJson(here), sb.printJson(landing),
+			sb.printJson(landing[1] - here[1]), sb.printJson(landing[2] - here[2]),
+			sb.printJson(vx), sb.printJson(vy))
+
+		--  VERTICAL BY setVelocity, HORIZONTAL BY CONTROL. The walk
+		--  mover only ever drives x, through controlApproachXVelocity,
+		--  so a vertical set survives it; x has to be issued the same
+		--  way or the mover's own control wins the axis.
 		local parameters = mcontroller.baseParameters()
-		local gravity = world.gravity(here) * (parameters.gravityMultiplier or 1.0)
-
-		if gravity > 0 then
-			local dx = landing[1] - here[1]
-			local dy = landing[2] - here[2]
-
-			--  THE CHASSIS'S OWN RUN SPEED, because it is the fastest launch it
-			--  can honestly take and speed is what buys span here.
-			local speed = LIQUID_HOP_VX
-			local okSpeed, runSpeed = pcall(function()
-				return parameters.runSpeed
-			end)
-			if okSpeed and tonumber(runSpeed) ~= nil and runSpeed > 0 then
-				speed = runSpeed
-			end
-
-			if dx ~= 0 and ((dx > 0) == (dir > 0)) then
-				local vx = speed * dir
-				local t = math.abs(dx) / speed
-				local vy = (dy / t) + (0.5 * gravity * (t - PHYSICS_DT))
-
-				--  CLEARANCE OVER THE POOL, not merely a solution that reaches
-				--  the far side: the flat arc that lands exactly on the lip is
-				--  the one that clips into the liquid on the way.
-				vy = math.max(vy, discreteLaunchForRise(
-					math.max(dy, 0) + JUMP_ARC_CLEARANCE, gravity))
-
-				--  NO MORE THAN THE CHASSIS CAN ACTUALLY JUMP. The solve will
-				--  happily ask for whatever the geometry needs, and a pet that
-				--  clears a gap it could not clear under its own power is a
-				--  different bug wearing this one's clothes. A pool that needs
-				--  more than this is one to stop at, not to leap.
-				local ceiling = nil
-				local okJump, profile = pcall(function()
-					return parameters.airJumpProfile.jumpSpeed
-				end)
-				if okJump then ceiling = tonumber(profile) end
-
-				if vy > 0
-				   and (ceiling == nil or vy <= ceiling)
-				   and arcHitsTerrain(here, vx, vy, gravity, t, landing) == nil then
-					sb.logInfo("UNIT LIQUID AHEAD at %s (heading %s): hopping "
-						.. "from %s to %s, %s tiles across and %s up, at [%s,%s]",
-						sb.printJson(entry), sb.printJson(dir),
-						sb.printJson(here), sb.printJson(landing),
-						sb.printJson(dx), sb.printJson(dy),
-						sb.printJson(vx), sb.printJson(vy))
-
-					--  VERTICAL BY setVelocity, HORIZONTAL BY CONTROL. The walk
-					--  mover only ever drives x, through controlApproachXVelocity,
-					--  so a vertical set survives it; x has to be issued the same
-					--  way or the mover's own control wins the axis.
-					mcontroller.setVelocity({ vel[1], vy })
-					mcontroller.controlApproachXVelocity(vx,
-						parameters.airForce or parameters.groundForce)
-					stateData.liquidHopPending = true
-					stateData.liquidHopAirborne = nil
-					return true
-				end
-			end
-		end
+		mcontroller.setVelocity({ vel[1], vy })
+		mcontroller.controlApproachXVelocity(vx,
+			parameters.airForce or parameters.groundForce)
+		stateData.liquidHopPending = true
+		stateData.liquidHopAirborne = nil
+		return true
 	end
 
 	--  NO HOP -- too wide, too high, nowhere dry to land, or the arc clips
@@ -6148,76 +6178,76 @@ local function avoidLiquidAhead(stateData)
 		stateData.liquidStopSaid = entry
 
 		sb.logInfo("UNIT LIQUID AHEAD at %s (heading %s) and no hop available "
-			.. "-- stopping at %s rather than walking in (exit %s, landing %s)",
+			.. "-- stopping at %s rather than walking in (exit %s, %s)",
 			sb.printJson(entry), sb.printJson(dir), sb.printJson(here),
-			sb.printJson(exit), sb.printJson(landing))
+			sb.printJson(exit), tostring(reason))
 	end
 
 	return true
 end
 
-local UNPERCH_RADIUS = 2
-local UNPERCH_MAX = 2.5
-
-local function unperchFromCorner(stateData)
-	if not mcontroller.onGround() then return false end
-
+--  WHICH BOTTOM CORNER IS ON SOMETHING. A perched body is onGround with no
+--  standable footing under its middle, so at most one corner is carrying
+--  it. Sampled just below and just inside each bottom corner of the box.
+local function perchFooting()
 	local here = mcontroller.position()
-
-	local okHere, standable = pcall(validStandingPosition, here, false)
-	if not okHere or standable then return false end
-
-	--  BIASED TOWARD THE WAY THE PET WAS GOING. standableNear ranks columns by
-	--  distance from the point it is given, so searching from a point one tile
-	--  ahead makes the forward column the nearest one whenever it exists at
-	--  all, and the column behind only wins when there is nothing ahead. Facing
-	--  is used because a perched unit has no velocity left to read.
-	local facing = mcontroller.facingDirection()
-	if facing ~= 1 and facing ~= -1 then facing = 1 end
-
-	local okNear, spot = pcall(standableNear, { here[1] + facing, here[2] },
-		UNPERCH_RADIUS, UNPERCH_RADIUS, false, -UNPERCH_RADIUS)
-
-	if not okNear or spot == nil then
-		sb.logInfo("UNIT UNPERCH: at %s onGround but not standable, and no "
-			.. "standing column within %s tiles -- leaving it to the ladder",
-			sb.printJson(here), sb.printJson(UNPERCH_RADIUS))
-		return false
-	end
-
-	local gap = world.magnitude(spot, here)
-
-	if gap > UNPERCH_MAX then
-		sb.logInfo("UNIT UNPERCH: nearest standing column to %s is %s at %s, "
-			.. "further than the %s cap -- not moving it",
-			sb.printJson(here), sb.printJson(gap), sb.printJson(spot),
-			sb.printJson(UNPERCH_MAX))
-		return false
-	end
-
-	sb.logInfo("UNIT UNPERCH: %s was onGround but not standable -- placing on "
-		.. "the standing column at %s, %s tiles away",
-		sb.printJson(here), sb.printJson(spot), sb.printJson(gap))
-
-	mcontroller.setPosition(spot)
-	mcontroller.setVelocity({ 0, 0 })
-
-	return true
+	local box = mcontroller.boundBox()
+	local y = here[2] + box[2] - 0.3
+	local left = world.pointTileCollision({ here[1] + box[1] + 0.15, y }, STANDABLE_TILE_SET)
+	local right = world.pointTileCollision({ here[1] + box[3] - 0.15, y }, STANDABLE_TILE_SET)
+	return left, right
 end
 
---  THE PERCH IS A PHYSICAL STATE AND IS WATCHED AS ONE.
---
---  onGround-and-not-standable is true from the first tick the unit settles
---  on a corner, so it does not need a progress window to prove the unit is
---  stuck. What it needs is a DEBOUNCE, because the same pair is also briefly
---  true at the end of an ordinary landing or while stepping across a corner.
---  A second of it held continuously is a perch; a few ticks is a landing.
---
---  Sitting this on the progress ladder cost ten to fifteen seconds per perch:
---  two five-second windows of no net displacement before the first attempt.
-local UNPERCH_DEBOUNCE = 1.0
+--  WALK OFF THE CORNER, 2026-09-12i (Lofty: "figure out which corner of the
+--  known hitbox is the one that's on a ledge and just prefer moving to that
+--  direction"). MEASURED 14:40..14:48: 76 placements onto the body's own
+--  column, every one "footing under the centre false", every one slid
+--  straight back onto the corner. The body is perched, so one bottom
+--  corner is on something: walk toward it for UNPERCH_WALK_TIME. Neither
+--  corner on anything is a corner-of-the-poly perch on a tile edge: hop
+--  the way the body faces. 12k: the column placement that used to be the
+--  fallback is gone -- 44 episodes, 0 fallbacks.
+local UNPERCH_DEBOUNCE = 1.0  --  seconds dwelt on a corner before acting; cut by mistake in 12k, back in 12m
+local UNPERCH_WALK_TIME = 0.6
+local UNPERCH_DWELL = 0.5   --  tiles the body may drift while still counting as perched (12j)
+
+local function unperchWalk(stateData)
+	local left, right = perchFooting()
+	local here = mcontroller.position()
+	local dir = nil
+	if left and not right then dir = -1 elseif right and not left then dir = 1 end
+
+	if dir ~= nil then
+		stateData.unperchWalk = { dir = dir, until_ = world.time() + UNPERCH_WALK_TIME, hop = false }
+		sb.logInfo("UNIT UNPERCH: %s is perched with footing under its %s corner -- walking that way for %s s",
+			sb.printJson(here), dir < 0 and "left" or "right", sb.printJson(UNPERCH_WALK_TIME))
+		return true
+	end
+
+	local facing = mcontroller.facingDirection()
+	if facing == 0 then facing = 1 end
+	stateData.unperchWalk = { dir = facing, until_ = world.time() + UNPERCH_WALK_TIME, hop = true }
+	sb.logInfo("UNIT UNPERCH: %s is perched with footing under %s corner (left %s, right %s) -- hopping %s",
+		sb.printJson(here), (left and right) and "both" or "neither", tostring(left), tostring(right),
+		facing < 0 and "left" or "right")
+	return true
+end
 
 local function unperchWatch(dt, stateData)
+	--  A WALK IN PROGRESS IS APPLIED EVERY TICK until it lapses.
+	local walk = stateData.unperchWalk
+	if walk ~= nil then
+		if world.time() < walk.until_ then
+			mcontroller.controlMove(walk.dir, true)
+			if walk.hop and not walk.jumped then
+				mcontroller.controlJump()
+				walk.jumped = true
+			end
+			return
+		end
+		stateData.unperchWalk = nil
+	end
+
 	local perched = mcontroller.onGround()
 	if perched then
 		local ok, standable = pcall(validStandingPosition, mcontroller.position(), false)
@@ -6225,6 +6255,20 @@ local function unperchWatch(dt, stateData)
 	end
 
 	if not perched then
+		stateData.perchTime = 0
+		stateData.perchAnchor = nil
+		return
+	end
+
+	--  DWELLING, NOT PASSING, 2026-09-12j (Lofty: false positives on sloped
+	--  terrain). onGround-but-not-standable is also true mid-slope, where
+	--  the body is moving fine. The timer counts only while the body stays
+	--  within UNPERCH_DWELL of where it started counting; real movement
+	--  resets it.
+	local here = mcontroller.position()
+	local anchor = stateData.perchAnchor
+	if anchor == nil or world.magnitude(here, anchor) > UNPERCH_DWELL then
+		stateData.perchAnchor = here
 		stateData.perchTime = 0
 		return
 	end
@@ -6234,9 +6278,9 @@ local function unperchWatch(dt, stateData)
 
 	stateData.perchTime = 0
 
-	if unperchFromCorner(stateData) then
+	if unperchWalk(stateData) then
 		stateData.progressStrikes = 0
-		freshPather("unperched from a corner")
+		freshPather("unperching on foot")
 	end
 end
 
@@ -6284,8 +6328,11 @@ local function petportsTaskUpdateInner(dt, stateData)
   local finder = self.pather and self.pather.finder
   local searching = finder ~= nil and finder.aStar ~= nil and not finder.hasPath
 
-  if petports_navTick ~= nil and (munchMayHold(task) or not searching) then
-    petports_navTick(dt, entity.uniqueId())
+  --  TOLD, NOT SKIPPED, 2026-09-12d (Lofty). Skipping the tick froze the
+  --  flush, the graph build and the overlay for the length of every search;
+  --  the tick now yields only its probes. See navTickInner.
+  if petports_navTick ~= nil then
+    petports_navTick(dt, entity.uniqueId(), searching and not munchMayHold(task))
   end
 
   --  HAND THE STATE BACK WHEN REAL WORK ARRIVES.
@@ -6782,6 +6829,7 @@ local function petportsTaskUpdateInner(dt, stateData)
     else
       local skipped = 0
       local stopReason = "hit MAX_ARC_SKIP"
+      local landPassed = false
 
       while skipped < MAX_ARC_SKIP do
         local index = arcFinder.currentEdgeIndex
@@ -6805,8 +6853,10 @@ local function petportsTaskUpdateInner(dt, stateData)
           if arcMode ~= "GROUNDED"
              or not arcPastWaypoint(edges, index, mcontroller.position()) then
             stopReason = "edge " .. tostring(index) .. " is a " .. tostring(edge.action)
+            if edge.action == "Land" then landPassed = true end
             break
           end
+          if edge.action == "Land" then landPassed = true end
 
           sb.logInfo("UNIT ARC consuming edge %s of %s in GROUNDED mode: it is "
             .. "a %s to %s and the unit at %s is already past it toward %s",
@@ -6847,6 +6897,25 @@ local function petportsTaskUpdateInner(dt, stateData)
         tostring(arcFinder.currentEdgeIndex),
         tostring(arcFinder.edges and #arcFinder.edges),
         sb.printJson(mcontroller.position()))
+
+      --  THE TOUCHDOWN STOP LIVES HERE, 2026-09-13f -- the place the arc
+      --  mover's grounded branch names for it. MEASURED 21:47:57.066..57.230:
+      --  the airborne brake's last look was 0.55 tiles short of the Land at
+      --  [5853,1185.8]; the next tick the body was down at 5852.94 with vx
+      --  -5.64, this skip consumed the Land as passed, moveWalk took over
+      --  still carrying that speed, and the body left the one-wide platform
+      --  at 5852.44 -- past the Walk edge's own end. A Land means stop:
+      --  when GROUNDED consumes or halts on one, x is zeroed outright, the
+      --  same mechanism and reason as the airborne latch, and the next edge
+      --  starts from rest.
+      if arcMode == "GROUNDED" and landPassed then
+        local landVel = mcontroller.velocity()
+        if math.abs(landVel[1]) >= LAND_BRAKE_STATIONARY then
+          mcontroller.setVelocity({ 0, landVel[2] })
+          sb.logInfo("UNIT ARC touchdown at %s vel %s reached the Land -- killing horizontal velocity",
+            sb.printJson(mcontroller.position()), sb.printJson(landVel))
+        end
+      end
 
       --  WHAT IS LEFT OF THE PLAN WAS COMPUTED FOR A POSITION THE UNIT IS NOT
       --  IN, and only the grounded case can tell.
@@ -7906,8 +7975,100 @@ local function petportsTaskUpdateInner(dt, stateData)
     end
   end
 
+  --  PAST THE WAYPOINT IS AT THE WAYPOINT, 2026-09-13c (Lofty: "if the pet
+  --  scoots forward past its next waypoint it doesn't detect that it's
+  --  ahead of schedule"). MEASURED 21:15:29.7..30.4: the leg to 5830.5 was
+  --  taken at 5838.3; the pool hop landed at 5826.3, four tiles beyond it,
+  --  outside the arrival radius, and the fresh plan walked back to it. The
+  --  body's projection onto the leg's own line (taken from where the leg
+  --  was assigned) is past 1 when the waypoint is behind us; a two-tile
+  --  band around the line and the waypoint's height keep it to this leg.
+  --  A WALKER IS JUDGED ON THE GROUND AND ALONG X, 2026-09-13d. MEASURED
+  --  21:24:24.8..25.6: the leg to [5791.5,1173.8] ended in a drop; the
+  --  test fired in the air (which never counts for a walker), the body
+  --  landed at 1170.9, three tiles under the waypoint, the height band
+  --  refused it, and the pather walked back and jumped up to a waypoint
+  --  the route was about to leave downward. A walker's leg line bends at
+  --  every ledge, so the line test is a free mover's; a walker is past
+  --  its waypoint when its x is past it along the leg, and its height is
+  --  either the waypoint's or on the way to the next anchor's.
+  local overshot = false
+  if stateData.navWaypoint ~= nil and stateData.navLegStart ~= nil
+     and stateData.navLegArrived ~= true and not stateData.navLegStep
+     and (petports_freeMover() or mcontroller.onGround()) then
+    local here = mcontroller.position()
+    local wp, start, nextAnchor = stateData.navWaypoint, stateData.navLegStart, stateData.navLegNext
+    local lx, ly = wp[1] - start[1], wp[2] - start[2]
+    local t = nil
+    local aligned = false
+    if petports_freeMover() then
+      local len2 = lx * lx + ly * ly
+      if len2 >= 1 then
+        local px, py = here[1] - start[1], here[2] - start[2]
+        t = (px * lx + py * ly) / len2
+        aligned = math.abs(px * ly - py * lx) / math.sqrt(len2) <= 2
+          and math.abs(here[2] - wp[2]) <= 2
+      end
+    elseif math.abs(lx) >= 1 then
+      t = (here[1] - start[1]) / lx
+      local rise = here[2] - wp[2]
+      aligned = math.abs(rise) <= 2
+      if not aligned and type(nextAnchor) == "table" then
+        local toNext = nextAnchor[2] - wp[2]
+        aligned = (rise * toNext) > 0 and math.abs(rise) <= math.abs(toNext) + 1
+      end
+    end
+    if t ~= nil and t >= 1 and aligned then
+      overshot = true
+      sb.logInfo("UNIT coarse leg %s is behind us at %s (%s of the leg from %s) -- arrived",
+        sb.printJson(wp), sb.printJson(here),
+        sb.printJson(math.floor(t * 100 + 0.5) / 100), sb.printJson(start))
+    end
+  end
+
+  --  A LATER ROUTE CELL UNDERFOOT IS THE CELL REACHED, 2026-09-13e.
+  --  MEASURED 21:34:52.8..54.4: the route into the pocket ran 5850,1178 ->
+  --  5850,1172 -> 5853,1168 -> 5850,1163. The leg to [5850.5,1172.8] was
+  --  planned by the engine as a drop onto the 1168.8 ledge and a jump back
+  --  up; the body landed at [5854.55,1168.8], 1.05 from the anchor of
+  --  5853,1168 -- the cell AFTER the waypoint -- jumped up to the waypoint,
+  --  and the next leg brought it straight back down to that ledge. The
+  --  overshoot test above is about this leg's line; this is about the
+  --  route: a grounded walker within arrival distance of a route cell past
+  --  its waypoint has reached that cell, and the chain continues from it.
+  --  Walkers only -- a free mover does not fall through its route.
+  if stateData.navWaypoint ~= nil and stateData.navLegArrived ~= true
+     and not overshot and not stateData.navLegStep
+     and not petports_freeMover() and mcontroller.onGround()
+     and not (petports_gravitySwitchable ~= nil and petports_gravitySwitchable()) then
+    local route = self.petportsNavLastRoute
+    local path = route ~= nil and route.path or nil
+    local legTo = stateData.navLegTo
+    if type(path) == "table" and legTo ~= nil then
+      local at = nil
+      for i = 1, #path do
+        if path[i] == legTo then at = i break end
+      end
+      if at ~= nil then
+        local here = mcontroller.position()
+        for j = at + 1, math.min(#path, at + NAV_ROUTE_LOOKAHEAD) do
+          local kx, ky = string.match(path[j], "^(-?%d+),(-?%d+)$")
+          local anchor = kx ~= nil and petports_navAnchor(tonumber(kx), tonumber(ky), false) or nil
+          if anchor ~= nil and world.magnitude(here, anchor) < ARRIVAL_DISTANCE then
+            sb.logInfo("UNIT standing on route cell %s at %s, %s cell(s) past the waypoint %s -- reached it instead",
+              tostring(path[j]), sb.printJson(here), sb.printJson(j - at), sb.printJson(stateData.navWaypoint))
+            stateData.navLegTo = path[j]
+            stateData.navRemaining = #path - j
+            stateData.navLegArrived = true
+            break
+          end
+        end
+      end
+    end
+  end
+
   local legReached = stateData.navWaypoint ~= nil
-    and (stateData.navLegArrived == true
+    and (stateData.navLegArrived == true or overshot
       or world.magnitude(stateData.navWaypoint, mcontroller.position())
          < (petports_freeMover()
             and (stateData.navLegStep and NAV_LEG_STEP_ARRIVAL
@@ -7959,10 +8120,18 @@ local function petportsTaskUpdateInner(dt, stateData)
       elseif notYet == "more" then
         --  Keep what the arrival cleared so the next tick can retry from the
         --  same cell with the same remaining count.
+        --  TOWARD THE NEXT ANCHOR, NOT THE BODY, 2026-09-12h (Lofty: "zeroes
+        --  its velocity once it hits a waypoint"). MEASURED 14:10:34..36:
+        --  0.16..0.4 s of "next leg not ready" at nearly every leg, and a
+        --  waypoint on the body's own position is an arrival, which
+        --  approachTo brakes to zero. The anchor after the reached one is
+        --  already in hand for the turn measurement; the body flies toward
+        --  it until the leg resolves and replaces it. Held only at a route's
+        --  end, where there is no next anchor.
         stateData.navLegTo = reachedCell
         stateData.navRemaining = remaining
         stateData.navLegArrived = true
-        stateData.navWaypoint = mcontroller.position()
+        stateData.navWaypoint = stateData.navLegNext or mcontroller.position()
 
         if stateData.navChainWait ~= reachedCell then
           stateData.navChainWait = reachedCell
@@ -8045,7 +8214,13 @@ local function petportsTaskUpdateInner(dt, stateData)
     end
     stateData.navLegTurn = turn
     local sharp = turn >= NAV_LEG_SHARP_TURN
-    self.petportsLegTightTurn = stateData.navWaypoint ~= nil and turn >= NAV_LEG_BRAKE_TURN
+    --  A STEP LEG ALWAYS LANDS ON THE POINT, 2026-09-12g. MEASURED 13:58:45:
+    --  a 0.31-tile step to the anchor with a 0.15 arrival, flown at full
+    --  speed -- 0.45 a tick -- overshot the window every tick for six
+    --  seconds. The brake below is what steerDirectly needs to set the
+    --  exact velocity that lands.
+    self.petportsLegTightTurn = stateData.navWaypoint ~= nil
+      and (stateData.navLegStep == true or turn >= NAV_LEG_BRAKE_TURN)
 
     local legArrival = (stateData.navWaypoint ~= nil and petports_freeMover())
       and (stateData.navLegStep and NAV_LEG_STEP_ARRIVAL

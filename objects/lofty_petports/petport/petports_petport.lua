@@ -1396,6 +1396,23 @@ end
 --  longer holding it. Whichever wins clears self.task, and the loser used to be
 --  discarded -- which meant recall failures were never counted, re-home never
 --  fired, and a stranded unit was recalled forever.
+--  Work families whose generator is held after repeated stranding failures;
+--  see noteFailure. Keyed by the id prefix before the colon.
+FAMILY_HELD = { asterite = true, animal = true }
+FAMILY_STRIKES = 3
+FAMILY_HOLD = 120.0
+
+local function familyOnHold(family)
+  local until_ = self.familyHold and self.familyHold[family]
+  if until_ == nil then return false end
+  if world.time() >= until_ then
+    self.familyHold[family] = nil
+    sb.logInfo("PETPORT %s %s work released from its hold", stationUniqueId(), family)
+    return false
+  end
+  return true
+end
+
 local function noteFailure(taskId, reason)
   if taskId == nil then return end
 
@@ -1471,6 +1488,28 @@ local function noteFailure(taskId, reason)
 
   local record = self.workFailures[taskId] or { count = 0 }
   record.count = record.count + 1
+
+  --  THE FAMILY, NOT JUST THE ID, 2026-09-12b. MEASURED 14:38..14:53 (Lofty:
+  --  planting starved until the asterite module came out): 52 deposits are
+  --  52 work ids, each with its own backoff, so the generator always had a
+  --  fresh one to hand out above planting, and each stranded the unit. Three
+  --  stranding failures running in one family hold that family's generator
+  --  for FAMILY_HOLD seconds; a success in the family clears the count.
+  --  Animals in an unreachable pen are the same shape (Lofty).
+  if strandedReason then
+    local family = string.match(taskId, "^(%a+):")
+    if family ~= nil and FAMILY_HELD[family] then
+      self.familyStrikes = self.familyStrikes or {}
+      self.familyStrikes[family] = (self.familyStrikes[family] or 0) + 1
+      if self.familyStrikes[family] >= FAMILY_STRIKES then
+        self.familyHold = self.familyHold or {}
+        self.familyHold[family] = world.time() + FAMILY_HOLD
+        self.familyStrikes[family] = 0
+        sb.logInfo("PETPORT %s %s work HELD for %s s: %s stranding failure(s) running",
+          stationUniqueId(), family, sb.printJson(FAMILY_HOLD), sb.printJson(FAMILY_STRIKES))
+      end
+    end
+  end
 
   --  WAS THIS A ROUTING FAILURE OR SOMETHING ELSE?
   --
@@ -1593,7 +1632,7 @@ end
 --  only way to tell a stale copy from a wrong one was to guess. The upcycler
 --  object's missing stamp already cost a full test round; this is the same
 --  silent failure with more surface area.
-local PETPORT_BUILD_STAMP = "2026-09-11i a flavor marked preference false is not on the restock wanted list"
+local PETPORT_BUILD_STAMP = "2026-09-12b a work family that strands the unit three times running is held for two minutes; defrag says why it did nothing"
 
 --  PORT PROFILER, 2026-09-07b. MEASURED 21:00: six ports on a small islet,
 --  59 port ticks over 30 ms in 39 s totalling 3.7 s, worst 268 ms, while
@@ -3002,6 +3041,8 @@ function init()
       self.workFailures[report.id] = nil
       self.retryAllowance[report.id] = nil
       self.unreachableFailures = 0
+      local family = string.match(tostring(report.id), "^(%a+):")
+      if family ~= nil and self.familyStrikes ~= nil then self.familyStrikes[family] = 0 end
       if report.id == "return:" .. stationUniqueId() then
         self.recallFailures = 0
       end
@@ -16348,6 +16389,7 @@ local function defragWork()
   if #deposits == 0 then return nil, "no deposit beacon to gather into" end
 
   local homeless, full, unreachable = 0, 0, 0
+  local claimed, backedOffN, noStack = 0, 0, 0
 
   for index, entry in ipairs(names) do
     if index > DEFRAG_PLAN_CAP then break end
@@ -16367,11 +16409,18 @@ local function defragWork()
       --  back to ordinary storage and gets pulled again.
       --
       --  servicePointNear asks the UNIT, so this is per-chassis for free.
-      local reachable = servicePointNear("crate " .. tostring(target.id),
-        target.id, target.position, 4) ~= nil
+      local reachable, reachWhy = servicePointNear("crate " .. tostring(target.id),
+        target.id, target.position, 4)
 
-      if not reachable then
+      if reachable == nil then
         unreachable = unreachable + 1
+        --  SAID ONCE, 2026-09-12a: this exit was silent (fact.tooling.mergedrefusal).
+        if self.defragSkip ~= target.id then
+          self.defragSkip = target.id
+          sb.logInfo("PETPORT %s defrag destination %s SKIPPED: %s of %s",
+            stationUniqueId(), sb.printJson(target.id), tostring(reachWhy),
+            sb.printJson(target.position))
+        end
       else
         local sources = defragSources(entry.name, where, target.id, byId)
 
@@ -16388,6 +16437,9 @@ local function defragWork()
 
           local failure = self.workFailures[workId]
           local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
+
+          if backedOff then backedOffN = backedOffN + 1
+          elseif not claimFree(workId) then claimed = claimed + 1 end
 
           if not backedOff and claimFree(workId) then
             --  THE REAL DESCRIPTOR, READ NOW. The spread map is up to a scan
@@ -16418,6 +16470,8 @@ local function defragWork()
                 end
               end
             end
+
+            if slot == nil then noStack = noStack + 1 end
 
             if slot ~= nil then
               --  ROOM FOR THIS STACK, NOT FOR ONE OF IT. defragDestination
@@ -16496,11 +16550,23 @@ local function defragWork()
     end
   end
 
-  return nil, string.format(
+  --  EVERY SILENT EXIT COUNTED AND SAID ONCE, 2026-09-12a (fact.tooling
+  --  .mergedrefusal). MEASURED 14:38..14:53: the drone ports logged defrag
+  --  plans naming crate 70 as the source and then nothing at all. Change-
+  --  gated on the text.
+  local why = string.format(
     "%s name(s) misplaced or scattered, none actionable: %s with nowhere to "
-    .. "gather into, "
-    .. "%s with the destination full, %s with a crate this unit cannot reach",
-    #names, homeless, full, unreachable)
+    .. "gather into, %s with the destination full, %s with a crate this unit "
+    .. "cannot reach, %s claimed by another unit, %s backed off, %s with no "
+    .. "stack found in the source", #names, homeless, full, unreachable,
+    claimed, backedOffN, noStack)
+
+  if self.defragWhy ~= why then
+    self.defragWhy = why
+    sb.logInfo("PETPORT %s defrag: %s", stationUniqueId(), why)
+  end
+
+  return nil, why
 end
 
 --  ---------------------------------------------------------------------------
@@ -17176,7 +17242,9 @@ local function findWork()
   --  that is ready stays ready, where a drop on the ground is on a despawn
   --  timer. Nothing is lost by clearing the ground first.
   local beast, noBeast
-  if doAnimals then beast, noBeast = portProf("g.animal", animalWork) end
+  if doAnimals and not familyOnHold("animal") then
+    beast, noBeast = portProf("g.animal", animalWork)
+  end
   if dispatchable(beast) ~= nil then return beast end
 
   --  TRAPS SIT WITH CROPS AND ANIMALS, AND BELOW BOTH.
@@ -17212,7 +17280,9 @@ local function findWork()
   --  world property and sorts every deposit in coverage; a port with no module
   --  socketed should not pay for an answer it will discard.
   local ore, noOre
-  if doAsterite then ore, noOre = portProf("g.asterite", asteriteWork) end
+  if doAsterite and not familyOnHold("asterite") then
+    ore, noOre = portProf("g.asterite", asteriteWork)
+  end
   if dispatchable(ore) ~= nil then return ore end
 
   --  Fetching is the lowest-priority thing a unit can do: it is the only work

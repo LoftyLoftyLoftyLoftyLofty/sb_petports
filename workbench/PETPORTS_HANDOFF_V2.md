@@ -50,71 +50,212 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-11 (asterite mining, and the walker fixes it exposed)
+### What is built, as of 2026-09-13 evening (walker across lava; the flyer day did not happen)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-**THE PERFORMANCE VERDICT OF 2026-09-10 STILL STANDS AND IS STILL THE NEXT
-THING.** Nothing in this session touched the flush stall or the port tick.
-The order on re-entry is unchanged: `plan.pathing.cityscale` item 2 (chunked
-dense shards) first, `todo.port.tickyield` second, and only then the
-unrestricted flyer. Everything that "collapses into the flyer working" sits
-behind those two.
+Lofty's plan for the day was the unrestricted flyer. The day went to the
+plain walker in the lava pocket instead: six hours, ten builds, every one of
+them read off a log before it was written. What landed is a routing change
+and a set of arrival rules; nothing about the flyer moved.
 
-**WHAT THIS SESSION WAS.** A detour: the Asterite Mining Module, end to end,
-for Lemon Drops' Falling Stars mod (`starore`). Built in five gated builds
-and all five are in and working: scan and store (port 11a), removal probe
-(unit 11a-f), dispatch and act (port 11c, unit 11g), module gate (port 11d),
-swings, sound and beam (unit 11h-i, overlay 11a-d), filters (no stamp). Plus
-the stat (port 11e-f). See `arch.mining.*`.
+**VERIFIED IN GAME TODAY, IN ORDER:**
+- coarsenav 13a: the stretch refusal is gone; every TRUE edge carries `d`,
+  the tiles its proving path travelled, and the router is Dijkstra over
+  it (arch.pathing.edgelength). The climb out of the pocket is a stored
+  edge and the pet leaves the pocket. Store stride 5, `_f` on the edge
+  property, one wipe done.
+- taskAction 13c/13d: a body past its waypoint has arrived
+  (arch.locomotion.legarrival): the free mover by projection onto the leg
+  line, the walker on the ground by x with a height between the waypoint
+  and the next anchor; a leg the body already stands at chains from that
+  cell instead of dropping the route. The pool hop is one hop each way.
+- taskAction 13e: a grounded walker within arrival distance of a route
+  cell PAST its waypoint has reached that cell (same entry). The pocket's
+  jump-up-then-back-down is gone.
+- taskAction 13f: the grounded arc skip kills horizontal velocity when it
+  consumes or halts on a Land (dd.locomotion.touchdownstop). Thirteen
+  landings in the last log, all stopped.
 
-**WHAT IT EXPOSED, ALL FIXED, ALL CONFIRMED IN GAME.** The feature drove the
-walker across a crusted roof, a lava edge, stepped ledges and a poison maze
-in one afternoon, and every one of these was already there:
+**DO NOT REPEAT** (each cost a build and was wrong or incomplete):
+- Arriving at a waypoint from the liquid-hop landing (taskAction 13a, 13b,
+  both removed): right verdict, wrong spot. The mover had already planned
+  back to the waypoint on the touchdown tick, and the chained leg was then
+  DECLINED as "already there" and abandoned for a direct search east
+  through the pool. Arrival belongs in the leg test; the decline belongs
+  chained. See arch.locomotion.legarrival.
+- A leash grace after a task report (taskAction/port 13e, reverted before
+  it ran): built on a misread of the log's tail. The backtrack was
+  BEFORE the mining. The report-to-dispatch window is real (leash leg
+  taken 80 ms after the report, dispatch 320 ms later, 21:34:56.75) and is
+  recorded below as an observation, not a defect.
+- "The pet slides off the one-wide platform" at [5853,1185.8] after 13f:
+  it does not; the plan walks off it. Read the Walk edge after the Land
+  before blaming the landing (todo.pathing.legdetour).
+- Stating elapsed time between messages: Claude has no clock on Lofty's
+  side; the only times are the log's.
 
-    unit 11m-n   solveLaunch replaced the planner's validated arc with a
-                 flat one that clipped the lip; now vetoes any arc of its own
-                 that flies through terrain (`dd.locomotion.arcveto`)
-    unit 11q     a landing that overshot walked back to the waypoint it
-                 passed; consumed instead (`arch.locomotion.overshoot`)
-    unit 11r-s   a unit balanced on a chamfer corner sat for a minute;
-                 detected in ~1 s and placed on a real column
-                 (`arch.locomotion.unperch`)
-    monstertype  drone and flyer declared no `petports_avoidLiquids`, so
-                 nothing was ever denied and the lava module unlocked
-                 nothing (`fact.locomotion.avoidlist`)
-    unit 11u-z   a walker scans a few tiles ahead for denied liquid and hops
-                 it at run speed or stops; replans on landing
-                 (`arch.locomotion.liquidscan`)
-    unit 11aa    reaching a coarse leg read the route search's "more" as
-                 "no route" and abandoned a route it had been following --
-                 the swimmer's poison-maze regression, fixed
-                 (`dd.locomotion.notready`)
-    port 11h     a death report from a unit that re-homed after a reload was
-                 refused as a stranger; honoured (`arch.dispatch.deathowner`)
+**OBSERVED, NOT FILED AS DEFECTS:** (1) a unit that reports done starts
+its leash leg the same tick and the port answers within a beat -- up to
+WORK_INTERVAL without cargo; harmless so far. (2) standing on a platform
+flush with a lava surface reads a small liquid percentage and blends liquid
+friction (the deposit crates at [5833..5836,1181.8]); the lever, if any, is
+a movement parameter -- read StarActorMovementController.cpp in the
+baseline before naming one. (3) the 12b chunk codec drops a bridge's `k`,
+`board` and `hole` at flush and the merged loader reads it back as "wade"
+(todo.pathing.bridgeextras); additive to fix, needs no wipe.
 
-**STILL OPEN FROM THIS SESSION**, in the order they are likely to bite:
-`todo.locomotion.laddermore` (same bare-`if` on `tryCoarseLeg` in the strike
-ladder), `todo.locomotion.lefthop` (the plan.drawio vertical-launch case is a
-different bug from 11m and is untouched), `todo.port.localslots` (192 of 200,
-the asterite functions went global under `dd.tooling.delocalise`).
+**BUILD STAMPS IN PLAY:** coarsenav `2026-09-13a`, taskAction
+`2026-09-13f`, port `2026-09-12b` (unchanged today), contract
+`2026-09-12d`, flyapproach `2026-09-10c`, work `2026-09-11b`, overlay
+`2026-09-11d`. FLIGHT_TRACE off. PETPORTS_NAV_VERBOSE on.
 
-**BUILD STAMPS IN PLAY:** port `2026-09-11h`, taskAction `2026-09-11aa`,
-work `2026-09-11b`, overlay `2026-09-11d`, coarsenav `2026-09-10r`,
-contract `2026-09-10a`, flyapproach `2026-09-10c`, habitat `2026-09-07a`.
+**NEXT, IN ORDER:** (1) the unrestricted flyer, which was today's plan
+(plan.unit.unrestrictedflyer); (2) todo.pathing.legdetour, the picker
+handing the engine a seven-tile leg it detours over the route's own cells;
+(3) todo.locomotion.dropstack, now understood as a crate-stack descent, not
+one drop; (4) plan.pathing.cityscale item 1, route on the coarse levels --
+the Dijkstra rewrite is the moment to make it a corridor search; (5)
+todo.pathing.bridgeextras before the otter is next exercised; (6)
+todo.dispatch.roundtrip.
 
-**NOTHING FROM THIS SESSION IS COMMITTED.** Last commit is `6cd4efc`
-(2026-09-10, the flyer prototype). Working tree carries the whole day.
-Commit standard: asterite as a unit of work is done and clean; commit it
-before the performance work so a rollback of that does not take this with
-it.
-
-The draw overlay remains the first thing to turn off when the game feels
-slow.
+**COMMIT STATE:** bab1bc9 is still the last commit. Everything above is in
+the working tree and verified; this is a commit point.
 
 ## ARCHITECTURE
+
+### Every TRUE edge carries the tiles its path travelled, and the router costs by it
+`arch.pathing.edgelength` -- see also `arch.pathing.coarsenav`, `arch.pathing.chunkstore`, `fact.pathing.stretchclimb`, `plan.pathing.cityscale`
+
+BUILT AND VERIFIED 2026-09-13 (coarsenav 13a). A probe that proves a pair
+sums `aStar:result()` edge by edge and records that as `d` on the edge; a
+free mover's sweep records its line; a bridge or a contradiction gets the
+straight line between the cells (`navCellSpan`). The chunk edge array is
+`[dx, dy, r, t, d]`, stride 5, and the edge property carries `_f = 5`; a
+property with another stride reads as empty and logs once that the store
+wants a wipe. Both graph builds fill `graph.len[from][to]`; `navLearn`
+keeps it current in the memo on insert and contradiction.
+
+`navRouteStep` and `petports_navPath` are Dijkstra over `len` with a binary
+heap (`navHeap`), same job, yield and budget contract as the BFS they
+replace; the budget counts settled nodes. `NAV route A -> B: N hop(s), T
+tile(s) by edge length, E expanded` is logged once per pair under
+PETPORTS_NAV_VERBOSE. MEASURED: the pocket climb (37 engine edges for 6.1
+tiles) is stored and taken; the lap home from 5830,1181 is 60 hops, 156
+tiles, 287 expanded.
+
+WHY: the stretch rule refused a long path as a reachability verdict because
+the BFS router could not tell a 166-tile detour from a 2-tile step (Lofty:
+"why does the tool for going long distances have a distance check"). Now
+the detour is an expensive edge and never a deleted one. This supersedes
+the rule in fact.pathing.stretchclimb.
+
+### The store is keyed by chunk: one index property and one edge property per 32-tile chunk per profile
+`arch.pathing.chunkstore` -- see also `plan.pathing.cityscale`, `todo.pathing.storesize`, `fact.pathing.indexparse`, `fact.tooling.worldstorage`, `arch.pathing.coarsenav`, `todo.pathing.chunkclaim`, `dd.tooling.delocalise`
+
+**BUILT 2026-09-12 (coarsenav 12b), UNTESTED.** plan.pathing.cityscale item
+2. The world's 30 s flush rewrites its whole metadata blob and our share of
+it was one property per swept CELL for the edges (2,078 reads to build a
+graph) plus one whole-profile index table, every edge a string key and a
+three-key table. Now:
+
+    petports_navindex                      profile registry, unchanged
+    petports_navindex:<profile>            { _g, chunks = { "chx,chy" = true } }
+    petports_navchunk:<profile>:<ck>       { _g, _n, c = [ id, at, radius, ... ] }
+    petports_navchunkedges:<profile>:<ck>  { _g, e = { "<id>" = [ dx, dy, r, t, ... ] } }
+
+A chunk is 32 tiles a side (Starbound's own; Lofty), keyed in cell space,
+so at stride 1 it holds up to 1,024 cells. `id` is the cell's slot in the
+chunk, an edge names its target relative to its source, `r` is 0/1, `t` is
+whole seconds, and the generation is one `_g` per property rather than one
+per entry. Flat arrays because the engine's JSON-to-Lua conversion is
+native and arrays are its cheapest case. The `_n` short-read guard of 10b
+moved down to the chunk; Seen and Mine are keyed `[profile][chunk][cell]`.
+
+**THE READERS DID NOT CHANGE.** `navCellRead` still returns one cell's
+`{ [to] = { r, t, g } }` and `navIndexRead()[profile]` still returns the
+profile's `{ [cell] = { at, radius, g } }`; both decode from the chunk on
+first touch and memoise, so one read fills a whole chunk of the cell cache.
+The graph build's per-cell reads become per-chunk reads; item 4 is where
+the consumers stop asking for the whole profile.
+
+**A WRITE IS READ-FRESH, MERGE, WRITE, PER CHUNK.** The old flush merged
+onto the memo, safe only because the claim made a cell single-writer; a
+chunk is not, so the flush reads the chunk back, applies this unit's
+deltas and writes. Atomic because the three are one Lua call (entity
+scripts do not interleave, properties are synchronous); no claim needed.
+
+**MIGRATION IS A WIPE, NOT A CONVERSION.** New property names, and the edge
+prefix differs from the legacy `petports_navedges:` so a chunk key cannot
+collide with a legacy cell shard of the same text. A legacy-shaped
+per-profile index (a cell map) is cleared on first sight with every shard
+it lists (`NAV legacy store for ... cleared`); what it did not list is
+unlistable and waits for a wipe, as it always did. Run
+`petports_navWipe()` once on 12b regardless.
+
+**KNOWN RISK, TO MEASURE:** a dense interior chunk could carry ~13k edges
+in one property and its parse could exceed the 4 ms clock. If a log shows
+it, the edge property splits into quarters under the same index chunk.
+
+### A body past its waypoint has arrived, and a leg it already stands at chains
+`arch.locomotion.legarrival` -- see also `arch.pathing.coarsenav`, `dd.locomotion.hoppable`, `todo.pathing.legdetour`, `todo.locomotion.dropstack`
+
+BUILT AND VERIFIED 2026-09-13 (taskAction 13c, 13d, 13e; Lofty: "if the
+pet scoots forward past its next waypoint it doesn't detect that it's ahead
+of schedule"). The leg test was a radius around the waypoint; "past it" had
+no test. Three cases, all in petportsTaskUpdateInner before `legReached`:
+
+1. PAST ALONG THE LEG. `tryCoarseLeg` records `navLegStart`, the body
+   position when the leg was assigned. A free mover projects its body onto
+   the line start->waypoint: projection >= 1 within a two-tile band of the
+   line and of the waypoint's height is arrived. A walker's leg line bends
+   at every ledge, so a walker is judged on the ground and along x: its x
+   past the waypoint's along the leg's x extent, and its height either
+   within two of the waypoint's or on the way to the next anchor's
+   (`navLegNext`, plus a tile). Vertical legs (|dx| < 1) keep the radius.
+   MEASURED: the pool hop landed 4 tiles past its waypoint on the far lip
+   (21:15:29.7); the ledge drop landed 2.9 tiles under its waypoint with the
+   route continuing down (21:24:24.8). Both are arrivals now.
+2. ALREADY THERE CHAINS. A chained leg whose waypoint is inside
+   ARRIVAL_DISTANCE of the body used to be declined, which dropped the
+   route for a direct search -- east through the pool it had just crossed
+   (21:15:30.500). It now re-takes the leg from that cell; the recursion
+   advances one route cell per call and stops when the graph offers the
+   same cell twice.
+3. A LATER ROUTE CELL UNDERFOOT. A grounded walker within ARRIVAL_DISTANCE
+   of any of the next NAV_ROUTE_LOOKAHEAD (6) route cells past its waypoint
+   has reached that cell; `navLegTo` and `navRemaining` move to it and the
+   ordinary chain continues. MEASURED 21:34:53.3: the engine's plan for a
+   leg to [5850.5,1172.8] dropped the body onto the 1168.8 ledge -- 1.05
+   from the anchor of the cell AFTER the waypoint -- and the unit jumped up
+   to the waypoint and came straight back down. Walkers only; a switchable
+   chassis is skipped because its anchor is side-dependent.
+
+Log lines: `coarse leg W is behind us at P (t of the leg from S) -- arrived`,
+`coarse leg W is where we already are -- taking the next leg from C`,
+`standing on route cell C at P, n cell(s) past the waypoint W -- reached it
+instead`.
+
+### A free mover whose first hop is not clear from its body steps onto its own anchor first
+`arch.pathing.stepleg` -- see also `arch.pathing.coarsenav`, `fact.pathing.waterlinestart`, `dd.locomotion.hoppable`
+
+**BUILT AND VERIFIED 2026-09-12 (coarsenav 12c..12f, taskAction 12e..12h).**
+MEASURED 13:16 ("lava peekaboo"): sweeps prove anchor-to-anchor lines, arrival
+is loose, so the body settled 0.79 off its anchor and the line to the next
+hop clipped a corner the anchor's line clears; the picker's step rule was
+gated on minAdvance and the bisection handed out its first in-reach node
+untested; 93 identical cycles. Now: first hop not clear from the body ->
+the own anchor is the leg at any distance, flagged "step"; no in-reach node
+is handed out unswept; when nothing in reach is clear the first hop is the
+leg, also as a step. A step leg is never declined as already-there, is the
+07r nudge under NAV_LEG_ARRIVAL_FREE, lands with the tight-turn brake
+otherwise, carries the first hop as its next anchor, and the caller's
+navStepFor budget (two per leg) is passed to the picker. A leg reached while
+the next is "more" flies toward navLegNext instead of holding on the body
+(which approachTo brakes to zero -- the waypoint stutter). profWrap forwards
+every return value (12d), which the seventh value needed.
 
 ### A bridge is an edge between the two sides of a switchable chassis, in a third store
 `arch.pathing.bridges` -- see also `arch.pathing.mergedgraph`, `arch.pathing.boundarycells`, `dd.pathing.boundarystore`, `dd.pathing.probeprofile`, `arch.locomotion.dive`, `arch.locomotion.exitdefer`, `fact.pathing.exitprobestart`, `fact.pathing.wadeunreadable`
@@ -6256,7 +6397,104 @@ the unit it currently owns (`petId`). The second clause is unreachable on a
 port that has spawned, so both measured leftovers are still refused. The
 refusal was not losing cargo, only the drop; the load stayed in the item.
 
+### Plain flavor: a Perfectly Generic Item is one blip, and one blip is two plain treats
+`arch.upcycler.plain` -- see also `fact.tooling.messagekeys`
+
+BUILT 2026-09-11/12 (upcycler 11a-b, flavors, pane 11b, port 11i). `plain` is
+a full manifest flavor: item `petports_petfuel`, blip colour `ff40ac`, reagent
+`perfectlygenericitem` weight 1, `yield` 2, `preference` false. The preference
+roll and the port's restock wanted list skip `preference == false`; the
+upcycler and pane see it normally. `petports_flavorYield` defaults to 1.
+`emitFuel` asks `containerItemsCanFit` for the whole yield before placing and
+blocks rather than placing a partial -- a two-treat yield blocks at 999 the
+way a one-treat one blocks at 1000. The re-flavoring path already refuses a
+blank into plain and keeps the blip.
+
+
 ## DESIGN DECISIONS
+
+### A Land means stop, on the ground too: the grounded arc skip kills x when it passes one
+`dd.locomotion.touchdownstop` -- see also `fact.pathing.arcmoverthrottle`, `todo.pathing.brakefloor`, `todo.locomotion.arrival`, `dd.locomotion.narrowlanding`
+
+DECIDED AND VERIFIED 2026-09-13 (taskAction 13f). The airborne brake in
+petportsArcMover latches on `ahead <= LAND_BRAKE_ARRIVED`; its last look
+before a touchdown can be short (0.55 tiles at 21:47:57.066), and on the
+next tick the body is down, the arc skip in update() has consumed the Land
+as passed, and the cursor is on the next mover with the flight's horizontal
+velocity intact -- moveWalk took over at vx -5.64 and the body left a
+one-wide platform past its own Walk edge's end. The arc mover's grounded
+branch named this spot: "if a slide-off is ever measured, the place to stop
+it is the GROUNDED branch of that skip." The skip loop now notes when
+GROUNDED consumes or halts on a Land; if |vx| >= LAND_BRAKE_STATIONARY, x is
+zeroed outright with setVelocity, the same mechanism and reason as the
+airborne latch. The next edge starts from rest. `ARC touchdown at P vel V
+reached the Land -- killing horizontal velocity`. The tall-arc launch
+(dd.locomotion.narrowlanding) fired correctly on the same jump; the ceiling
+was not the cause.
+
+### A walk through a denied liquid the chassis can hop is not a refusal
+`dd.locomotion.hoppable` -- see also `arch.pathing.coarsenav`, `dead.locomotion.pelagic`, `fact.pathing.stretchclimb`
+
+**DECIDED AND BUILT 2026-09-12 (coarsenav 12h, taskAction 12l), VERIFIED
+18:47: `hopping from [5825.31,1181.8] to [5831.5,1181.8], 6.19 tiles across,
+40.2 up`.** The engine walks a one-deep pool as ground (the liquid is below
+the body's swim fraction), so every probe across returned Walk>Walk>Walk and
+navPathForbidden refused it; the far bank never entered the graph while the
+executor's avoidLiquidAhead could have hopped it on arrival. The hop decision
+is now one function, petports_liquidHopFrom(here, dir) -- scan for the
+denied span, dry landing past it, arc from runSpeed and real gravity, jump
+ceiling from airJumpProfile.jumpSpeed, arcHitsTerrain -- called by the
+executor as before and by the probe from the last dry node in the path's
+direction. A landing clears the span; no landing keeps the refusal and says
+why (`needs 49.7 up, chassis jumps 45`). Only Walk edges qualify; an arc that
+grazes lava stays a refusal. The lower pool at 5838..5844 needs 49..51 up
+against 45 and is correctly refused: jump physics, a monstertype number.
+
+### A work family that strands the unit three times running is held for two minutes
+`dd.dispatch.familyhold` -- see also `arch.dispatch.deathowner`, `dd.pathing.yieldrule`
+
+**DECIDED AND BUILT 2026-09-12 (port 12b), VERIFIED 16:58 (`asterite work
+HELD for 120 s`; replant x3, withdraw x3, water dispatched inside the hold).**
+52 deposits are 52 work ids with separate backoffs, so the asterite generator
+always had a fresh failure to hand out above planting; the animal generator
+in an unreachable pen has the same shape (Lofty). FAMILY_HELD = asterite,
+animal; FAMILY_STRIKES 3; FAMILY_HOLD 120 s; a success in the family clears
+the count. The port's main chunk is at 193 of 200 locals after this.
+
+### The nav tick is told the pather is searching, not skipped
+`dd.pathing.tickwhilesearching` -- see also `arch.pathing.coarsenav`, `dd.pathing.yieldrule`, `dead.locomotion.pelagic`
+
+**DECIDED AND BUILT 2026-09-12 (coarsenav 12a, taskAction 12d; Lofty:
+"when the pet is searching for a path all of the nav debug stops").**
+`petportsTaskUpdateInner` skipped the whole `petports_navTick` while the
+unit's own pather had a live A* without a path. The reason was real only
+for sweep steps and bridge exit probes, which are explore calls competing
+with the live search; the tick also carried the flush, the index tick,
+the graph build, the merged build, the contradict scan and the overlay,
+none of which touch the pathfinder. A search that will never resolve (a
+submerged free mover aiming at air, `dead.locomotion.pelagic`) runs to
+SEARCH_LIMIT and froze the graph build for its whole length. Now the
+tick takes `searching` and returns after the draw when it is set; only
+the survey and the bridge probes yield.
+
+### A profile is keyed by the probe's inputs, not by monstertype
+`dd.pathing.profilebyinputs` -- see also `arch.pathing.coarsenav`, `arch.pathing.chunkstore`, `dd.pathing.probeprofile`
+
+**DECIDED 2026-09-12, NOT BUILT (Lofty: "if the ground walker and
+amphibious walk mode both generate functionally identical cells, can pets
+for both kinds update the same store?").** The profile string opens with
+`world.monsterType`, so the drone and the otter's walker side never share
+a cell even when every capability matches, against the header's own rule
+that the store is keyed by capability. The replacement: the inputs the
+probe consumes. A free mover's body sweep is pure geometry, so bounds,
+liquids and avoidLiquid already determine its verdict. A walker's probe
+is the engine A* run with `mcontroller.baseParameters()` (gravity forced
+on, jumpSpeed scaled by jumpModifier), so its key carries whichever
+movement parameters PathFinder reads -- to be taken from the retail
+`StarPlatformerAStar.cpp` (Lofty will link the baseline file), never
+guessed: a parameter left out is the "lava-capable unit teaches, plain
+unit dies" case. A profile change orphans the old stores, so it lands
+with a wipe, after `arch.pathing.chunkstore` is verified.
 
 ### Nothing a unit does may stall a server tick: anything longer than its budget yields
 `dd.pathing.yieldrule` -- see also `arch.pathing.tickbudget`, `arch.pathing.frontierqueue`, `proc.tooling.profilefirst`, `plan.pathing.cityscale`
@@ -8537,6 +8775,18 @@ bare false as "no route" and abandoned a route it had just followed; a
 swimmer on a 1411-cell graph lost that race at its first corner every time.
 Any caller that discards the second return has this bug.
 
+### A narrow landing skips kept-vx and raises the arc only until the landing is slow
+`dd.locomotion.narrowlanding` -- see also `dd.locomotion.arcveto`, `todo.locomotion.arrival`
+
+DECIDED 2026-09-12 (taskAction 12b-c). `landingIsNarrow` asks
+`validStandingPosition` one tile either side of the landing. Narrow skips
+branch 1 and lets branch 2 raise its rise in half-tile steps until the landing
+vx is under `NARROW_LANDING_VX` (8), bounded by the chassis `jumpSpeed`; never
+for a vertical launch. Measured: 11.7 slid off a one-wide platform, 7.7 held.
+First draft aimed at `JUMP_VELOCITY_CAP` as a target and sent a 7-up vertical
+launch to apex 13.65 -- the cap is a bound, not a target. The descent half of
+`arcHitsTerrain` now tests with a set that includes `"Platform"`.
+
 ## DESIGN INTENT -- PLANNED
 
 ### City scale: chunk-keyed store, hierarchical routing, a chunk loader
@@ -8556,7 +8806,7 @@ scale in a known order, and this is that order:
    PETPORTS_NAV_SEARCH_BUDGET becomes a corridor size. Mostly wiring; the
    ladder exists.
 2. **Chunk-keyed index AND edges** (Lofty: "per chunk rather than per
-   tile"). One property per 32x32-tile chunk per profile for the index
+   tile"). **BUILT 2026-09-12 AS `arch.pathing.chunkstore`, UNTESTED.** One property per 32x32-tile chunk per profile for the index
    (today one property for the whole profile: `fact.pathing.indexparse`)
    and one for the edges of its 256 cells (today one property per CELL:
    2,078 reads to load a graph). Every read and write becomes a few
@@ -8853,6 +9103,52 @@ missing.
 ## DESIGN INTENT -- NICE TO HAVE
 
 ## ENGINE FACTS
+
+### world.time() returns 0 during a monster's init
+`fact.unit.initclock` -- see also `fact.unit.uninitnokill`, `arch.unit.death`
+
+MEASURED 2026-09-12 13:56 (`init clock 0, now 2.25584e+09`). A time window
+taken across init is meaningless; contract 12b counts updates instead
+(PETPORTS_CULL_TICKS, wrapping groundPet's update). The queued unload kill
+landed 1..18 updates after init across four units.
+
+### The stretch rule refused a climb the engine had found
+`fact.pathing.stretchclimb` -- see also `arch.pathing.coarsenav`, `dd.locomotion.hoppable`, `plan.pathing.cityscale`
+
+MEASURED 2026-09-12 18:47: `5856,1175 -> 5857,1181 TOO LONG: 37 edge(s) for
+6.1 tile(s) apart (limit 26)` on all three rim cells of the pocket, so the
+pocket was a directed dead end for the plain walker while the lava-immune one
+left through the lower pool. A staircase is Jump>Arc>Arc>Land per ledge, four
+edges per tile gained; edge count reads every climb as a detour, and the
+intermediate ledges are not standable cells, so there is no "chain of short
+hops" for the refusal to defer to -- refusing the edge deletes the
+connection. Coarsenav 12i measures tiles travelled instead (same constants;
+UNVERIFIED at retirement). THE RULE IS STILL A REACHABILITY CHECK AND SHOULD
+NOT BE: the correct fix (Lofty, 2026-09-12: "why does the tool for going long
+distances have a distance check") records the travelled length with the edge
+and lets the router cost by it, so the 166-edge deck detour the rule was
+written for is an expensive edge rather than a deleted one. Store format
+change; queued with the next wipe (STATUS item 2).
+**SUPERSEDED 2026-09-13 BY `arch.pathing.edgelength`:** 12i never ran; 13a
+removed the rule and did the store change.
+
+### Retail's A* can loop forever on a self-crossing path
+`fact.pathing.astarcycle` -- see also `dead.locomotion.pelagic`, `ref.tooling.osbaseline`
+
+READ 2026-09-12 from retail's StarAStar.hpp (OpenStarbound baseline commit
+6352e8e) and xStarbound's fix (6bf9219). reconstructPath walks cameFrom
+pointers with no cycle guard; cameFrom is overwritten unconditionally for a
+target not in the open set (the early-exploration node is held out of it);
+and StarPlatformerAStar's Land edges have a SOURCE that is not the expanded
+node (the arc node T, created in the same neighbour list), so parent pointers
+are not a tree rooted in expansion order. A cheaper arrival at T through L
+gives L <- T <- ... <- L and result() never returns. xStarbound stamps a
+re-encountered target with a fresh nodeId and guards reconstruction;
+OpenStarbound's attempt does not work (Lofty, from a client developer).
+Free movers are immune (Fly edges are a lattice); every gravity-on search --
+walker legs and, by volume, walker survey probes -- is exposed on retail; it
+cannot be caught from Lua (one explore() call hangs the world thread, the
+log just stops). Not seen today. For SORTING_FOR_MODDERS' known issues.
 
 ### A free mover's true sweep verdict was learned one way, and every "no path" was a leaf
 `fact.pathing.onewaytrue` -- see also `arch.pathing.frontierqueue`, `arch.pathing.executorguards`, `arch.pathing.coarsenav`
@@ -12673,6 +12969,18 @@ MEASURED 2026-09-11 on `petports_petport.lua`: worst is `findWork` at 29,
 an upvalue, so de-localising relieves this too. Recorded because the failure
 reads nothing like "too many local variables".
 
+### A table that crosses an entity message after a reload can arrive keyed by string
+`fact.tooling.messagekeys` -- see also `arch.upcycler.plain`
+
+MEASURED 2026-09-11. `storage.blips`, a sequence, was received by the pane as
+`{"1":"plain","2":"plain",...}` after a world reload; `#` read 0 and `[1]` read
+nil on both the pane and the object. A fresh in-session sequence arrives as an
+array. Cause in Starbound's Lua-to-JSON not established. Both sides now read
+either key form; the object rebuilds its queue as a `jarray()` so it
+serialises as an array from then on. Any other table that crosses a message
+after a reload is exposed to the same thing, and `sb.printJson` showing
+`{"1":` is the tell.
+
 ## DISPROVEN
 
 ### A fixed search budget on a graph that grows
@@ -13839,6 +14147,63 @@ holes closed, nothing lost, every one in a single pass. `--old` reinstates the
 pass without it.
 
 ## BACKLOG
+
+### Dispatch should ask whether the unit can get back
+`todo.dispatch.roundtrip` -- see also `fact.pathing.stretchclimb`, `dd.dispatch.familyhold`
+
+OPENED 2026-09-12 18:47: the plain walker reached ore in a pocket it could not
+leave (see fact.pathing.stretchclimb for why), failed three times and was
+recalled with the ore intact. The recall is the right backstop; the gap is
+that nothing in the port routes target->home before dispatching. The graph can
+answer it once the target's cells are surveyed; a target with no route home
+is one to skip, not fail.
+
+### A long leg lets the engine detour over the route's own cells
+`todo.pathing.legdetour` -- see also `arch.pathing.coarsenav`, `dd.locomotion.narrowlanding`, `todo.locomotion.dropstack`
+
+OPENED 2026-09-13 21:58 (Lofty: "looks like another slide"; it was the
+plan). From 5855,1181 the picker handed out [5848.5,1181.8], the farthest
+route cell inside NAV_LEG_REACH (8), and the engine planned the seven tiles
+its own way: up four onto a one-wide platform at [5853,1185.8], off its far
+side, down six to [5850,1179.8], into the drop veto. The route's own cells
+between the two ([5851.5,1178.8] among them) carry proven edges with
+measured lengths (coarsenav 13a) that never leave the ground. Candidate
+rule: when the engine's plan for a leg is much longer in tiles than the
+route's summed `d` across the same cells, shorten the leg by a hop and ask
+again. A picker change, not a landing one; the 13f touchdown stop and the
+tall-arc launch both fired correctly on this jump.
+
+### The chunk codec drops a bridge's kind and points
+`todo.pathing.bridgeextras` -- see also `arch.pathing.chunkstore`, `arch.pathing.bridges`, `arch.pathing.mergedgraph`
+
+READ 2026-09-13 from the code, not measured: navBridgeLearn merges `k`,
+`board`, `float`, `hole` onto the pending entry, and the 12b edge array
+`[dx, dy, r, t, d]` encodes none of them, so after a flush the merged
+loader's `bridge[from>to]` has no `k` and navWaypoint's bridge leg falls
+back to "wade" (coarsenav ~5223). The otter has not been run since 12b.
+Additive fix: a side map on the edge property keyed by cell id and target
+delta, not a stride change, so no wipe.
+
+### A pre-flight check for undefined global reads
+`todo.tooling.globals` -- see also `proc.tooling.retired12`
+
+OPENED 2026-09-12 (taskAction 12k -> 12m): deleting unperchFromCorner took
+UNPERCH_DEBOUNCE with it; luabalance and localorder cannot see a global read
+of a name that is assigned nowhere, and it crashed update() on the first
+perch. A script listing upper-case identifiers read but never assigned across
+the mod's Lua would have caught it in one run.
+
+### A chunk write claim, if the fresh read is the tall thing
+`todo.pathing.chunkclaim` -- see also `arch.pathing.chunkstore`, `dd.pathing.yieldrule`
+
+OPENED 2026-09-12 as the fallback, NOT wanted yet (Lofty: "if setProperty
+is synchronous and we don't need to worry about atomicity the claim thing
+is unnecessary"). The flush reads a chunk fresh before it writes -- one
+parse per touched chunk per 5 s per unit. If a log shows that parse as
+the tall thing, a unit holding a chunk claim could trust its own memo and
+skip the read; the cost is two claim RMWs per flush against one read, a
+TTL for a dead holder, and every other unit in the chunk holding its
+pending edges until release. Measure first.
 
 ### The edge index loses cells, and the graph is built from the index
 `todo.pathing.indexshrink` -- see also `arch.pathing.coarsenav`, `fact.pathing.onewaytrue`, `arch.pathing.frontierqueue`, `fact.pathing.indexparse`
@@ -15983,7 +16348,58 @@ MEASURED 2026-09-11. 175 of the locals are functions. Cohesive extraction
 candidates by slot count: farming 36, machines 30, containers 26, targeting
 16, pane mirror 15. Any one of them is a session.
 
+### Descending a stack of platforms: one controlDown falls through all of them, and both fixes were reverted
+`todo.locomotion.dropstack` -- see also `fact.pathing.platformdrop`, `arch.locomotion.unperch`
+
+OPENED 2026-09-12. CORRECTED 2026-09-13 (Lofty): the origin was a STACK OF
+CRATES, each crate's top a platform surface, and the eleven-tile drop was the
+last of a chain: the unit dropped through the first crate (correct), walked
+to the right edge of the second row to drop again, backtracked left, and only
+then fell the remaining eleven tiles to the floor. The drop was the one part
+the code caught as aberrant; the walk-right-drop-walk-left before it is the
+same class as todo.pathing.legdetour and arch.locomotion.legarrival case 3,
+and should be read as such when the stack is next logged.
+Measured: scoots (`setPosition` a quarter below the
+surface) pass one platform each and work. When a scoot is REFUSED the drop
+falls back to `controlDown`, and one refusal for "no platform above the floor
+to pass" -- the unit was mid-air, nothing to pass -- started the engine's
+fall-through state and a one-tile Drop edge ended eleven tiles down through
+four platforms. Two builds tried and rolled back the same night: 12d gated
+`controlDown` to the embed-in-solid refusal only, which left a unit resting
+0.40 above a platform on a chamfer corner refused forever ("not standing on
+it", `DROP_ORIGIN_TOLERANCE` 0.35); 12e widened the tolerance to 0.5, after
+which one-wide platform jumps failed. Not understood: why the tolerance change
+affected jump landings at all. Start from a log of 12c on the stack, and treat
+`DROP_ORIGIN_TOLERANCE` and the scoot's standing test as coupled to landing
+detection somewhere that is not visible from the drop code.
+
+### The launch solver reaches the point and knows nothing about arriving
+`todo.locomotion.arrival` -- see also `dd.locomotion.narrowlanding`, `dd.locomotion.arcveto`, `todo.locomotion.lefthop`
+
+NAMED 2026-09-12 (Lofty). Ceiling bonks on tall arcs, the amphibious
+horizontal pounce at a target below, the one-wide platform slide, the
+vertical-launch left-side hop -- one gap: `solveLaunch` optimises for the
+cheapest parabola through the target and has no term for what the landing is
+like (narrow, roofed, below, one-wide). `dd.locomotion.narrowlanding` is one
+special case of it. A landing-quality term in the solve replaces the special
+cases; until then each new terrain shape is a new one.
+
 ## PROCESS
+
+### The 2026-09-12 session was retired for churn: what it teaches
+`proc.tooling.retired12` -- see also `proc.tooling.profilefirst`, `fact.tooling.mergedrefusal`
+
+Lofty retired the session mid-stream. Three fixes in one day were built on a
+mechanism inferred rather than shown by the log (the cull time window, the
+swim cost, and "the rejection is correct and permanent" said before the
+executor's own hop code eighty lines away had been read). The fixes that
+stuck -- the chunk store, tick-while-searching, the step leg, the hop, the
+stretch finding -- were the ones where the log line came first and named the
+mechanism. Rules that stand: read the wrapper before widening what it wraps;
+never assert a binding's behaviour without a fact for it; when a change did
+not fix what it was for, say so in the next reply and roll it back rather
+than stacking the next theory on it; and answer "why is X rejected" by
+reading every site that touches X before answering.
 
 ### Profile before proposing; the log before the fix
 `proc.tooling.profilefirst` -- see also `fact.tooling.luaprofile`

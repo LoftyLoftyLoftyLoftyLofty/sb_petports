@@ -47,7 +47,7 @@
 --  arrives, which is strictly better information anyway: it proves the file
 --  loaded AND that the port can reach it, which is the pair of facts the stamp
 --  exists to establish.
-local CONTRACT_BUILD_STAMP = "2026-09-10a the port tells the unit how many units its network has"
+local CONTRACT_BUILD_STAMP = "2026-09-12d the init clock is gone; a solid fly target needs range, not sight"
 
 local contractStamped = false
 
@@ -128,9 +128,33 @@ end
 --  unit's state and written cargo into the item by the time this is called,
 --  so a unit culled here resumes from the item on the next load exactly as
 --  one that faded would.
+--  Updates after init within which a death with the storage latch set is
+--  the unload cull completing rather than a real death. See die().
+PETPORTS_CULL_TICKS = 60
+
+--  THE UPDATE COUNT, kept beside vanilla's update. Nothing else in the mod
+--  defines update on a unit, so this wraps groundPet's directly.
+local petportsBaseUpdate = update
+
+function update(dt)
+  self.petportsTicks = (self.petportsTicks or 0) + 1
+  if petportsBaseUpdate then
+    return petportsBaseUpdate(dt)
+  end
+end
+
 function petports_despawn(instant)
   stampOnce()
   self.petportsNoDrop = true
+
+  --  AND IN STORAGE, 2026-09-12a. MEASURED 12:41:35 (Lofty: both walkers
+  --  dropped their cargo where they stood on load): the instant cull below
+  --  cannot kill from uninit (fact.unit.uninitnokill), so the unit is saved
+  --  alive with the kill queued; on reload it re-homes, its first tick
+  --  processes the kill, `self` is gone and die() reports a death the port
+  --  now honours for an adopted unit (arch.dispatch.deathowner). A persistent
+  --  monster's storage IS saved, so the latch rides there; die() reads it.
+  storage.petportsNoDrop = true
   monster.setDeathParticleBurst(nil)
   monster.setDeathSound(nil)
 
@@ -228,6 +252,29 @@ function die()
     sb.logInfo("UNIT %s died on a recall at %s -- cargo stays with the port",
       tostring(entity.id()), sb.printJson(mcontroller.position()))
     return
+  end
+
+  --  THE UNLOAD CULL, COMPLETING A LOAD LATER, 2026-09-12a. The storage
+  --  latch was set by petports_despawn before the save; a death inside
+  --  PETPORTS_CULL_TICKS of init with it present is that queued kill and
+  --  the load is already in the item. A leftover that came back ALIVE
+  --  (uninit never ran) keeps working with the latch set and clears it on
+  --  its first real death, which spills as it should.
+  --  UPDATES, NOT world.time, 2026-09-12b: world.time() returns 0 during
+  --  init (MEASURED 13:56, "init clock 0"), so a time window cannot be
+  --  taken across it. The clock is the update count; PETPORTS_CULL_TICKS
+  --  is generous because the queued kill landed 1..18 updates after init.
+  local ticks = self.petportsTicks or 0
+  if storage.petportsNoDrop then
+    storage.petportsNoDrop = nil
+    if ticks < PETPORTS_CULL_TICKS then
+      sb.logInfo("UNIT %s died %s update(s) after init with the unload latch in storage -- "
+        .. "the unload cull completing, cargo stays with the port",
+        tostring(entity.id()), sb.printJson(ticks))
+      return
+    end
+    sb.logInfo("UNIT %s died %s update(s) after init with a stale unload latch -- a real death, reporting it",
+      tostring(entity.id()), sb.printJson(ticks))
   end
 
   if self.anchorId == nil or not world.entityExists(self.anchorId) then
@@ -3980,7 +4027,14 @@ end
 --  terrain? A ray, not a sweep: this asks whether the unit is in the right
 --  PLACE, while getting there is the pather's problem and has its own body
 --  sweep in petports_flyapproach.lua.
+--  A SOLID TARGET NEEDS RANGE, NOT SIGHT, 2026-09-12c (Lofty: "it's okay if
+--  the mining beam shoots through walls because the player's can too").
+--  MEASURED 14:51:10: 289 grid points for a deposit, 126 "fits but cannot
+--  see the target" -- the ray ran to the centre of the deposit's own tile,
+--  which is rock, so nothing could ever see it. A target in the open keeps
+--  the sight test; a target inside a tile is reached by distance alone.
 local function flySighted(point, target)
+  if world.pointTileCollision(target, FLY_TILE_SET) then return true end
   return not world.lineTileCollision(point, target, FLY_TILE_SET)
 end
 
