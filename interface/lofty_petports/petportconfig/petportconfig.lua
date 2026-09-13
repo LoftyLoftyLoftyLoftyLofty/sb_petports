@@ -64,7 +64,7 @@ local DEBUG = true
 --  Bump on every change to this file. A pane has no visible version and a stale
 --  copy is indistinguishable from an unfixed one -- which cost a cycle on the
 --  upcycler before the stamp existed.
-local PANE_BUILD_STAMP = "2026-09-13d source rows read in scan order, restock first"
+local PANE_BUILD_STAMP = "2026-09-13f the details tab preference value wears its flavor colour"
 
 local PANE_STATE_KEY = "petports_paneState"
 
@@ -1959,6 +1959,30 @@ local function groupDigits(value)
 	return text
 end
 
+--  A TREAT TOTAL WEARING ITS OWN FLAVOUR'S COLOUR.
+--
+--  THE NUMBER, NOT THE LABEL. The label is the word a player reads to find the
+--  row; the number is what they came to compare, and tinting it gives the
+--  block a readable shape at a glance without making seven words harder to
+--  scan than seven colours.
+--
+--  THE COLOUR COMES FROM THE MANIFEST, so an eighth flavour from a mod is
+--  tinted by the field it already has to declare for its blip.
+--
+--  NO ENTRY, NO ESCAPE. A flavour this pane has a count for but no manifest
+--  entry -- an orphan row, left by a mod removed after a unit ate some -- would
+--  otherwise take flavorHex's white fallback, and statText draws in GREY. White
+--  is not "no tint" here; it is a brighter row than its neighbours, on the one
+--  line least able to explain itself. Untinted matches the block instead.
+local function flavorCount(id, count)
+	if petports_flavor(id) == nil then
+		return groupDigits(count)
+	end
+
+	return string.format("^#%s;%s^reset;",
+		petports_flavorHex(id), groupDigits(count))
+end
+
 --  THE MIRROR CARRIES NUMBERS AND THIS TURNS THEM INTO SENTENCES -- the same
 --  split as bodyKind: the port does not know the wording, and the rate is
 --  derived HERE so the mirror never carries a value that two fields could
@@ -2134,7 +2158,7 @@ local function paintStats(stats)
 		drawn[flavor] = true
 		addLine(petports_format("petport.stats.fedflavor",
 			flavorLabel(flavor),
-			groupDigits(flavors[flavor] or 0)))
+			flavorCount(flavor, flavors[flavor] or 0)))
 	end
 
 	--  ANYTHING COUNTED BUT NOT IN THE MANIFEST STILL GETS A ROW. A flavor
@@ -2149,7 +2173,7 @@ local function paintStats(stats)
 	for _, flavor in ipairs(orphans) do
 		addLine(petports_format("petport.stats.fedflavor",
 			flavorLabel(flavor),
-			groupDigits(flavors[flavor])))
+			flavorCount(flavor, flavors[flavor])))
 	end
 
 	addSeparator()
@@ -2408,7 +2432,24 @@ local function refresh(force)
 	paintDiagnostics(state.diagnostics)
 
 	paintModules(state)
-	widget.setText("detailsFlavorValue", flavorLabel(state.flavor) or "--")
+	--  THE VALUE WEARS ITS FLAVOUR'S COLOUR, the same manifest field and the same
+	--  escape as the treat totals on the stats tab. Both answer "which flavour",
+	--  so both should answer it the same way without the player reading a word.
+	--
+	--  THE WORD HERE, THE NUMBER THERE, and that is not an inconsistency: the
+	--  stats block repeats one label shape seven times and the number is what
+	--  differs, where this line has no number and the word IS the value.
+	--
+	--  THE DASH STAYS PLAIN. No flavour means nothing to take a colour from, and
+	--  the widget's own grey is what "not set yet" should look like.
+	local flavorName = flavorLabel(state.flavor)
+
+	if flavorName == nil or petports_flavor(state.flavor) == nil then
+		widget.setText("detailsFlavorValue", flavorName or "--")
+	else
+		widget.setText("detailsFlavorValue", string.format("^#%s;%s^reset;",
+			petports_flavorHex(state.flavor), flavorName))
+	end
 	widget.setText("detailsSerial", state.serial and ("Serial " .. state.serial) or "")
 
 	paintStats(state.stats)

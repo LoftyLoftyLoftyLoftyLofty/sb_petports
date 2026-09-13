@@ -186,18 +186,19 @@ function petports_reagentCount()
 	return n
 end
 
---  The blip colour for a flavor, as RRGGBBAA ready for "?multiply=".
+--  A flavour's colour as the config states it, RRGGBB.
 --
---  EIGHT DIGITS OUT, SIX DIGITS IN. The config stores RRGGBB because that is
---  what anyone editing it will type; the directive wants alpha too, and a
---  flavour is never drawn translucent.
+--  THE ONE LOOKUP. petports_flavorColor below dresses this for "?multiply=" and
+--  the stats list feeds it to a "^#rrggbb;" escape; neither reads the manifest
+--  field itself, so the two can never disagree about what colour a flavour is.
 --
---  A flavour with no colour falls back to white, which multiplies to no change
---  at all -- so a mod that forgets the field gets a visible plain blip rather
+--  A flavour with no colour falls back to white. Against a multiply that is no
+--  change at all, and in text it is the colour the row would have had anyway --
+--  so a mod that forgets the field gets a plain blip and a plain number rather
 --  than an invisible one or an error.
-function petports_flavorColor(flavorId)
+function petports_flavorHex(flavorId)
 	local flavor = petports_flavor(flavorId)
-	if flavor == nil then return "ffffffff" end
+	if flavor == nil then return "ffffff" end
 
 	local color = flavor.color
 
@@ -206,10 +207,19 @@ function petports_flavorColor(flavorId)
 			sb.logError("petports: flavor %s has an unusable color %s; wanted RRGGBB",
 				tostring(flavorId), tostring(flavor.color))
 		end
-		return "ffffffff"
+		return "ffffff"
 	end
 
-	return color .. "ff"
+	return color
+end
+
+--  The blip colour for a flavor, as RRGGBBAA ready for "?multiply=".
+--
+--  EIGHT DIGITS OUT, SIX DIGITS IN. The config stores RRGGBB because that is
+--  what anyone editing it will type; the directive wants alpha too, and a
+--  flavour is never drawn translucent.
+function petports_flavorColor(flavorId)
+	return petports_flavorHex(flavorId) .. "ff"
 end
 
 --  The treat item a flavor produces. nil is a MANIFEST ERROR rather than an

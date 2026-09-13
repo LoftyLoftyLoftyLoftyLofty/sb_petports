@@ -50,86 +50,75 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-14 early morning (session closed on Fable usage; resume 2026-09-16)
+### What is built, as of 2026-09-13 (beacon source gates; coarse nav parked for Fable)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-The 13th went to the plain walker in the lava pocket; the 14th's first hour
-went to the otter with a lava block. The session ended on usage, not on a
-clean state: the last log shows the two builds below working and several
-new otter behaviours nobody has read a log for yet.
+**THE PLAN NOW LIVES IN `workbench/plan.drawio`, NOT HERE.** Lofty moved
+triage there because this document had accumulated drift faster than it could
+be read on the human side. The OUTSTANDING KNOWN ISSUES table on that page is
+33 rows graded on category, urgency, importance and difficulty, and it is the
+list to work from. BACKLOG below is still real but is no longer the authority
+on what is next. A human audit of this document is itself an item on that page.
+
+This session deliberately avoided coarse nav: two commits of walker and
+amphibious probe work landed before it (a55d6a5, d920415) and the amphibious
+pathing that follows them is waiting for Fable rather than being picked at
+here. Nothing in this session touches coarsenav, taskAction, or any nav file.
 
 **VERIFIED IN GAME:**
-- coarsenav 13a: stretch refusal gone, `d` on every TRUE edge, Dijkstra
-  router (arch.pathing.edgelength).
-- taskAction 13c/13d/13e/13f: overshoot arrival, already-there chains,
-  later-route-cell arrival, touchdown stop (arch.locomotion.legarrival,
-  dd.locomotion.touchdownstop).
-- port 13a: depositWork honours the failure backoff
-  (dd.dispatch.depositbackoff). MEASURED 03:18: before it, one
-  SEARCH_LIMIT search per 6.5 s with the survey yielding to each; after it,
-  the survey runs uninterrupted and the crate is skipped for its 30 s.
+- port 13b/13c/13d/13e, pane 13a..13d: the six beacon source gates
+  (arch.beacon.sourcegates). Medic drawing medicalgoods from a restock
+  crate was confirmed working; seeds followed once the box was ticked.
+- pane 13c: checkbox rows seeded at row build (dd.pane.rowseed). This was
+  the defect behind the seed report -- see below.
 
 **BUILT, NOT VERIFIED:**
-- coarsenav 13b: bridge `k`/`board`/`float`/`hole` survive the flush in an
-  `x` side map on the edge property (todo.pathing.bridgeextras, now
-  built). Needs an otter to learn a dive, flush, and reload.
-- coarsenav 13c: an A* probe learns under the profile it was started
-  under (`probe.profile`), so a module socketed mid-probe cannot write the
-  verdict into the wrong store (todo.pathing.moduleprofile, partial). Needs
-  a module swap during a survey and a store read to confirm.
+- pane 13e/13f: flavour colour on the stats-tab treat totals and on the
+  details-tab preference value (dd.pane.flavorcolor). In test when the
+  session ended.
+- The water leg's gates: every port in the log reported `no dry soil
+  needing water` throughout, so `waterdeposit` and `waterrestock` have
+  never been exercised.
 
-**OBSERVED IN THE LAST LOG, NOT READ, NOT FILED:** (Lofty, 2026-09-14)
-the amphibious unit backtracks out of the water after launching into it,
-"among other things". No timestamps, no analysis. The FIRST thing next
-session is that log: read before any build. Suspects, in order of what the
-code says rather than what is measured: the leg test's walker branch
-(arch.locomotion.legarrival case 1) running on a body that has just
-switched to the swim side; the 13f touchdown stop firing on a dive Land;
-`0 bridge(s)` in the merged graph with `no pair crosses` at 5813,1146
-while the crate sits in the water at [5838,1146.8].
+**MEASURED, AND WORTH KEEPING:** the seed fetch that "did not work" was not a
+fetch fault. The writeback lines carry each pet's whole `toggles` table, and
+the only pet with a farming module had `farmrestock: false` stored while the
+other two pets had the key absent or true. Reading a stored toggle set out of
+`writing back to item` is the fastest way to settle any pane-versus-port
+disagreement and cost one log to answer a question two builds of reasoning had
+not.
 
-**DO NOT REPEAT** (from the 13th, still standing):
-- Arriving at a waypoint from the liquid-hop landing (taskAction 13a/13b,
-  removed): right verdict, wrong spot. Arrival belongs in the leg test.
-- A leash grace after a task report (reverted before it ran): misread of a
-  log tail. The report-to-dispatch window is real and is an observation.
-- "The pet slides off the one-wide platform" after 13f: it does not; the
-  plan walks off (todo.pathing.legdetour).
-- Stating elapsed time between messages: Claude has no clock on Lofty's
-  side; the only times are the log's.
-- Blaming a slow probe for a slow survey: in the 03:18 log every r2 probe
-  resolved on its own tick; the gaps were the survey yielding to the unit's
-  own SEARCH_LIMIT search. Look at what is between the probe lines.
+**DO NOT REPEAT:**
+- Asserting what a widget's base colour is without reading the `.config`.
+  `statText` is grey [160,166,174], not white, and a comment shipped in pane
+  13e claiming otherwise was wrong within the hour (dd.pane.flavorcolor).
+- Claiming `withdrawWork`'s decline string separates its counts. It
+  separates only `wrongMedium`; storage, claims and backoff share one
+  phrase (todo.port.fetchreason).
+- Chasing the scroll wheel. It is `buttonAdvance * 3` pixels from a GLOBAL
+  asset with no per-widget key (fact.pane.scrollwheel). Dropped on purpose.
+- Everything in the 13th's DO NOT REPEAT list still stands; it was dropped
+  from this rewrite only because none of it was in play this session. It is
+  in git at the previous STATUS.
 
-**OBSERVED, NOT DEFECTS:** (1) a unit that reports done starts its leash leg
-the same tick and the port answers within a beat -- up to WORK_INTERVAL
-without cargo. (2) standing on a platform flush with a lava surface reads a
-small liquid percentage and blends liquid friction; the lever, if any, is a
-movement parameter -- read StarActorMovementController.cpp in the baseline
-before naming one. (3) a stuck unit on task keeps munching: real, and the
-03:18 case was the deposit loop above rather than a munch defect. If a
-stalled-and-eating unit appears with the backoff honoured, gate the munch on
-the progress window (todo.unit.munchwhilestuck, not yet filed).
+**BUILD STAMPS IN PLAY:** port `2026-09-13e`, pane `2026-09-13f`, coarsenav
+`2026-09-13c`, taskAction `2026-09-13f`, contract `2026-09-12d`, flyapproach
+`2026-09-10c`, work `2026-09-11b`, overlay `2026-09-11d`. flavors has no
+stamp and gained `petports_flavorHex`.
 
-**BUILD STAMPS IN PLAY:** coarsenav `2026-09-13c`, taskAction
-`2026-09-13f`, port `2026-09-13a`, contract `2026-09-12d`, flyapproach
-`2026-09-10c`, work `2026-09-11b`, overlay `2026-09-11d`. FLIGHT_TRACE
-off. PETPORTS_NAV_VERBOSE on.
+**NEXT, IN ORDER:** (1) whatever the plan.drawio table says, which is the
+point of moving it there; (2) the amphibious coarse nav work, on Fable, not
+here; (3) todo.port.fetchreason, which is cheap and would have saved this
+session an hour.
 
-**NEXT, IN ORDER:** (1) read the last otter log end to end before touching
-anything; file what it shows; (2) verify coarsenav 13b and 13c from it if
-the events are there; (3) the unrestricted flyer
-(plan.unit.unrestrictedflyer), which was the 13th's plan and is still the
-plan; (4) todo.pathing.legdetour; (5) todo.locomotion.dropstack, now a
-crate-stack descent; (6) plan.pathing.cityscale item 1; (7)
-todo.dispatch.roundtrip.
-
-**COMMIT STATE:** bab1bc9 is still the last commit. Everything above is in
-the working tree. Two of the builds are unverified; commit the tree as
-"walker across lava; otter groundwork unverified" rather than waiting.
+**COMMIT STATE:** d920415 is the last commit. a55d6a5 and d920415 landed
+after the previous STATUS was written and are NOT described by it -- both are
+coarse nav and amphibious probe work from the sessions this one follows, and
+neither is filed as an entry. Everything from this session is in the working
+tree, uncommitted.
 
 ## ARCHITECTURE
 
@@ -4202,6 +4191,54 @@ patient and then be sent to a crate it could not. Both legs now route through
 longer means "the network has none"; it means "none this unit can get to", and
 the medic's decline text had to stop asserting the stronger claim.
 
+### Where a fetch leg is allowed to shop
+`arch.beacon.sourcegates` -- see also `arch.beacon.restock`, `arch.dispatch.twolegs`, `dd.pane.settingdefault`, `dd.pane.rowseed`
+
+**BUILT 2026-09-13.** Three fetch legs take an item out of storage --
+`medicWork`'s dose, `withdrawWork`'s seed, `withdrawWaterWork`'s liquid -- and
+all three scanned deposit beacons only. A player who stationed medicalgoods in
+a restock crate had a medic that could not find them and a decline string that
+blamed reach.
+
+Each leg now asks TWO questions, one per beacon kind, and each is a per-unit
+toggle under its module's block:
+
+    medicWork            medicrestock   medicdeposit    needs `medic`
+    withdrawWork         farmrestock    farmdeposit     needs `farming`
+    withdrawWaterWork    waterrestock   waterdeposit    needs `farming`
+
+**RESTOCK IS SCANNED FIRST, DEPOSIT SECOND.** A restock crate holds what a
+player deliberately stationed where it is wanted; deposit is the bulk store.
+The order was deposit-first for two builds and was reversed on 2026-09-13 --
+the pane rows were reordered with it, on the defragmentation block's rule that
+reading top to bottom should be reading the order the work happens in.
+
+**THE SOURCE LIST IS BUILT, THEN WALKED.** `containerWithSeed(seedName,
+wantDeposit, wantRestock)` appends the two sorted lists and runs one loop, so
+the availability test and the `servicePointNear` reach-skip apply to both kinds
+unchanged. `withdrawWaterWork` builds the same list at the top of the function
+rather than inside its scan -- that loop is nested two deep and
+`petports_beaconsFor` sorts on every call, so it was re-sorting the same crates
+once per wanted liquid per run.
+
+**NEAREST-FIRST WITHIN EACH KIND, NOT ACROSS THEM.** `petports_beaconsFor`
+sorts each list by distance from the PORT, and appending one after the other
+keeps that ordering inside each group only. A far restock crate therefore beats
+a near deposit crate. That is the intended precedence today; a genuinely
+nearest-crate fetch is a different feature and would have to decide whether
+distance is measured from the port or from the unit.
+
+**BOTH BOXES OFF IS A LEGITIMATE ANSWER**, not a state to guard against. The
+source list comes back empty, the leg declines, and the decline reads the same
+as an empty network -- which is a real gap in the log and is filed as
+todo.port.fetchreason.
+
+**THE GATES LIVE ON `toggles`, NOT ON `medic` OR `farming`.** Those two
+handlers rebuild their tables by walking `MEDIC_CLASSES` and `FARMING_CLASSES`
+and would drop a key that is not a patient class or a farming activity --
+silently, and absent reads as ON. The defragmentation rows already take the
+`owner = "toggles"`, `needs = "<module flag>"` route and this follows them.
+
 ### Renaming a unit, and the tag that is a separate question
 `arch.pane.rename` -- see also `arch.pane.petport`, `arch.port.pushsignature`, `fact.unit.entityname`, `fact.pane.textboxcallback`
 
@@ -7306,6 +7343,66 @@ spellings of one rule, and they are written in different files by different
 reflexes -- `~= false` reads as permissive, `== true` reads as careful. Adding a
 setting means choosing the default ONCE and writing it on both sides deliberately.
 
+### A pooled list row arrives wearing the last row's checkbox, so seed it at build
+`dd.pane.rowseed` -- see also `dd.pane.settingdefault`, `fact.pane.listrepaint`, `arch.beacon.sourcegates`
+
+**OBSERVED 2026-09-13.** A farming pet stored `farmrestock: false` for a box
+nobody had ticked off, and the feature behind it looked broken for two builds.
+
+The row build path set visibility, label, data and help on every settings row
+and never called `setChecked`. Painting was left entirely to the steady-state
+loop, which by its own comment runs only on a poll where the PORT's state
+moved. Between building the list and the next such poll, every checkbox read
+whatever its pooled widget last held -- the build path's own note says a row
+"may arrive wearing the last kind that used it", and the checked flag travels
+the same way.
+
+**THAT WINDOW IS WRITABLE, WHICH IS WHAT MADE IT A BUG RATHER THAN A FLICKER.**
+`settingsRowClicked` commits the whole owner by reading every box back, so one
+click inside the window stores a neighbour's leftover value as the player's
+choice.
+
+**INSERTING A ROW IS WHEN IT BITES.** Every row below a new one shifts by one
+and re-pairs with a different pooled widget, so adding a setting is exactly the
+change that exposes it -- which is why it surfaced on the first build that added
+one. The pet it hit had `nametag: false` stored, so there was an unchecked
+widget in the pool to inherit.
+
+**THE COLOUR FIELDS WERE ALREADY RIGHT** and said why: "SEEDED HERE, so a
+freshly built field is never blank... stating it at build time keeps the two
+paths from having to agree about who paints first." The checkboxes now do the
+same thing for the same reason.
+
+### A flavour's colour is the manifest's, and one resolver serves both shapes
+`dd.pane.flavorcolor` -- see also `arch.pane.statslist`, `dd.pane.settingdefault`
+
+**BUILT 2026-09-13.** Treat totals on the stats tab and the preference value on
+the details tab are drawn in their flavour's own colour, through a `^#rrggbb;`
+escape closed by `^reset;`.
+
+**THE FIELD ALREADY EXISTED FOR THE BLIPS.** `color` lives on the flavour in
+the manifest so a modded eighth flavour gets a blip tint by declaring one field.
+Text wants six digits and `?multiply=` wants eight, so `petports_flavorHex`
+now owns the lookup, the validation and the fallback, and
+`petports_flavorColor` is one line appending `ff`. Neither the pane nor the
+upcycler reads `flavor.color` itself.
+
+**NO MANIFEST ENTRY, NO ESCAPE.** An orphan row -- a flavour with a stored
+count and no manifest entry, left by a mod removed after a unit ate some -- takes
+the white fallback, and `statText` draws in GREY [160,166,174]. White there is
+not "no tint"; it is a brighter row than its neighbours on the one line least
+able to explain itself. Both call sites check for the entry and print plain.
+
+**A COMMENT ASSERTING OTHERWISE SHIPPED AND WAS WRONG WITHIN THE HOUR.** It
+claimed white was "the colour the row draws in anyway", which was never checked
+against the `.config`. Read the widget's own `color` before claiming what a
+fallback looks like.
+
+**THE NUMBER ON ONE TAB, THE WORD ON THE OTHER**, and that is not an
+inconsistency: the stats block repeats one label shape seven times and the
+number is what differs, where the details line has no number and the word IS
+the value. The `--` for an unset flavour stays in the widget's grey.
+
 ### Diagnostics are icons with tooltips, not a wrapped label
 `dd.pane.diagicons` -- see also `fact.pane.labelgrows`
 
@@ -10104,6 +10201,33 @@ out; the file carries a do-not-re-add block.
 
 What is left, if the hitch ever needs solving: fewer widgets per cell, or fewer
 cells. Not fewer per frame.
+
+### THE SCROLL WHEEL MOVES A FIXED PIXEL COUNT, SET GLOBALLY, WITH NO PER-WIDGET KEY
+`fact.pane.scrollwheel` -- see also `fact.pane.listrepaint`, `ref.tooling.osbaseline`
+
+READ 2026-09-13 from `source/windowing/StarScrollArea.cpp`. `ScrollArea`'s
+constructor reads exactly one scroll-rate value, and it is a global asset path
+rather than anything off the widget's own config:
+
+    m_buttonAdvance = assets->json("/interface.config:scrollArea.buttonAdvance").toInt();
+
+The `MouseWheelEvent` branch of `sendEvent` scrolls by `m_buttonAdvance * 3`
+up and the negative of that down. No reference to content size, member size or
+row count. `advanceFactorHelper` -- the time-scaled one -- is wired only to the
+scroll bar's forward and backward buttons, never to the wheel.
+
+**SO A ROW-AT-A-TIME WHEEL IS NOT AVAILABLE TO A MOD.** The only lever is
+patching `scrollArea.buttonAdvance`, which changes every scroll area in the
+game including vanilla's, and collides with any other mod doing the same. Row
+height could be matched to the step instead, but the step is what is too large
+-- the stats list is 11px rows in a 165px band and a notch crosses a large
+fraction of it. DROPPED 2026-09-13 rather than solved.
+
+**READ FROM A FORK, NOT FROM THE BASELINE.** The source above is xStarbound at
+6352e8e; GitHub refused an automated read of the file's history, so whether the
+`* 3` multiplier is vanilla is UNCONFIRMED. Diff against the osbaseline
+checkout before this is relied on for anything but the decision it already
+settled.
 
 ### `"callback" : "null"` ON A ROW BUTTON IS HOVER ART FOR FREE
 `fact.pane.nullcallback`
@@ -15097,6 +15221,24 @@ which was true of the tab as it stood and stopped being true two days later.
 - **Rename is BUILT** -- the button on the Settings tab works and the name is
   pushed to a live unit by `pushPetName`. The claim that it was `not built`
   survived here for a session after it shipped.
+
+### A fetch leg's decline does not name the gate that closed it
+`todo.port.fetchreason` -- see also `arch.beacon.sourcegates`, `arch.dispatch.twolegs`, `proc.tooling.logging`
+
+**FILED 2026-09-13, AND IT COST AN HOUR THE DAY IT WAS FILED.**
+`withdrawWork`'s decline separates only `wrongMedium`; storage, claims and the
+replant leg's backoff share one phrase -- "no seed in storage, claimed, or the
+replant leg has backed off" -- so a log line naming seven waiting intents said
+nothing about which of the three it was. `medicWork`'s is the same shape.
+
+Since arch.beacon.sourcegates, both can also decline because a player unticked
+both source boxes, and that reads identically to genuinely empty crates.
+
+Two format strings, no behaviour change: split the three counts the way
+`wrongMedium` already is, and state the gate values when the source list came
+back empty. proc.tooling.logging's rule is the one being broken -- a refusal
+that names neither the thing nor the values it was measured against cannot be
+acted on.
 
 ### Error state on the petport itself
 `todo.port.errorindicator`
