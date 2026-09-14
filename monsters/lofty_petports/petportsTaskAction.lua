@@ -185,6 +185,19 @@ local TASK_TRACE_MOVES = false
 --  refusals all distinct.
 local FLIGHT_TRACE = false
 
+--  THE FUEL GATE'S TWO TRANSITION LINES.
+--
+--  OFF BY DEFAULT, 2026-09-13h. They cannot repeat per tick -- one fires when a
+--  window closes short and the other when the anchor is next beaten -- and they
+--  were 14 lines of 18,658 in the run that verified the gate. But a cold nav
+--  store means a unit that fails task after task while the graph builds, and
+--  every one of those failures is a hold/resume pair. The evidence they carry
+--  is only wanted while the gate itself is in question, and it is not.
+--
+--  WRAPPED, NOT MUTED. Lua evaluates arguments before the call, so a helper
+--  that checked the flag inside itself would still pay for every sb.printJson.
+local FUEL_TRACE = false
+
 --  BUILD STAMP.
 --
 --  Printed once per state entry. Twice now a fix has been diagnosed as not
@@ -207,7 +220,7 @@ local FLIGHT_TRACE = false
 --  Every other engine call in this mod lives inside a function for this reason.
 --  If a stamp is wanted earlier than first entry, put it in a function the
 --  monstertype's script list will call, never beside the local it names.
-local BUILD_STAMP = "2026-09-13f the grounded arc skip kills horizontal velocity when it passes the Land, so a touchdown at speed does not skid off a narrow platform"
+local BUILD_STAMP = "2026-09-13h the fuel gate's hold and resume lines are behind FUEL_TRACE, off -- the gate is verified and a cold nav store would make a pair of them out of every failed task"
 local stampLogged = false
 
 --  How long to let A* search without producing a path before calling the
@@ -5495,7 +5508,7 @@ local function flightTrace(dt, stateData)
   stateData.petportsTrace = { pos = here, grounded = grounded, tick = tick, flight = flight }
 end
 
---  FUEL BURNS WHILE WORKING, AND ONLY WHILE WORKING.
+--  FUEL BURNS WHILE THE UNIT IS GETTING SOMEWHERE, AND ONLY THEN.
 --
 --  arch.fuel.burn. vanilla drains hunger at a flat rate from groundPet.lua's
 --  tickResources regardless of what the unit is doing, which contradicts the
@@ -5518,30 +5531,127 @@ end
 --  defaultPercentage 100 fills it on load -- but petResources() enumerates that
 --  table to build the sync the port mirrors, so without this the pane draws an
 --  empty bar for every unit that predates the feature.
+
+--  MOVING, NOT MERELY DISPATCHED, 2026-09-13g (Lofty: "pets being active and
+--  trying to figure out a path while their nodes are building can take a long
+--  time and having them burning through food while they figure out the
+--  environment is bad").
+--
+--  THE GATE WAS task.port ALONE, which answers "is this unit dispatched" and
+--  was read as "is this unit working". Those coincide only once a dispatch
+--  becomes travel, and while the coarse graph is still being probed they do
+--  not: the unit holds a real task and stands through a search, a refused leg,
+--  two progress strikes, a failure report and a re-dispatch, paying the chassis
+--  rate for every second of it. 900 at 1.0/sec is fifteen minutes, so a base
+--  that is still being learned can empty a tank without the unit covering a
+--  tile.
+--
+--  ARRIVAL IS NOT CARVED OUT, AND THAT IS A DECISION (Lofty, 2026-09-13).
+--  Planting a seed, landing a fish and reorganising a crate are one-tick
+--  interactions; the only act with any duration is mining, and a unit standing
+--  over its hole eating free is cheaper than a second clause in the rule. The
+--  rule is one sentence: a unit pays for ground covered.
+--
+--  THE SAME QUESTION THE PROGRESS WATCHDOG ASKS, ON THE SAME TWO NUMBERS.
+--  "Moved less than PROGRESS_DISTANCE in PROGRESS_WINDOW" is already this
+--  file's definition of going nowhere -- it is what raises a strike -- and a
+--  window that earns a strike is exactly the window that must not be charged.
+--  Constants of its own would let the two drift into disagreeing about the same
+--  unit. NET DISPLACEMENT, NOT VELOCITY, so the oscillation that defeated the
+--  stall detector is not charged either: a body vibrating in place has speed
+--  and goes nowhere.
+--
+--  ITS OWN ANCHOR, ON self, AND ASKED ABOVE THE PORT TEST. burnFuel runs above
+--  every early return in the update and the watchdog does not, so progressAnchor
+--  is not available to it. On self rather than stateData because the verdict
+--  must survive a re-dispatch -- a unit that cannot path is failed and handed
+--  the task again, and a per-task anchor would charge the first window of every
+--  attempt forever. Asked above the port test so the anchor tracks the leash
+--  too, which is what makes a unit parked on its port already held when work
+--  arrives: it starts paying when it actually leaves, not when it is told to.
+--
+--  IT BURNS BY DEFAULT AND STOPS, RATHER THAN THE OTHER WAY ROUND. Deferring
+--  the charge until a window had proved motion would discard the unbilled tail
+--  of every task that ends mid-window, which is most of the short ones. So the
+--  first window of a stall is charged -- the unit was trying -- and nothing
+--  after it is, until the anchor is beaten again.
+local function fuelMoving(dt)
+	local here = mcontroller.position()
+
+	if self.petportsFuelAnchor == nil then
+		self.petportsFuelAnchor = here
+		self.petportsFuelTimer = 0
+		self.petportsFuelHeld = false
+		return true
+	end
+
+	--  BEATEN EARLY ENDS THE HOLD EARLY, not at the next window edge, so a unit
+	--  that gets moving again is not handed the remainder as free travel.
+	if world.magnitude(here, self.petportsFuelAnchor) >= PROGRESS_DISTANCE then
+		if self.petportsFuelHeld and FUEL_TRACE then
+			sb.logInfo("UNIT fuel: moving again at %s -- resuming the burn",
+				sb.printJson(here))
+		end
+
+		self.petportsFuelAnchor = here
+		self.petportsFuelTimer = 0
+		self.petportsFuelHeld = false
+		return true
+	end
+
+	self.petportsFuelTimer = (self.petportsFuelTimer or 0) + dt
+
+	if self.petportsFuelTimer >= PROGRESS_WINDOW then
+		self.petportsFuelTimer = 0
+		self.petportsFuelAnchor = here
+
+		if not self.petportsFuelHeld and FUEL_TRACE then
+			sb.logInfo("UNIT fuel: moved less than %s in %s s at %s -- holding the burn",
+				sb.printJson(PROGRESS_DISTANCE), sb.printJson(PROGRESS_WINDOW),
+				sb.printJson(here))
+		end
+
+		self.petportsFuelHeld = true
+	end
+
+	return not self.petportsFuelHeld
+end
+
 local function burnFuel(dt, task)
-  if task == nil or task.port == nil then return end
+	--  ABOVE THE PORT TEST, AND UNCONDITIONALLY. An anchor that only advanced
+	--  on dispatched ticks would be stale by the length of every leash, and the
+	--  first tick of the next task would read the walk home as motion.
+	local moving = fuelMoving(dt)
 
-  if storage.petResources ~= nil and storage.petResources.petports_fuel == nil then
-    storage.petResources.petports_fuel = status.resource("petports_fuel")
-  end
+	if task == nil or task.port == nil then return end
 
-  --  THE MODULE HOOK GOES HERE, NOT IN THE MONSTERTYPE. petports_fuelDrain is
-  --  the chassis cost; an efficiency module divides it, and until those items
-  --  exist the divisor is 1 and this reads as the chassis rate alone.
-  local rate = tonumber(config.getParameter("petports_fuelDrain", 1.0)) or 1.0
+	if storage.petResources ~= nil and storage.petResources.petports_fuel == nil then
+		storage.petResources.petports_fuel = status.resource("petports_fuel")
+	end
 
-  --  THE EFFICIENCY MODULE, ARRIVING WITH THE MODULE PUSH RATHER THAN BEING
-  --  LOOKED UP HERE. petports_setModuleEffects sets it; the port derives it
-  --  from FUEL_EFFICIENCY_BONUS, so the minutes are written down once.
-  --
-  --  NIL UNTIL THE PORT HAS PUSHED ONCE, which is why the fallback is 1.0 and
-  --  not 0 -- a unit spawned and burning before its first module push should
-  --  burn at the chassis rate, not become immortal.
-  rate = rate * (tonumber(self.petportsFuelScale) or 1.0)
+	--  THE MIGRATION WRITE STAYS ABOVE THE MOTION GATE. It repairs a table the
+	--  pane enumerates rather than charging anything, and a unit whose first
+	--  dispatched seconds are spent standing through a search would otherwise
+	--  draw an empty bar for exactly as long as the stall lasted.
+	if not moving then return end
 
-  if rate <= 0 then return end
+	--  THE MODULE HOOK GOES HERE, NOT IN THE MONSTERTYPE. petports_fuelDrain is
+	--  the chassis cost; an efficiency module divides it, and until those items
+	--  exist the divisor is 1 and this reads as the chassis rate alone.
+	local rate = tonumber(config.getParameter("petports_fuelDrain", 1.0)) or 1.0
 
-  status.modifyResource("petports_fuel", -(rate * dt))
+	--  THE EFFICIENCY MODULE, ARRIVING WITH THE MODULE PUSH RATHER THAN BEING
+	--  LOOKED UP HERE. petports_setModuleEffects sets it; the port derives it
+	--  from FUEL_EFFICIENCY_BONUS, so the minutes are written down once.
+	--
+	--  NIL UNTIL THE PORT HAS PUSHED ONCE, which is why the fallback is 1.0 and
+	--  not 0 -- a unit spawned and burning before its first module push should
+	--  burn at the chassis rate, not become immortal.
+	rate = rate * (tonumber(self.petportsFuelScale) or 1.0)
+
+	if rate <= 0 then return end
+
+	status.modifyResource("petports_fuel", -(rate * dt))
 end
 
 --  RUN AND MUNCH -- THE EMERGENCY FOOD INGRESS.
