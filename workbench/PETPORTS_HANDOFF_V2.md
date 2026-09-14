@@ -50,7 +50,7 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-13 (beacon source gates; coarse nav parked for Fable)
+### What is built, as of 2026-09-13 (the fuel motion gate; nav store wiped on purpose)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
@@ -59,66 +59,68 @@ here disagrees with anything below, this is right and that is stale.
 **THE PLAN NOW LIVES IN `workbench/plan.drawio`, NOT HERE.** Lofty moved
 triage there because this document had accumulated drift faster than it could
 be read on the human side. The OUTSTANDING KNOWN ISSUES table on that page is
-33 rows graded on category, urgency, importance and difficulty, and it is the
-list to work from. BACKLOG below is still real but is no longer the authority
-on what is next. A human audit of this document is itself an item on that page.
+the list to work from. BACKLOG below is still real but is no longer the
+authority on what is next. A human audit of this document is itself an item on
+that page.
 
-This session deliberately avoided coarse nav: two commits of walker and
-amphibious probe work landed before it (a55d6a5, d920415) and the amphibious
-pathing that follows them is waiting for Fable rather than being picked at
-here. Nothing in this session touches coarsenav, taskAction, or any nav file.
+ONE FEATURE, ONE FILE. Everything this session touched is
+`petportsTaskAction.lua`; coarsenav, the port and the pane were not opened.
 
 **VERIFIED IN GAME:**
-- port 13b/13c/13d/13e, pane 13a..13d: the six beacon source gates
-  (arch.beacon.sourcegates). Medic drawing medicalgoods from a restock
-  crate was confirmed working; seeds followed once the box was ticked.
-- pane 13c: checkbox rows seeded at row build (dd.pane.rowseed). This was
-  the defect behind the seed report -- see below.
+- taskAction 13g: the fuel motion gate (arch.fuel.burn). Two holds with a
+  dispatched unit inside them, `petports_fuel` and `traveled` both flat
+  across the whole of each; burn rate while moving unchanged at the chassis
+  1.0/sec. The 19:42 hold spanned three complete dispatch-strike-fail
+  cycles, which is the case the feature exists for.
 
 **BUILT, NOT VERIFIED:**
-- pane 13e/13f: flavour colour on the stats-tab treat totals and on the
-  details-tab preference value (dd.pane.flavorcolor). In test when the
-  session ended.
-- The water leg's gates: every port in the log reported `no dry soil
-  needing water` throughout, so `waterdeposit` and `waterrestock` have
-  never been exercised.
+- taskAction 13h: `FUEL_TRACE`, off, gating the gate's two transition lines.
+  Written after the verifying log, so no run has yet confirmed the lines are
+  silent. Trivially checkable: grep the next log for `UNIT fuel:`.
 
-**MEASURED, AND WORTH KEEPING:** the seed fetch that "did not work" was not a
-fetch fault. The writeback lines carry each pet's whole `toggles` table, and
-the only pet with a farming module had `farmrestock: false` stored while the
-other two pets had the key absent or true. Reading a stored toggle set out of
-`writing back to item` is the fastest way to settle any pane-versus-port
-disagreement and cost one log to answer a question two builds of reasoning had
-not.
+**MEASURED, AND WORTH KEEPING:** the fuel lines were 14 of 18,658 logged lines
+-- 0.075%. The volume in that run was `NAV probe START` 2,595, `NAV neighbours
+of` 1,116, `NAV sweep of` 1,104 and `UNIT standable candidate` 1,012, or 26% of
+the file for nav alone. Bucketing a log by its first three words before
+deciding what to silence takes one pass and settles the question; reasoning
+about which flag is loud does not.
+
+**THE NAV STORE WAS WIPED DELIBERATELY at the end of the session**, so the next
+log is a cold graph build against the larger base. Expect many failed tasks.
+`no vent route (hops used 0)` already failed six drop tasks in the 19:41-19:42
+window with a WARM store, from around [2511-2518, 1152.8] toward [2527-2535,
+1184.9] -- a 32-tile vertical gap the graph had nothing for. That is the signal
+worth reading in the cold run, and it is plausibly plan.pathing.cityscale
+showing its edges rather than a defect.
 
 **DO NOT REPEAT:**
-- Asserting what a widget's base colour is without reading the `.config`.
-  `statText` is grey [160,166,174], not white, and a comment shipped in pane
-  13e claiming otherwise was wrong within the hour (dd.pane.flavorcolor).
-- Claiming `withdrawWork`'s decline string separates its counts. It
-  separates only `wrongMedium`; storage, claims and backoff share one
-  phrase (todo.port.fetchreason).
-- Chasing the scroll wheel. It is `buttonAdvance * 3` pixels from a GLOBAL
-  asset with no per-widget key (fact.pane.scrollwheel). Dropped on purpose.
+- Reading `petports_fuel` out of a `writing back to item` line as if it were
+  the live resource. It is `storage.petResources`, a MIRROR the port
+  resamples on its anchor tick, so two write-backs 0.18 s apart can carry
+  an identical value and short windows read impossible rates (-0.332/sec
+  inside a fully-charging stretch). Only windows of several seconds are
+  trustworthy for a rate.
+- Asserting a log is being spammed by a feature without counting. See
+  MEASURED above: the suspected source was 0.075% of the file.
 - Everything in the 13th's DO NOT REPEAT list still stands; it was dropped
   from this rewrite only because none of it was in play this session. It is
   in git at the previous STATUS.
 
 **BUILD STAMPS IN PLAY:** port `2026-09-13e`, pane `2026-09-13f`, coarsenav
-`2026-09-13c`, taskAction `2026-09-13f`, contract `2026-09-12d`, flyapproach
-`2026-09-10c`, work `2026-09-11b`, overlay `2026-09-11d`. flavors has no
-stamp and gained `petports_flavorHex`.
+`2026-09-13c`, taskAction `2026-09-13h`, contract `2026-09-12d`, flyapproach
+`2026-09-10c`, work `2026-09-11b`, overlay `2026-09-11d`.
 
-**NEXT, IN ORDER:** (1) whatever the plan.drawio table says, which is the
-point of moving it there; (2) the amphibious coarse nav work, on Fable, not
-here; (3) todo.port.fetchreason, which is cheap and would have saved this
-session an hour.
+**NEXT, IN ORDER:** (1) whatever the plan.drawio table says; (2) read the cold
+nav build log for `no vent route`, which is the one open question this session
+raised and did not touch; (3) todo.port.tickyield, still designated a first
+build for a future session.
 
-**COMMIT STATE:** d920415 is the last commit. a55d6a5 and d920415 landed
-after the previous STATUS was written and are NOT described by it -- both are
-coarse nav and amphibious probe work from the sessions this one follows, and
-neither is filed as an entry. Everything from this session is in the working
-tree, uncommitted.
+**COMMIT STATE:** af1c70e is the last commit. 3914a4b and af1c70e landed after
+the previous STATUS was written -- they are the pane and beacon work that
+STATUS described as sitting uncommitted in the working tree, so they are
+already filed under arch.beacon.sourcegates and dd.pane.flavorcolor and need no
+new entry. This session's change is `petportsTaskAction.lua` alone, in the
+working tree, uncommitted.
 
 ## ARCHITECTURE
 
@@ -5288,8 +5290,8 @@ releases its own field after committing -- pressing a commit button is the least
 ambiguous "done with this" in the pane, so the caret should not survive it.
 
 
-### Fuel burns while working, and only while working
-`arch.fuel.burn` -- see also `dd.fuel.hungerwhileworking`, `dd.fuel.fedproductive`, `arch.fuel.eat`
+### Fuel burns while the unit is covering ground, and only then
+`arch.fuel.burn` -- see also `dd.fuel.hungerwhileworking`, `dd.fuel.fedproductive`, `arch.fuel.eat`, `todo.fuel.carriedmotion`, `arch.pathing.oneanchor`
 
 **BUILT 2026-09-03.** `petports_fuel` is a resource of the mod's own, declared in
 every monstertype at `maxValue 900, defaultPercentage 100`, and burned by
@@ -5315,6 +5317,74 @@ why hunger never moves.
 **STATION-KEEPING IS NOT WORK.** The burn is gated on `task.port ~= nil`, which
 is the line the file already drew between dispatched work and a leash task. A
 parked fleet is free and so is a unit walking home, both verified in game.
+
+**AND NEITHER IS STANDING STILL WITH A TASK IN HAND. BUILT AND VERIFIED
+2026-09-13 (taskAction 13g).** `task.port` answers "is this unit dispatched"
+and was being read as "is this unit working". Those coincide only once a
+dispatch becomes travel, and while the coarse graph is still being probed they
+do not: the unit holds a real task and stands through a search, a refused leg, a
+progress strike, a failure report and a re-dispatch, paying the chassis rate
+throughout. At 1.0/sec that empties a tank in fifteen minutes without the unit
+covering a tile, which is the opposite of upkeep proportional to work done
+(Lofty: "having them burning through food while they figure out the environment
+is bad").
+
+`fuelMoving(dt)` holds a net-displacement anchor and returns false once a window
+closes under the threshold; `burnFuel` returns before touching the resource when
+it does.
+
+**THE SAME QUESTION THE PROGRESS WATCHDOG ASKS, ON THE SAME TWO CONSTANTS.**
+`PROGRESS_WINDOW` 5.0 and `PROGRESS_DISTANCE` 2.5 already define going nowhere
+in `petportsTaskAction.lua` -- they are what raises a strike -- and a window that
+earns a strike is exactly the window that must not be charged. Constants of its
+own would let two resolvers disagree about one unit, which is
+`arch.pathing.oneanchor`'s rule applied outside pathing. NET DISPLACEMENT, NOT
+VELOCITY: a body vibrating in place has speed and goes nowhere, and the
+oscillation that defeated the stall detector must not be billed either.
+
+**THE ANCHOR IS ON `self`, NOT `stateData`, AND THE LOG SETTLED IT.** Measured
+19:42:00 to 19:42:17 with a warm store: one hold spanned three complete
+dispatch-strike-fail cycles (`drop:486`, `drop:485`, `drop:935`, all `no vent
+route`). `petports_fuel` flat at 568.734, `traveled` flat at 125251. A per-task
+anchor would have opened a fresh window on each re-dispatch and billed its first
+five seconds, so roughly fifteen of those seventeen seconds instead of none.
+
+**ASKED ABOVE THE PORT TEST, SO THE ANCHOR TRACKS THE LEASH TOO.** An anchor
+that only advanced on dispatched ticks would be stale by the length of every
+leash and the first tick of the next task would read the walk home as motion.
+The consequence is intended and visible: a unit parked on its port is already
+held when work arrives and starts paying when it actually leaves. MEASURED:
+dispatch at 19:39:09.147, burn resumed 19:39:12.758, 3.6 s of unbilled travel.
+
+**IT BURNS BY DEFAULT AND STOPS, RATHER THAN THE OTHER WAY ROUND.** Deferring
+the charge until a window had proved motion would discard the unbilled tail of
+every task ending mid-window, which is most of the short ones. The first window
+of a stall is charged -- the unit was trying -- and nothing after it is.
+
+**ARRIVAL IS NOT CARVED OUT, AND THAT IS A DECISION** (Lofty, 2026-09-13):
+"planting a seed is a one tick action, reorganizing a box is a hopefully one
+tick action, landing a fish is a one tick interaction. The time spent doing the
+task is irrelevant for all tasks except mining, and who cares they can have the
+1.25 seconds of free food." So there is no second clause and no `stateData`
+read: a unit pays for ground covered.
+
+**A UNIT CREEPING BELOW THE THRESHOLD NEVER PAYS, AND THAT IS INHERITED RATHER
+THAN CHOSEN.** The anchor resets at each window close, so under 0.5 tiles/sec
+sustained is free -- 8% of `walkSpeed` 6. MEASURED in the same hold: 2511 to
+2513.37 to 2515.73 to 2518.45, about 2.4 tiles a window, held throughout. Only a
+unit that is failing anyway can hold that pace, and `PROGRESS_DISTANCE` has the
+identical blind spot for strikes, so closing one without the other would be the
+disagreement this borrows the constants to avoid.
+
+**THE RATE IS UNCHANGED WHILE MOVING.** Clean ten-second windows in the same
+log read -0.964, -0.965, -0.964, -1.007 and -0.995 per second against a chassis
+rate of 1.0 and a `fuelScale` of 1.0.
+
+**THE TWO TRANSITION LINES ARE BEHIND `FUEL_TRACE`, OFF (taskAction 13h).** They
+cannot repeat per tick and were 14 lines of 18,658 in the verifying run, but a
+cold nav store makes a hold/resume pair out of every failed task and the gate is
+no longer in question. Wrapped at the call site rather than muted in a helper,
+because Lua evaluates `sb.printJson` before the call either way.
 
 **MIGRATION IS NOT DECORATION.** `groundPet.lua` seeds `storage.petResources`
 once with `or config.getParameter`, so a unit predating this has no such key.
@@ -16420,6 +16490,29 @@ it is a worked example of the cursor half in this file.
 a name in one crate that is actually in three, and every consumer would act on
 it -- the destination ladder, the migration gate and the deposit preference all
 read it as complete.
+
+### Displacement the unit did not produce is still charged as work
+`todo.fuel.carriedmotion` -- see also `arch.fuel.burn`, `arch.vent.routing`
+
+OPENED 2026-09-13, NOT OBSERVED. `fuelMoving` reads position and cannot ask what
+moved it. A dispatched unit standing on a running conveyor is carried past its
+anchor, so the gate reads motion and charges; worse, a belt moving it more than
+`PROGRESS_DISTANCE` per window masks a genuine stall from the gate entirely. A
+vent hop is the same shape in one frame rather than continuously.
+
+IT IS NOT URGENT AND THE REASON IS STRUCTURAL. `PROGRESS_DISTANCE` has the
+identical hole -- a carried unit already never raises a progress strike -- so the
+gate is inheriting the watchdog's answer rather than inventing a second, worse
+one, which is the whole reason it shares those constants. A fix belongs to both
+or neither.
+
+AN IDLE UNIT ON A BELT IS UNAFFECTED AND WAS THE FIRST QUESTION ASKED (Lofty).
+`burnFuel` still returns on `task.port == nil` before touching the resource, and
+`fuelMoving` only advances an anchor, so a parked pet riding a belt costs nothing
+whether the belt is running or not.
+
+WANTED BEFORE ANYTHING IS WRITTEN: a log of a dispatched unit parked on a live
+belt. Everything above is read off the source.
 
 ### Stale CRLF in a repo that specifies LF
 `todo.tooling.crlfstale` -- see also `proc.tooling.assertshape`
