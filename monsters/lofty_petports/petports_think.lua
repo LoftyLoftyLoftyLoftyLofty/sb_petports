@@ -1,3 +1,5 @@
+-- Drives the unit's thinking animation from per-tick pings.
+
 local THINK_DEBUG = true
 
 local THINK_DELAY = 2.0
@@ -11,16 +13,19 @@ local THINK_STATE_ON     = "spin"
 local THINK_STATE_ON_L   = "spinflip"
 local THINK_STATE_OFF    = "none"
 
+-- Records a thinking ping and its reason for this tick.
 function petports_think(reason)
   self.petportsThinkPinged = true
   self.petportsThinkReason = reason
 end
 
+-- Returns the spin state matching the current facing, or the off state.
 local function wantedState(want)
   if not want then return THINK_STATE_OFF end
   return mcontroller.facingDirection() < 0 and THINK_STATE_ON_L or THINK_STATE_ON
 end
 
+-- Sets the thinking animation state and logs a failure.
 local function applyState(state)
   local ok, err = pcall(animator.setAnimationState, THINK_STATE_TYPE, state)
 
@@ -31,6 +36,7 @@ local function applyState(state)
   return ok
 end
 
+-- Advances the held, grace and minimum-show timers and switches the animation state to match.
 function petports_thinkPump(dt)
   self.petportsThinkHeld     = self.petportsThinkHeld or 0
   self.petportsThinkGrace    = self.petportsThinkGrace or 0
@@ -103,6 +109,7 @@ function petports_thinkPump(dt)
   end
 end
 
+-- Zeroes the thinking timers and hides the indicator.
 function petports_thinkClear()
   self.petportsThinkPinged = false
   self.petportsThinkHeld = 0
@@ -119,6 +126,7 @@ function petports_thinkClear()
   end
 end
 
+-- Forces the indicator on and logs it.
 function petports_thinkSelfTest()
   self.petportsThinkHeld = THINK_DELAY
   self.petportsThinkGrace = 5.0

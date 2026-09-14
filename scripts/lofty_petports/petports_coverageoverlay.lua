@@ -1,3 +1,5 @@
+-- Player-side overlay drawing port coverage, unit speech bubbles and beams.
+
 require "/scripts/lofty_petports/petports_work.lua"
 
 local PETPORTS_OVERLAY_BUILD_STAMP = "2026-09-11d beams are not culled at all; the renderer already does it and better"
@@ -35,6 +37,7 @@ local petports_overlay_originalUpdate = update
 local petports_overlay_originalUninit = uninit
 
 
+-- Returns whether an item name carries the petport tag.
 local function taggedPetport(name)
 	if name == nil then return false end
 
@@ -42,6 +45,7 @@ local function taggedPetport(name)
 	return ok and tagged == true
 end
 
+-- Returns whether the player has a petport on the cursor or in hand.
 local function holdingPetport()
 	if OVERLAY_ON_SWAP_SLOT and player.swapSlotItem ~= nil then
 		local cursor = player.swapSlotItem()
@@ -63,6 +67,7 @@ local function holdingPetport()
 end
 
 
+-- Returns the registry's port ids in sorted order.
 local function sortedPortIds(ports)
 	local ids = {}
 	for portId, _ in pairs(ports) do table.insert(ids, portId) end
@@ -70,6 +75,7 @@ local function sortedPortIds(ports)
 	return ids
 end
 
+-- Groups the registry's ports into networks of compatible adjacent rects.
 local function allNetworks(ports, ids)
 	local claimed = {}
 	local networks = {}
@@ -112,6 +118,7 @@ local function allNetworks(ports, ids)
 	return networks
 end
 
+-- Returns a palette colour chosen by hashing a key.
 local function colourFor(key, alpha)
 	local hash = 5381
 	for i = 1, #key do
@@ -123,6 +130,7 @@ local function colourFor(key, alpha)
 end
 
 
+-- Returns overlapping intervals merged into runs.
 local function mergeIntervals(intervals)
 	table.sort(intervals, function(a, b) return a[1] < b[1] end)
 
@@ -138,6 +146,7 @@ local function mergeIntervals(intervals)
 	return merged
 end
 
+-- Returns what is left of a range once a set of intervals is removed.
 local function complement(low, high, removals)
 	local kept = {}
 	local cursor = low
@@ -162,6 +171,7 @@ local function complement(low, high, removals)
 end
 
 
+-- Returns the rect edges with the parts that fall inside other rects removed.
 local function outlineSegments(rects)
 	local segments = {}
 
@@ -211,6 +221,7 @@ local function outlineSegments(rects)
 end
 
 
+-- Returns diagonal lines at a spacing, clipped to a set of rects.
 local function hatchSegments(rects, spacing, anti)
 	local segments = {}
 	if #rects == 0 then return segments end
@@ -268,6 +279,7 @@ local function hatchSegments(rects, spacing, anti)
 end
 
 
+-- Returns a string covering every port's rect, participate flag and id.
 local function geometrySignature(ports, ids)
 	local parts = {}
 
@@ -288,6 +300,7 @@ local function geometrySignature(ports, ids)
 	return table.concat(parts, "|")
 end
 
+-- Rebuilds the outline and hatch segments when the registry version or its geometry changed.
 local function rebuildIfStale()
 	local registry = petports_registry()
 	local version = registry.version or 0
@@ -366,12 +379,14 @@ local BUBBLE_Y = 3.0
 local BUBBLE_DRAW_RANGE = 25.0
 
 
+-- Returns the horizontal offsets for one, two or three icons.
 local function bubbleSlotX(count)
 	if count == 1 then return { 0.0 } end
 	if count == 2 then return { -BUBBLE_PITCH / 2, BUBBLE_PITCH / 2 } end
 	return { -BUBBLE_PITCH, 0.0, BUBBLE_PITCH }
 end
 
+-- Returns the held bubbles within draw range, nearest first, dropping those whose unit is gone.
 local function bubblesToDraw(origin)
 	local out = {}
 	if self.petportsBubbles == nil then return out end
@@ -414,6 +429,7 @@ local BUBBLE_ICON_PX = 16
 
 local BUBBLE_ICON_SLACK = 2
 
+-- Returns an image's canvas size, cached.
 local function iconSize(path)
 	self.petportsIconSize = self.petportsIconSize or {}
 
@@ -437,6 +453,7 @@ local function iconSize(path)
 	return size
 end
 
+-- Returns an image's non-empty region as a box around its centre, cached.
 local function iconBox(path)
 	self.petportsIconBox = self.petportsIconBox or {}
 
@@ -471,6 +488,7 @@ local function iconBox(path)
 	return box
 end
 
+-- Returns an icon's layers placed about their common centre, with a scale that fits the bubble.
 local function layoutIcon(icon)
 	local layers = icon
 	if type(icon) == "string" then layers = { { image = icon } } end
@@ -557,6 +575,7 @@ local function layoutIcon(icon)
 	return out
 end
 
+-- Draws a bubble backing and its icons above a unit.
 local function addBubble(entry)
 	local icons = entry.icons
 	local n = #icons
@@ -617,6 +636,7 @@ local function addBubble(entry)
 end
 
 
+-- Draws a coloured line relative to the player.
 local function addSegment(a, b, colour, origin)
 	local drawable = {
 		line = {
@@ -651,6 +671,7 @@ local BEAM_WAVE_MOVE = 6.0
 
 local BEAM_SEGMENT_CAP = 32
 
+-- Returns the live beams, dropping expired ones and those whose unit is gone.
 local function beamsToDraw(origin)
 	local out = {}
 	if self.petportsBeams == nil then return out end
@@ -679,6 +700,7 @@ local function beamsToDraw(origin)
 	return out
 end
 
+-- Draws a beam as rotated segments with a wobble and a pulsing tint.
 local function addBeam(entry)
 	local beam = entry.beam
 	local now = self.petportsBeamClock or 0
@@ -751,6 +773,7 @@ local function addBeam(entry)
 	end
 end
 
+-- Tests whether drawables take the Overlay layer and records the result.
 local function probeRenderLayer()
 	local ok = pcall(function()
 		localAnimator.addDrawable(
@@ -773,6 +796,7 @@ local function probeRenderLayer()
 end
 
 
+-- Chains the original init, clears the overlay state and installs the bubble and beam handlers.
 function init()
 	if petports_overlay_originalInit then petports_overlay_originalInit() end
 
@@ -828,6 +852,7 @@ function init()
 	sb.logInfo("PETPORTS overlay build: %s", PETPORTS_OVERLAY_BUILD_STAMP)
 end
 
+-- Chains the original update, then redraws coverage, beams and bubbles when there is anything to show.
 function update(dt)
 	if petports_overlay_originalUpdate then petports_overlay_originalUpdate(dt) end
 
@@ -888,6 +913,7 @@ function update(dt)
 	self.petportsOverlayDrawing = true
 end
 
+-- Clears the drawables and chains the original uninit.
 function uninit()
 	if localAnimator ~= nil and self.petportsOverlayDrawing then
 		localAnimator.clearDrawables()

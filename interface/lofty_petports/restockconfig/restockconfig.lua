@@ -1,3 +1,5 @@
+-- Pane for a Restock Beacon: edits its enabled flag and its list of item requests.
+
 local HOLD_CHECK_INTERVAL = 0.25
 
 local AWAY_LIMIT = 4
@@ -34,12 +36,14 @@ local FIELD_WIDGET = { min = "tbMin", max = "tbMax" }
 
 local REQUESTS_LIST = "requestsScroll.requestsList"
 
+-- Logs a formatted line when DEBUG is set.
 local function dbg(fmt, ...)
 	if not DEBUG then return end
 	local ok, text = pcall(string.format, fmt, ...)
 	sb.logInfo("petports restock pane: %s", ok and text or ("<badformat> " .. tostring(fmt)))
 end
 
+-- Returns a value printed as JSON, or a placeholder.
 local function j(value)
 	if value == nil then return "nil" end
 	local ok, text = pcall(sb.printJson, value)
@@ -52,11 +56,13 @@ local rowIds = {}
 local rowPaths = {}
 
 
+-- Returns the beacon's answer to the held check.
 local function beaconAnswer()
 	local promise = world.sendEntityMessage(player.id(), "petports_beaconHeld", self.token)
 	return promise:result()
 end
 
+-- Returns whether the player's swap slot holds an item.
 local function cursorOccupied()
 	local ok, swap = pcall(player.swapSlotItem)
 	return ok and type(swap) == "table" and swap.name ~= nil
@@ -64,6 +70,7 @@ end
 
 local CLEARED_FIELDS = { "requests", "item", "min", "max" }
 
+-- Returns the instance fields the beacon should clear, or nil.
 local function clearList()
 	local out = nil
 
@@ -81,6 +88,7 @@ local function clearList()
 	return out
 end
 
+-- Sends the enabled flag and the requests to the beacon, holding the write when it is refused.
 local function write()
 	local clear = clearList()
 
@@ -117,6 +125,7 @@ local function write()
 end
 
 
+-- Returns an item's short description and max stack, or nil.
 local function itemFacts(name)
 	if type(name) ~= "string" or name == "" then return nil end
 
@@ -135,6 +144,7 @@ end
 
 local POLYMORPHIC_CONFIG = "/scripts/lofty_petports/petports_polymorphic.config"
 
+-- Loads the polymorphic display name table once.
 local function polymorphicNames()
 	if self.polymorphic ~= nil then return self.polymorphic end
 
@@ -151,6 +161,7 @@ local function polymorphicNames()
 	return self.polymorphic
 end
 
+-- Returns an item's display name, cached, preferring its polymorphic override.
 local function labelFor(name)
 	self.labels = self.labels or {}
 
@@ -168,6 +179,7 @@ local function labelFor(name)
 	return self.labels[name]
 end
 
+-- Returns a whole number inside the quota range, or nil.
 local function quotaValue(text)
 	local value = tonumber(text)
 	if value == nil then return nil end
@@ -178,6 +190,7 @@ local function quotaValue(text)
 	return value
 end
 
+-- Shortens text to a character limit.
 local function truncate(text, limit)
 	limit = limit or SUMMARY_CHARS
 	if #text <= limit then return text end
@@ -187,11 +200,13 @@ local function truncate(text, limit)
 	return text:sub(1, limit - 2) .. ".."
 end
 
+-- Returns the selected request.
 local function selected()
 	if self.selectedIndex == nil then return nil end
 	return self.state.requests[self.selectedIndex]
 end
 
+-- Moves the selection onto an existing request, or drops it when the list is empty.
 local function ensureSelection()
 	if #self.state.requests == 0 then
 		self.selectedIndex = nil
@@ -204,6 +219,7 @@ local function ensureSelection()
 	end
 end
 
+-- Returns the index of the request for an item, or nil.
 local function indexOf(name)
 	for index, request in ipairs(self.state.requests) do
 		if request.item == name then return index end
@@ -213,6 +229,7 @@ local function indexOf(name)
 end
 
 
+-- Writes a quota text box and records what it now shows.
 local function setField(field, value)
 	local text = value ~= nil and tostring(value) or ""
 
@@ -220,6 +237,7 @@ local function setField(field, value)
 	pcall(widget.setText, FIELD_WIDGET[field], text)
 end
 
+-- Sets the summary line from the held write, the request count and the selected quotas.
 local function renderSummary()
 	if self.pendingWrite then
 		widget.setText("summary", petports_stringOr("restock.unsaved"))
@@ -262,6 +280,7 @@ local function renderSummary()
 		truncate(label, SUMMARY_CHARS - fixed)))
 end
 
+-- Fills the min and max boxes from the selected request.
 local function renderFields()
 	local request = selected()
 
@@ -274,6 +293,7 @@ local function renderFields()
 	end
 end
 
+-- Sets the item slot, the request count and the hint.
 local function renderSlot()
 	local count = #self.state.requests
 	local request = selected()
@@ -294,6 +314,7 @@ local function renderSlot()
 	widget.setText("requestHint", petports_stringOr("restock.hint"))
 end
 
+-- Sets each request row's text and background art.
 local function paintRows()
 	for index, path in pairs(rowPaths) do
 		local request = self.state.requests[index]
@@ -315,6 +336,7 @@ local function paintRows()
 	end
 end
 
+-- Rebuilds the request list, keeping the selection where it can.
 local function refreshRequests()
 	local keep = self.selectedIndex
 
@@ -354,6 +376,7 @@ local function refreshRequests()
 		tostring(#self.state.requests), tostring(self.selectedIndex))
 end
 
+-- Redraws the slot, the list, the fields and the summary.
 local function renderAll()
 	renderSlot()
 	refreshRequests()
@@ -362,6 +385,7 @@ local function renderAll()
 end
 
 
+-- Adds a request for an item with quotas from its stack size, or selects the one already listed.
 local function addRequest(name)
 	local existing = indexOf(name)
 
@@ -393,6 +417,7 @@ local function addRequest(name)
 	return true
 end
 
+-- Removes a request and moves the selection.
 local function removeRequest(index)
 	if self.state.requests[index] == nil then return false end
 
@@ -408,6 +433,7 @@ local function removeRequest(index)
 end
 
 
+-- Stores a valid quota on the selected request and writes.
 local function commitField(field, text)
 	local request = selected()
 	if request == nil then return end
@@ -426,6 +452,7 @@ local function commitField(field, text)
 	renderSummary()
 end
 
+-- Reads a quota box and commits it when its text changed.
 local function syncField(field)
 	if type(self.state) ~= "table" then return end
 	if not self.fieldsUsable then return end
@@ -450,6 +477,7 @@ local function syncField(field)
 	end
 end
 
+-- Syncs both quota boxes.
 local function pollFields()
 	for _, field in ipairs(QUOTA_FIELDS) do
 		syncField(field)
@@ -457,6 +485,7 @@ local function pollFields()
 end
 
 
+-- Registers the remove and hover member callbacks on the request list.
 local function registerRowCallbacks()
 	local ok, err = pcall(function()
 		widget.registerMemberCallback(REQUESTS_LIST,
@@ -486,6 +515,7 @@ local function registerRowCallbacks()
 end
 
 
+-- Converts a stored single item, min and max into a one-entry request list.
 local function migrate()
 	if type(self.state.requests) == "table" and #self.state.requests > 0 then
 		return false
@@ -511,6 +541,7 @@ local function migrate()
 end
 
 
+-- Returns whether the beacon that opened this pane is on the cursor.
 local function openedFromCursor()
 	local expected = config.getParameter("beaconItemName")
 	if type(expected) ~= "string" then return false end
@@ -520,6 +551,7 @@ local function openedFromCursor()
 	return ok and type(swap) == "table" and swap.name == expected
 end
 
+-- Hides every editing widget and shows the hotbar-only notice.
 local function lockWithNotice()
 	local messages = config.getParameter("hotbarOnlyMessage") or {}
 	local species = nil
@@ -556,6 +588,7 @@ local function lockWithNotice()
 	widget.setText("noticeLineTwo", truncate(tostring(message[2] or "")))
 end
 
+-- Reads the beacon's config, cleans the requests, seeds the checkboxes and draws the pane.
 function init()
 	sb.logInfo("PETPORTS restockconfig build: %s", BUILD_STAMP)
 
@@ -643,6 +676,7 @@ function init()
 	dbg("init: complete")
 end
 
+-- Polls the quota boxes, flushes a held write, and dismisses the pane once the beacon is gone.
 function update(dt)
 	if self.noticeMode then
 		self.holdTimer = self.holdTimer - dt
@@ -709,6 +743,7 @@ function update(dt)
 	pane.dismiss()
 end
 
+-- Attempts a held write and tells the beacon its pane closed.
 function dismissed()
 	if self.noticeMode then return end
 
@@ -721,6 +756,7 @@ function dismissed()
 end
 
 
+-- Stores the enabled checkbox, sets the title icon and writes.
 function enabledToggled()
 	self.state.enabled = widget.getChecked("enabledCheckbox")
 	dbg("enabledToggled -> %s", tostring(self.state.enabled))
@@ -728,12 +764,14 @@ function enabledToggled()
 	write()
 end
 
+-- Stores the feeder checkbox and writes.
 function feederToggled()
 	self.state.feeder = widget.getChecked("feederCheckbox")
 	dbg("feederToggled -> %s", tostring(self.state.feeder))
 	write()
 end
 
+-- Records the selected request and redraws the fields, slot and rows.
 function requestSelected()
 	if self.rebuilding then return end
 
@@ -758,6 +796,7 @@ function requestSelected()
 	renderSummary()
 end
 
+-- Adds a request for the item on the cursor and puts the item back.
 function requestSlotClicked()
 	local swap = player.swapSlotItem()
 
@@ -776,6 +815,7 @@ function requestSlotClicked()
 	renderAll()
 end
 
+-- Drops the selection.
 function requestSlotCleared()
 	dbg("requestSlotCleared: dropping selection")
 
@@ -784,13 +824,16 @@ function requestSlotCleared()
 	renderAll()
 end
 
+-- Syncs the min box.
 function minChanged()
 	syncField("min")
 end
 
+-- Syncs the max box.
 function maxChanged()
 	syncField("max")
 end
 
+-- Does nothing.
 function rowHovered()
 end

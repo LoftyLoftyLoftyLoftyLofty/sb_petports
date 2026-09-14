@@ -1,3 +1,5 @@
+-- Monster action that carries out one port task: routing to it, working it, and reporting back.
+
 petportsTaskAction = {}
 
 local APPROACH_TIMEOUT = 20.0
@@ -72,10 +74,12 @@ local LAND_BRAKE_CEILING = 1.0
 
 local LAND_BRAKE_STATIONARY_GAP = 0.5
 
+-- Returns the rise a launch speed reaches under the engine's discrete integration.
 local function discreteRise(v0, gravity)
   return ((v0 * v0) / (2 * gravity)) + ((v0 * PHYSICS_DT) / 2)
 end
 
+-- Returns the launch speed that reaches a rise under the engine's discrete integration.
 local function discreteLaunchForRise(rise, gravity)
   local half = PHYSICS_DT / 2
   return gravity * (math.sqrt((half * half) + ((2 * rise) / gravity)) - half)
@@ -91,6 +95,7 @@ local HARVEST_LEVEL = 1
 
 local seedSpacesCache = {}
 
+-- Returns a seed's occupied spaces, cached, assuming 1x2 when they cannot be read.
 local function seedSpaces(seedName)
 	if seedName == nil then return { {0, 0}, {0, 1} } end
 	if seedSpacesCache[seedName] ~= nil then return seedSpacesCache[seedName] end
@@ -118,6 +123,7 @@ local function seedSpaces(seedName)
 	return spaces
 end
 
+-- Returns whether any object covers the tiles a seed would occupy at an anchor.
 local function tileOccupied(anchor, seedName)
 	local tiles = {}
 	local lox, loy = anchor[1], anchor[2]
@@ -166,6 +172,7 @@ local CHASE_RETARGET_INTERVAL = 0.5
 
 local CHASE_BUDGET = 10.0
 
+-- Returns the first pool name inside a treasure pool value.
 local function treasurePoolName(value)
   if type(value) == "string" then return value end
   if type(value) ~= "table" then return nil end
@@ -199,6 +206,7 @@ local TRACKED_TARGETS = {
             goneIsDone = true }
 }
 
+-- Returns a task's tracked entity id and its tracking row.
 local function trackedEntity(task)
   local row = task ~= nil and TRACKED_TARGETS[task.type] or nil
   if row == nil then return nil, nil end
@@ -253,6 +261,7 @@ local NAV_LEG_SHARP_TURN = 75
 local NAV_ROUTE_LOOKAHEAD = 6
 local NAV_LEG_BRAKE_TURN = 45
 
+-- Asks the coarse graph for the next waypoint toward a target and starts a fresh pather on it.
 local function tryCoarseLeg(stateData, target, reach, fromOverride)
   if petports_navWaypoint == nil then return false end
 
@@ -404,6 +413,7 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
   return true
 end
 
+-- Takes the next leg of a vent plan, or plans one, returning routing, probing, walk or none.
 local function tryVentRoute(stateData, target)
   if petports_planRoute == nil then return "none" end
 
@@ -468,6 +478,7 @@ local function tryVentRoute(stateData, target)
   return "routing"
 end
 
+-- Returns whether the unit's body overlaps a vent's bounds.
 function petportsTaskAction.touchingVent(ventId)
   local ok, ventRect = pcall(objectBounds, ventId)
 
@@ -482,6 +493,7 @@ function petportsTaskAction.touchingVent(ventId)
            or me[2] > ventRect[4] or me[4] < ventRect[2])
 end
 
+-- Returns the task state data, refusing a task with no position or a tracked target already gone.
 function petportsTaskAction.enterWith(args)
   local task = args.petportsTask
   if task == nil then return nil end
@@ -549,6 +561,7 @@ function petportsTaskAction.enterWith(args)
   }
 end
 
+-- Walks the pather at the scaled speed, slowing on the approach to a jump point.
 function petportsWalkMover(pather)
   local finder = pather.finder
   local ahead = finder ~= nil and finder.lookAhead and finder:lookAhead(1) or nil
@@ -581,6 +594,7 @@ function petportsWalkMover(pather)
   return PathMover.moveWalk(pather)
 end
 
+-- Returns the highest target height across the upcoming arc edges.
 local function plannedApex(pather)
   local finder = pather.finder
   local edges = finder and finder.edges
@@ -604,6 +618,7 @@ local function plannedApex(pather)
   return highest
 end
 
+-- Returns the position of the first non-arc edge after the current one.
 local function plannedLanding(pather)
   local finder = pather.finder
   local edges = finder and finder.edges
@@ -625,6 +640,7 @@ end
 
 local ARC_DESCENT_SOLIDS = { "Null", "Block", "Slippery", "Dynamic", "Platform" }
 
+-- Steps an arc through the physics timestep and returns where the body first hits terrain.
 local function arcHitsTerrain(source, vx, vy, gravity, airtime, landing)
 	if gravity == nil or gravity <= 0 then return nil end
 
@@ -656,6 +672,7 @@ local function arcHitsTerrain(source, vx, vy, gravity, airtime, landing)
 	return nil
 end
 
+-- Logs whether a solved arc is clear, when flight tracing is on.
 local function traceLaunchTerrain(source, vx, vy, gravity, landing, airtime)
 	if not FLIGHT_TRACE then return end
 	if gravity == nil or gravity <= 0 then return end
@@ -676,6 +693,7 @@ local function traceLaunchTerrain(source, vx, vy, gravity, landing, airtime)
 		sb.printJson(landing and (landing[1] - source[1])))
 end
 
+-- Returns whether either tile beside a landing is unstandable.
 local function landingIsNarrow(landing)
 	for _, side in ipairs({ -1, 1 }) do
 		local ok, standable = pcall(validStandingPosition,
@@ -685,6 +703,7 @@ local function landingIsNarrow(landing)
 	return false
 end
 
+-- Returns a launch velocity that clears terrain and arrives descending at the planned landing, or the planner's own.
 local function solveLaunch(pather, edge, source)
   local plannedVx = edge.jumpVelocity[1]
   local plannedVy = edge.jumpVelocity[2]
@@ -812,6 +831,7 @@ local DROP_PROBE_DEPTH = 6
 
 local PROBE_EPSILON = 0.001
 
+-- Returns the surface height of the first platform below the feet and above a floor.
 local function platformToPass(position, floorFeet)
   local bounds = mcontroller.boundBox()
   local feet = position[2] + bounds[2]
@@ -834,6 +854,7 @@ local function platformToPass(position, floorFeet)
   return nil
 end
 
+-- Returns a printable list of the platform and block rows below a position.
 local function probeBelow(position)
   local bounds = mcontroller.boundBox()
   local rows = {}
@@ -862,6 +883,7 @@ local DROP_ORIGIN_TOLERANCE = 0.35
 
 local DROP_SETTLE_MAX = 1.0
 
+-- Returns the surface height of the lowest platform below the feet and above a floor.
 local function lastPlatformToPass(position, floorFeet)
   local bounds = mcontroller.boundBox()
   local feet = position[2] + bounds[2]
@@ -882,6 +904,7 @@ local function lastPlatformToPass(position, floorFeet)
   return lowest
 end
 
+-- Returns whether the body clears solid tiles with its feet at a height.
 local function bodyFitsWithFeetAt(position, feet)
   local bounds = mcontroller.boundBox()
   local centre = feet - bounds[2]
@@ -891,6 +914,7 @@ local function bodyFitsWithFeetAt(position, feet)
   return not world.rectTileCollision(region, {"Null", "Block", "Dynamic"})
 end
 
+-- Places the body just below the platform it is standing on, and returns whether it could.
 local function scootThroughPlatform(pather, floorFeet)
   local position = mcontroller.position()
   local surface = lastPlatformToPass(position, floorFeet)
@@ -938,6 +962,7 @@ local function scootThroughPlatform(pather, floorFeet)
     sb.printJson(surface), sb.printJson(surface - feet))
 end
 
+-- Scoots through the platform underfoot, or falls back to holding down for a timed drop.
 function petportsTimedDrop(pather, time)
   local delta = pather.delta
   local descent = (delta ~= nil and delta[2] ~= nil) and -delta[2] or 0
@@ -993,6 +1018,7 @@ function petportsTimedDrop(pather, time)
     probeBelow(here))
 end
 
+-- Clears the drop hold state.
 local function releaseDrop(pather)
   pather.downHoldTimer = nil
   pather.petportsDropOrigin = nil
@@ -1000,6 +1026,7 @@ local function releaseDrop(pather)
   pather.petportsDropFloorFeet = nil
 end
 
+-- Holds down until no platform remains above the floor, the floor is reached, or the hold expires.
 function petportsKeepDropping(pather, dt)
   if pather.downHoldTimer == nil then return end
 
@@ -1068,6 +1095,7 @@ function petportsKeepDropping(pather, dt)
   end
 end
 
+-- Walks or swims back to the jump point, then launches on the solved velocity.
 function petportsJumpMover(pather)
   if mcontroller.onGround() and pather.jumpCooldown then
     return "running"
@@ -1261,6 +1289,7 @@ function petportsJumpMover(pather)
   return "running"
 end
 
+-- Flies an arc, killing horizontal velocity once it arrives over the planned landing.
 function petportsArcMover(pather)
   pather.jumped = false
   pather.jumpCooldown = 0.3
@@ -1399,6 +1428,7 @@ function petportsArcMover(pather)
   return "running"
 end
 
+-- Builds a new pather with this chassis's path options and movers.
 freshPather = function(why)
   if petports_gravitySwitchable() then
     petports_setSwimMode(
@@ -1431,6 +1461,7 @@ freshPather = function(why)
   self.petportsExploreCalls = 0
   self.petportsExploreRate = (why == "coarse leg") and NAV_LEG_EXPLORE_RATE
     or EXPLORE_RATE
+  -- Returns the explore rate, counting the calls.
   self.pather.finder.exploreRate = function()
     self.petportsExploreCalls = (self.petportsExploreCalls or 0) + 1
     return self.petportsExploreRate or EXPLORE_RATE
@@ -1449,10 +1480,12 @@ freshPather = function(why)
   self.pather.keepDropping = petportsKeepDropping
 end
 
+-- Builds a new pather.
 function petports_freshPather(why)
   return freshPather(why)
 end
 
+-- Logs the build stamp once and builds a fresh pather for the task.
 function petportsTaskAction.enteringState(stateData)
   if not stampLogged then
     stampLogged = true
@@ -1470,6 +1503,7 @@ local TASK_MOVING_DISTANCE = 2.0
 
 local TASK_MOVING_INTERVAL = 0.2
 
+-- Sends a task outcome to the port and drops the held task.
 local function report(stateData, outcome, reason, cargo, retry)
   local task = stateData.task
 
@@ -1510,6 +1544,7 @@ local COLUMN_RADIUS = 3
 
 local columnCache = {}
 
+-- Returns the column offsets out to a radius, nearest first, cached.
 local function columnsFor(radius)
 	radius = math.floor(radius or COLUMN_RADIUS)
 	if radius < 0 then radius = 0 end
@@ -1528,6 +1563,7 @@ end
 
 local standableNearInner
 
+-- Runs the standable search with the survey treating the position's own medium as the unit's.
 local function standableNear(position, searchUp, radius, mediumVerified, searchDown)
   if not (petports_gravitySwitchable ~= nil and petports_gravitySwitchable()) then
     return standableNearInner(position, searchUp, radius, mediumVerified, searchDown)
@@ -1545,6 +1581,7 @@ local function standableNear(position, searchUp, radius, mediumVerified, searchD
   return select(2, table.unpack(results))
 end
 
+-- Returns the nearest point the unit can stand on, or hover at, searching outward column by column.
 standableNearInner = function(position, searchUp, radius, mediumVerified, searchDown)
   if petports_freeMover() then
     local flyPoint = petports_flyPointNear(position, radius, mediumVerified)
@@ -1663,6 +1700,7 @@ petports_standablePoint = standableNear
 
 OBJECT_SEARCH_BUFFER = 2
 
+-- Returns the nearest standable point on top of an object's bounds.
 local function objectRoofPoint(position, bounds)
   if position == nil or type(bounds) ~= "table" or #bounds < 4 then return nil end
 
@@ -1712,6 +1750,7 @@ local function objectRoofPoint(position, bounds)
   return best
 end
 
+-- Returns a standable point beside an object's bounds, falling back to its roof.
 function petports_objectPointNear(position, bounds, mediumVerified)
   if position == nil or type(bounds) ~= "table" or #bounds < 4 then return nil end
 
@@ -1739,6 +1778,7 @@ function petports_objectPointNear(position, bounds, mediumVerified)
   return objectRoofPoint(position, bounds)
 end
 
+-- Returns a task's live target: the current water tile, the tracked entity's position, or the task position.
 local function currentTarget(task)
   if task.type == "water" then
     local tile = task.tiles ~= nil and task.tiles[task.waterIndex or 1] or nil
@@ -1758,6 +1798,7 @@ end
 
 local TARGET_DRIFT = 1.5
 
+-- Returns the point the unit walks to for a target, holding it until the target drifts.
 local function approachTargetFor(stateData, rawPosition)
   if self.petportsDiveRetarget then
     self.petportsDiveRetarget = nil
@@ -1841,6 +1882,7 @@ local function approachTargetFor(stateData, rawPosition)
   return stateData.groundTarget
 end
 
+-- Returns whether the unit's own node is a valid standing position.
 local function originIsPlannable()
   if petports_freeMover() then return true, nil end
 
@@ -1852,6 +1894,7 @@ local function originIsPlannable()
   return standable == true, node
 end
 
+-- Returns the nearest standable node on the same row, and its distance.
 local function nudgeTargetNear(node)
   local here = mcontroller.position()
 
@@ -1879,6 +1922,7 @@ local function nudgeTargetNear(node)
   return nil
 end
 
+-- Walks the unit onto a plannable node, and returns whether it is still doing so.
 local function nudgeOrigin(stateData, dt)
   if not mcontroller.onGround() then
     if stateData.originNudge ~= nil then
@@ -1972,6 +2016,7 @@ local PLAN_WALK_LOOKAHEAD = 6
 
 local PLAN_DROP_REACH = 1.25
 
+-- Scoots through the platform underfoot when a nearby walk or land edge sits below the unit.
 local function tryPlanDrop(pather, finder)
   if pather == nil or finder == nil then return false, "no pather", false end
   if not mcontroller.onGround() then return false, "airborne", false end
@@ -2028,6 +2073,7 @@ local function tryPlanDrop(pather, finder)
   return false, detail, true
 end
 
+-- Returns whether terrain blocks the sweep to the next walk edge, with that edge.
 local function planWalkBlocked(finder)
   local edges = finder and finder.edges
   local index = finder and finder.currentEdgeIndex
@@ -2068,6 +2114,7 @@ local function planWalkBlocked(finder)
   return blocked, walkIndex, walkEdge, sweep
 end
 
+-- Returns the plan's horizontal position at a height.
 local function flightPlanX(finder, y)
   if finder == nil or finder.edges == nil then return nil end
 
@@ -2100,6 +2147,7 @@ local function flightPlanX(finder, y)
   return nil
 end
 
+-- Logs the position, velocity and drift from the solved arc each tick, when flight tracing is on.
 local function flightTrace(dt, stateData)
   if not FLIGHT_TRACE then return end
 
@@ -2195,6 +2243,7 @@ local function flightTrace(dt, stateData)
 end
 
 
+-- Returns whether the unit has covered ground recently enough for fuel to burn.
 local function fuelMoving(dt)
 	local here = mcontroller.position()
 
@@ -2235,6 +2284,7 @@ local function fuelMoving(dt)
 	return not self.petportsFuelHeld
 end
 
+-- Drains fuel at the configured rate while the unit is moving.
 local function burnFuel(dt, task)
 	local moving = fuelMoving(dt)
 
@@ -2261,10 +2311,12 @@ local MUNCH_RADIUS = 3.0
 
 local MUNCH_LOW = 0.25
 
+-- Returns whether leftovers may be handed to the port rather than dropped.
 local function munchMayHold(task)
   return task == nil or task.port == nil or task.hold == true
 end
 
+-- Eats nearby unclaimed fuel drops while fuel is low, handing the leftovers to the port.
 local function runAndMunch(dt, task)
   self.munchTimer = (self.munchTimer or 0) - dt
   if self.munchTimer > 0 then return end
@@ -2357,6 +2409,7 @@ local ASTERITE_SPARKS = 6
 
 local ASTERITE_CLEAR_MARGIN = 1
 
+-- Returns the swing count, mining particle and mining sounds for a tile mod.
 local function asteriteEffects(modName)
 	local swings = ASTERITE_SWINGS_MIN
 	local particle = nil
@@ -2401,6 +2454,7 @@ local function asteriteEffects(modName)
 	return swings, particle, sounds
 end
 
+-- Tells every player to draw a mining beam at a tile.
 local function publishBeam(centre, swings, period)
 	local ok, players = pcall(world.players)
 	if not ok or players == nil then return end
@@ -2411,6 +2465,7 @@ local function publishBeam(centre, swings, period)
 	end
 end
 
+-- Spawns a projectile that plays the mining particles and sounds when it reaps.
 local function asteriteSwingEffect(centre, particle, sounds)
 	local reap = {}
 
@@ -2438,6 +2493,7 @@ local function asteriteSwingEffect(centre, particle, sounds)
 	end
 end
 
+-- Returns whether the unit is level with an arc's target and already past it.
 local function arcPastWaypoint(edges, index, here)
 	local edge = edges[index]
 	local following = edges[index + 1]
@@ -2469,12 +2525,14 @@ local LIQUID_SCAN_SPAN = 10
 
 local LIQUID_HOP_VX = 6
 
+-- Returns whether the liquid at a point is one this chassis will not enter.
 local function deniedLiquidAt(point)
 	local ok, liquid = pcall(world.liquidAt, point)
 	if not ok or type(liquid) ~= "table" or liquid[1] == nil then return false end
 	return petports_liquidDenied(liquid[1]) == true
 end
 
+-- Returns the landing and launch velocity for hopping a pool of denied liquid ahead, or a refusal reason.
 function petports_liquidHopFrom(here, dir)
 	local bounds = mcontroller.boundBox()
 	if type(bounds) ~= "table" or #bounds < 4 then return nil end
@@ -2540,6 +2598,7 @@ function petports_liquidHopFrom(here, dir)
 	return landing, vx, vy, entry, exit
 end
 
+-- Hops or stops at denied liquid in the direction of travel, and returns whether it took control.
 local function avoidLiquidAhead(stateData)
 	if stateData.liquidHopPending then
 		if not mcontroller.onGround() then
@@ -2594,6 +2653,7 @@ local function avoidLiquidAhead(stateData)
 	return true
 end
 
+-- Returns whether there is footing under the body's left and right corners.
 local function perchFooting()
 	local here = mcontroller.position()
 	local box = mcontroller.boundBox()
@@ -2607,6 +2667,7 @@ local UNPERCH_DEBOUNCE = 1.0
 local UNPERCH_WALK_TIME = 0.6
 local UNPERCH_DWELL = 0.5
 
+-- Starts a timed walk, or a hop, off a perch toward whichever corner has footing.
 local function unperchWalk(stateData)
 	local left, right = perchFooting()
 	local here = mcontroller.position()
@@ -2629,6 +2690,7 @@ local function unperchWalk(stateData)
 	return true
 end
 
+-- Runs the unperch walk, and starts one once the unit has stood somewhere unstandable long enough.
 local function unperchWatch(dt, stateData)
 	local walk = stateData.unperchWalk
 	if walk ~= nil then
@@ -2674,6 +2736,7 @@ local function unperchWatch(dt, stateData)
 	end
 end
 
+-- Runs one tick of a task: fuel, coarse and vent routing, approach and arrival, then the work for the task's own type.
 local function petportsTaskUpdateInner(dt, stateData)
   local task = stateData.task
 
@@ -4633,6 +4696,7 @@ local function petportsTaskUpdateInner(dt, stateData)
   return false
 end
 
+-- Clears the leg and pather state, cancels the probe, and reports the task failed if it is still held.
 function petportsTaskAction.leavingState(stateData)
   stateData.navWaypoint = nil
   stateData.navRemaining = nil
@@ -4661,6 +4725,7 @@ end
 local taskSectionsInstalled = false
 local taskSectionDepth = {}
 
+-- Returns a function that runs another inside a named profiler section, ignoring re-entry.
 local function taskProfWrap(name, fn)
   return function(...)
     local depth = (taskSectionDepth[name] or 0) + 1
@@ -4673,6 +4738,7 @@ local function taskProfWrap(name, fn)
   end
 end
 
+-- Wraps the routing, standable, approach, dive and bounds calls in profiler sections, once.
 local function installTaskSections()
   if taskSectionsInstalled then return end
   taskSectionsInstalled = true
@@ -4691,6 +4757,7 @@ local function installTaskSections()
   end
 end
 
+-- Runs the task step inside the profiler, then the liquid-avoidance and unperch watches.
 function petportsTaskAction.update(dt, stateData)
   installTaskSections()
   if petports_profInstall ~= nil then petports_profInstall() end
@@ -4713,6 +4780,7 @@ end
 local ASTERITE_REACH_BASE = 8
 local ASTERITE_REACH_MAX = 12
 
+-- Returns the mining reach for this body size, capped.
 function petports_asteriteReach()
 	local bounds = mcontroller.boundBox()
 	local body = 0
@@ -4725,6 +4793,7 @@ function petports_asteriteReach()
 	return math.min(ASTERITE_REACH_BASE + body, ASTERITE_REACH_MAX)
 end
 
+-- Returns the closest stored asterite deposit, with its key and range.
 local function nearestDeposit()
 	local here = mcontroller.position()
 	local bestKey, bestEntry, bestRange
@@ -4743,10 +4812,12 @@ local function nearestDeposit()
 	return bestKey, bestEntry, bestRange
 end
 
+-- Returns a number truncated to two decimal places.
 local function round2(n)
 	return math.floor((tonumber(n) or 0) * 100) / 100
 end
 
+-- Places a matmod on a tile and logs the mod and material before and after.
 function petports_asteriteSetMod(x, y, newMod, allowOverlap)
 	if allowOverlap == nil then allowOverlap = true end
 
@@ -4780,6 +4851,7 @@ function petports_asteriteSetMod(x, y, newMod, allowOverlap)
 	return placed
 end
 
+-- Damages a tile and logs the mod and material before and after.
 function petports_asteriteDamage(x, y, amount, damageType, harvestLevel)
 	local tile = { math.floor(tonumber(x) or 0), math.floor(tonumber(y) or 0) }
 
@@ -4824,6 +4896,7 @@ function petports_asteriteDamage(x, y, amount, damageType, harvestLevel)
 	return damaged
 end
 
+-- Clears the asterite mod off a tile within reach, spawns its item drop, and drops the store entry.
 function petports_asteriteMine(x, y, allowOverlap, reachOverride)
 	if allowOverlap == nil then allowOverlap = true end
 

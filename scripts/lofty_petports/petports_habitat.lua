@@ -1,3 +1,5 @@
+-- Decides whether a chassis can occupy a footprint, and names the cause.
+
 PETPORTS_HABITAT_SWIMS = "swims"
 PETPORTS_HABITAT_FLIES = "flies"
 PETPORTS_HABITAT_EITHER_MEDIUM = "eitherMedium"
@@ -37,10 +39,12 @@ local TARGET_REASONS =
 	[PETPORTS_HABITAT_SUBMERGED_WALKER] = "is submerged and this walker will not stand in liquid"
 }
 
+-- Returns the target-phrased text for a refusal cause.
 function petports_habitatTargetReason(cause)
 	return TARGET_REASONS[cause] or ("is refused: " .. tostring(cause))
 end
 
+-- Returns the port-phrased text for a verdict cause.
 function petports_habitatReason(cause)
 	return REASONS[cause] or "cannot inhabit this port"
 end
@@ -48,6 +52,7 @@ end
 
 local liquidNameCache = {}
 
+-- Returns the lowercase names a liquid id answers to, cached.
 function petports_habitatLiquidNames(liquidId)
 	local key = tostring(liquidId)
 	if liquidNameCache[key] ~= nil then return liquidNameCache[key] end
@@ -70,6 +75,7 @@ function petports_habitatLiquidNames(liquidId)
 	return resolved
 end
 
+-- Returns whether a liquid id is named in an avoided set.
 function petports_habitatLiquidDenied(avoided, liquidId)
 	if liquidId == nil then return false end
 	if avoided == nil or next(avoided) == nil then return false end
@@ -81,6 +87,7 @@ function petports_habitatLiquidDenied(avoided, liquidId)
 	return false
 end
 
+-- Returns a lowercase name set built from a list.
 function petports_habitatAvoidedSet(list)
 	local names = {}
 
@@ -94,6 +101,7 @@ end
 
 local capabilityCache = {}
 
+-- Returns the bounding box of a polygon, or nil.
 local function polyBounds(poly)
 	if type(poly) ~= "table" or #poly == 0 then return nil end
 
@@ -114,6 +122,7 @@ local function polyBounds(poly)
 	return { left, bottom, right, top }
 end
 
+-- Returns a monster type's movement and liquid capabilities, cached.
 local function typeCapabilities(monsterType)
 	if monsterType == nil then return nil end
 
@@ -125,6 +134,7 @@ local function typeCapabilities(monsterType)
 
 	local base = type(params.baseParameters) == "table" and params.baseParameters or {}
 
+	-- Returns a parameter from the monster type or its base parameters.
 	local function read(name, fallback)
 		local value = params[name]
 		if value == nil then value = base[name] end
@@ -150,6 +160,7 @@ local function typeCapabilities(monsterType)
 	return caps
 end
 
+-- Returns a monster type's capabilities with the permitted liquids taken out of its avoided set.
 function petports_habitatCapabilitiesForType(monsterType, permitted)
 	local caps = typeCapabilities(monsterType)
 	if caps == nil then return nil end
@@ -171,6 +182,7 @@ function petports_habitatCapabilitiesForType(monsterType, permitted)
 	}
 end
 
+-- Returns a lowercase name set built from a list.
 function petports_habitatPermittedSet(list)
 	return petports_habitatAvoidedSet(list)
 end
@@ -191,6 +203,7 @@ local KNOWN_TETHERS =
 
 local tetherCache = {}
 
+-- Returns a monster type's tethering location type, cached, defaulting to floor.
 function petports_habitatTether(monsterType)
 	if monsterType == nil then return DEFAULT_TETHER end
 
@@ -221,6 +234,7 @@ function petports_habitatTether(monsterType)
 end
 
 
+-- Returns whether the given capabilities suit a wet, dry or mixed footprint, with the cause.
 function petports_habitatVerdict(caps, wet, dry, liquids)
 	if type(caps) ~= "table" then return nil end
 
@@ -269,6 +283,7 @@ end
 
 PETPORTS_HABITAT_SUBMERGED_FILL = 0.9
 
+-- Returns whether any point is submerged, whether any is not, and the liquid ids found.
 function petports_habitatMedia(points)
 	if points == nil or #points == 0 then return false, true, {} end
 
@@ -294,6 +309,7 @@ function petports_habitatMedia(points)
 	return wet, dry, liquids
 end
 
+-- Returns the verdict for the first suitable point, or the first refusal.
 function petports_habitatAnyPointSuits(caps, points)
 	if points == nil or #points == 0 then return { ok = true } end
 
@@ -310,6 +326,7 @@ function petports_habitatAnyPointSuits(caps, points)
 	return firstRefusal
 end
 
+-- Returns the centre of every tile an object occupies.
 function petports_habitatObjectPoints(entityId)
 	if entityId == nil then return nil end
 
@@ -340,6 +357,7 @@ function petports_habitatObjectPoints(entityId)
 	return points
 end
 
+-- Returns the bounding box of an object's occupied tiles.
 function petports_habitatObjectBounds(entityId)
 	local points = petports_habitatObjectPoints(entityId)
 	if points == nil or #points == 0 then return nil end

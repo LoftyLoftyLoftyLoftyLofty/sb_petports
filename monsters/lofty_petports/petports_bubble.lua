@@ -1,7 +1,10 @@
+-- Builds the unit's speech bubble icons and publishes them to players.
+
 local BUBBLE_DEBUG = true
 
 local BUBBLE_MONSTER_PARTS = false
 
+-- Sends the icon list and the enabled flag to every player.
 local function publishBubble(icons)
 	local ok, players = pcall(world.players)
 	if not ok or players == nil then
@@ -51,6 +54,7 @@ petports_bubbleIcon =
 
 
 
+-- Turns bubble display on or off and republishes the current icons.
 function petports_setUnitBubbles(show)
 	local enabled = show ~= false
 	if enabled == (self.petportsBubbleEnabled ~= false) then return true end
@@ -69,6 +73,7 @@ end
 
 local BUBBLE_HEARTBEAT_CALLS = 10
 
+-- Republishes the current icons every tenth call.
 function petports_bubbleHeartbeat()
 	if self.petportsBubbleSent == nil then return end
 
@@ -79,6 +84,7 @@ function petports_bubbleHeartbeat()
 	publishBubble(self.petportsBubbleSent)
 end
 
+-- Publishes up to three icons and sets the matching bubble layout.
 function petports_bubbleSet(icons)
 	petports_bubbleInstallShadow()
 
@@ -123,10 +129,12 @@ function petports_bubbleSet(icons)
 	return true
 end
 
+-- Clears the bubble.
 function petports_bubbleClear()
 	petports_bubbleSet(nil)
 end
 
+-- Mirrors the bubble transformation group while the unit faces left.
 function petports_bubbleFlip(force)
 	if self.petportsBubbleGroupOk == nil then
 		self.petportsBubbleGroupOk = animator.hasTransformationGroup(BUBBLE_GROUP)
@@ -160,6 +168,7 @@ function petports_bubbleFlip(force)
 	end
 end
 
+-- Wraps mcontroller.controlFace to record the commanded facing and flip the bubble.
 function petports_bubbleInstallShadow()
 	if self.petportsBubbleHooked ~= nil then return end
 
@@ -167,6 +176,7 @@ function petports_bubbleInstallShadow()
 		local origFace = mcontroller.controlFace
 
 		if type(origFace) == "function" then
+			-- Records the commanded facing and flips the bubble, then calls the original.
 			mcontroller.controlFace = function(direction, ...)
 				if type(direction) == "number" and direction ~= 0 then
 					self.petportsBubbleFacing = direction
@@ -190,6 +200,7 @@ function petports_bubbleInstallShadow()
 end
 
 
+-- Flips the bubble to the current facing while it is shown.
 function petports_bubblePump(dt)
 
 	if dt ~= nil then
@@ -217,12 +228,14 @@ end
 
 local BUBBLE_BLUEPRINT = "/items/generated/blueprint.png"
 
+-- Returns an image path prefixed with a directory unless it is already absolute.
 local function absolutePath(image, directory)
 	if type(image) ~= "string" then return image end
 	if image:sub(1, 1) == "/" then return image end
 	return tostring(directory) .. image
 end
 
+-- Returns an icon as layers over the blueprint image.
 local function withBlueprintBacking(icon)
 	if icon == nil then return nil end
 
@@ -237,6 +250,7 @@ local function withBlueprintBacking(icon)
 	return layers
 end
 
+-- Returns an item's icon as a path or a layer list, backed with the blueprint for recipe items.
 function petports_bubbleItemIcon(descriptor)
 	local ok, cfg = pcall(root.itemConfig, descriptor)
 	if not ok or cfg == nil then
@@ -317,6 +331,7 @@ function petports_bubbleItemIcon(descriptor)
 	return path
 end
 
+-- Resolves an item table, a mark token or an item token into an icon.
 local function resolveToken(token)
 	if type(token) == "table" and type(token.item) == "table" then
 		local path = petports_bubbleItemIcon(token.item)
@@ -351,6 +366,7 @@ local function resolveToken(token)
 	return nil
 end
 
+-- Resolves a token list into icons and shows them.
 function petports_setUnitBubbleSpec(tokens)
 	if type(tokens) ~= "table" or #tokens == 0 then
 		petports_bubbleClear()
@@ -374,6 +390,7 @@ function petports_setUnitBubbleSpec(tokens)
 	return true
 end
 
+-- Shows an x, a named item's icon and a gun.
 function petports_bubbleSelfTest(itemName)
 	itemName = itemName or "dirtmaterial"
 
@@ -388,6 +405,7 @@ function petports_bubbleSelfTest(itemName)
 	})
 end
 
+-- Shows the icons of up to three named items.
 function petports_bubbleSelfTestItems(a, b, c)
 	local icons = {}
 	for _, name in ipairs({ a, b, c }) do
@@ -403,6 +421,7 @@ function petports_bubbleSelfTestItems(a, b, c)
 	petports_bubbleSet(icons)
 end
 
+-- Shows n box icons.
 function petports_bubbleSelfTestLayout(n)
 	local icons = {}
 	for i = 1, (n or 3) do icons[i] = petports_bubbleIcon.box end
@@ -411,6 +430,7 @@ end
 
 
 
+-- Logs an asset's canvas size and non-empty region.
 function petports_bubbleProbeMeasure(label, path)
 	if type(path) ~= "string" then
 		sb.logInfo("PROBE %s -- not a path (%s)", tostring(label), type(path))
@@ -436,6 +456,7 @@ function petports_bubbleProbeMeasure(label, path)
 		path, sizeText, regionText)
 end
 
+-- Collects every png or jpg path in a table up to three levels deep.
 local function collectAssets(value, trail, out, depth)
 	if depth > 3 then return end
 
@@ -457,6 +478,7 @@ local function collectAssets(value, trail, out, depth)
 	end
 end
 
+-- Logs an item's config keys, asset paths and the icon the resolver returns for it.
 function petports_bubbleProbeOne(name)
 	local descriptor = { name = name, count = 1 }
 
@@ -535,6 +557,7 @@ function petports_bubbleProbeOne(name)
 	end
 end
 
+-- Probes each named item, or two defaults.
 function petports_bubbleProbeIcon(...)
 	local names = { ... }
 	if #names == 0 then names = { "dirtmaterial", "humanhistory1-codex" } end

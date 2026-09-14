@@ -1,12 +1,16 @@
+-- Cycles the module lamp through hues at a configured period.
+
 local LIGHT = "petports_module_huelamp"
 
 
+-- Clamps a number to a range.
 local function fclamp(value, low, high)
 	if value < low then return low end
 	if value > high then return high end
 	return value
 end
 
+-- Maps a wrapped hue position to a 0-1 channel ramp.
 local function wave(t)
 	if t >= 1.0 then t = t - 1.0 end
 
@@ -16,12 +20,14 @@ local function wave(t)
 	return fclamp(t - 1, 0, 1)
 end
 
+-- Converts hue, saturation and value into a 0-255 colour triple.
 local function hueColor(hue, sat, val)
 	hue = hue - math.floor(hue)
 
 	sat = fclamp(sat, 0, 1)
 	val = fclamp(val, 0, 1)
 
+	-- Returns one colour channel for a hue offset.
 	local function channel(offset)
 		local c = wave(hue + offset) * sat + (1.0 - sat)
 
@@ -33,6 +39,7 @@ end
 
 
 
+-- Reads the huePeriod, saturation and intensity parameters and logs them.
 function init()
 	self.period = tonumber(config.getParameter("huePeriod", -8)) or -8
 	if self.period == 0 then self.period = -8 end
@@ -51,6 +58,7 @@ function init()
 		tostring(self.saturation), tostring(self.intensity))
 end
 
+-- Advances the hue by dt and applies the resulting colour when it changes.
 function update(dt)
 	self.hue = (self.hue + dt / self.period) % 1
 
@@ -76,5 +84,6 @@ function update(dt)
 	self.applied = color
 end
 
+-- Does nothing.
 function uninit()
 end

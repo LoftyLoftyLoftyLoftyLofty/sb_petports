@@ -1,3 +1,5 @@
+-- Monster state that hops a beached unit until it is back in liquid.
+
 require "/scripts/util.lua"
 
 petportsFlopState = {}
@@ -26,6 +28,7 @@ FLOP_MEDIA = {
   mixed = true
 }
 
+-- Returns flop state data when a non-gravity-switchable swimmer is stranded in air, otherwise nil.
 function petportsFlopState.enter()
   if petports_gravitySwitchable() then return nil end
 
@@ -69,10 +72,12 @@ function petportsFlopState.enter()
   }
 end
 
+-- Calls enter and ignores the arguments.
 function petportsFlopState.enterWith(args)
   return petportsFlopState.enter()
 end
 
+-- Sets the flopping animation and logs the position.
 function petportsFlopState.enteringState(stateData)
   animator.setAnimationState("movement", "flopping")
 
@@ -82,6 +87,7 @@ function petportsFlopState.enteringState(stateData)
     sb.printJson(mcontroller.position()), FLOP_BUILD_STAMP)
 end
 
+-- Applies the flop movement parameters and jumps in a random direction on an interval, returning true once back in medium.
 function petportsFlopState.update(dt, stateData)
   local report = petports_outOfMedium()
 
@@ -122,5 +128,6 @@ function petportsFlopState.update(dt, stateData)
   return false
 end
 
+-- Does nothing.
 function petportsFlopState.leavingState(stateData)
 end

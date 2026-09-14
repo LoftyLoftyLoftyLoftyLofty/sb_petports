@@ -1,3 +1,6 @@
+-- Grants lava and fire status immunity while active.
+
+-- Adds the lava and fire immunity modifiers and stops the effect updating.
 function init()
 	effect.addStatModifierGroup(
 	{
@@ -8,5 +11,6 @@ function init()
 	script.setUpdateDelta(0)
 end
 
+-- Does nothing.
 function uninit()
 end

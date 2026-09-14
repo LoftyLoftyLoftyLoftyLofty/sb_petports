@@ -1,13 +1,17 @@
+-- Drives the module lamp colour from the petports_lightColor status property.
+
 local LIGHT = "petports_module_rgblamp"
 
 local DEFAULT = { 140, 140, 140 }
 
 
+-- Returns true when two colour triples match.
 local function sameColor(a, b)
 	if a == nil or b == nil then return false end
 	return a[1] == b[1] and a[2] == b[2] and a[3] == b[3]
 end
 
+-- Returns petports_lightColor as whole channels clamped to 0-255, or the default when it is unusable.
 local function wantedColor()
 	local stored = status.statusProperty("petports_lightColor", nil)
 
@@ -30,10 +34,12 @@ local function wantedColor()
 	return out
 end
 
+-- Clears the last applied colour.
 function init()
 	self.applied = nil
 end
 
+-- Applies the wanted colour to the lamp when it differs from the last applied one.
 function update(dt)
 	local color = wantedColor()
 
@@ -52,5 +58,6 @@ function update(dt)
 	sb.logInfo("PETPORTS rgblight: lamp is now %s", sb.printJson(color))
 end
 
+-- Does nothing.
 function uninit()
 end

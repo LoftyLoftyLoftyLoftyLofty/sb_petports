@@ -1,9 +1,12 @@
+-- Picks fish to spawn near a lure from either a zone config or the vanilla spawner config.
+
 require "/scripts/rect.lua"
 require "/scripts/util.lua"
 require "/scripts/vec2.lua"
 
 PETPORTS_VANILLA_SPAWNER_CONFIG = "/scripts/fishing/fishingspawner.config"
 
+-- Returns a new spawner.
 function PetportsFishingSpawner()
   local spawner = {}
 
@@ -14,12 +17,14 @@ function PetportsFishingSpawner()
 
   local biasOverride = nil
 
+  -- Returns the bias that a reset goes back to.
   local function initialBias()
     if biasOverride ~= nil then return biasOverride end
     local source = zoneConfig or vanillaConfig
     return (source and source.initialBias) or 0
   end
 
+  -- Loads and caches the vanilla spawner config.
   local function vanilla()
     if vanillaConfig == nil then
       local ok, data = pcall(root.assetJson, PETPORTS_VANILLA_SPAWNER_CONFIG)
@@ -28,6 +33,7 @@ function PetportsFishingSpawner()
     return vanillaConfig or nil
   end
 
+  -- Returns the spawn geometry taken from the zone config, the vanilla config or built-in defaults.
   local function geometry()
     local zone = zoneConfig
     local base = vanilla()
@@ -43,6 +49,7 @@ function PetportsFishingSpawner()
     }
   end
 
+  -- Returns a nearby liquid position with clear line of sight and deep enough liquid, or nil.
   local function spawnPositionNear(pos)
     local geo = geometry()
     if not world.liquidAt(pos) then return nil end
@@ -70,16 +77,19 @@ function PetportsFishingSpawner()
     return nil
   end
 
+  -- Returns true when the world time is inside the day range.
   local function isDay(geo)
     local t = world.timeOfDay()
     return t >= geo.dayRange[1] and t <= geo.dayRange[2]
   end
 
+  -- Returns true when the world time is inside the night range.
   local function isNight(geo)
     local t = world.timeOfDay()
     return t >= geo.nightRange[1] and t <= geo.nightRange[2]
   end
 
+  -- Rolls against the rarity tiers and returns the first monster matching the time of day and the filter.
   local function pickFromTiers(rarities, tiers, geo, extraFilter)
     local day, night = isDay(geo), isNight(geo)
     local roll = math.random() + spawnBias
@@ -104,6 +114,7 @@ function PetportsFishingSpawner()
     return nil
   end
 
+  -- Returns the monster the zone config gives for the liquid at a position and the current lure type.
   local function zoneSpawnType(pos, geo)
     local liquidHere = world.liquidAt(pos)
     if not liquidHere then return nil end
@@ -123,6 +134,7 @@ function PetportsFishingSpawner()
     return nil
   end
 
+  -- Returns the monster the vanilla config gives for the depth at a position and the world type.
   local function vanillaSpawnType(pos, geo)
     local cfg = vanilla()
     if cfg == nil then return nil end
@@ -145,6 +157,7 @@ function PetportsFishingSpawner()
     end)
   end
 
+  -- Returns a monster, position and rarity for a spawn near a position, or nil.
   function spawner.getSpawn(pos)
     local position = spawnPositionNear(pos)
     if position == nil then return nil end
@@ -163,10 +176,12 @@ function PetportsFishingSpawner()
     return kind, position, rarity
   end
 
+  -- Sets the spawn bias back to its initial value.
   function spawner.reset()
     spawnBias = initialBias()
   end
 
+  -- Sets the zone config and resets.
   function spawner.setParams(params)
     if type(params) ~= "table" then return false end
     zoneConfig = params
@@ -174,19 +189,23 @@ function PetportsFishingSpawner()
     return true
   end
 
+  -- Sets the lure type matched against zone entries.
   function spawner.setLureType(kind)
     lureType = kind
   end
 
+  -- Overrides the initial bias and resets.
   function spawner.setBias(value)
     biasOverride = value
     spawner.reset()
   end
 
+  -- Returns whether the spawner is on the zone or the vanilla config.
   function spawner.mode()
     return zoneConfig ~= nil and "zone" or "vanilla"
   end
 
+  -- Returns the current spawn bias.
   function spawner.bias()
     return spawnBias
   end

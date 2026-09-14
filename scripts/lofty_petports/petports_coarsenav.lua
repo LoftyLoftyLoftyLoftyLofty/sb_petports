@@ -1,7 +1,10 @@
+-- Coarse navigation: a cell graph of the world kept in world properties, and the routes taken across it.
+
 local COARSENAV_BUILD_STAMP = "2026-09-13c a probe learns under the profile it was started under, not the one live when it finishes"
 
 local navStamped = false
 
+-- Logs the coarsenav build stamp once.
 local function stampOnce()
 	if navStamped then return end
 	navStamped = true
@@ -35,6 +38,7 @@ local navBoxForbidden = nil
 local navForbiddenCells = nil
 local navTickClock = nil
 
+-- Records a property family and its enumerator in the world manifest.
 local function navFamilyRegister(root, enumerate)
 	navFamilies[root] = enumerate
 
@@ -53,6 +57,7 @@ local NAV_OVERLAY_REFRESH = 2.0
 
 PETPORTS_NAV_VERBOSE = true
 
+-- Flips nav verbose logging and returns the new state.
 function petports_navVerboseToggle()
 	PETPORTS_NAV_VERBOSE = not PETPORTS_NAV_VERBOSE
 	sb.logInfo("NAV verbose %s", PETPORTS_NAV_VERBOSE and "ON" or "OFF")
@@ -65,6 +70,7 @@ PETPORTS_NAV_STRIDE = 1
 
 PETPORTS_NAV_STRIDE_FREE = 1
 
+-- Returns this tick's cell stride, taking the free-mover value when the unit is one.
 local function navStride()
 	local now = world.time()
 
@@ -80,6 +86,7 @@ local function navStride()
 	return self.petportsNavStride
 end
 
+-- Returns the world coordinates of a cell's origin.
 local function navCellOrigin(cx, cy)
 	local stride = navStride()
 	return cx * stride, cy * stride
@@ -91,6 +98,7 @@ PETPORTS_NAV_RADIUS = 12
 
 PETPORTS_NAV_RADIUS_FREE = 4
 
+-- Returns the neighbour search radius for this chassis.
 local function navFullRadius()
 	if petports_freeMover ~= nil and petports_freeMover() then
 		return PETPORTS_NAV_RADIUS_FREE
@@ -100,6 +108,7 @@ end
 PETPORTS_NAV_RADIUS_START = 2
 PETPORTS_NAV_RADIUS_STEP = 2
 
+-- Returns the next radius to sweep a cell at, or nil once it is fully swept.
 local function navNextRadius(sweptRadius)
 	if (sweptRadius or 0) >= navFullRadius() then return nil end
 	if (sweptRadius or 0) <= 0 then return PETPORTS_NAV_RADIUS_START end
@@ -108,6 +117,7 @@ end
 
 local NAV_COVERAGE_MARGIN = 2
 
+-- Returns whether a box lies inside a network rect, with margin.
 local function navBoxInCoverage(x0, y0, x1, y1)
 	local rects = self.petportsNetwork
 
@@ -125,6 +135,7 @@ local function navBoxInCoverage(x0, y0, x1, y1)
 	return false
 end
 
+-- Returns whether a cell overlaps a network rect, with margin.
 local function navInCoverage(cx, cy)
 	local rects = self.petportsNetwork
 
@@ -152,6 +163,7 @@ local NAV_MAX_DISTANCE = 32
 
 PETPORTS_NAV_MAX_DISTANCE = NAV_MAX_DISTANCE
 
+-- Returns the pathfinder options with the nav leg distance cap.
 local function navPathOptions()
 	local options = petports_pathOptions()
 	options.maxDistance = NAV_MAX_DISTANCE
@@ -159,6 +171,7 @@ local function navPathOptions()
 end
 
 
+-- Returns the cell coordinates holding a position.
 function petports_navCell(position)
 	if type(position) ~= "table" then return nil, nil end
 
@@ -167,6 +180,7 @@ function petports_navCell(position)
 		math.floor(position[2] / stride)
 end
 
+-- Returns the string key for cell coordinates.
 function petports_navCellKey(cx, cy)
 	return tostring(cx) .. "," .. tostring(cy)
 end
@@ -175,6 +189,7 @@ local NAV_SOLID_SET = { "Null", "Block", "Dynamic", "Slippery" }
 
 local NAV_ANCHOR_TTL = 30.0
 
+-- Returns whether every tile in a cell collides.
 local function navCellSolidUncached(cx, cy)
 	local baseX, baseY = navCellOrigin(cx, cy)
 
@@ -190,6 +205,7 @@ local function navCellSolidUncached(cx, cy)
 	return true
 end
 
+-- Returns whether a cell is solid, cached.
 local function navCellSolid(cx, cy)
 	local key = petports_navCellKey(cx, cy)
 	local now = world.time()
@@ -209,6 +225,7 @@ end
 
 local NAV_FOOTING_SET = { "Block", "Slippery", "Platform" }
 
+-- Returns whether there is footing under the body's overlap with a cell at an x.
 local function navFootingUnderCell(x, baseX, baseY, bounds)
 	local left = math.max(baseX, x + bounds[1]) + 0.05
 	local right = math.min(baseX + PETPORTS_NAV_CELL, x + bounds[3]) - 0.05
@@ -222,6 +239,7 @@ local function navFootingUnderCell(x, baseX, baseY, bounds)
 end
 
 
+-- Returns the point a body can stand or hover at inside a cell, or nil with the reason.
 local function navAnchorUncached(cx, cy, freeMover)
 	local baseX, baseY = navCellOrigin(cx, cy)
 
@@ -324,6 +342,7 @@ local function navAnchorUncached(cx, cy, freeMover)
 		tostring(lift))
 end
 
+-- Clears every cached nav structure and records the store generation.
 local function navDropMemos(generation)
 	self.petportsNavPending = {}
 	self.petportsNavPendingCount = 0
@@ -366,6 +385,7 @@ local function navDropMemos(generation)
 	self.petportsNavGen = generation
 end
 
+-- Returns the store generation this unit is on.
 navGenNow = function()
 	navGenerationCheck()
 	if self.petportsNavGen == nil then
@@ -375,6 +395,7 @@ navGenNow = function()
 	return self.petportsNavGen
 end
 
+-- Drops the memos once another unit has bumped the store generation.
 navGenerationCheck = function()
 	local now = world.time()
 	if self.petportsNavGenAt == now then return end
@@ -392,6 +413,7 @@ navGenerationCheck = function()
 	end
 end
 
+-- Expires the anchor and solid caches on an interval and checks the generation.
 local function navCachesTick()
 	local now = world.time()
 
@@ -405,6 +427,7 @@ local function navCachesTick()
 	navGenerationCheck()
 end
 
+-- Returns a cell's anchor point, cached per profile, noting the cell as a boundary candidate.
 function petports_navAnchor(cx, cy, freeMover)
 	navCachesTick()
 
@@ -436,6 +459,7 @@ end
 
 local NAV_NEIGHBOUR_CHUNK = 40
 
+-- Returns the anchored cells within a radius, nearest first, yielding as it scans.
 function petports_navNeighbours(cx, cy, freeMover, radius)
 	radius = radius or navFullRadius()
 
@@ -503,6 +527,7 @@ function petports_navNeighbours(cx, cy, freeMover, radius)
 end
 
 
+-- Returns the profile string covering this chassis's type, movement, size and liquid rules.
 local function navProfileUncached()
 	local monsterType = world.monsterType(entity.id())
 	local freeMover = petports_freeMover()
@@ -526,6 +551,7 @@ local function navProfileUncached()
 		petports_avoidLiquid() and "1" or "0")
 end
 
+-- Returns this tick's profile string, memoised per side.
 function petports_navProfile()
 	local now = world.time()
 	local side = petports_freeMover() and "1" or "0"
@@ -542,6 +568,7 @@ function petports_navProfile()
 	return self.petportsNavProfileMemo[side]
 end
 
+-- Calls a function with the survey forced to one side, restoring it afterwards.
 local function navWithSide(freeMover, fn, ...)
 	local held = self.petportsNavSurveyFree
 	self.petportsNavSurveyFree = freeMover
@@ -554,6 +581,7 @@ local function navWithSide(freeMover, fn, ...)
 	return select(2, table.unpack(results))
 end
 
+-- Returns the side to survey this turn, alternating for a gravity-switchable chassis.
 local function navSurveySide()
 	if not petports_gravitySwitchable() then return petports_freeMover() end
 
@@ -562,11 +590,13 @@ local function navSurveySide()
 end
 
 
+-- Returns the key for an edge between two cells.
 local function navEdgeKey(fromKey, toKey)
 	return fromKey .. ">" .. toKey
 end
 
 local navKeyCoordsCache = {}
+-- Returns the coordinates a cell key holds, cached.
 local function navKeyCoords(key)
 	local held = navKeyCoordsCache[key]
 	if held ~= nil then return held[1], held[2] end
@@ -577,6 +607,7 @@ local function navKeyCoords(key)
 	return kx, ky
 end
 
+-- Returns the world distance between two cells.
 local function navCellSpan(fromKey, toKey)
 	local fx, fy = navKeyCoords(fromKey)
 	local tx, ty = navKeyCoords(toKey)
@@ -585,10 +616,12 @@ local function navCellSpan(fromKey, toKey)
 	return math.max(1, math.sqrt(dx * dx + dy * dy) * navStride())
 end
 
+-- Returns the index property name for a profile.
 local function navIndexProperty(profile)
 	return NAV_INDEX .. ":" .. profile
 end
 
+-- Returns every profile named in the index registry.
 local function navIndexProfiles()
 	local ok, registry = pcall(world.getProperty, NAV_INDEX)
 	if not ok or type(registry) ~= "table" then return {} end
@@ -602,14 +635,17 @@ local function navIndexProfiles()
 end
 
 
+-- Returns the bounds index property name for a bucket.
 local function navBoundsIndexProperty(bucket)
 	return NAV_BOUNDS .. ":" .. bucket
 end
 
+-- Returns the bounds property name for a cell in a bucket.
 local function navBoundsCellProperty(bucket, cellKey)
 	return NAV_BOUNDS .. ":" .. bucket .. ":" .. cellKey
 end
 
+-- Returns every property name the bounds family holds.
 local function navBoundsFamilyEnumerate()
 	local names = {}
 
@@ -630,6 +666,7 @@ local function navBoundsFamilyEnumerate()
 	return names
 end
 
+-- Returns a liquid level's name, or air below the fill threshold, cached.
 local function navLiquidName(level)
 	local fill = (level ~= nil) and (level[2] or 0) or 0
 	if level == nil or fill < NAV_BOUNDS_FILL then return "air" end
@@ -647,6 +684,7 @@ local function navLiquidName(level)
 	return self.petportsNavLiquidNames[id]
 end
 
+-- Queues a bounds cell for the next flush.
 local function navBoundsQueue(bucket, cellKey)
 	self.petportsNavBoundsMine = self.petportsNavBoundsMine or {}
 	self.petportsNavBoundsMine[bucket] = self.petportsNavBoundsMine[bucket] or {}
@@ -654,6 +692,7 @@ local function navBoundsQueue(bucket, cellKey)
 	self.petportsNavBoundsPendingCount = (self.petportsNavBoundsPendingCount or 0) + 1
 end
 
+-- Writes the queued bounds cells into their bucket indexes and the registry.
 local function navBoundsFlush()
 	navGenerationCheck()
 	if (self.petportsNavBoundsPendingCount or 0) == 0 then return end
@@ -691,6 +730,7 @@ local function navBoundsFlush()
 	self.petportsNavBoundsPendingCount = 0
 end
 
+-- Records a cell's liquid layout as a boundary record, queues its neighbours, and contradicts edges crossing any newly denied tile.
 navBoundaryNote = function(cx, cy)
 	self.petportsNavBoundsSeen = self.petportsNavBoundsSeen or {}
 	local cellKey = petports_navCellKey(cx, cy)
@@ -874,6 +914,7 @@ navBoundaryNote = function(cx, cy)
 	return true
 end
 
+-- Queues a set of newly denied tiles for the contradiction pass.
 navContradictThrough = function(tiles, cellKey)
 	self.petportsNavContradictQueue = self.petportsNavContradictQueue or {}
 	table.insert(self.petportsNavContradictQueue, { tiles = tiles, cellKey = cellKey })
@@ -882,6 +923,7 @@ end
 local NAV_CONTRADICT_SCAN = 300
 local NAV_CONTRADICT_BUDGET_MS = 2.0
 
+-- Drops fine edges that cross newly denied tiles, a budget at a time.
 local function navContradictTick()
 	local queue = self.petportsNavContradictQueue
 	if queue == nil or #queue == 0 then return end
@@ -937,6 +979,7 @@ local function navContradictTick()
 	local bounds = mcontroller.boundBox()
 	local cache = (self.petportsNavAnchorCache or {})[profile] or {}
 
+	-- Returns a cell's anchor from the cache only.
 	local function cachedAnchor(key)
 		local hit = cache[key]
 		return hit ~= nil and hit.anchor or nil
@@ -986,6 +1029,7 @@ local function navContradictTick()
 	table.remove(queue, 1)
 end
 
+-- Marks the cells around a denied-liquid cell as sweep seeds.
 navSeedBesideWall = function(cx, cy, media)
 	if not petports_gravitySwitchable() and not petports_freeMover() then return end
 	petports_profBegin("seedWall")
@@ -1014,6 +1058,7 @@ local NAV_FLOOD_PER_TICK = 6
 
 NAV_BRIDGE_SEEN_TTL = 300.0
 
+-- Notes a few queued neighbour cells as boundaries each tick.
 local function navBoundsFloodTick()
 	local queue = self.petportsNavBoundsFlood
 	if queue == nil or #queue == 0 then return end
@@ -1026,6 +1071,7 @@ local function navBoundsFloodTick()
 	end
 end
 
+-- Logs and returns everything known about the boundary cell at a position.
 function petports_navBoundsProbe(x, y)
 	local cx, cy = petports_navCell({ x, y })
 	local cellKey = petports_navCellKey(cx, cy)
@@ -1087,6 +1133,7 @@ function petports_navBoundsProbe(x, y)
 	return out
 end
 
+-- Returns the number of stored boundary cells in each bucket.
 function petports_navBoundsStats()
 	local ok, registry = pcall(world.getProperty, NAV_BOUNDS)
 	if not ok or type(registry) ~= "table" then return {} end
@@ -1103,6 +1150,7 @@ function petports_navBoundsStats()
 	return out
 end
 
+-- Returns the tiles holding denied liquid, read out of the bounds store, cached.
 navForbiddenCells = function()
 	local now = world.time()
 
@@ -1168,6 +1216,7 @@ navForbiddenCells = function()
 	return cells
 end
 
+-- Returns the first forbidden tile a body covers at a position.
 navBoxForbidden = function(forbidden, position, bounds)
 	local x0 = math.floor(position[1] + bounds[1] + 0.01)
 	local x1 = math.floor(position[1] + bounds[3] - 0.01)
@@ -1184,6 +1233,7 @@ navBoxForbidden = function(forbidden, position, bounds)
 	return nil
 end
 
+-- Returns the first forbidden tile a body crosses along a line.
 local function navSegmentForbidden(from, to)
 	local forbidden = navForbiddenCells()
 	if next(forbidden) == nil then return nil end
@@ -1203,6 +1253,7 @@ local function navSegmentForbidden(from, to)
 	return nil
 end
 
+-- Returns the first forbidden tile a path's nodes sit on, ignoring spans the unit can hop.
 local function navPathForbidden(edges)
 	local forbidden = navForbiddenCells()
 	if next(forbidden) == nil or type(edges) ~= "table" then return nil end
@@ -1255,6 +1306,7 @@ local function navPathForbidden(edges)
 	return nil
 end
 
+-- Adds a profile to the index registry.
 local function navIndexRegister(profile)
 	navFamilyRegister(NAV_INDEX, navEdgeFamilyEnumerate)
 	local ok, registry = pcall(world.getProperty, NAV_INDEX)
@@ -1273,10 +1325,12 @@ navChunk.INDEX_PREFIX = "petports_navchunk:"
 navChunk.EDGES_PREFIX = "petports_navchunkedges:"
 navChunk.EDGE_FORMAT = 5
 
+-- Returns the number of cells along a chunk's side.
 function navChunk.side()
 	return math.max(1, math.floor(navChunk.TILES / navStride()))
 end
 
+-- Returns the chunk key holding a cell, and the cell's id inside that chunk.
 function navChunk.of(cellKey)
 	local cx, cy = navKeyCoords(cellKey)
 	if cx == nil then return nil, nil end
@@ -1286,6 +1340,7 @@ function navChunk.of(cellKey)
 		(cx - chx * side) + (cy - chy * side) * side
 end
 
+-- Returns the cell key for an id inside a chunk.
 function navChunk.cellKey(chunkKey, id)
 	local chx, chy = string.match(chunkKey, "^(-?%d+),(-?%d+)$")
 	if chx == nil then return nil end
@@ -1295,14 +1350,17 @@ function navChunk.cellKey(chunkKey, id)
 		.. tostring(tonumber(chy) * side + math.floor(id / side))
 end
 
+-- Returns the index property name for a chunk under a profile.
 function navChunk.indexProperty(profile, chunkKey)
 	return navChunk.INDEX_PREFIX .. profile .. ":" .. chunkKey
 end
 
+-- Returns the edges property name for a chunk under a profile.
 function navChunk.edgesProperty(profile, chunkKey)
 	return navChunk.EDGES_PREFIX .. profile .. ":" .. chunkKey
 end
 
+-- Returns a profile's chunk registry, clearing a pre-chunk store if it finds one.
 function navChunk.registryRead(profile)
 	local ok, registry = pcall(world.getProperty, navIndexProperty(profile))
 	if not ok or type(registry) ~= "table" then return {} end
@@ -1315,6 +1373,7 @@ function navChunk.registryRead(profile)
 	return registry.chunks
 end
 
+-- Adds a chunk to a profile's registry.
 function navChunk.registryAdd(profile, chunkKey)
 	self.petportsNavChunkKnown = self.petportsNavChunkKnown or {}
 	self.petportsNavChunkKnown[profile] = self.petportsNavChunkKnown[profile] or {}
@@ -1329,6 +1388,7 @@ function navChunk.registryAdd(profile, chunkKey)
 	pcall(world.setProperty, navIndexProperty(profile), { _g = navGenNow(), chunks = chunks })
 end
 
+-- Removes a chunk from a profile's registry.
 function navChunk.registryDrop(profile, chunkKey)
 	local chunks = navChunk.registryRead(profile)
 	if chunks[chunkKey] == nil then return end
@@ -1338,6 +1398,7 @@ function navChunk.registryDrop(profile, chunkKey)
 	pcall(world.setProperty, navIndexProperty(profile), { _g = navGenNow(), chunks = chunks })
 end
 
+-- Reads a chunk's swept-cell index, returning the cells, whether the read worked, and the count it recorded.
 function navChunk.indexDecode(profile, chunkKey)
 	local ok, raw = pcall(world.getProperty, navChunk.indexProperty(profile, chunkKey))
 	local readOk = ok and type(raw) == "table"
@@ -1360,6 +1421,7 @@ function navChunk.indexDecode(profile, chunkKey)
 	return cells, true, tonumber(raw._n)
 end
 
+-- Packs a chunk's cells into the flat index record, and returns it with the count written.
 function navChunk.indexEncode(chunkKey, cells)
 	local flat, n = {}, 0
 	for cellKey, entry in pairs(cells) do
@@ -1376,6 +1438,7 @@ function navChunk.indexEncode(chunkKey, cells)
 	return { _g = navGenNow(), _n = n, c = flat }, n
 end
 
+-- Reads a chunk's edges, returning nothing when the generation or the format stride does not match.
 function navChunk.edgesDecode(profile, chunkKey)
 	petports_profBegin("chunkGet")
 	local ok, raw = pcall(world.getProperty, navChunk.edgesProperty(profile, chunkKey))
@@ -1423,6 +1486,7 @@ function navChunk.edgesDecode(profile, chunkKey)
 	return chunk
 end
 
+-- Packs a chunk's edges into the flat record, and returns it with the edge count.
 function navChunk.edgesEncode(chunk)
 	local e, n = {}, 0
 	local x = nil
@@ -1454,6 +1518,7 @@ function navChunk.edgesEncode(chunk)
 end
 
 
+-- Holds an index entry in this unit's memory of the chunk.
 local function navIndexRemember(profile, cellKey, entry)
 	local chunkKey = navChunk.of(cellKey)
 	if chunkKey == nil then return end
@@ -1464,6 +1529,7 @@ local function navIndexRemember(profile, cellKey, entry)
 	byProfile[chunkKey][cellKey] = entry
 end
 
+-- Drops a cell from this unit's memory of its chunk.
 local function navIndexForgetSeen(profile, cellKey)
 	local chunkKey = navChunk.of(cellKey)
 	local seen = self.petportsNavIndexSeen and self.petportsNavIndexSeen[profile]
@@ -1472,6 +1538,7 @@ end
 
 local NAV_INDEX_SHORT_TRIES = 12
 
+-- Reads a chunk's index, restores cells the read lost from memory, and flags a read that came back short.
 function navChunk.indexRead(profile, chunkKey)
 	local cells, readOk, expected = navChunk.indexDecode(profile, chunkKey)
 	local raw = 0
@@ -1509,6 +1576,7 @@ function navChunk.indexRead(profile, chunkKey)
 	return cells
 end
 
+-- Returns every indexed cell for a profile across its chunks, with the pending writes applied.
 local function navIndexProfileRead(profile)
 	local cells = {}
 	local chunks = navChunk.registryRead(profile)
@@ -1536,6 +1604,7 @@ end
 
 local NAV_INDEX_READ_INTERVAL = 10.0
 
+-- Returns the index as a table that reads each profile on first access, memoised.
 local function navIndexRead()
 	local now = world.time()
 
@@ -1545,6 +1614,7 @@ local function navIndexRead()
 	end
 
 	local index = setmetatable({}, {
+		-- Reads and stores a profile's cells the first time it is asked for.
 		__index = function(t, profile)
 			if type(profile) ~= "string" then return nil end
 			local cells = navIndexProfileRead(profile)
@@ -1559,6 +1629,7 @@ local function navIndexRead()
 	return index
 end
 
+-- Queues an index entry for the next flush and applies it to the memos.
 local function navIndexQueue(profile, cellKey, entry)
 	self.petportsNavIndexPending = self.petportsNavIndexPending or {}
 	self.petportsNavIndexPending[profile] = self.petportsNavIndexPending[profile] or {}
@@ -1581,6 +1652,7 @@ local function navIndexQueue(profile, cellKey, entry)
 	navIndexRemember(profile, cellKey, entry)
 end
 
+-- Merges updates into a chunk's index and writes it, holding the write while recent reads came back short.
 function navChunk.indexApply(profile, chunkKey, updates, force)
 	local cells = navChunk.indexRead(profile, chunkKey)
 	local slot = profile .. ":" .. chunkKey
@@ -1629,6 +1701,7 @@ end
 local NAV_INDEX_FLUSH_INTERVAL = 30.0
 local NAV_INDEX_FLUSH_BACKLOG = 200
 
+-- Writes the queued index entries chunk by chunk once the interval or the backlog is reached.
 local function navIndexFlush()
 	navGenerationCheck()
 	if (self.petportsNavIndexPendingCount or 0) == 0 then return end
@@ -1676,6 +1749,7 @@ local function navIndexFlush()
 	self.petportsNavIndexMemo = nil
 end
 
+-- Removes cells from their chunk indexes and from every memo.
 function navChunk.indexDrop(profile, cellKeys)
 	local byChunk = {}
 	for _, cellKey in ipairs(cellKeys) do
@@ -1702,6 +1776,7 @@ function navChunk.indexDrop(profile, cellKeys)
 end
 
 
+-- Deletes a profile's pre-chunk per-cell shards and its index.
 navChunk.legacyClear = function(profile, legacy)
 	local cleared = 0
 	for cellKey, entry in pairs(legacy) do
@@ -1715,6 +1790,7 @@ navChunk.legacyClear = function(profile, legacy)
 		profile, sb.printJson(cleared))
 end
 
+-- Returns every property name the edge family holds.
 navEdgeFamilyEnumerate = function()
 	local names = {}
 
@@ -1744,6 +1820,7 @@ navEdgeFamilyEnumerate = function()
 	return names
 end
 
+-- Returns the decoded-chunk cache, emptying it once its time to live passes.
 function navChunk.cache()
 	self.petportsNavCellCache = self.petportsNavCellCache or {}
 	self.petportsNavCacheAt = self.petportsNavCacheAt or world.time()
@@ -1757,6 +1834,7 @@ function navChunk.cache()
 	return self.petportsNavCellCache
 end
 
+-- Returns a chunk's edges, cached.
 function navChunk.edgesRead(profile, chunkKey)
 	local cache = navChunk.cache()
 	local key = navChunk.edgesProperty(profile, chunkKey)
@@ -1769,6 +1847,7 @@ function navChunk.edgesRead(profile, chunkKey)
 	return held
 end
 
+-- Returns a cell's outgoing edges from its chunk.
 local function navCellRead(profile, cellKey)
 	local chunkKey = navChunk.of(cellKey)
 	if chunkKey == nil then return {} end
@@ -1782,6 +1861,7 @@ local function navCellRead(profile, cellKey)
 	return edges
 end
 
+-- Merges or replaces cells in a chunk's edges, writes it, and returns the edge count.
 function navChunk.edgesApply(profile, chunkKey, updates, replace)
 	local chunk = navChunk.edgesDecode(profile, chunkKey)
 
@@ -1820,6 +1900,7 @@ function navChunk.edgesApply(profile, chunkKey, updates, replace)
 	return n
 end
 
+-- Replaces one cell's outgoing edges in its chunk.
 local function navCellWrite(profile, cellKey, edges)
 	local chunkKey = navChunk.of(cellKey)
 	if chunkKey == nil then return end
@@ -1830,12 +1911,14 @@ end
 local NAV_FLUSH_EDGES = 25
 local NAV_FLUSH_INTERVAL = 5.0
 
+-- Returns a profile's pending edge writes.
 local function navPendingFor(profile)
 	local pending = self.petportsNavPending
 	if type(pending) ~= "table" then return nil end
 	return pending[profile]
 end
 
+-- Writes the queued bounds, index and edge changes to the world properties.
 function petports_navFlush()
 	petports_profBegin("flushBounds")
 	navBoundsFlush()
@@ -1889,6 +1972,7 @@ function petports_navFlush()
 	return written
 end
 
+-- Returns an edge's stored verdict and its age.
 function petports_navKnown(profile, fromKey, toKey)
 	local key = navEdgeKey(fromKey, toKey)
 
@@ -1904,6 +1988,7 @@ function petports_navKnown(profile, fromKey, toKey)
 	return entry.r, world.time() - (entry.t or 0)
 end
 
+-- Drops a cell's outgoing edges and its index entry, and returns how many edges went.
 function petports_navForget(profile, cellKey)
 	local pending = navPendingFor(profile)
 
@@ -1941,6 +2026,7 @@ function petports_navForget(profile, cellKey)
 	return dropped
 end
 
+-- Records an edge verdict, updates the live graph, and flushes once the backlog or the interval is reached.
 function petports_navLearn(profile, fromKey, toKey, reachable, travelled)
 	self.petportsNavPending = self.petportsNavPending or {}
 	self.petportsNavPending[profile] = self.petportsNavPending[profile] or {}
@@ -2041,6 +2127,7 @@ function petports_navLearn(profile, fromKey, toKey, reachable, travelled)
 	end
 end
 
+-- Flushes the index once the edge flush time has arrived.
 local function navIndexTick()
 	if (self.petportsNavIndexPendingCount or 0) > 0
 	   and self.petportsNavFlushAt ~= nil
@@ -2050,6 +2137,7 @@ local function navIndexTick()
 	end
 end
 
+-- Records an edge as unreachable, and its reverse too for free movers.
 function petports_navContradict(profile, fromKey, toKey)
 	petports_navLearn(profile, fromKey, toKey, false)
 
@@ -2060,6 +2148,7 @@ end
 
 local NAV_VERIFY_SLOT = 999
 
+-- Spins the probe to completion for one edge and returns the verdict and the spin count.
 function petports_navVerify(fromKey, toKey)
 	local fx, fy = string.match(fromKey, "^(-?%d+),(-?%d+)$")
 	local tx, ty = string.match(toKey, "^(-?%d+),(-?%d+)$")
@@ -2082,6 +2171,7 @@ function petports_navVerify(fromKey, toKey)
 end
 
 
+-- Returns whether the body stays inside network coverage along a line.
 function navSegmentInCoverage(from, to)
 	local bounds = mcontroller.boundBox()
 	local samples = math.max(1, math.ceil(world.magnitude(from, to) / 0.5))
@@ -2100,6 +2190,7 @@ function navSegmentInCoverage(from, to)
 	return true
 end
 
+-- Runs one slice of a probe between two cells: a body sweep for free movers, otherwise A*, and records the verdict.
 function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 	stampOnce()
 
@@ -2321,6 +2412,7 @@ NAV_PROBE_MAX_TICKS = 60
 NAV_BRIDGE_RETRY = 30.0
 NAV_BRIDGE_RETRIES = 10
 
+-- Returns the profile string bridge edges are stored under.
 local function navBridgeProfile()
 	local now = world.time()
 
@@ -2333,11 +2425,13 @@ local function navBridgeProfile()
 	return self.petportsNavBridgeProfile
 end
 
+-- Returns the bridge profile for a gravity-switchable chassis, otherwise nil.
 function petports_navBridgeProfile()
 	if not petports_gravitySwitchable() then return nil end
 	return navBridgeProfile()
 end
 
+-- Records a bridge edge with its kind and geometry, and indexes both its cells.
 local function navBridgeLearn(fromKey, toKey, reachable, extra)
 	local profile = navBridgeProfile()
 
@@ -2371,6 +2465,7 @@ local function navBridgeLearn(fromKey, toKey, reachable, extra)
 	self.petportsNavFlushAt = self.petportsNavFlushAt or (now + NAV_FLUSH_INTERVAL)
 end
 
+-- Returns the indexed cells and anchors within bridge radius of a cell, on one side.
 local function navBridgeAnchorsAround(cx, cy, freeMover)
 	local out = {}
 	local profile = navWithSide(freeMover, petports_navProfile)
@@ -2394,12 +2489,14 @@ local function navBridgeAnchorsAround(cx, cy, freeMover)
 	return out
 end
 
+-- Returns whether a line between two points clears solid tiles.
 local function navBridgeSighted(from, to)
 	local set = PETPORTS_DIVE_SOLID_SET or NAV_SOLID_SET
 	local ok, hit = pcall(world.lineTileCollision, from, to, set)
 	return ok and hit == false
 end
 
+-- Removes and returns one queued bridge cell, preferring one already part-way through.
 local function navBridgeQueueTake()
 	local queue = self.petportsNavBridgeQueue
 	if type(queue) ~= "table" then return nil end
@@ -2418,6 +2515,7 @@ local function navBridgeQueueTake()
 	return nil
 end
 
+-- Runs one slice of the A* probe from a floating point back onto land, and records the result.
 local function navBridgeExitStep()
 	local probe = self.petportsNavBridgeExit
 	if probe == nil then return false end
@@ -2484,6 +2582,7 @@ end
 
 local NAV_BRIDGE_BUDGET_MS = 1.5
 
+-- Marks the anchored cells around a boundary as survey seeds on each side, within a time budget.
 local function navBridgeSeedSides(cx, cy, item)
 	local sides
 	if petports_gravitySwitchable() then sides = { false, true }
@@ -2532,6 +2631,7 @@ local function navBridgeSeedSides(cx, cy, item)
 	return true, state.seeded
 end
 
+-- Pairs the land and swim anchors around a boundary cell into dive and wade edges, and queues their exits.
 local function navBridgeExamine(cellKey, item)
 	local cx, cy, record = item.cx, item.cy, item.record
 	local baseX, baseY = navCellOrigin(cx, cy)
@@ -2594,10 +2694,12 @@ local function navBridgeExamine(cellKey, item)
 	local exits = {}
 	local learned = 0
 
+	-- Returns the point a body floats at above the water's top row.
 	local function floatAt(x)
 		return { x, top + 1 - (bounds[2] or -0.8) }
 	end
 
+	-- Queues an exit probe from a floating point back to a land anchor, once per pair.
 	local function queueExit(s, l, float)
 		local key = s.key .. ">" .. l.key
 		if exits[key] then return end
@@ -2698,6 +2800,7 @@ local function navBridgeExamine(cellKey, item)
 	petports_profCount("bridgeLearned", learned)
 end
 
+-- Runs the bridge work for this tick: an exit probe, a queued exit, a retry, or one boundary cell.
 local function navBridgeTick()
 	if petports_gravitySwitchable() and navBridgeExitStep() then return end
 
@@ -2731,6 +2834,7 @@ end
 
 
 
+-- Returns the reachable-edge adjacency for a profile, from the store and the pending writes.
 local function navAdjacency(profile)
 	local index = navIndexRead()
 	local cells = index[profile]
@@ -2764,6 +2868,7 @@ end
 
 local NAV_LEVELS = { 4, 8, 16, 32 }
 
+-- Returns the key of the block a cell falls in at a tile size.
 navBlockKey = function(cellKey, tiles)
 	local cx, cy = string.match(cellKey, "^(-?%d+),(-?%d+)$")
 	if cx == nil then return nil end
@@ -2779,12 +2884,14 @@ local NAV_BUILD_CHUNK = 12
 local NAV_BUILD_BUDGET_MS = 3.0
 local NAV_GRAPH_MIN_AGE = 30.0
 
+-- Returns whether a build step has used its millisecond budget.
 local function navBuildOverBudget(began)
 	if began == nil then return false end
 	local now = navTickClock()
 	return now ~= nil and (now - began) * 1000 >= NAV_BUILD_BUDGET_MS
 end
 
+-- Builds a profile's fine and coarse graphs a budget at a time, returning it once finished.
 local function navGraphBuildStep(profile)
 	local build = self.petportsNavGraphBuild
 
@@ -2850,6 +2957,7 @@ local function navGraphBuildStep(profile)
 
 	local levels = NAV_LEVELS
 	local blocks = build.blocks
+	-- Returns a cell's block key at every level, cached.
 	local function blocksOf(cellKey)
 		local held = blocks[cellKey]
 		if held ~= nil then return held end
@@ -2908,6 +3016,7 @@ end
 
 local NAV_MERGED_MIN_AGE = 5.0
 
+-- Builds the graph merging the land, swim and bridge profiles, a budget at a time.
 local function navMergedBuildStep()
 	local build = self.petportsNavMergedBuild
 	local bridgeProfile = navBridgeProfile()
@@ -3041,6 +3150,7 @@ local function navMergedBuildStep()
 	return self.petportsNavMerged
 end
 
+-- Returns the merged graph, rebuilding it when the store version moved and its minimum age has passed.
 local function navMergedGraphFor()
 	local cached = self.petportsNavMerged
 	local version = self.petportsNavVersion or 0
@@ -3065,6 +3175,7 @@ local function navMergedGraphFor()
 		side = {}, bridge = {}, building = true }
 end
 
+-- Returns a profile's graph, rebuilding it when the store version moved and its minimum age has passed.
 local function navGraphForInner(profile)
 	if petports_gravitySwitchable() and profile == navBridgeProfile() then
 		return navMergedGraphFor()
@@ -3096,6 +3207,7 @@ local function navGraphForInner(profile)
 	return { profile = profile, version = -1, fine = {}, len = {}, coarse = {}, building = true }
 end
 
+-- Returns a profile's graph inside a profiler section.
 local function navGraphFor(profile)
 	petports_profBegin("graphFor")
 	local g = navGraphForInner(profile)
@@ -3103,6 +3215,7 @@ local function navGraphFor(profile)
 	return g
 end
 
+-- Returns whether two cells' blocks connect at a block size, or nil once the budget runs out.
 local function navCoarseReaches(graph, tiles, fromKey, toKey, budget)
 	local a = navBlockKey(fromKey, tiles)
 	local b = navBlockKey(toKey, tiles)
@@ -3142,6 +3255,7 @@ end
 
 PETPORTS_NAV_SEARCH_BUDGET = 20000
 
+-- Returns whether one cell reaches another, ruling it out at each block size before searching the fine graph.
 function petports_navReaches(profile, fromKey, toKey, budget)
 	if fromKey == toKey then return true, 0 end
 
@@ -3191,6 +3305,7 @@ function petports_navReaches(profile, fromKey, toKey, budget)
 	return false, expanded
 end
 
+-- Returns a line describing why two cells have no route: the build state, a missing cell, or the nearest seam between their reachable sets.
 function petports_navWhyNoRoute(profile, fromKey, toKey)
 	local graph = navGraphFor(profile)
 	local fine = graph.fine or {}
@@ -3322,6 +3437,7 @@ local NAV_WAYPOINT_SWEEPS_PER_CALL = 2
 
 local navHeap = {}
 
+-- Pushes a key onto the heap at a cost.
 function navHeap.push(heap, cost, key)
 	local n = #heap + 1
 	heap[n] = { cost, key }
@@ -3333,6 +3449,7 @@ function navHeap.push(heap, cost, key)
 	end
 end
 
+-- Removes and returns the lowest cost entry on the heap.
 function navHeap.pop(heap)
 	local n = #heap
 	if n == 0 then return nil end
@@ -3353,6 +3470,7 @@ function navHeap.pop(heap)
 	return top[1], top[2]
 end
 
+-- Relaxes a node's neighbours into the search, returning the path once the target is settled.
 local function navRouteExpand(job, adjacency, lengths, node, cost, toKey)
 	if node == toKey then
 		local path = { toKey }
@@ -3378,6 +3496,7 @@ local function navRouteExpand(job, adjacency, lengths, node, cost, toKey)
 	return nil
 end
 
+-- Runs the route search a millisecond budget at a time, returning the path, or more while it continues.
 local function navRouteStep(profile, fromKey, toKey, budget)
 	if fromKey == toKey then return { fromKey } end
 	local graph = navGraphFor(profile)
@@ -3435,6 +3554,7 @@ local function navRouteStep(profile, fromKey, toKey, budget)
 	end
 end
 
+-- Returns the cell path between two cells, searched in one call.
 function petports_navPath(profile, fromKey, toKey, budget)
 	if fromKey == toKey then return { fromKey } end
 
@@ -3459,6 +3579,7 @@ function petports_navPath(profile, fromKey, toKey, budget)
 	end
 end
 
+-- Returns the next waypoint along the route to a cell, with the hops left behind it and the leg's cells and kind.
 function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdvance, allowStep)
 	local sweepJob = self.petportsNavWaypointJob
 	local path
@@ -3483,11 +3604,13 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdva
 
 	local graph = navGraphFor(profile)
 	local sides = graph.side
+	-- Returns a cell's side, taking the unit's own for cells on both.
 	local function sideOf(key)
 		local tag = sides ~= nil and sides[key] or nil
 		if tag == nil or tag == 2 then return freeMover and 1 or 0 end
 		return tag
 	end
+	-- Returns a cell's anchor as surveyed from a side.
 	local function anchorOf(key, asSide)
 		local kx = tonumber(string.match(key, "^(-?%d+),"))
 		local ky = tonumber(string.match(key, ",(-?%d+)$"))
@@ -3594,6 +3717,7 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdva
 	end
 
 	if freeMover and #inReach > 0 then
+		-- Returns whether the line from the body to a candidate anchor is clear.
 		local function clearTo(entry)
 			if petports_flyPathClear ~= nil then
 				local okClear, verdict = pcall(petports_flyPathClear, origin, entry.anchor)
@@ -3667,6 +3791,7 @@ end
 
 local NAV_NEAREST_SWEEPS = 6
 
+-- Returns the graph's cells bucketed by block, built on first use.
 local function navGraphBlocks(graph)
 	if graph.blocks ~= nil then return graph.blocks end
 
@@ -3690,6 +3815,7 @@ local function navGraphBlocks(graph)
 end
 
 
+-- Returns the debug colour for a swept radius.
 local function navRadiusColour(radius)
 	local lo, hi = PETPORTS_NAV_RADIUS_START, navFullRadius()
 	local t = (radius - lo) / math.max(1, hi - lo)
@@ -3697,6 +3823,7 @@ local function navRadiusColour(radius)
 	return { math.floor(255 * (1 - t) + 0.5), math.floor(255 * t + 0.5), 0, 255 }
 end
 
+-- Returns the first candidate cell inside the radius the body can reach, saving a resume point when its sweeps run out.
 local function navNearestFrom(candidates, startAt, position, freeMover, radius, resumeKey, fine)
 	local swept = 0
 
@@ -3735,6 +3862,7 @@ local function navNearestFrom(candidates, startAt, position, freeMover, radius, 
 	return nil
 end
 
+-- Returns the nearest graph cell to a position on a side, resuming a part-finished search.
 local function navNearestCellIn(graph, position, freeMover, radius, sideTag)
 	radius = radius or 2.5
 
@@ -3789,10 +3917,12 @@ local function navNearestCellIn(graph, position, freeMover, radius, sideTag)
 	return navNearestFrom(candidates, 1, position, freeMover, radius, resumeKey, fine)
 end
 
+-- Returns the nearest graph cell to a position.
 function petports_navNearestCell(position, freeMover, radius)
 	return navNearestCellIn(navGraphFor(petports_navProfile()), position, freeMover, radius, nil)
 end
 
+-- Returns the nearest merged-graph cell on the unit's own side.
 function petports_navNearestCellSide(position, freeMover, radius)
 	if not petports_gravitySwitchable() then
 		return petports_navNearestCell(position, freeMover, radius)
@@ -3803,6 +3933,7 @@ function petports_navNearestCellSide(position, freeMover, radius)
 		radius, freeMover and 1 or 0)
 end
 
+-- Returns the profile, edge, reachable, pending and swept-cell counts.
 function petports_navStats()
 	local index = navIndexRead()
 	local profiles, edges, reachable = 0, 0, 0
@@ -3833,6 +3964,7 @@ local NAV_SWEEP_TTL = 21600.0
 
 local NAV_CLAIM_TTL = 120.0
 
+-- Returns an index entry's sweep time and radius when it matches the current generation.
 local function navIndexEntry(value)
 	if type(value) == "number" then return nil, 0 end
 	if type(value) ~= "table" then return nil, 0 end
@@ -3844,6 +3976,7 @@ local function navIndexEntry(value)
 	return at, tonumber(value.radius) or 0
 end
 
+-- Returns when a cell was swept and to what radius, or nil once the record has expired.
 function petports_navSwept(profile, cellKey)
 	local index = navIndexRead()
 	local cells = index[profile]
@@ -3857,12 +3990,14 @@ function petports_navSwept(profile, cellKey)
 	return at, radius
 end
 
+-- Returns the radius a cell has been swept to.
 function petports_navSweptRadius(profile, cellKey)
 	local at, radius = petports_navSwept(profile, cellKey)
 	if at == nil then return 0 end
 	return radius
 end
 
+-- Returns the radius a cell has been swept to, from an index already read.
 local function navSweptRadiusIn(cells, cellKey, now)
 	if type(cells) ~= "table" then return 0 end
 
@@ -3876,10 +4011,12 @@ end
 PETPORTS_NAV_SWEEPS = 8
 PETPORTS_NAV_WORKERS = 4
 
+-- Returns the first probe slot a sweep's workers use.
 local function navSlotBase(index)
 	return (index - 1) * PETPORTS_NAV_WORKERS
 end
 
+-- Claims a cell and starts the coroutine that probes its neighbours out to the next radius.
 function petports_navSweepStart(cx, cy, ownerId, index)
 	local profile = petports_navProfile()
 	local cellKey = petports_navCellKey(cx, cy)
@@ -3983,6 +4120,7 @@ local NAV_STEPS_PER_TICK = 2
 
 local NAV_STEPS_PER_TICK_FREE = 8
 
+-- Returns the process clock in seconds, or nil where it is unavailable.
 navTickClock = function()
 	if type(os) == "table" and type(os.clock) == "function" then
 		local ok, t = pcall(os.clock)
@@ -3991,6 +4129,7 @@ navTickClock = function()
 	return nil
 end
 
+-- Resumes the live sweeps in rotation, within the tick's step count and time budget.
 function petports_navSweepStep()
 	local sweeps = self.petportsNavSweeps
 	if sweeps == nil or next(sweeps) == nil then return nil end
@@ -4058,12 +4197,14 @@ function petports_navSweepStep()
 	return "done"
 end
 
+-- Returns how many sweeps are live.
 function petports_navSweepCount()
 	local count = 0
 	for _ in pairs(self.petportsNavSweeps or {}) do count = count + 1 end
 	return count
 end
 
+-- Records a completed sweep's radius in the index, releases its claim and clears its probe slots.
 function petports_navFinishSweep(index, completed)
 	local sweeps = self.petportsNavSweeps or {}
 	local sweep = sweeps[index]
@@ -4103,6 +4244,7 @@ function petports_navFinishSweep(index, completed)
 	sweeps[index] = nil
 end
 
+-- Returns the per-level block and edge counts, and every pair the coarse levels rule out that the fine graph connects.
 function petports_navLevelReport()
 	local profile = petports_navProfile()
 	local graph = navGraphFor(profile)
@@ -4203,6 +4345,7 @@ end
 
 local navDebugBroken = false
 
+-- Calls a debug draw function, turning debug drawing off for the session on the first failure.
 local function navDrawSafely(fn, ...)
 	if navDebugBroken then return end
 
@@ -4214,6 +4357,7 @@ local function navDrawSafely(fn, ...)
 	end
 end
 
+-- Draws a cell's outline.
 local function navDrawCell(cx, cy, colour)
 	local x0, y0 = navCellOrigin(cx, cy)
 	local x1 = x0 + PETPORTS_NAV_CELL
@@ -4225,6 +4369,7 @@ local function navDrawCell(cx, cy, colour)
 	navDrawSafely(world.debugLine, { x0, y1 }, { x0, y0 }, colour)
 end
 
+-- Draws a cross at a position.
 local function navDrawPoint(position, colour)
 	if type(position) ~= "table" then return end
 
@@ -4238,6 +4383,7 @@ local function navDrawPoint(position, colour)
 		colour)
 end
 
+-- Returns the share of blocks fully swept at each level, cached.
 function petports_navLevelProgress()
 	local profile = petports_navProfile()
 	local version = self.petportsNavVersion or 0
@@ -4311,6 +4457,7 @@ function petports_navLevelProgress()
 	return levels
 end
 
+-- Returns the centre, sweep time and radius of every swept cell, cached.
 local function navSweptPoints()
 	local version = self.petportsNavVersion or 0
 	local held = self.petportsNavSweptPoints
@@ -4368,18 +4515,21 @@ local NAV_BOUNDS_DRAW_REFRESH = 4.0
 
 PETPORTS_NAV_DRAW_EDGES = false
 
+-- Returns the world origin of a cell key.
 local function navKeyOrigin(key)
 	local kx, ky = string.match(tostring(key), "^(-?%d+),(-?%d+)$")
 	if kx == nil then return nil end
 	return navCellOrigin(tonumber(kx), tonumber(ky))
 end
 
+-- Returns a cell's anchor from the cache, without computing one.
 local function navCachedAnchor(key)
 	local cache = (self.petportsNavAnchorCache or {})[petports_navProfile()]
 	local hit = cache ~= nil and cache[key] or nil
 	return hit ~= nil and hit.anchor or nil
 end
 
+-- Draws the graph edges, walls, boundaries and last route near the unit, with the survey and graph status lines.
 local function navDrawLive(here, line)
 	local profile = petports_navProfile()
 	local freeMover = petports_freeMover()
@@ -4520,6 +4670,7 @@ local function navDrawLive(here, line)
 	end
 end
 
+-- Returns the stored boundary records within draw range, cached.
 local function navBoundsInRange(here)
 	local now = world.time()
 
@@ -4560,13 +4711,16 @@ local function navBoundsInRange(here)
 	return out
 end
 
+-- Draws the dive, wade and exit bridges near the unit, and the queued cells.
 local function navDrawBridges(here)
+	-- Returns whether a point is inside draw range.
 	local function near(p)
 		return type(p) == "table"
 			and math.abs(p[1] - here[1]) <= NAV_DRAW_RANGE
 			and math.abs(p[2] - here[2]) <= NAV_DRAW_RANGE
 	end
 
+	-- Draws a cross at a position.
 	local function cross(position, colour)
 		local size = 0.25
 		navDrawSafely(world.debugLine,
@@ -4605,6 +4759,7 @@ local function navDrawBridges(here)
 		navDrawSafely(world.debugLine, probe.from, probe.to, "magenta")
 	end
 
+	-- Draws a grey cross at a queued cell's centre.
 	local function pendingCross(key)
 		local cx, cy = string.match(key, "^(-?%d+),(-?%d+)$")
 		if cx == nil then return end
@@ -4617,6 +4772,7 @@ local function navDrawBridges(here)
 	for key in pairs(self.petportsNavBridgeRetry or {}) do pendingCross(key) end
 end
 
+-- Draws the liquid tiles of every boundary record in range.
 navDrawBounds = function(here)
 	for _, entry in ipairs(navBoundsInRange(here)) do
 		local record = entry.record
@@ -4635,6 +4791,7 @@ navDrawBounds = function(here)
 	end
 end
 
+-- Flips nav debug drawing and returns the new state.
 function petports_navDebugToggle()
 	PETPORTS_NAV_DEBUG = not PETPORTS_NAV_DEBUG
 	navDebugBroken = false
@@ -4644,6 +4801,7 @@ function petports_navDebugToggle()
 	return PETPORTS_NAV_DEBUG
 end
 
+-- Draws the level progress, the live graph, the swept cells, the running sweeps and the running probes.
 function petports_navDebugDraw()
 	if not PETPORTS_NAV_DEBUG then return end
 
@@ -4740,6 +4898,7 @@ local NAV_FRONTIER_REBUILD = 10.0
 local NAV_CANDIDATE_CACHE = 2.0
 local navCandidatesInner
 
+-- Yields once a candidate scan has used the tick budget, then restarts the clock.
 local function navCandYield(clock)
 	if clock.began == nil then return end
 	local now = navTickClock()
@@ -4749,6 +4908,7 @@ local function navCandYield(clock)
 	end
 end
 
+-- Returns the cells worth sweeping next, served from the cache or from a coroutine that rebuilds the list.
 function petports_navCandidates(limit)
 	local now = world.time()
 	local freeMover = petports_freeMover()
@@ -4801,9 +4961,11 @@ function petports_navCandidates(limit)
 	return list
 end
 
+-- Builds the sweep candidate list from the unit's own cell, the seeds, the nearby graph and the frontier queue, yielding on the tick budget.
 navCandidatesInner = function(limit)
 	local clock = { began = coroutine.running() ~= nil and navTickClock() or nil }
 	local yieldEvery, yieldCount = 8, 0
+	-- Yields on the tick budget every eighth call.
 	local function candTick()
 		yieldCount = yieldCount + 1
 		if yieldCount % yieldEvery == 0 then navCandYield(clock) end
@@ -4878,6 +5040,7 @@ navCandidatesInner = function(limit)
 	self.petportsNavFrontier[sideKey] = self.petportsNavFrontier[sideKey] or {}
 	local queue = self.petportsNavFrontier[sideKey]
 
+	-- Adds an unswept in-coverage cell to the candidate list and to the frontier queue.
 	local function consider(cellKey)
 		if seen[cellKey] then return end
 		seen[cellKey] = true
@@ -4939,6 +5102,7 @@ navCandidatesInner = function(limit)
 
 	local unswept, foundBefore = 0, 0
 
+	-- Returns how many candidates found so far have never been swept.
 	local function unsweptFound()
 		for i = foundBefore + 1, #found do
 			if (found[i].radius or 0) <= 0 then unswept = unswept + 1 end
@@ -5064,6 +5228,7 @@ navCandidatesInner = function(limit)
 		consider(cellKey)
 	end
 
+	-- Orders candidates by swept radius, then distance, then key.
 	local function before(a, b)
 		if a.radius ~= b.radius then return a.radius < b.radius end
 		if a.distance ~= b.distance then return a.distance < b.distance end
@@ -5099,6 +5264,7 @@ navCandidatesInner = function(limit)
 	return found
 end
 
+-- Returns the cell to sweep next, or a reason there is none.
 function petports_navNextCell(freeMover)
 	local candidates = petports_navCandidates(1)
 	if #candidates == 0 then return nil, nil, "no unswept cell in the graph" end
@@ -5109,6 +5275,7 @@ local NAV_CLAIM_ATTEMPTS = 8
 
 local NAV_PURGE_PER_PASS = 4
 
+-- Drops a few stale cells that fell outside coverage, with their edges and index entries.
 local function navPurgeDeadzonesInner(profile)
 	local index = navIndexRead()
 	local cells = index[profile]
@@ -5155,6 +5322,7 @@ local function navPurgeDeadzonesInner(profile)
 	return dropped
 end
 
+-- Purges stale out-of-coverage cells inside a profiler section.
 local function navPurgeDeadzones(profile)
 	petports_profBegin("purge")
 	local r = navPurgeDeadzonesInner(profile)
@@ -5179,6 +5347,7 @@ local PROF_WORLD_FUNCTIONS = {
 
 local profSurvey = {}
 
+-- Adds to a survey counter.
 function petports_profCount(name, by)
 	profSurvey[name] = (profSurvey[name] or 0) + (by or 1)
 end
@@ -5191,6 +5360,7 @@ local profTickStart, profTickMax = nil, 0
 local profReportAt = nil
 local profInstalled = false
 
+-- Returns the profiler clock, or nil when there is none.
 local function profNow()
 	if profClock == nil then return nil end
 	local ok, t = pcall(profClock)
@@ -5200,6 +5370,7 @@ end
 
 local profGcTuned = false
 
+-- Flips the garbage collector between the tuned and the default pause and step multiplier.
 function petports_gcTune()
 	if type(collectgarbage) ~= "function" then
 		sb.logInfo("GC tune: collectgarbage is not available")
@@ -5221,6 +5392,7 @@ function petports_gcTune()
 	return profGcTuned
 end
 
+-- Returns the Lua heap size in kilobytes, or nil.
 local function profHeapKb()
 	if type(collectgarbage) ~= "function" then return nil end
 	local ok, kb = pcall(collectgarbage, "count")
@@ -5230,6 +5402,7 @@ end
 
 local profHeapLast = nil
 
+-- Takes the clock and wraps the counted world functions, once.
 function petports_profInstall()
 	if profInstalled then return end
 	profInstalled = true
@@ -5268,17 +5441,20 @@ function petports_profInstall()
 		sb.printJson(counted), sb.printJson(#PROF_WORLD_FUNCTIONS))
 end
 
+-- Flips profiling and returns the new state.
 function petports_profToggle()
 	PETPORTS_PROFILE = not PETPORTS_PROFILE
 	sb.logInfo("PROFILE %s", PETPORTS_PROFILE and "ON" or "OFF")
 	return PETPORTS_PROFILE
 end
 
+-- Marks the start of a profiler section.
 function petports_profBegin(section)
 	if not PETPORTS_PROFILE then return end
 	profOpen[section] = profNow()
 end
 
+-- Closes a profiler section and adds its call count and time.
 function petports_profEnd(section)
 	if not PETPORTS_PROFILE then return end
 
@@ -5304,6 +5480,7 @@ end
 local PROF_STALL_MS = 250
 local profTickEndAt = nil
 
+-- Starts the tick timer and logs a stall when process time passed between ticks.
 function petports_profTickBegin()
 	if not PETPORTS_PROFILE then return end
 	profTickStart = profNow()
@@ -5318,6 +5495,7 @@ function petports_profTickBegin()
 	end
 end
 
+-- Closes the tick timer and logs the section, survey, heap and world-call report on an interval.
 function petports_profTickEnd()
 	if not PETPORTS_PROFILE then return end
 
@@ -5394,6 +5572,7 @@ end
 
 local NAV_SURVEY_CONCURRENT = 2
 
+-- Returns whether this unit takes a survey turn this tick, staggering the units across the network.
 local function navSurveyTurn()
 	self.petportsNavUpdateCount = (self.petportsNavUpdateCount or 0) + 1
 
@@ -5415,6 +5594,7 @@ local function navSurveyTurn()
 	return false
 end
 
+-- Starts sweeps on the best candidate cells, and reports the side complete when there are none.
 local function navTopUp(ownerId)
 	local candidates = petports_navCandidates(NAV_CLAIM_ATTEMPTS)
 	local side = petports_freeMover() and "1" or "0"
@@ -5502,6 +5682,7 @@ local function navTopUp(ownerId)
 	return false
 end
 
+-- Runs the tick's nav work: builds, contradictions, drawing, boundary and bridge steps, then the sweeps and top-up.
 local function navTickInner(dt, ownerId, searching)
 	navGenerationCheck()
 	navIndexTick()
@@ -5572,6 +5753,7 @@ local function navTickInner(dt, ownerId, searching)
 	return result == true
 end
 
+-- Runs the nav tick inside the profiler.
 function petports_navTick(dt, ownerId, searching)
 	petports_profInstall()
 	petports_profBegin("navTick")
@@ -5580,10 +5762,12 @@ function petports_navTick(dt, ownerId, searching)
 	return result
 end
 
+-- Packs a call's return values with their count.
 local function profPack(...)
 	return { n = select("#", ...), ... }
 end
 
+-- Returns a function that runs another inside a named profiler section.
 local function profWrap(name, fn)
 	return function(...)
 		petports_profBegin(name)
@@ -5603,6 +5787,7 @@ petports_navCandidates = profWrap("candidates", petports_navCandidates)
 petports_navNearestCell = profWrap("nearestCell", petports_navNearestCell)
 petports_navWaypoint = profWrap("waypoint", petports_navWaypoint)
 
+-- Returns the cell, swept, fully-swept, frontier and edge counts, with the cells being swept now.
 function petports_navProgress()
 	local profile = petports_navProfile()
 	local graph = navGraphFor(profile)
@@ -5613,6 +5798,7 @@ function petports_navProgress()
 	local sweptCells = navIndexRead()[profile]
 	local now = world.time()
 
+	-- Counts a cell once into the total, swept and fully-swept tallies.
 	local function count(cellKey)
 		if seen[cellKey] then return end
 		seen[cellKey] = true
@@ -5649,6 +5835,7 @@ function petports_navProgress()
 	}
 end
 
+-- Logs the cell, chunk, edge and byte counts of each profile's store and returns its total size in kilobytes.
 function petports_navDumpStore()
 	local index = navIndexRead()
 	local grand = 0
@@ -5707,6 +5894,7 @@ function petports_navDumpStore()
 	return math.floor((grand + claimBytes) / 1024)
 end
 
+-- Deletes every nav property in the manifest, releases the survey claims, and bumps the store generation.
 function petports_navWipe()
 	local cleared = 0
 	local roots = 0
@@ -5782,6 +5970,7 @@ function petports_navWipe()
 end
 
 
+-- Probes every neighbour of the unit's own cell to completion and returns the verdict, store and reach counts.
 function petports_navSelfTest(wipe)
 	stampOnce()
 

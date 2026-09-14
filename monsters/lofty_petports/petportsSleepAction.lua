@@ -1,13 +1,17 @@
+-- Monster action that sleeps in place or at a target to drain the sleepy resource.
+
 petportsSleepAction = {
   cooldown = 10
 }
 
 local APPROACH_TIMEOUT = 6.0
 
+-- Returns the action name.
 function petportsSleepAction.description()
   return "sleepAction"
 end
 
+-- Returns sleep state data when sleeping is allowed and the sleepy resource is high enough, otherwise nil.
 function petportsSleepAction.enterWith(args)
   if not config.getParameter("petports_allowSleep", true) then
     sb.logInfo("UNIT sleep refused: petports_allowSleep is false")
@@ -33,6 +37,7 @@ function petportsSleepAction.enterWith(args)
   }
 end
 
+-- Emotes when sleeping at a target, otherwise starts the sleep particles.
 function petportsSleepAction.enteringState(stateData)
   if stateData.targetId then
     emote("sleepy")
@@ -41,6 +46,7 @@ function petportsSleepAction.enteringState(stateData)
   end
 end
 
+-- Walks to a rest position near the unit and starts sleeping on arrival.
 local function settleInPlace(dt, stateData)
   if stateData.restPosition == nil then
     local here = mcontroller.position()
@@ -71,6 +77,7 @@ local function settleInPlace(dt, stateData)
   return false
 end
 
+-- Approaches the target, settles beside it and starts sleeping.
 local function settleAtTarget(dt, stateData)
   if not world.entityExists(stateData.targetId) then return true end
 
@@ -94,6 +101,7 @@ local function settleAtTarget(dt, stateData)
   return false
 end
 
+-- Settles first, then drains the sleepy resource and ends the action once it is empty.
 function petportsSleepAction.update(dt, stateData)
   if not stateData.sleeping then
     if stateData.targetId then
@@ -121,6 +129,7 @@ function petportsSleepAction.update(dt, stateData)
   return false
 end
 
+-- Returns the unit to idle and stops the sleep particles.
 function petportsSleepAction.leavingState(stateData)
   setIdleState()
   animator.setParticleEmitterActive("sleep", false)

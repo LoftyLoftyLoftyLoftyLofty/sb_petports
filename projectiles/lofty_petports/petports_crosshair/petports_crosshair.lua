@@ -1,7 +1,10 @@
+-- Marker projectile that kills older duplicates of itself.
+
 require "/scripts/vec2.lua"
 
 local DEFAULT_CULL_RADIUS = 2.0
 
+-- Reads petportsItem and installs the item, kill and move handlers.
 function init()
 	self.item = projectile.getParameter("petportsItem")
 	self.culled = false
@@ -28,6 +31,7 @@ function init()
 	end)
 end
 
+-- On its first tick, kills nearby crosshairs with a lower entity id carrying the same item.
 function update(dt)
 	if self.culled then return end
 	self.culled = true

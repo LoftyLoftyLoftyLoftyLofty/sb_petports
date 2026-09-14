@@ -1,5 +1,8 @@
+-- Sets a pane's title icon from an on/off image pair.
+
 local applied = nil
 
+-- Sets the title icon to paths.on or paths.off, skipping the call when that asset is already applied.
 function petports_applyPaneIcon(paths, enabled)
 	if type(paths) ~= "table" or paths.on == nil or paths.off == nil then
 		sb.logError("petports: petports_applyPaneIcon needs both an on and an off asset")

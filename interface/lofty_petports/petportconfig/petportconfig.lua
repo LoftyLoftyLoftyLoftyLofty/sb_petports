@@ -1,9 +1,12 @@
+-- Pane for a Petport: shows the unit's details, edits its settings and lists its stats.
+
 require "/scripts/lofty_petports/petports_strings.lua"
 
 require "/scripts/lofty_petports/petports_modules.lua"
 
 require "/scripts/lofty_petports/petports_flavors.lua"
 
+-- Returns a flavor's label, or its id capitalised.
 local function flavorLabel(id)
 	if type(id) ~= "string" or id == "" then return nil end
 
@@ -65,6 +68,7 @@ local RGB_DEFAULT = 140
 
 local RGB_STEP = 1
 
+-- Returns a setting row's kind: check, rgb or sep.
 local function rowKind(row)
 	if row == nil then return nil end
 	if row.kind ~= nil then return row.kind end
@@ -212,28 +216,33 @@ local PET_COLUMN = {
 	"taskLabel", "diagLabel"
 }
 
+-- Logs a formatted line when DEBUG is set.
 local function dbg(fmt, ...)
 	if not DEBUG then return end
 	local ok, text = pcall(string.format, fmt, ...)
 	sb.logInfo("PETPORTS petportpane: %s", ok and text or ("<badformat> " .. tostring(fmt)))
 end
 
+-- Sets the visibility of a list of widgets.
 local function setVisibleAll(names, visible)
 	for _, name in ipairs(names) do
 		widget.setVisible(name, visible)
 	end
 end
 
+-- Returns a value printed as JSON, or a placeholder.
 local function j(value)
 	local ok, text = pcall(sb.printJson, value)
 	return ok and text or "<unprintable>"
 end
 
 
+-- Returns the container entity id.
 local function portId()
 	return pane.containerEntityId()
 end
 
+-- Reads the port's pane state parameter.
 local function readState()
 	local id = portId()
 	if id == nil then return nil end
@@ -247,6 +256,7 @@ local function readState()
 	return state
 end
 
+-- Sends a message to the port.
 local function tell(name, payload)
 	local id = portId()
 	if id == nil then return end
@@ -260,6 +270,7 @@ local PANE_SOUNDS = {
 
 local soundIsLocal = nil
 
+-- Plays a pane sound locally, falling back to asking the port to play it.
 local function paneSound(name)
 	local path = PANE_SOUNDS[name]
 
@@ -288,6 +299,7 @@ local activeTab = "tabDetails"
 
 local blipShown = {}
 
+-- Tints the fuel blips full, low or critical up to the filled count.
 local function paintFuel(blips)
 	local filled = math.max(0, math.min(BLIP_COUNT, math.floor(blips or 0)))
 
@@ -307,6 +319,7 @@ local function paintFuel(blips)
 	end
 end
 
+-- Sets the fuel label for an organic or a robotic body.
 local function paintFuelLabel(bodyKind)
 	local key = (bodyKind == "robotic") and "petport.fuel.robotic" or "petport.fuel.organic"
 	local text = petports_string(key)
@@ -316,6 +329,7 @@ local function paintFuelLabel(bodyKind)
 	end
 end
 
+-- Puts the first cargo stack in the slot and enables the take button.
 local function paintCargo(cargo)
 	local stack = cargo and cargo[1] or nil
 
@@ -331,6 +345,7 @@ end
 
 local diagText = {}
 
+-- Shows a tinted icon for each diagnostic and sets the diagnostic label.
 local function paintDiagnostics(diags)
 	diags = diags or {}
 
@@ -362,6 +377,7 @@ local PORTRAIT_EXCLUDE = {
 	"/lofty_petports/shared/indicator"
 }
 
+-- Returns whether an image path is one of the excluded indicator assets.
 local function isIndicator(path)
 	for _, fragment in ipairs(PORTRAIT_EXCLUDE) do
 		if string.find(path, fragment, 1, true) then return true end
@@ -372,6 +388,7 @@ end
 local measuredOnce = false
 local transformSignature = nil
 
+-- Returns each portrait drawable's centre and the combined bounds, marking those mirrored against the first.
 local function layoutDrawables(drawables)
 	local items = {}
 	local x0, y0, x1, y1
@@ -462,6 +479,7 @@ local portraitResolved = false
 
 local PORTRAIT_AWAY_SIZE = 8
 
+-- Draws the unit's portrait scaled into the preview canvas, or the away text.
 local function paintPreview(petId)
 	local canvas = widget.bindCanvas("petPreview")
 	if canvas == nil then return end
@@ -552,6 +570,7 @@ local paneModuleFlags = {}
 local paneSettings = {}
 local paneHasUnit = false
 
+-- Returns the slot and item of every socketed module, with one slot optionally replaced.
 local function moduleRecords(overrideSlot, overrideItem)
 	local out = {}
 	for i = 1, MODULE_SLOTS do
@@ -577,6 +596,7 @@ local lightPainted = {}
 
 local lightSent = {}
 
+-- Writes a colour channel's text box and records what it now shows.
 local function setLightField(path, channel, value)
 	local text = tostring(value)
 
@@ -585,11 +605,13 @@ local function setLightField(path, channel, value)
 	pcall(widget.setText, path .. ".settingField", text)
 end
 
+-- Drops focus from a widget when it holds it.
 local function blurField(name)
 	local ok, focused = pcall(widget.hasFocus, name)
 	if ok and focused then pcall(widget.blur, name) end
 end
 
+-- Drops focus from the name box and every colour box.
 local function blurPaneFields()
 	blurField("tbPetName")
 
@@ -602,6 +624,7 @@ local function blurPaneFields()
 	end
 end
 
+-- Returns text as a whole number clamped to the channel range, and whether it was clamped.
 local function rgbValue(text)
 	local value = tonumber(text)
 	if value == nil then return nil end
@@ -614,6 +637,7 @@ local function rgbValue(text)
 	return value, false
 end
 
+-- Returns the setting rows whose required module flag is present.
 local function applicableSettingRows()
 	local out = {}
 
@@ -626,12 +650,14 @@ local function applicableSettingRows()
 	return out
 end
 
+-- Returns a colour channel's value, or the default.
 local function lightValue(channel)
 	local value = paneLight[channel]
 	if type(value) ~= "number" then return RGB_DEFAULT end
 	return value
 end
 
+-- Returns a setting row's stored value, or its default.
 local function settingValue(row)
 	local store = paneSettings[row.owner] or {}
 	local value = store[row.key]
@@ -640,6 +666,7 @@ local function settingValue(row)
 	return value ~= false
 end
 
+-- Returns the icon, subtitle and rarity of the socketed module supplying each module flag.
 local function moduleHelpByFlag()
 	local out = {}
 
@@ -675,6 +702,7 @@ local function moduleHelpByFlag()
 	return out
 end
 
+-- Puts a help item carrying a row's tooltip into its help slot.
 local function setRowHelp(rowPath, row, moduleHelp)
 	local tip = petports_string(row.tip)
 
@@ -711,6 +739,7 @@ local function setRowHelp(rowPath, row, moduleHelp)
 	widget.setVisible(rowPath .. ".helpSlot", true)
 end
 
+-- Rebuilds the settings list when its row set changed, then writes every checkbox and colour box.
 local function paintSettings()
 	local showing = (activeTab == "tabSettings")
 	widget.setVisible("settingsScroll", showing and paneHasUnit)
@@ -806,6 +835,7 @@ local function paintSettings()
 	end
 end
 
+-- Shows the module slots this unit has and fills them.
 local function paintModuleSlots()
 	local showing = (activeTab == "tabDetails")
 
@@ -825,6 +855,7 @@ local moduleTokenSeq = 0
 
 local paneNameSeen = false
 
+-- Returns a fresh module write token.
 local function nextModuleToken()
 	moduleTokenSeq = moduleTokenSeq + 1
 
@@ -832,6 +863,7 @@ local function nextModuleToken()
 	return (ok and tostring(uuid) or "pane") .. ":" .. tostring(moduleTokenSeq)
 end
 
+-- Takes the module flags, settings and light out of a state, and repaints the slots once the port echoes the write token.
 local function paintModules(state)
 	paneModuleFlags = {}
 	for _, flag in ipairs(state.moduleFlags or {}) do
@@ -888,6 +920,7 @@ local function paintModules(state)
 	paintModuleSlots()
 end
 
+-- Returns a number with thousands separators.
 local function groupDigits(value)
 	local text = tostring(math.floor(tonumber(value) or 0))
 
@@ -900,6 +933,7 @@ local function groupDigits(value)
 	return text
 end
 
+-- Returns a count in its flavor's colour, or plain when the flavor is unknown.
 local function flavorCount(id, count)
 	if petports_flavor(id) == nil then
 		return groupDigits(count)
@@ -911,6 +945,7 @@ end
 
 local statsRowPaths = {}
 
+-- Builds the stats lines and writes them into the list, rebuilding the rows when their number changed.
 local function paintStats(stats)
 	if activeTab ~= "tabStats" or type(stats) ~= "table" then
 		if #statsRowPaths > 0 then
@@ -925,10 +960,12 @@ local function paintStats(stats)
 
 	local lines = {}
 
+	-- Adds a text line.
 	local function addLine(text)
 		table.insert(lines, { text = text })
 	end
 
+	-- Adds a separator line.
 	local function addSeparator()
 		table.insert(lines, { text = STATS_SEPARATOR_TEXT, sep = true })
 	end
@@ -1059,6 +1096,7 @@ local function paintStats(stats)
 end
 
 
+-- Switches the visible tab and repaints the module slots and the settings.
 local function showTab(which)
 	blurPaneFields()
 
@@ -1080,6 +1118,7 @@ local lastSignature = nil
 
 local livePetId = nil
 
+-- Clears every unit widget and hides the unit column.
 local function showEmpty()
 	livePetId = nil
 	paneModules = {}
@@ -1119,6 +1158,7 @@ local function showEmpty()
 	setVisibleAll(TAB_MEMBERS[activeTab], false)
 end
 
+-- Reads the port's state and repaints the pane when it changed.
 local function refresh(force)
 	local state = readState()
 
@@ -1197,26 +1237,31 @@ local function refresh(force)
 end
 
 
+-- Switches to the details tab and refreshes.
 function tabDetailsClicked()
 	showTab("tabDetails")
 	refresh(true)
 end
 
+-- Switches to the settings tab and refreshes.
 function tabSettingsClicked()
 	showTab("tabSettings")
 	refresh(true)
 end
 
+-- Switches to the stats tab and refreshes.
 function tabStatsClicked()
 	showTab("tabStats")
 	refresh(true)
 end
 
+-- Does nothing.
 function statsRowSelected()
 end
 
 local pendingTake = nil
 
+-- Asks the port for its cargo.
 function cargoTakeClicked()
 	if pendingTake ~= nil then return end
 
@@ -1228,6 +1273,7 @@ function cargoTakeClicked()
 	pendingTake = world.sendEntityMessage(id, "petports_takeCargo", {})
 end
 
+-- Gives the player whatever cargo the port returned.
 local function pollTake()
 	if pendingTake == nil then return end
 	if not pendingTake:finished() then return end
@@ -1252,6 +1298,7 @@ local function pollTake()
 	refresh(true)
 end
 
+-- Swaps a module between the cursor and a slot, refusing stacks, non-modules and duplicates.
 function moduleSlotClicked(widgetName)
 	local index = tonumber(string.sub(widgetName, -1))
 	if index == nil or index < 1 or index > MODULE_SLOTS then return end
@@ -1317,6 +1364,7 @@ end
 
 local pendingFeed = nil
 
+-- Offers the item on the cursor to the unit.
 function feedSlotClicked()
 	if pendingFeed ~= nil then return end
 
@@ -1330,6 +1378,7 @@ function feedSlotClicked()
 		{ item = { name = cursor.name, count = 1, parameters = cursor.parameters } })
 end
 
+-- Takes one item off the cursor once the feed was accepted.
 local function pollFeed()
 	if pendingFeed == nil then return end
 	if not pendingFeed:finished() then return end
@@ -1387,10 +1436,12 @@ local hoverRects = {}
 
 local staticTips = {}
 
+-- Collects the static tooltips declared on the pane's widgets.
 local function sweepTips()
 	staticTips = petports_sweepTips()
 end
 
+-- Returns a widget's rect, cached.
 local function hoverRect(name)
 	if hoverRects[name] ~= nil then return hoverRects[name] end
 
@@ -1405,12 +1456,14 @@ local function hoverRect(name)
 	return hoverRects[name]
 end
 
+-- Returns whether a point is inside a rect.
 local function within(rect, at)
 	return rect ~= nil
 		and at[1] >= rect[1] and at[1] <= rect[3]
 		and at[2] >= rect[2] and at[2] <= rect[4]
 end
 
+-- Returns the title, body and rect of the diagnostic or tipped widget under a point.
 local function hoverTarget(at)
 	for i = 1, DIAG_SLOTS do
 		local entry = diagText[i]
@@ -1430,6 +1483,7 @@ local function hoverTarget(at)
 	return nil
 end
 
+-- Hides the tooltip canvas.
 local function hideTip()
 	if not tipShowing then return end
 	tipShowing = false
@@ -1440,11 +1494,13 @@ local tipMetricCache = {}
 
 local measureFailLogged = false
 
+-- Returns the drawn heights of a tooltip's title and body, cached.
 local function tipMetrics(title, body)
 	local key = tostring(title) .. "\1" .. tostring(body)
 	local cached = tipMetricCache[key]
 	if cached ~= nil then return cached[1], cached[2] end
 
+	-- Returns the height and width a measuring widget takes for a text.
 	local function measure(name, text)
 		local ok, size = pcall(function()
 			widget.setText(name, text)
@@ -1474,6 +1530,7 @@ local function tipMetrics(title, body)
 	return titleH, bodyH
 end
 
+-- Draws the tooltip for whatever is under the mouse, or hides it.
 local function paintHover()
 	if hoverCanvas == nil then
 		local ok, bound = pcall(widget.bindCanvas, "hoverCanvas")
@@ -1563,9 +1620,11 @@ local function paintHover()
 	}, 7, TIP_BODY_COLOR)
 end
 
+-- Does nothing.
 function petNameEntered()
 end
 
+-- Sends the trimmed name box to the port.
 function renameClicked()
 	local typed = widget.getText("tbPetName") or ""
 	local trimmed = typed:match("^%s*(.-)%s*$")
@@ -1577,10 +1636,12 @@ function renameClicked()
 end
 
 
+-- Sends the port enabled checkbox.
 function portEnabledToggled()
 	tell("petports_setPortEnabled", { enabled = widget.getChecked("portEnabled") })
 end
 
+-- Focuses a colour box, or flips a checkbox and sends its owner's whole set.
 function settingsRowClicked(from, index)
 	local i = tonumber(index)
 	if i == nil then return end
@@ -1620,6 +1681,7 @@ function settingsRowClicked(from, index)
 end
 
 
+-- Stores a colour channel and sends all three to the port.
 local function commitLight(channel, value)
 	if paneLight[channel] == value then return end
 
@@ -1642,6 +1704,7 @@ local function commitLight(channel, value)
 	tell(SETTING_MESSAGE.light, set)
 end
 
+-- Reads each colour box and commits it when its text changed.
 local function pollLightFields()
 	if activeTab ~= "tabSettings" or not paneHasUnit then return end
 
@@ -1666,6 +1729,7 @@ local function pollLightFields()
 	end
 end
 
+-- Steps a colour channel up or down and commits it.
 function settingsSpinClicked(from, index)
 	local i = tonumber(index)
 	if i == nil then return end
@@ -1684,10 +1748,12 @@ function settingsSpinClicked(from, index)
 	setLightField(path, row.key, value)
 end
 
+-- Does nothing.
 function settingsFieldChanged()
 end
 
 
+-- Applies the strings, registers the settings row callbacks, shows the details tab and refreshes.
 function init()
 	dbg("build %s, port %s", PANE_BUILD_STAMP, tostring(portId()))
 	widget.setText("buildStamp", PANE_BUILD_STAMP)
@@ -1715,6 +1781,7 @@ function init()
 	refresh(true)
 end
 
+-- Polls the take and feed promises, refreshes, polls the colour boxes, and draws the portrait and the tooltip.
 function update(dt)
 	pollTake()
 	pollFeed()
@@ -1727,5 +1794,6 @@ function update(dt)
 	paintHover()
 end
 
+-- Does nothing.
 function uninit()
 end

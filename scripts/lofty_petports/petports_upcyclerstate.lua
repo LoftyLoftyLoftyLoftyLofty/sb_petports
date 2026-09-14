@@ -1,3 +1,5 @@
+-- Decides whether an upcycler refuses to run, and why, from its slot contents.
+
 require "/scripts/lofty_petports/petports_flavors.lua"
 
 
@@ -12,6 +14,7 @@ PETPORTS_TAG_PLAIN_TREAT = "petports_plain_treat"
 
 local tagCache = {}
 
+-- Returns whether an item carries an item tag, caching the answer.
 function petports_hasItemTag(name, tag)
 	if type(name) ~= "string" or type(tag) ~= "string" then return false end
 
@@ -36,10 +39,12 @@ function petports_hasItemTag(name, tag)
 	return tagCache[name][tag]
 end
 
+-- Returns true when an item is tagged as a plain treat.
 function petports_upcyclerPlainTreat(name)
 	return petports_hasItemTag(name, PETPORTS_TAG_PLAIN_TREAT) == true
 end
 
+-- Returns true when an item is tagged against upcycling.
 function petports_upcyclerExempt(name)
 	return petports_hasItemTag(name, PETPORTS_TAG_NO_UPCYCLING)
 end
@@ -58,6 +63,7 @@ PETPORTS_UPCYCLER_CAUSES = {
 	reagentWaiting   = { slot = 1, severity = "waiting" }
 }
 
+-- Returns true when the input wants the reagent slot and the reagent wants the input slot.
 function petports_upcyclerDeadlocked(inputName, reagentName, ruleFor)
 	if type(inputName) ~= "string" or type(reagentName) ~= "string" then
 		return false
@@ -81,6 +87,7 @@ function petports_upcyclerDeadlocked(inputName, reagentName, ruleFor)
 	return inWantsReagentSlot and reWantsBurnSlot
 end
 
+-- Returns the first refusal cause the slot contents produce, or nil.
 function petports_upcyclerVerdict(ctx)
 	if type(ctx) ~= "table" then return nil end
 
@@ -166,6 +173,7 @@ function petports_upcyclerVerdict(ctx)
 	return nil
 end
 
+-- Returns true when a verdict is an error rather than a wait.
 function petports_upcyclerAlerting(verdict)
 	return type(verdict) == "table" and verdict.severity == "error"
 end

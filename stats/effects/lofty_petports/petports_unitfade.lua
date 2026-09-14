@@ -1,6 +1,9 @@
+-- Fades a unit to white and shrinks it, or plays that in reverse.
+
 local DEFAULT_COLOR = "ff00ff"
 local WHITE = { 255, 255, 255 }
 
+-- Converts an RRGGBB string into a colour triple, or nil.
 local function parseColor(hex)
 	if type(hex) ~= "string" or #hex < 6 then
 		return nil
@@ -21,14 +24,17 @@ local function parseColor(hex)
 	return rgb
 end
 
+-- Formats a colour triple as RRGGBB.
 local function hex6(rgb)
 	return string.format("%02x%02x%02x", rgb[1], rgb[2], rgb[3])
 end
 
+-- Returns the whole number a fraction of the way from one number to another.
 local function lerp(ratio, from, to)
 	return math.floor(from + (to - from) * ratio)
 end
 
+-- Reads the fade parameters, makes the unit invulnerable and stunned, and applies the first frame.
 function init()
 	self.grow = config.getParameter("grow", false)
 	self.killOnFinish = config.getParameter("killOnFinish", false)
@@ -66,6 +72,7 @@ function init()
 	self.whooshPlayed = false
 end
 
+-- Sets the fade, border and scale directives for a point in the effect.
 function applyAt(elapsed)
 	local toColor = { self.fadeColor[1], self.fadeColor[2], self.fadeColor[3] }
 	local fade = 1.0
@@ -98,6 +105,7 @@ end
 
 local whooshReported = false
 
+-- Plays the materialise or dematerialise sound once.
 function playWhooshOnce()
 	if self.whooshPlayed then
 		return
@@ -117,6 +125,7 @@ function playWhooshOnce()
 	end
 end
 
+-- Advances the effect, holds the unit still, and zeroes its health at the end when killOnFinish is set.
 function update(dt)
 	if self.grow then
 		self.elapsed = self.elapsed - dt
@@ -141,6 +150,7 @@ function update(dt)
 	end
 end
 
+-- Clears the parent directives unless killOnFinish is set.
 function uninit()
 	if not self.killOnFinish then
 		effect.setParentDirectives("")

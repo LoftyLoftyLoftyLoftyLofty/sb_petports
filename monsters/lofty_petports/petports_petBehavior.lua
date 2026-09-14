@@ -1,3 +1,5 @@
+-- Queues and scores the unit's pet actions each tick.
+
 local RUN_CADENCE_DEBUG = false
 
 petBehavior = {
@@ -8,6 +10,7 @@ local TASK_SCORE = 150
 
 local LEASH_SCORE = 120
 
+-- Builds the reaction, action and action-state tables and reads the action parameters.
 function petBehavior.init()
 
   petBehavior.entityTypeReactions = {
@@ -41,10 +44,12 @@ end
 
 local SURFACE_NUDGE_REACH = 3
 
+-- Adds an action to the queue.
 function petBehavior.queueAction(type, args, score)
   table.insert(petBehavior.actionQueue, {type = type, args = args, score = score})
 end
 
+-- Runs a non-state action when it is off cooldown and no action state is running.
 function petBehavior.performAction(action)
   if petBehavior.actions[action.type] and self.actionCooldowns[action.type] <= 0 and self.actionState.stateDesc() == "" then
     return petBehavior.actions[action.type](args)
@@ -53,6 +58,7 @@ function petBehavior.performAction(action)
   return false
 end
 
+-- Handles the beached case, then queues this tick's actions and picks the highest scoring one.
 function petBehavior.run()
   if petports_bubbleHeartbeat ~= nil then petports_bubbleHeartbeat() end
 
@@ -204,6 +210,7 @@ function petBehavior.run()
   petBehavior.actionQueue = {}
 end
 
+-- Returns an action's score from the resource that drives it.
 function petBehavior.scoreAction(action)
   if action == "eat" or action == "beg" then
     return status.resource("hunger")
@@ -234,6 +241,7 @@ function petBehavior.scoreAction(action)
 end
 
 
+-- Dispatches an entity to the reaction for its type.
 function petBehavior.reactTo(entityId)
   local entityType = world.entityType(entityId)
 
@@ -242,6 +250,7 @@ function petBehavior.reactTo(entityId)
   end
 end
 
+-- Queues begging at a player holding food, then following a known player or inspecting an unknown one.
 function petBehavior.reactToPlayer(entityId)
   local playerUuid = world.entityUniqueId(entityId)
 
@@ -260,6 +269,7 @@ function petBehavior.reactToPlayer(entityId)
   end
 end
 
+-- Queues eating a food drop, or inspecting an unrecognised one.
 function petBehavior.reactToItemDrop(entityId)
   local entityName = world.entityName(entityId)
   local foodLiking = itemFoodLiking(entityName)
@@ -271,6 +281,7 @@ function petBehavior.reactToItemDrop(entityId)
   end
 end
 
+-- Queues play when the monster is a petball.
 function petBehavior.reactToMonster(entityId)
   local entityName = world.monsterType(entityId)
   if entityName == "petball" then
@@ -278,6 +289,7 @@ function petBehavior.reactToMonster(entityId)
   end
 end
 
+-- Queues sleep when the object is a pethouse and sleeping is allowed.
 function petBehavior.reactToObject(entityId)
   local entityName = world.entityName(entityId)
   if entityName == "pethouse" then
@@ -287,6 +299,7 @@ function petBehavior.reactToObject(entityId)
 end
 
 
+-- Plays an emote and returns false.
 function petBehavior.emote(emoteName)
   emote(emoteName)
   return false

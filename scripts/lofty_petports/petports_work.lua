@@ -1,27 +1,34 @@
+-- World-property stores for work claims, the port registry, fish, replants, heals and asterite.
+
 PETPORTS_WORK_BUILD_STAMP = "2026-09-11b removal is replacement: petports_cleared, because metamod:none is not a real mod"
 
 local CLAIM_KEY = "petports_claims"
 
 
+-- Returns every work claim on the world.
 function petports_claimsAll()
   return world.getProperty(CLAIM_KEY) or {}
 end
 
 local claimsMemo = nil
 
+-- Starts serving claim reads from a single snapshot.
 function petports_claimsMemoBegin()
   claimsMemo = petports_claimsAll()
 end
 
+-- Stops serving claim reads from the snapshot.
 function petports_claimsMemoEnd()
   claimsMemo = nil
 end
 
+-- Writes the claim table to the world property and updates the snapshot.
 local function writeClaims(claims)
   world.setProperty(CLAIM_KEY, claims)
   if claimsMemo ~= nil then claimsMemo = claims end
 end
 
+-- Drops every claim held by an owner.
 function petports_claimsClearOwner(ownerId)
   if ownerId == nil then return end
 
@@ -38,6 +45,7 @@ function petports_claimsClearOwner(ownerId)
   if changed then writeClaims(claims) end
 end
 
+-- Drops every claim of a work type and returns how many went.
 function petports_claimsClearType(workType)
   if workType == nil then return 0 end
   local claims = petports_claimsAll()
@@ -52,6 +60,7 @@ function petports_claimsClearType(workType)
   return dropped
 end
 
+-- Drops every claim whose expiry has passed.
 function petports_claimsSweep()
   local claims = petports_claimsAll()
   local now = world.time()
@@ -69,11 +78,13 @@ function petports_claimsSweep()
   if changed then writeClaims(claims) end
 end
 
+-- Returns the claim on a work id.
 function petports_claimGet(workId)
   if claimsMemo ~= nil then return claimsMemo[workId] end
   return petports_claimsAll()[workId]
 end
 
+-- Takes a claim unless another owner holds an unexpired one, and returns whether it was taken.
 function petports_claimTake(workId, ownerId, unitId, workType, position, ttl)
   local claims = petports_claimsAll()
   local existing = claims[workId]
@@ -104,6 +115,7 @@ function petports_claimTake(workId, ownerId, unitId, workType, position, ttl)
   return true
 end
 
+-- Pushes out the expiry of a claim the caller still owns.
 function petports_claimRefresh(workId, ownerId, ttl)
   local claims = petports_claimsAll()
   local claim = claims[workId]
@@ -115,6 +127,7 @@ function petports_claimRefresh(workId, ownerId, ttl)
   return true
 end
 
+-- Drops a claim when the caller owns it.
 function petports_claimRelease(workId, ownerId)
   local claims = petports_claimsAll()
   local claim = claims[workId]
@@ -135,6 +148,7 @@ function petports_claimRelease(workId, ownerId)
 end
 
 
+-- Returns a square rect of a given size centred on a point.
 function petports_coverageRect(centre, size)
   local half = size / 2
   return {
@@ -145,11 +159,13 @@ function petports_coverageRect(centre, size)
   }
 end
 
+-- Returns whether a position lies inside a rect.
 function petports_rectContains(rect, position)
   return position[1] >= rect[1] and position[1] <= rect[3]
      and position[2] >= rect[2] and position[2] <= rect[4]
 end
 
+-- Returns whether two rects overlap once the first is inflated by a pad.
 function petports_rectsAdjacent(a, b, pad)
   pad = pad or 1
   local inflated = { a[1] - pad, a[2] - pad, a[3] + pad, a[4] + pad }
@@ -161,14 +177,17 @@ end
 
 local REGISTRY_KEY = "petports_registry"
 
+-- Returns the port registry.
 function petports_registry()
   return world.getProperty(REGISTRY_KEY) or { version = 0, ports = {} }
 end
 
+-- Returns the registry version.
 function petports_registryVersion()
   return petports_registry().version or 0
 end
 
+-- Writes a port's entry into the registry and bumps the version.
 function petports_registryPublish(portId, entry)
   local registry = petports_registry()
   registry.ports = registry.ports or {}
@@ -182,6 +201,7 @@ function petports_registryPublish(portId, entry)
     tostring(entry.busy))
 end
 
+-- Drops a port from the registry and bumps the version.
 function petports_registryRemove(portId)
   local registry = petports_registry()
   if registry.ports == nil or registry.ports[portId] == nil then return end
@@ -194,6 +214,7 @@ function petports_registryRemove(portId)
   world.setProperty(REGISTRY_KEY, registry)
 end
 
+-- Bumps the registry version.
 function petports_registryTouch()
   local registry = petports_registry()
   registry.version = (registry.version or 0) + 1
@@ -202,6 +223,7 @@ function petports_registryTouch()
   sb.logInfo("PETPORTS registry touched -> version %s", sb.printJson(registry.version))
 end
 
+-- Drops every other port registered on the same tile.
 function petports_registryClearAt(position, exceptPortId)
   local registry = petports_registry()
   if registry.ports == nil then return end
@@ -224,12 +246,14 @@ function petports_registryClearAt(position, exceptPortId)
   end
 end
 
+-- Returns whether two registry entries may share a network.
 function petports_entriesCompatible(a, b)
   if a.participate and b.participate then return true end
   if not a.participate and not b.participate then return a.id == b.id end
   return false
 end
 
+-- Returns every registry entry reachable from a port through compatible adjacent rects.
 local function networkMemberMap(portId)
   local registry = petports_registry()
   local ports = registry.ports or {}
@@ -258,6 +282,7 @@ local function networkMemberMap(portId)
   return members
 end
 
+-- Returns the member ids in sorted order.
 local function sortedMemberIds(members)
   local ids = {}
   for memberId, _ in pairs(members) do table.insert(ids, memberId) end
@@ -265,10 +290,12 @@ local function sortedMemberIds(members)
   return ids
 end
 
+-- Returns the sorted ids of a port's network.
 function petports_networkMemberIds(portId)
   return sortedMemberIds(networkMemberMap(portId))
 end
 
+-- Returns the registry entries of a port's network in id order.
 function petports_networkMembers(portId)
   local members = networkMemberMap(portId)
 
@@ -279,6 +306,7 @@ function petports_networkMembers(portId)
   return list
 end
 
+-- Returns the coverage rects of a port's network.
 function petports_networkRects(portId)
   local rects = {}
   for _, entry in ipairs(petports_networkMembers(portId)) do
@@ -287,6 +315,7 @@ function petports_networkRects(portId)
   return rects
 end
 
+-- Returns whether two rect lists match.
 function petports_rectListsEqual(a, b)
   if a == nil or b == nil then return a == b end
   if #a ~= #b then return false end
@@ -302,10 +331,12 @@ end
 
 local FISH_KEY = "petports_fish"
 
+-- Returns every published fish entry.
 function petports_fishAll()
 	return world.getProperty(FISH_KEY) or {}
 end
 
+-- Writes a port's fish entry.
 function petports_fishPublish(portId, entry)
 	if portId == nil then return end
 
@@ -314,6 +345,7 @@ function petports_fishPublish(portId, entry)
 	world.setProperty(FISH_KEY, fish)
 end
 
+-- Drops a port's fish entry.
 function petports_fishClearOwner(portId)
 	if portId == nil then return end
 
@@ -327,6 +359,7 @@ function petports_fishClearOwner(portId)
 	world.setProperty(FISH_KEY, fish)
 end
 
+-- Drops every fish entry whose expiry has passed.
 function petports_fishSweep()
 	local fish = petports_fishAll()
 	local now = world.time()
@@ -345,6 +378,7 @@ function petports_fishSweep()
 end
 
 
+-- Returns the string key for a tile position.
 function petports_tileKey(position)
   return string.format("%s,%s",
     math.floor(position[1]),
@@ -353,14 +387,17 @@ end
 
 local REPLANT_KEY = "petports_replants"
 
+-- Returns every replant intent.
 function petports_replantsAll()
 	return world.getProperty(REPLANT_KEY) or {}
 end
 
+-- Returns the replant intent at a tile key.
 function petports_replantGet(tileKey)
 	return petports_replantsAll()[tileKey]
 end
 
+-- Records a replant intent at a position and returns its tile key.
 function petports_replantSet(position, seedName, ownerId)
 	local key = petports_tileKey(position)
 	local intents = petports_replantsAll()
@@ -379,6 +416,7 @@ function petports_replantSet(position, seedName, ownerId)
 	return key
 end
 
+-- Drops the replant intents at a list of tile keys and returns how many went.
 function petports_replantClearMany(keys, why)
 	if type(keys) ~= "table" or #keys == 0 then return 0 end
 
@@ -401,6 +439,7 @@ function petports_replantClearMany(keys, why)
 	return cleared
 end
 
+-- Returns whether any registered port's rect contains a position.
 function petports_anyPortCovers(position)
 	if type(position) ~= "table" then return false end
 
@@ -415,6 +454,7 @@ function petports_anyPortCovers(position)
 	return false
 end
 
+-- Drops the replant intent at a tile key.
 function petports_replantClear(tileKey, why)
 	local intents = petports_replantsAll()
 	if intents[tileKey] == nil then return false end
@@ -427,12 +467,14 @@ function petports_replantClear(tileKey, why)
 	return true
 end
 
+-- Returns the key for a route out of a position through an exit.
 function petports_routeKey(position, exitId)
   return petports_tileKey(position) .. "|" .. tostring(exitId)
 end
 
 local unitTypeCache = {}
 
+-- Returns whether a monster type is flagged as a unit, cached.
 function petports_isUnitType(monsterType)
 	if monsterType == nil then return false end
 
@@ -456,10 +498,12 @@ end
 
 local HEAL_KEY = "petports_heals"
 
+-- Returns every recorded heal cooldown.
 function petports_healsAll()
 	return world.getProperty(HEAL_KEY) or {}
 end
 
+-- Drops heal cooldowns that have passed or whose entity is gone.
 local function pruneHeals(heals)
 	local now = world.time()
 
@@ -474,10 +518,12 @@ local function pruneHeals(heals)
 	return heals
 end
 
+-- Returns the heal table key for an entity id.
 local function healKey(entityId)
 	return tostring(entityId)
 end
 
+-- Returns the seconds left on an entity's heal cooldown.
 function petports_healCooldownRemaining(entityId)
 	if entityId == nil then return 0 end
 
@@ -488,6 +534,7 @@ function petports_healCooldownRemaining(entityId)
 	return math.max(readyAt - world.time(), 0)
 end
 
+-- Records a heal cooldown for an entity.
 function petports_healRecord(entityId, duration)
 	if entityId == nil then return false end
 
@@ -500,12 +547,14 @@ function petports_healRecord(entityId, duration)
 	return true
 end
 
+-- Returns the work id for healing an entity.
 function petports_healWorkId(entityId)
 	return "heal:" .. tostring(entityId)
 end
 
 local chassisTeamCache = {}
 
+-- Returns a monster type's damage team type and number, cached.
 function petports_chassisTeam(monsterType)
 	if monsterType == nil then return nil end
 
@@ -517,6 +566,7 @@ function petports_chassisTeam(monsterType)
 
 	local base = type(params.baseParameters) == "table" and params.baseParameters or {}
 
+	-- Returns a parameter from the monster type or its base parameters.
 	local function read(name, fallback)
 		local value = params[name]
 		if value == nil then value = base[name] end
@@ -542,24 +592,29 @@ PETPORTS_ASTERITE_CLEARED = "petports_cleared"
 
 local ASTERITE_CAP = 2000
 
+-- Returns the cap on stored asterite deposits.
 function petports_asteriteCap()
 	return ASTERITE_CAP
 end
 
+-- Returns every noted asterite deposit.
 function petports_asteriteAll()
 	return world.getProperty(ASTERITE_KEY) or {}
 end
 
+-- Returns the deposit at a tile key.
 function petports_asteriteGet(tileKey)
 	return petports_asteriteAll()[tileKey]
 end
 
+-- Returns how many deposits are stored.
 function petports_asteriteCount()
 	local n = 0
 	for _ in pairs(petports_asteriteAll()) do n = n + 1 end
 	return n
 end
 
+-- Notes a deposit at a position, returning whether it was added, the count, and whether the cap stopped it.
 function petports_asteriteNote(position, modName, ownerId)
 	if type(position) ~= "table" or type(modName) ~= "string" then
 		return false, 0, false
@@ -585,6 +640,7 @@ function petports_asteriteNote(position, modName, ownerId)
 	return true, count + 1, false
 end
 
+-- Drops the deposit at a tile key.
 function petports_asteriteClear(tileKey)
 	if tileKey == nil then return false end
 
@@ -596,6 +652,7 @@ function petports_asteriteClear(tileKey)
 	return true
 end
 
+-- Empties the deposit store and returns how many went.
 function petports_asteriteWipe()
 	local n = petports_asteriteCount()
 	world.setProperty(ASTERITE_KEY, {})

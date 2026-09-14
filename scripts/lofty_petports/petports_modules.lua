@@ -1,3 +1,6 @@
+-- Checks a module set for duplicate or mutually exclusive items.
+
+-- Returns an item's mutualExclusivityCategories, or nil.
 local function exclusivityOf(name)
 	if type(name) ~= "string" or name == "" then return nil end
 
@@ -12,6 +15,7 @@ local function exclusivityOf(name)
 	return categories
 end
 
+-- Returns the first item name that repeats or collides on an exclusivity category, plus that category when one collided.
 function petports_moduleSetDuplicate(records)
 	if type(records) ~= "table" then return nil end
 

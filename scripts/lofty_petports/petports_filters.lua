@@ -1,7 +1,10 @@
+-- Reads the filter group manifest and decides which items a filter accepts.
+
 local PETPORTS_FILTER_MANIFEST = "/scripts/lofty_petports/petports_filtergroups.config"
 
 local PETPORTS_FILTER_DEBUG = false
 
+-- Logs a formatted line when filter debug is on.
 local function fdbg(fmt, ...)
 	if not PETPORTS_FILTER_DEBUG then return end
 	local ok, text = pcall(string.format, fmt, ...)
@@ -18,6 +21,7 @@ local petportsManifest = nil
 local petportsGroupsById = nil
 local petportsGroupOrder = nil
 
+-- Loads the manifest once, dropping groups whose sentinel item is absent and ordering what is left.
 function petports_filterManifest()
 	if petportsManifest ~= nil then return petportsManifest end
 
@@ -34,6 +38,7 @@ function petports_filterManifest()
 	petportsManifest = data
 	petportsGroupsById = data.groups
 
+	-- Returns whether an item name resolves.
 	local function modInstalled(name)
 		if type(name) ~= "string" or name == "" then return true end
 
@@ -41,6 +46,7 @@ function petports_filterManifest()
 		return ok and config ~= nil
 	end
 
+	-- Returns a container's installed entries sorted by order then id.
 	local function ordered(container)
 		local list = {}
 
@@ -69,16 +75,19 @@ function petports_filterManifest()
 	return petportsManifest
 end
 
+-- Returns a group by id.
 function petports_filterGroup(groupId)
 	petports_filterManifest()
 	return petportsGroupsById[groupId]
 end
 
+-- Returns the groups in manifest order.
 function petports_filterGroups()
 	petports_filterManifest()
 	return petportsGroupOrder or {}
 end
 
+-- Returns a group's subgroups in order.
 function petports_filterSubgroups(group)
 	if type(group) ~= "table" then return {} end
 
@@ -89,6 +98,7 @@ function petports_filterSubgroups(group)
 	return group.orderedSubgroups or {}
 end
 
+-- Returns an item's category and its item and colony tags, cached.
 function petports_itemFacts(name)
 	if type(name) ~= "string" then return nil end
 
@@ -106,6 +116,7 @@ function petports_itemFacts(name)
 
 	local facts = { category = cfg.config.category, tags = {} }
 
+	-- Adds a tag list to the fact table and returns how many were added.
 	local function absorb(list)
 		if type(list) ~= "table" then return 0 end
 		local n = 0
@@ -132,6 +143,7 @@ function petports_itemFacts(name)
 	return facts
 end
 
+-- Returns an item descriptor's price, cached.
 function petports_itemValue(descriptor)
 	if type(descriptor) ~= "table" or type(descriptor.name) ~= "string" then
 		return 0
@@ -161,6 +173,7 @@ function petports_itemValue(descriptor)
 	return price
 end
 
+-- Returns whether any entry in a list passes a test.
 local function anyOf(list, test)
 	if type(list) ~= "table" then return false end
 	for _, value in ipairs(list) do
@@ -169,6 +182,7 @@ local function anyOf(list, test)
 	return false
 end
 
+-- Returns whether an item matches a subgroup by tag, category, item name, name part or suffix.
 local function subgroupMatches(subgroup, facts, name)
 	if type(subgroup) ~= "table" or facts == nil then return false end
 
@@ -217,6 +231,7 @@ local function subgroupMatches(subgroup, facts, name)
 	return false
 end
 
+-- Returns whether an item matches a rule, with unclassified subgroups matching only items no other subgroup claims.
 local function ruleMatches(rule, facts, name)
 	if type(rule) ~= "table" then return false end
 
@@ -265,6 +280,7 @@ local function ruleMatches(rule, facts, name)
 	return false
 end
 
+-- Returns the filter's verdict for an item after applying every matching rule in order.
 function petports_filterAccepts(filter, name)
 	if type(filter) ~= "table" then return true end
 
@@ -290,6 +306,7 @@ function petports_filterAccepts(filter, name)
 	return verdict
 end
 
+-- Returns whether a filter admits nothing at all.
 function petports_filterAcceptsNothing(filter)
 	if type(filter) ~= "table" then return false end
 	if filter.base ~= "deny" then return false end
@@ -302,6 +319,7 @@ function petports_filterAcceptsNothing(filter)
 	return true
 end
 
+-- Returns the slot, name and count of every item a filter refuses.
 function petports_filterMisfits(filter, items, exemptSlot)
 	local misfits = {}
 
@@ -331,6 +349,7 @@ function petports_filterMisfits(filter, items, exemptSlot)
 	return misfits
 end
 
+-- Returns the slot, name and surplus count of every item beyond what the requests ask for.
 function petports_restockMisfits(requests, items, exemptSlot)
 	local misfits = {}
 
@@ -385,6 +404,7 @@ end
 
 local petportsSubgroupTotal = nil
 
+-- Returns the total number of subgroups, cached.
 local function subgroupTotal()
 	if petportsSubgroupTotal ~= nil then return petportsSubgroupTotal end
 
@@ -400,6 +420,7 @@ local function subgroupTotal()
 	return total
 end
 
+-- Returns how many subgroups a filter admits.
 function petports_filterBreadth(filter)
 	if type(filter) ~= "table" then return subgroupTotal() end
 
@@ -450,6 +471,7 @@ end
 
 local petportsPerishableSubgroups = nil
 
+-- Returns every subgroup marked perishable, cached.
 local function perishableSubgroups()
 	if petportsPerishableSubgroups ~= nil then return petportsPerishableSubgroups end
 
@@ -467,6 +489,7 @@ local function perishableSubgroups()
 	return out
 end
 
+-- Returns whether an item rots, by its timeToRot parameter or a perishable subgroup.
 function petports_itemPerishable(descriptor)
 	local name = descriptor
 
@@ -500,6 +523,7 @@ function petports_itemPerishable(descriptor)
 	return rots
 end
 
+-- Clears the manifest and every cached item fact, price and perishable answer.
 function petports_filterResetCache()
 	petportsItemFacts = {}
 	petportsItemPrices = {}

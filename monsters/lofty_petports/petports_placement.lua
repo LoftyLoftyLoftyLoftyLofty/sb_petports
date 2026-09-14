@@ -1,3 +1,5 @@
+-- Finds and validates positions for a unit to stand or rest on.
+
 require "/scripts/util.lua"
 require "/scripts/vec2.lua"
 require "/scripts/rect.lua"
@@ -19,12 +21,14 @@ local AVOID_CLEARANCE = 4
 local PLAYER_CLEARANCE = 3
 
 
+-- Returns an object's itemTags, or nil.
 local function tagsOf(entityId)
   local ok, tags = pcall(world.getObjectParameter, entityId, "itemTags")
   if ok then return tags end
   return nil
 end
 
+-- Returns true when an object carries a tag.
 local function hasTag(entityId, tag)
   local tags = tagsOf(entityId)
   if tags == nil then return false end
@@ -34,10 +38,12 @@ local function hasTag(entityId, tag)
   return false
 end
 
+-- Returns true when an object is tagged as a perch.
 local function isPerch(entityId)
   return hasTag(entityId, PERCH_TAG)
 end
 
+-- Returns true when an object carries one of the avoidance tags.
 local function isAvoidMarker(entityId)
   local tags = tagsOf(entityId)
   if tags == nil then return false end
@@ -47,11 +53,13 @@ local function isAvoidMarker(entityId)
   return false
 end
 
+-- Returns the unit's bound box translated to a position.
 local function footprintAt(position)
   local bounds = mcontroller.boundBox()
   return rect.translate(bounds, position)
 end
 
+-- Returns true when a footprint covers any space an object occupies.
 local function overlapsObject(footprint, objectId)
   local ok, spaces = pcall(world.objectSpaces, objectId)
   if not ok or spaces == nil then return false end
@@ -73,6 +81,7 @@ local function overlapsObject(footprint, objectId)
 end
 
 
+-- Returns an object's position shifted by its petports_perchOffset.
 function petports_perchPosition(objectId)
   local position = world.entityPosition(objectId)
   if position == nil then return nil end
@@ -83,6 +92,7 @@ function petports_perchPosition(objectId)
   return {position[1] + offset[1], position[2] + offset[2]}
 end
 
+-- Returns whether a position is standable and clear of objects, avoidance markers and players, with the reason when it is not.
 function petports_canRestAt(position, options)
   options = options or {}
   if position == nil then return false, "no position" end
@@ -126,10 +136,12 @@ function petports_canRestAt(position, options)
   return true
 end
 
+-- Returns a position moved to the horizontal centre of its tile.
 local function tileCentre(position)
   return { math.floor(position[1]) + 0.5, position[2] }
 end
 
+-- Returns the nearest restable ground position within an offset, or nil.
 function petports_findRestPosition(position, maxOffset, options)
   maxOffset = maxOffset or 6
 
@@ -157,6 +169,7 @@ function petports_findRestPosition(position, maxOffset, options)
   return nil
 end
 
+-- Moves the unit onto the nearest rest position and returns whether one was found.
 function petports_settleAt(position, options)
   local resting = petports_findRestPosition(position, 6, options)
   if resting == nil then return false end

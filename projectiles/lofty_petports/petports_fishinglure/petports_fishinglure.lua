@@ -1,3 +1,5 @@
+-- Lure projectile that spawns fish nearby and keeps out of their reach.
+
 require "/scripts/vec2.lua"
 require "/scripts/util.lua"
 require "/scripts/rect.lua"
@@ -5,6 +7,7 @@ require "/scripts/lofty_petports/petports_fishingspawner.lua"
 
 LURE_SPAWNER_CONFIG = "/scripts/fishing/fishingspawner.config"
 
+-- Reads the lure parameters, builds the spawner and installs the zone, fish and hook handlers.
 function init()
   self.ownerId = projectile.sourceEntity()
 
@@ -80,6 +83,7 @@ function init()
     sb.printJson(self.ownerId), sb.printJson(projectile.timeToLive()))
 end
 
+-- Returns whether a point falls in any of the coverage boxes.
 local function insideCoverage(boxes, point)
   if boxes == nil or #boxes == 0 then return true end
 
@@ -93,6 +97,7 @@ local function insideCoverage(boxes, point)
   return false
 end
 
+-- Returns whether a monster type runs a lurk state script.
 local function typeIsLurker(monsterType)
   local ok, params = pcall(root.monsterParameters, monsterType)
   if not ok or type(params) ~= "table" then return false end
@@ -110,6 +115,7 @@ local function typeIsLurker(monsterType)
   return false
 end
 
+-- Returns whether a candidate position is deep enough, clear, in sight and inside coverage.
 local function lureSpotValid(from, candidate)
   local cfg = self.spawnerConfig
   if cfg == nil then return false end
@@ -130,6 +136,7 @@ local function lureSpotValid(from, candidate)
   return true
 end
 
+-- Moves the lure to a valid spot out of the fish's reach and turns it away.
 local function teleportFrom(fishPosition, why)
   local cfg = self.spawnerConfig
   if cfg == nil then return false end
@@ -202,6 +209,7 @@ local function teleportFrom(fishPosition, why)
   return false
 end
 
+-- Slides the lure along its hold level, reversing at collisions, dry tiles and the coverage edge.
 local function patrol(dt)
   local here = mcontroller.position()
 
@@ -230,6 +238,7 @@ local function patrol(dt)
   mcontroller.setVelocity({ 0, 0 })
 end
 
+-- Dies with its owner, patrols, moves away from the current fish, and spawns a new one on a timer.
 function update(dt)
   if not self.ownerId or not world.entityExists(self.ownerId) then
     projectile.die()
@@ -313,6 +322,7 @@ function update(dt)
   patrol(dt)
 end
 
+-- Kills the projectile.
 function kill()
   projectile.die()
 end

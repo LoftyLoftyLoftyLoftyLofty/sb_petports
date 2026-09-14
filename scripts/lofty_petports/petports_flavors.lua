@@ -1,3 +1,5 @@
+-- Reads the flavor manifest and answers questions about flavors and their reagents.
+
 local PETPORTS_FLAVOR_MANIFEST = "/scripts/lofty_petports/petports_flavors.config"
 
 local petportsFlavorManifest = nil
@@ -6,6 +8,7 @@ local petportsFlavorOrder = nil
 
 local petportsReagentIndex = nil
 
+-- Loads the manifest once, building the ordered flavor list and the reagent index.
 function petports_flavorManifest()
 	if petportsFlavorManifest ~= nil then return petportsFlavorManifest end
 
@@ -74,33 +77,39 @@ function petports_flavorManifest()
 	return petportsFlavorManifest
 end
 
+-- Returns the flavors in manifest order.
 function petports_flavors()
 	petports_flavorManifest()
 	return petportsFlavorOrder or {}
 end
 
+-- Returns a flavor by id.
 function petports_flavor(flavorId)
 	petports_flavorManifest()
 	return petportsFlavorsById[flavorId]
 end
 
+-- Returns a flavor's reagents ordered by weight.
 function petports_flavorReagents(flavorId)
 	local flavor = petports_flavor(flavorId)
 	if flavor == nil then return {} end
 	return flavor.orderedReagents or {}
 end
 
+-- Returns the flavor and weight an item carries as a reagent, or nil.
 function petports_reagentFor(itemName)
 	if type(itemName) ~= "string" then return nil end
 	petports_flavorManifest()
 	return petportsReagentIndex[itemName]
 end
 
+-- Returns an item's reagent weight, or zero.
 function petports_reagentWeight(itemName)
 	local entry = petports_reagentFor(itemName)
 	return entry ~= nil and entry.weight or 0
 end
 
+-- Returns how many items are indexed as reagents.
 function petports_reagentCount()
 	petports_flavorManifest()
 	local n = 0
@@ -108,6 +117,7 @@ function petports_reagentCount()
 	return n
 end
 
+-- Returns a flavor's RRGGBB colour, or white.
 function petports_flavorHex(flavorId)
 	local flavor = petports_flavor(flavorId)
 	if flavor == nil then return "ffffff" end
@@ -125,10 +135,12 @@ function petports_flavorHex(flavorId)
 	return color
 end
 
+-- Returns a flavor's colour with a full alpha byte.
 function petports_flavorColor(flavorId)
 	return petports_flavorHex(flavorId) .. "ff"
 end
 
+-- Returns a flavor's yield as a whole number of at least one.
 function petports_flavorYield(flavorId)
 	local flavor = petports_flavor(flavorId)
 	local n = flavor and tonumber(flavor.yield) or 1
@@ -136,6 +148,7 @@ function petports_flavorYield(flavorId)
 	return math.floor(n)
 end
 
+-- Returns the item a flavor produces, or nil.
 function petports_flavorItem(flavorId)
 	local flavor = petports_flavor(flavorId)
 	if flavor == nil then return nil end
@@ -149,6 +162,7 @@ function petports_flavorItem(flavorId)
 	return flavor.item
 end
 
+-- Picks one of the preference-eligible flavors by seed.
 function petports_preferredFlavor(seed, eligible)
 	local allowed = nil
 
@@ -173,6 +187,7 @@ function petports_preferredFlavor(seed, eligible)
 	return candidates[(n % #candidates) + 1]
 end
 
+-- Returns whether a flavor exists and is in the eligible list.
 function petports_flavorEligible(flavorId, eligible)
 	if flavorId == nil then return false end
 	if petports_flavor(flavorId) == nil then return false end

@@ -1,7 +1,10 @@
+-- Keeps a port's coverage region loaded and dies when the port is gone.
+
 require "/scripts/util.lua"
 require "/scripts/lofty_petports/petports_work.lua"
 
 
+-- Sets the unique id, works out the coverage rect and installs the stop handler.
 function init()
   local wantedId = config.getParameter("residencyUniqueId")
   if wantedId and stagehand.setUniqueId then
@@ -27,6 +30,7 @@ function init()
     tostring(self.portUniqueId), sb.printJson(self.rect))
 end
 
+-- Returns true when the port's unique id resolves to an entity that exists.
 local function portPresent()
   if self.portUniqueId == nil then
     return false
@@ -36,6 +40,7 @@ local function portPresent()
   return portId ~= nil and world.entityExists(portId)
 end
 
+-- Loads the coverage region, and dies once the orphan grace has run out with no port.
 function update(dt)
   world.loadRegion(self.rect)
 

@@ -1,3 +1,5 @@
+-- Fly and swim movement for free movers, replacing approachPoint and setJumpState.
+
 local vanillaSetJumpState = setJumpState
 
 local BUILD_STAMP = "2026-09-10c the string-pull line is never swept past STRING_PULL_RANGE"
@@ -9,6 +11,7 @@ local DRAW_PLAN = false
 
 local PLAN_SHAPE_DEBUG = false
 
+-- Logs the mix of edge actions in a plan when it changes.
 local function reportPlanShape(finder)
   if not PLAN_SHAPE_DEBUG then return end
   if finder == nil or not finder.hasPath or finder.edges == nil then return end
@@ -39,9 +42,11 @@ end
 
 local FLY_ARRIVAL = 1.0
 
+-- Logs whether the body fits at the start, the target and their tile centres.
 local function probeStartNode(targetPosition)
   local bounds = mcontroller.boundBox()
 
+  -- Returns whether the body clears terrain at a position.
   local function fits(x, y)
     return not world.rectTileCollision({
       x + bounds[1], y + bounds[2],
@@ -66,6 +71,7 @@ local function probeStartNode(targetPosition)
       or "start and its tile centre agree -- look elsewhere")
 end
 
+-- Logs a path result once per distinct reason.
 local function reportFlyPathEnd(result, targetPosition, distance)
   local reason = tostring(result)
 
@@ -92,6 +98,7 @@ local FLY_ANIM_STILL = 0.5
 local FLY_TELEMETRY = true
 local FLY_SAMPLE = 0.5
 
+-- Logs the issued fly command, velocity and current edge twice a second.
 local function sampleFlyCommand(dt)
   if not FLY_TELEMETRY then return end
 
@@ -142,6 +149,7 @@ local STRING_PULL_TASKS = {
 }
 
 
+-- Returns whether a velocity keeps the body out of denied liquid, stopping the unit when it does not.
 local function flyCommandAllowed(velocity)
   local dt = script.updateDt and script.updateDt() or (1 / 12)
   local here = mcontroller.position()
@@ -174,6 +182,7 @@ local function flyCommandAllowed(velocity)
   return true
 end
 
+-- Issues a fly command, falling back to each single axis, and returns what was issued.
 local function guardedFly(command)
   if flyCommandAllowed(command) then
     mcontroller.controlFly(command)
@@ -195,6 +204,7 @@ local function guardedFly(command)
   return nil
 end
 
+-- Flies straight at a target, setting the velocity outright when it is within one tick on a tight-turn leg.
 local function steerDirectly(toTarget, length, running)
   local speed = petports_scaledSpeed(mcontroller.baseParameters().flySpeed)
 
@@ -219,6 +229,7 @@ local function steerDirectly(toTarget, length, running)
   setMovementState(running)
 end
 
+-- Returns whether a point is occupiable, checking only for denied liquid when the chassis has both media.
 local function mediumClearAt(x, y, bounds, bothMedia)
   if not bothMedia then return petports_mediumAllows({ x, y }, bounds) end
   local level = world.liquidAt({ x, y })
@@ -227,6 +238,7 @@ local function mediumClearAt(x, y, bounds, bothMedia)
   return true
 end
 
+-- Returns whether a straight line is free of terrain and of media this chassis may not occupy.
 local function flyPathClear(from, to)
   local span = world.distance(to, from)
   local length = math.sqrt(span[1] * span[1] + span[2] * span[2])
@@ -250,10 +262,12 @@ local function flyPathClear(from, to)
   return true
 end
 
+-- Returns whether a straight line is clear.
 function petports_flyPathClear(from, to)
   return flyPathClear(from, to)
 end
 
+-- Returns whether the line to the target is clear, rechecked on a timer and refused beyond the pull range.
 local function stringPullClear(here, targetPosition, dt)
   local task = self.petportsTask
   if task == nil then return false end
@@ -272,6 +286,7 @@ local function stringPullClear(here, targetPosition, dt)
   return self.petportsPullClear == true
 end
 
+-- Returns whether every point on a straight line is in a medium this chassis may occupy.
 local function flyMediumClear(from, to)
   local bounds = mcontroller.boundBox()
 
@@ -293,10 +308,12 @@ local function flyMediumClear(from, to)
   return true
 end
 
+-- Returns whether an edge is a Fly or Swim edge.
 local function isFreeEdge(edge)
   return edge ~= nil and (edge.action == "Fly" or edge.action == "Swim")
 end
 
+-- Returns the furthest free edge target within aim range that has a clear line to it, and how many edges it skips.
 local function aimAhead(from, edgeAt)
   for i = FLY_LOOKAHEAD, 1, -1 do
     local ahead = edgeAt(i)
@@ -318,6 +335,7 @@ local function aimAhead(from, edgeAt)
 end
 
 
+-- Returns whether every leg of a plan, after shortcuts, stays in a medium this chassis may occupy.
 local function planMediumValid(finder)
   if finder == nil or finder.edges == nil then return true end
 
@@ -370,6 +388,7 @@ local function planMediumValid(finder)
 end
 
 
+-- Returns a string identifying a plan by its edge count and final target.
 local function planSignature(finder)
   if finder == nil or finder.edges == nil or #finder.edges == 0 then return nil end
 
@@ -380,6 +399,7 @@ local function planSignature(finder)
     .. (target and (tostring(target[1]) .. "," .. tostring(target[2])) or "?")
 end
 
+-- Returns a reduced speed while the unit is close to the start of an upcoming jump edge.
 local function swimApproachSpeed(pather, base)
   local finder = pather.finder
   local ahead = finder ~= nil and finder.lookAhead and finder:lookAhead(1) or nil
@@ -407,6 +427,7 @@ local function swimApproachSpeed(pather, base)
   return math.min(base, JUMP_APPROACH_SPEED)
 end
 
+-- Advances past reached free edges, validates the plan once per signature, and steers at the furthest clear aim point.
 local function petportsFreeMoverInner(pather)
   while isFreeEdge(pather.edge) do
     if passedTarget(pather.edge) then
@@ -526,6 +547,7 @@ local function petportsFreeMoverInner(pather)
   return "running"
 end
 
+-- Sets the movement animation from speed for free movers, otherwise calls the vanilla function.
 function setJumpState()
   if not petports_freeMover() then
     return vanillaSetJumpState()
@@ -549,6 +571,7 @@ function setJumpState()
   end
 end
 
+-- Moves the unit toward a target by ground path, string pull, plan or direct steer, returning true on arrival.
 function approachPoint(dt, targetPosition, stopDistance, running, arrival)
   if not petports_freeMover() then
     local toTarget = world.distance(targetPosition, mcontroller.position())
@@ -747,6 +770,7 @@ function approachPoint(dt, targetPosition, stopDistance, running, arrival)
   return false
 end
 
+-- Runs the free-mover step inside the profiler.
 function petportsFreeMover(pather)
   if petports_profBegin ~= nil then petports_profBegin("freeMover") end
   local result = petportsFreeMoverInner(pather)

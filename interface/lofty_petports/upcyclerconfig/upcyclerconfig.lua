@@ -1,3 +1,5 @@
+-- Pane for the Upcycler: edits its rules, shows its charge and progress, and lists the flavors.
+
 require "/scripts/lofty_petports/petports_flavors.lua"
 require "/scripts/lofty_petports/petports_upcyclerstate.lua"
 
@@ -7,18 +9,21 @@ local DEBUG = true
 
 local PANE_BUILD_STAMP = "2026-09-14a a burn button forces the input slot by hand past every refusal, and the pane captions, reports and cancels it"
 
+-- Returns the singular or plural string for a count of a noun.
 local function counted(count, noun)
 	local form = "many"
 	if count == 1 then form = "one" end
 	return petports_format("upcycler.count." .. noun .. "." .. form, tostring(count))
 end
 
+-- Logs a formatted line when DEBUG is set.
 local function dbg(fmt, ...)
 	if not DEBUG then return end
 	local ok, text = pcall(string.format, fmt, ...)
 	sb.logInfo("PETPORTS upcyclerpane: %s", ok and text or ("<badformat> " .. tostring(fmt)))
 end
 
+-- Returns a value printed as JSON, or a placeholder.
 local function j(value)
 	local ok, text = pcall(sb.printJson, value)
 	return ok and text or "<unprintable>"
@@ -54,6 +59,7 @@ local TAG_BEACON = "petports_beacon"
 local TAG_FUEL = "petports_fuel"
 
 
+-- Reads the rules, enabled and feeder parameters straight off the container object.
 local function readDirect()
 	if world == nil or world.getObjectParameter == nil then
 		dbg("readDirect: world.getObjectParameter not available in this context")
@@ -86,6 +92,7 @@ local function readDirect()
 end
 
 
+-- Sends the rules, enabled and feeder state to the container object.
 local function writeState()
 	local id = pane.containerEntityId()
 
@@ -104,6 +111,7 @@ local function writeState()
 end
 
 
+-- Loads the polymorphic display name table once.
 local function polymorphicNames()
 	if self.polymorphic ~= nil then return self.polymorphic end
 
@@ -120,6 +128,7 @@ local function polymorphicNames()
 	return self.polymorphic
 end
 
+-- Returns an item's display name, cached, preferring its polymorphic override.
 local function labelFor(name)
 	self.labels = self.labels or {}
 
@@ -143,9 +152,11 @@ local function labelFor(name)
 end
 
 local WARNING_ARGS = {
+	-- Returns the labels of both items named in a deadlock verdict.
 	slotsDeadlocked = function(v) return labelFor(v.item), labelFor(v.other) end
 }
 
+-- Returns the warning line for a refusal verdict.
 local function warningText(verdict)
 	local key = "upcycler.warn." .. string.lower(verdict.cause or "")
 
@@ -162,6 +173,7 @@ local function warningText(verdict)
 end
 
 
+-- Moves the selection onto an existing rule, or drops it when the list is empty.
 local function ensureSelection()
 	if #self.rules == 0 then
 		self.selectedIndex = nil
@@ -173,6 +185,7 @@ local function ensureSelection()
 	end
 end
 
+-- Sets each rule row's background to the plain, alternate or selected art.
 local function paintRuleRows()
 	for index, path in pairs(self.rowPaths or {}) do
 		local art = RULE_ROW_ART_ALT
@@ -187,6 +200,7 @@ local function paintRuleRows()
 	end
 end
 
+-- Rebuilds the rule list with each row's text, reagent button and burn button.
 local function refreshRules()
 	self.rebuilding = true
 	widget.clearListItems(RULES_LIST)
@@ -228,6 +242,7 @@ local function refreshRules()
 		tostring(#self.rules), tostring(self.selectedIndex))
 end
 
+-- Rewrites one rule row's text.
 local function refreshRuleRow(index)
 	local row = (self.rowNames or {})[index]
 	local rule = self.rules[index]
@@ -238,6 +253,7 @@ local function refreshRuleRow(index)
 		string.format("%s  >  %s", labelFor(rule.item), tostring(rule.max)))
 end
 
+-- Writes the threshold box and records what it now shows.
 local function setThresholdText(value)
 	local text = value ~= nil and tostring(value) or ""
 
@@ -245,6 +261,7 @@ local function setThresholdText(value)
 	pcall(widget.setText, "tbThreshold", text)
 end
 
+-- Puts the selected rule's item in the sample slot and sets the hint.
 local function refreshSampleSlot()
 	local rule = self.selectedIndex ~= nil and self.rules[self.selectedIndex] or nil
 
@@ -258,6 +275,7 @@ local function refreshSampleSlot()
 	end
 end
 
+-- Fills the threshold box and its label from the selected rule.
 local function refreshThreshold()
 	local rule = self.selectedIndex ~= nil and self.rules[self.selectedIndex] or nil
 
@@ -271,6 +289,7 @@ local function refreshThreshold()
 	refreshSampleSlot()
 end
 
+-- Reads the threshold box and stores it on the selected rule when it changed.
 local function syncThreshold()
 	if not self.fieldUsable then return end
 
@@ -303,18 +322,21 @@ local function syncThreshold()
 end
 
 
+-- Stores the enabled checkbox and writes.
 function enabledToggled()
 	self.enabled = widget.getChecked("enabledCheckbox") == true
 	dbg("enabledToggled -> %s", tostring(self.enabled))
 	writeState()
 end
 
+-- Stores the feeder checkbox and writes.
 function feederToggled()
 	self.feeder = widget.getChecked("feederCheckbox") == true
 	dbg("feederToggled -> %s", tostring(self.feeder))
 	writeState()
 end
 
+-- Returns the threshold box as a number.
 local function thresholdValue()
 	local ok, text = pcall(widget.getText, "tbThreshold")
 	if not ok then return nil end
@@ -322,6 +344,7 @@ local function thresholdValue()
 	return tonumber(text)
 end
 
+-- Records the selected rule and redraws the rows and the threshold.
 function ruleSelected()
 	if self.rebuilding then return end
 
@@ -343,6 +366,7 @@ function ruleSelected()
 	refreshThreshold()
 end
 
+-- Adds a rule for the item on the cursor and switches the machine off, or selects the rule it already has.
 function sampleSlotClicked()
 	local swap = player.swapSlotItem()
 
@@ -385,6 +409,7 @@ function sampleSlotClicked()
 	writeState()
 end
 
+-- Drops the selection.
 function sampleSlotCleared()
 	self.selectedIndex = nil
 
@@ -392,11 +417,13 @@ function sampleSlotCleared()
 	refreshThreshold()
 end
 
+-- Syncs the threshold box.
 function thresholdChanged()
 	syncThreshold()
 end
 
 
+-- Removes a rule and writes.
 local function ruleRowRemove(_, rowIndex)
 	dbg("ruleRowRemove fired with data=%s (%s)", tostring(rowIndex), type(rowIndex))
 
@@ -414,6 +441,7 @@ local function ruleRowRemove(_, rowIndex)
 end
 
 
+-- Returns the item in the input grid, or nil.
 local function inputItem()
 	local ok, items = pcall(widget.itemGridItems, "itemGrid")
 	if not ok or type(items) ~= "table" then return nil end
@@ -427,6 +455,7 @@ local function inputItem()
 	return nil
 end
 
+-- Returns the rule naming an item, or nil.
 local function ruleFor(name)
 	for _, rule in ipairs(self.rules or {}) do
 		if rule.item == name then return rule end
@@ -435,6 +464,7 @@ local function ruleFor(name)
 	return nil
 end
 
+-- Returns every item across the input, reagent and output grids.
 local function allSlotItems()
 	local items = {}
 
@@ -453,6 +483,7 @@ local function allSlotItems()
 	return items
 end
 
+-- Returns whether an item carries an item tag, cached.
 local function hasTag(name, tag)
 	self.tagCache = self.tagCache or {}
 	self.tagCache[name] = self.tagCache[name] or {}
@@ -476,17 +507,20 @@ local function hasTag(name, tag)
 	return self.tagCache[name][tag]
 end
 
+-- Shows the warning text and icon.
 local function showWarning(text)
 	widget.setText("warnText", text)
 	widget.setVisible("warnText", true)
 	widget.setVisible("warnIcon", true)
 end
 
+-- Hides the warning text and icon.
 local function hideWarning()
 	widget.setVisible("warnText", false)
 	widget.setVisible("warnIcon", false)
 end
 
+-- Sets the burn button's caption and enabled state from the forced item and the input slot.
 local function refreshBurnButton(input)
 	local forced = type(self.forcedName) == "string"
 
@@ -506,6 +540,7 @@ local function refreshBurnButton(input)
 	end
 end
 
+-- Updates the burn button, the warning line and the status line from the slot contents.
 function refreshStatus()
 	if not self.loaded then return end
 
@@ -574,6 +609,7 @@ local PROGRESS_STEPS = 20
 
 local PROGRESS_INTERVAL = 0.25
 
+-- Returns the charge queue as a plain array of at most the blip count.
 local function blipSequence(queue)
 	if type(queue) ~= "table" then return {} end
 
@@ -587,6 +623,7 @@ local function blipSequence(queue)
 	return out
 end
 
+-- Tints each blip to its flavor's colour, or to the empty colour.
 local function refreshBlips(queue)
 	queue = blipSequence(queue)
 
@@ -604,6 +641,7 @@ local function refreshBlips(queue)
 	end
 end
 
+-- Polls the machine on an interval and takes the points, blips and slot names from its reply.
 local function refreshProgress(dt)
 	self.progressTimer = (self.progressTimer or 0) - dt
 
@@ -657,6 +695,7 @@ local function refreshProgress(dt)
 end
 
 
+-- Takes a read state into the pane and redraws everything.
 local function applyState(state)
 	self.rules = {}
 
@@ -707,6 +746,7 @@ local rebuildingFlavors = false
 local FLAVOR_WIDGETS = { "flavorsScroll", "reagentsLabel", "reagentsScroll" }
 local INSTRUCTION_WIDGETS = { "instructionsText" }
 
+-- Sets the visibility of a list of widgets.
 local function setWidgetsVisible(names, shown)
 	for _, name in ipairs(names) do
 		local ok, err = pcall(widget.setVisible, name, shown)
@@ -716,6 +756,7 @@ local function setWidgetsVisible(names, shown)
 	end
 end
 
+-- Sets each flavor row's background to the plain, alternate or selected art.
 local function paintFlavorRows()
 	for rowId, path in pairs(flavorRowPath) do
 		local art = FLAVOR_ROW_ART_ALT
@@ -730,6 +771,7 @@ local function paintFlavorRows()
 	end
 end
 
+-- Rebuilds the reagent cells for a flavor and sets the heading.
 local function refreshReagents(flavor)
 	local wantId = flavor ~= nil and flavor.id or nil
 	if wantId == shownReagentFlavor then return end
@@ -767,6 +809,7 @@ local function refreshReagents(flavor)
 	dbg("refreshReagents: %s, %d cell(s)", tostring(flavor.id), #reagents)
 end
 
+-- Rebuilds the flavor list with each row's label and item icon.
 local function refreshFlavors()
 	rebuildingFlavors = true
 	widget.clearListItems(FLAVORS_LIST)
@@ -830,6 +873,7 @@ local function refreshFlavors()
 	dbg("refreshFlavors: %d flavor(s)", #shownFlavors)
 end
 
+-- Shows the instructions or flavors widgets and sets the tab checkboxes.
 local function showTab(which)
 	activeTab = which
 
@@ -842,6 +886,7 @@ local function showTab(which)
 	dbg("showTab: %s", tostring(which))
 end
 
+-- Asks the machine to discard its charge.
 function clearChargeClicked()
 	local id = pane.containerEntityId()
 	if id == nil then return end
@@ -850,6 +895,7 @@ function clearChargeClicked()
 	world.sendEntityMessage(id, "petports_upcyclerClearCharge")
 end
 
+-- Asks the machine to force-burn the input item, or to stop the forced burn.
 function burnNowClicked()
 	local id = pane.containerEntityId()
 	if id == nil then return end
@@ -877,16 +923,19 @@ function burnNowClicked()
 		{ item = held.name })
 end
 
+-- Shows the instructions tab.
 function tabInstructionsClicked()
 	showTab("instructions")
 end
 
+-- Shows the flavors tab, building the list on first use.
 function tabFlavorsClicked()
 	showTab("flavors")
 
 	if #shownFlavors == 0 then refreshFlavors() end
 end
 
+-- Records the selected flavor row and shows its reagents.
 local function selectFlavorRow(rowId, from)
 	if rebuildingFlavors then return end
 
@@ -900,6 +949,7 @@ local function selectFlavorRow(rowId, from)
 	refreshReagents(flavor)
 end
 
+-- Flips a rule's reagent routing and writes.
 local function ruleReagentToggled(_, index)
 	index = tonumber(index)
 	local rule = index and self.rules[index]
@@ -928,6 +978,7 @@ local function ruleReagentToggled(_, index)
 	writeState()
 end
 
+-- Flips a rule's burner entry and writes.
 local function ruleBurnToggled(_, index)
 	index = tonumber(index)
 	local rule = index and self.rules[index]
@@ -956,12 +1007,14 @@ local function ruleBurnToggled(_, index)
 	writeState()
 end
 
+-- Selects a flavor row.
 local function flavorRowClicked(_, rowId)
 	selectFlavorRow(rowId, "row")
 end
 
 
 
+-- Clears the pane state, registers the row callbacks, shows the instructions tab and reads the machine.
 function init()
 	sb.logInfo("PETPORTS upcyclerconfig build: %s", PANE_BUILD_STAMP)
 
@@ -1023,11 +1076,13 @@ local FLICKER_HZ = 9
 local BREATHE_HZ = 0.7
 local BREATHE_FLOOR = 0.45
 
+-- Returns a 0-1 level as a two-digit alpha byte.
 local function alphaHex(level)
 	local byte = math.floor(math.max(0, math.min(1, level)) * 255 + 0.5)
 	return string.format("%02x", byte)
 end
 
+-- Paints the running light: flickering after a switch, steady while on, breathing while off.
 local function paintLight(dt)
 	local enabled = self.enabled == true
 
@@ -1063,6 +1118,7 @@ local function paintLight(dt)
 	end
 end
 
+-- Paints the light, syncs the threshold, and refreshes the status and the progress.
 function update(dt)
 	paintLight(dt)
 	syncThreshold()

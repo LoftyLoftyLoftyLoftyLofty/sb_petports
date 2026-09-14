@@ -1,3 +1,5 @@
+-- Beacon item that opens its config pane and stores the settings on the item.
+
 local DEFAULTS =
 {
 	enabled = true,
@@ -26,12 +28,14 @@ local PANE_ALIVE = 1.0
 
 local DEBUG = false
 
+-- Logs a formatted line when DEBUG is set.
 local function dbg(fmt, ...)
 	if not DEBUG then return end
 	local ok, text = pcall(string.format, fmt, ...)
 	sb.logInfo("petports beacon: %s", ok and text or ("<badformat> " .. tostring(fmt)))
 end
 
+-- Returns a value printed as JSON, or a placeholder.
 local function j(value)
 	if value == nil then return "nil" end
 	local ok, text = pcall(sb.printJson, value)
@@ -41,11 +45,13 @@ end
 
 local TOKEN_KEY = "petports_beaconPaneToken"
 
+-- Returns a new pane token.
 local function newToken()
 	if sb.makeUuid then return sb.makeUuid() end
 	return tostring(math.random(1, 1073741824))
 end
 
+-- Sets the animation tag and inventory icon to the on or off frame.
 local function setIcon(enabled)
 	local frame = enabled and "on" or "off"
 
@@ -62,6 +68,7 @@ local function setIcon(enabled)
 	activeItem.setInventoryIcon(base .. ":" .. frame)
 end
 
+-- Returns every beacon field read from the item parameters.
 local function readConfig()
 	local out = {}
 	for field, key in pairs(FIELDS) do
@@ -70,6 +77,7 @@ local function readConfig()
 	return out
 end
 
+-- Restores the pane token, installs the pane handlers and sets the icon.
 function init()
 	self.paneToken = config.getParameter(TOKEN_KEY)
 
@@ -157,12 +165,14 @@ function init()
 	end)
 end
 
+-- Counts down the pane keepalive timer.
 function update(dt, fireMode, shifting, moves)
 	if (self.paneTimer or 0) > 0 then
 		self.paneTimer = self.paneTimer - dt
 	end
 end
 
+-- Issues a new pane token and opens the config pane.
 function activate(fireMode, shifting)
 	if (self.paneTimer or 0) > 0 then
 		dbg("activate ignored, pane still alive (%.2fs left)", self.paneTimer)
@@ -183,5 +193,6 @@ function activate(fireMode, shifting)
 		config.getParameter("interactData"))
 end
 
+-- Does nothing.
 function uninit()
 end

@@ -1,3 +1,5 @@
+-- Petport object: holds the unit, finds work across its network, and dispatches and reports on tasks.
+
 require "/scripts/util.lua"
 require "/scripts/messageutil.lua"
 require "/scripts/lofty_petports/petports_work.lua"
@@ -54,6 +56,7 @@ PET_TOGGLES =
   waterrestock = true
 }
 
+-- Returns whether the socketed unit has a settings group turned on.
 function petportParticipates(group)
   if self.petData == nil then return false end
 
@@ -66,10 +69,12 @@ end
 ENABLED_KEY = "petports_enabled"
 
 
+-- Returns whether the port is switched on.
 function petportEnabled()
   return config.getParameter(ENABLED_KEY, true) ~= false
 end
 
+-- Returns whether the unit has crosshair markers turned on.
 function petportCrosshairs()
   if self.petData == nil then return false end
 
@@ -112,6 +117,7 @@ local socketedItem
 
 CARGO_TRACE = true
 
+-- Returns a printable summary of a cargo list.
 local function cargoSummary(cargo)
   if cargo == nil then return "nil" end
   if type(cargo) ~= "table" then return "NOT A TABLE (" .. type(cargo) .. ")" end
@@ -135,6 +141,7 @@ local function cargoSummary(cargo)
   return "empty"
 end
 
+-- Returns a cargo table as a dense array, ordered by its numeric keys.
 local function normaliseCargo(cargo)
   if type(cargo) ~= "table" then return {} end
 
@@ -153,6 +160,7 @@ local function normaliseCargo(cargo)
   return dense
 end
 
+-- Logs a cargo summary against a label when cargo tracing is on.
 local function cargoTrace(where, cargo)
   if not CARGO_TRACE then return end
   local ok, text = pcall(string.format, "PETPORT CARGO | %-22s | %s",
@@ -211,6 +219,7 @@ DIAG_FALLBACK = false
 
 RESIDENCY_TYPE = "petports_residency"
 
+-- Logs a labelled value when DEBUG is set.
 local function trace(label, value)
   if not DEBUG then return end
   if value == nil then
@@ -224,6 +233,7 @@ end
 
 local metrics = {}
 
+-- Adds an amount to one of the unit's stat counters.
 metrics.add = function(key, amount)
   if self.petData == nil then return end
   if amount == nil or amount == 0 then return end
@@ -232,6 +242,7 @@ metrics.add = function(key, amount)
   self.petData.stats[key] = (self.petData.stats[key] or 0) + amount
 end
 
+-- Counts a treat against the total and against its flavor.
 function countFed(flavor)
   metrics.add("fed", 1)
 
@@ -244,10 +255,12 @@ function countFed(flavor)
   end
 end
 
+-- Returns this port's coverage rect.
 local function coverageRect()
   return petports_coverageRect(entity.position(), COVERAGE_SIZE)
 end
 
+-- Writes this port's rect, position and network id into the registry, dropping any predecessor on the tile.
 local function publishRegistry()
   local rect = coverageRect()
 
@@ -263,6 +276,7 @@ end
 
 UNIT_POSITION_THRESHOLD = 4.0
 
+-- Updates the registry entry with the unit's position and busy state once either has moved on.
 local function publishUnitPosition()
   local registry = petports_registry()
   local entry = (registry.ports or {})[stationUniqueId()]
@@ -294,6 +308,7 @@ local function publishUnitPosition()
   petports_registryPublish(stationUniqueId(), entry)
 end
 
+-- Returns every vent in the network's inflated rects with its entry and exits, logging the set when it changes.
 local function gatherVents()
 	local ventReport = {}
 
@@ -356,6 +371,7 @@ local function gatherVents()
   return vents
 end
 
+-- Returns a string identifying a vent list by its ids and exits.
 local function ventSignature(vents)
   local rows = {}
   for _, vent in ipairs(vents or {}) do
@@ -370,6 +386,7 @@ local function ventSignature(vents)
   return table.concat(rows, ";")
 end
 
+-- Drops cached route edges naming a vent that is gone, and returns how many went.
 local function pruneRouteCache(vents)
   if self.routeCache == nil then return 0 end
 
@@ -390,6 +407,7 @@ local function pruneRouteCache(vents)
   return removed
 end
 
+-- Rereads the network, units and vents when the registry version moves, and pushes them to the unit.
 local function refreshNetwork()
   local version = petports_registryVersion()
   local unitChanged = false
@@ -453,6 +471,7 @@ local function refreshNetwork()
   end
 end
 
+-- Returns whether a position lies in the network's rects.
 local function inNetwork(position)
   local rects = self.networkRects
   if rects == nil or #rects == 0 then rects = { coverageRect() } end
@@ -468,6 +487,7 @@ FAMILY_HELD = { asterite = true, animal = true }
 FAMILY_STRIKES = 3
 FAMILY_HOLD = 120.0
 
+-- Returns whether a work family is held, releasing it once its hold expires.
 local function familyOnHold(family)
   local until_ = self.familyHold and self.familyHold[family]
   if until_ == nil then return false end
@@ -479,6 +499,7 @@ local function familyOnHold(family)
   return true
 end
 
+-- Records a task failure, backs the task off, and holds its family after repeated stranding.
 local function noteFailure(taskId, reason)
   if taskId == nil then return end
 
@@ -548,12 +569,14 @@ local function noteFailure(taskId, reason)
 end
 
 
+-- Returns the residency unique id for this port's position.
 local function residencyUniqueId()
   local position = entity.position()
   return string.format("petports_residency_%s_%s",
     math.floor(position[1]), math.floor(position[2]))
 end
 
+-- Spawns the residency stagehand for this port when none exists.
 local function ensureResidency()
   local residencyId = residencyUniqueId()
   local existing = world.loadUniqueEntity(residencyId)
@@ -573,6 +596,7 @@ local function ensureResidency()
     stationUniqueId(), residencyId, tostring(ok), tostring(result))
 end
 
+-- Tells this port's residency stagehand to stop.
 local function stopResidency()
   local residencyId = world.loadUniqueEntity(residencyUniqueId())
   if residencyId == nil then return end
@@ -580,6 +604,7 @@ local function stopResidency()
   world.sendEntityMessage(residencyId, "petports_residencyStop")
 end
 
+-- Drops the held task and releases its claim.
 local function abandonTask(reason)
   if self.task == nil then return end
 
@@ -596,6 +621,7 @@ local PORT_PROF_INTERVAL = 10.0
 local portProfPhases = {}
 local portProfAt = nil
 
+-- Returns the process clock in seconds, or nil where it is unavailable.
 local function portClock()
   if type(os) == "table" and type(os.clock) == "function" then
     local ok, t = pcall(os.clock)
@@ -604,6 +630,7 @@ local function portClock()
   return nil
 end
 
+-- Runs a function and adds its time to a named phase.
 local function portProf(name, fn, ...)
   if not PETPORT_PROFILE then return fn(...) end
 
@@ -628,6 +655,7 @@ local function portProf(name, fn, ...)
   return a, b, c
 end
 
+-- Logs the phase timings on an interval and clears them.
 local function portProfReport()
   if not PETPORT_PROFILE then return end
 
@@ -657,6 +685,7 @@ end
 
 
 
+-- Turns asterite scanning on only when the matmod exists and drops a real item.
 function asteriteLatch()
   self.asteriteEnabled = false
   self.asteriteDrop = nil
@@ -694,6 +723,7 @@ function asteriteLatch()
     sb.printJson(math.floor(COVERAGE_SIZE) * math.floor(COVERAGE_SIZE)))
 end
 
+-- Returns a scan start index hashed from this port's unique id.
 function asteriteCursorSeed()
   local uniqueId = tostring(stationUniqueId() or "")
   local h = 0
@@ -705,6 +735,7 @@ function asteriteCursorSeed()
   return h
 end
 
+-- Checks one tile of the coverage rect for the asterite mod, noting it in the store, and wraps at the end of a sweep.
 function asteriteScanStep()
   if not self.asteriteEnabled then return end
 
@@ -783,6 +814,7 @@ function asteriteScanStep()
   self.asteriteCursor = index
 end
 
+-- Logs the stored deposits up to a limit and returns how many there are.
 function petports_asteriteDump(limit)
   limit = tonumber(limit) or 40
 
@@ -813,6 +845,7 @@ function petports_asteriteDump(limit)
   return n
 end
 
+-- Reads the config, clears the port state, and installs every message handler.
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
   sb.logInfo("PETPORT work build: %s", PETPORTS_WORK_BUILD_STAMP)
@@ -1011,6 +1044,7 @@ function init()
     local records = payload.modules
     if type(records) ~= "table" then return false end
 
+    -- Clears the pane signature and refuses the module write.
     local function refuse()
       self.paneSignature = nil
       return false
@@ -1473,6 +1507,7 @@ function init()
   object.setInteractive(true)
 end
 
+-- Stops the residency and removes this port from the registry.
 function die()
   self.destroyed = true
 
@@ -1481,6 +1516,7 @@ function die()
   petports_registryRemove(stationUniqueId())
 end
 
+-- Abandons the task, clears the fish entry and crosshairs, and saves the unit back into its item.
 function uninit()
   abandonTask("petport unloading")
 
@@ -1492,10 +1528,12 @@ function uninit()
 end
 
 
+-- Returns whether the unit exists.
 function hasPet()
   return self.petId ~= nil and world.entityExists(self.petId)
 end
 
+-- Adopts a unit's id and takes its seed, food likings, known players and resources into the pet data.
 function setPet(entityId, params)
   if self.petId ~= nil and self.petId ~= entityId then
     return false
@@ -1531,18 +1569,21 @@ function setPet(entityId, params)
 end
 
 
+-- Returns the item in the port's socket, or nil.
 socketedItem = function()
   local item = world.containerItemAt(entity.id(), 0)
   if item == nil or item.name == nil then return nil end
   return item
 end
 
+-- Returns an item's stored pet seed.
 local function itemSeed(item)
   if item == nil or item.parameters == nil then return nil end
   if item.parameters.petData == nil then return nil end
   return item.parameters.petData.seed
 end
 
+-- Returns the pet data merged from an item's config and its parameters, with the cargo normalised.
 local function petDataFrom(item)
   local base = root.itemConfig(item)
   local data = {}
@@ -1563,6 +1604,7 @@ local function petDataFrom(item)
   return data
 end
 
+-- Spawns the unit at the port's spawn offset with its saved status, storage and name.
 function spawnPet()
   cargoTrace("spawnPet: entry", self.petData and self.petData.cargo)
   if self.petData == nil or self.petData.monsterType == nil then return end
@@ -1615,6 +1657,7 @@ function spawnPet()
   end
 end
 
+-- Takes the unit's state back into the pet data, despawns it, and writes it into the item.
 function saveAndDespawn(skipWrite, instant)
   if self.petId and world.entityExists(self.petId) then
     local ok, state = pcall(world.callScriptedEntity, self.petId, "petports_store")
@@ -1641,6 +1684,7 @@ function saveAndDespawn(skipWrite, instant)
   self.spawning = false
 end
 
+-- Writes the pet data into the item now and lets work run on the next tick.
 local function flushCargo()
   self.dirty = true
   writeBackToItem()
@@ -1650,6 +1694,7 @@ local function flushCargo()
 end
 
 
+-- Returns a beacon item's behavior, or nil when it is switched off.
 local function beaconBehaviorOf(item)
   if item == nil or item.name == nil then return nil end
 
@@ -1664,6 +1709,7 @@ local function beaconBehaviorOf(item)
   return root.itemConfig(item).config[BEACON_KEY]
 end
 
+-- Returns whether an object carries an item tag.
 local function objectHasTag(id, tag)
   local ok, tags = pcall(world.getObjectParameter, id, "itemTags")
   if not ok or type(tags) ~= "table" then return false end
@@ -1675,6 +1721,7 @@ local function objectHasTag(id, tag)
   return false
 end
 
+-- Returns an object's machine kind, enabled and feeder flags and rules, or nil when it is not a machine.
 local function machineAt(id)
   local ok, kind = pcall(world.getObjectParameter, id, MACHINE_KEY)
   if not ok or type(kind) ~= "string" or kind == "" then return nil end
@@ -1716,6 +1763,7 @@ local function machineAt(id)
   return machine
 end
 
+-- Scans the network for containers, returning the beacons, the deposit census, the machines and where each item is spread.
 local function scanContainers()
   local rects = self.networkRects
   if rects == nil or #rects == 0 then rects = { coverageRect() } end
@@ -1895,6 +1943,7 @@ local function scanContainers()
   return found, containers, census, censusStacks, machines, spread
 end
 
+-- Logs the item census against each machine rule when the picture changes.
 local function reportCensus(census, censusStacks, machines)
   local distinct = 0
   for _ in pairs(census) do distinct = distinct + 1 end
@@ -1942,6 +1991,7 @@ DEFRAG_DEBUG = true
 
 SPREAD_REPORT_CAP = 12
 
+-- Logs which items sit in more than one crate when the picture changes.
 local function reportSpread(spread)
   if not DEFRAG_DEBUG then return end
 
@@ -2011,6 +2061,7 @@ end
 
 
 
+-- Returns whether a crate can take one more of an item.
 local function crateHasRoom(id, name)
   if world.containerItemsCanFit == nil then return false end
 
@@ -2020,6 +2071,7 @@ local function crateHasRoom(id, name)
   return fits > 0
 end
 
+-- Returns the crate an item belongs in, ranked by filter narrowness, aging, how much it already holds and its size.
 local function defragDestination(name, where, crates, perishable)
   local ranked = {}
 
@@ -2105,6 +2157,7 @@ local function defragDestination(name, where, crates, perishable)
     tostring(#ranked))
 end
 
+-- Returns the crates an item should be moved out of, smallest holding first, and how many refuse it outright.
 local function defragSources(name, where, destinationId, byId)
   local sources = {}
   local misfiled = 0
@@ -2136,6 +2189,7 @@ local function defragSources(name, where, destinationId, byId)
   return sources, misfiled
 end
 
+-- Orders defrag candidates by slots used, then crate count, then name.
 local function defragOrder(names)
   table.sort(names, function(a, b)
     if a.slots ~= b.slots then return a.slots > b.slots end
@@ -2146,6 +2200,7 @@ local function defragOrder(names)
   return names
 end
 
+-- Returns whether a crate ages an item better than its current one, cached per beacon scan.
 local function defragBetterTempExists(name, current, deposits, perishable)
   local version = self.beaconVersion or 0
 
@@ -2174,6 +2229,7 @@ local function defragBetterTempExists(name, current, deposits, perishable)
   return better
 end
 
+-- Returns whether a narrower crate accepts an item, cached per beacon scan.
 local function defragBetterHomeExists(name, closest, deposits)
   local version = self.beaconVersion or 0
 
@@ -2200,6 +2256,7 @@ local function defragBetterHomeExists(name, closest, deposits)
   return better
 end
 
+-- Returns every item that is scattered, in too broad a crate, or at the wrong temperature, in the order to move them.
 local function defragCandidates(spread, crates)
   local chill = petportParticipates("chill")
   local byId = {}
@@ -2288,6 +2345,7 @@ end
 
 DEFRAG_PLAN_CAP = 16
 
+-- Logs the destination and sources planned for each defrag candidate when the plan changes.
 local function reportDefragPlan(spread, crates)
   if not DEFRAG_DEBUG then return end
   if not petportDefrag() then return end
@@ -2355,6 +2413,7 @@ local function reportDefragPlan(spread, crates)
     stationUniqueId(), tostring(#lines), tostring(#names), report)
 end
 
+-- Rescans the containers on an interval and stores the beacons, census, machines and spread.
 local function refreshBeacons(dt)
   self.beaconTimer = (self.beaconTimer or 0) - dt
   if self.beaconTimer > 0 then return end
@@ -2405,6 +2464,7 @@ local function refreshBeacons(dt)
   reportDefragPlan(spread, found)
 end
 
+-- Returns the live beacons of a behavior, nearest first.
 function petports_beaconsFor(behavior)
   local matches = {}
   local origin = entity.position()
@@ -2422,6 +2482,7 @@ function petports_beaconsFor(behavior)
   return matches
 end
 
+-- Adds an item to the unit's cargo, taking the first medkit into its own slot, and writes the item back.
 function receiveCargo(item)
   if item == nil or item.name == nil then return end
 
@@ -2490,6 +2551,7 @@ function receiveCargo(item)
   flushCargo()
 end
 
+-- Serialises the pet data into the socketed item.
 function writeBackToItem()
   if self.petData == nil then
     cargoTrace("writeBack: REFUSED, no petData", nil)
@@ -2514,6 +2576,7 @@ function writeBackToItem()
   self.dirty = false
 end
 
+-- Returns this port's unique id, assigning one when it has none.
 function stationUniqueId()
   local uniqueId = entity.uniqueId()
   if not uniqueId then
@@ -2535,6 +2598,7 @@ PANE_DIAG_LIMIT = 4
 
 local bodyKindCache = {}
 
+-- Returns whether the unit's body is organic or robotic, cached.
 local function paneBodyKind()
   local monsterType = self.petData and self.petData.monsterType
   if monsterType == nil then return nil end
@@ -2567,18 +2631,21 @@ PETPORTS_FUEL_LOW = 0.25
 PETPORTS_FUEL_PLAIN     = 60
 PETPORTS_FUEL_PREFERRED = 120
 
+-- Returns the unit's stored fuel.
 local function petportFuelValue()
   local resources = self.petData and self.petData.storage and self.petData.storage.petResources
   if type(resources) ~= "table" then return nil end
   return tonumber(resources.petports_fuel)
 end
 
+-- Returns how much fuel the unit has room for.
 function petportFuelHeadroom()
   local fuel = petportFuelValue()
   if fuel == nil then return nil end
   return math.max(0, PANE_FUEL_MAX - fuel)
 end
 
+-- Returns whether the unit's fuel is below the low mark.
 function petportFuelWanted()
   local fuel = petportFuelValue()
   if fuel == nil then return false end
@@ -2587,6 +2654,7 @@ end
 
 FLAVOR_CACHE_TTL = 5.0
 
+-- Returns the unit's preferred flavor, cached.
 function petportUnitFlavor()
   if self.petId == nil or not world.entityExists(self.petId) then return nil end
 
@@ -2604,6 +2672,7 @@ function petportUnitFlavor()
   return flavor
 end
 
+-- Returns whether the unit has any fuel left.
 function petportFuelled()
   local resources = self.petData and self.petData.storage and self.petData.storage.petResources
   if type(resources) ~= "table" then return true end
@@ -2614,6 +2683,7 @@ function petportFuelled()
   return fuel > 0
 end
 
+-- Returns the fuel as a blip count for the pane.
 local function paneFuelBlips()
   local resources = self.petData and self.petData.storage and self.petData.storage.petResources
   if type(resources) ~= "table" then return PANE_FUEL_BLIPS end
@@ -2626,6 +2696,7 @@ local function paneFuelBlips()
   return math.max(0, math.min(PANE_FUEL_BLIPS, blips))
 end
 
+-- Returns the cargo for the pane, each stack capped at its own max size.
 local function paneCargo()
   if self.petData == nil or self.petData.cargo == nil then return nil end
 
@@ -2647,6 +2718,7 @@ end
 
 DIAG_MAX_CHARS = 26
 
+-- Returns a diagnostic with its short text cut to the pane's width.
 local function paneDiag(severity, short, full)
   local capped = short
   if #capped > DIAG_MAX_CHARS then
@@ -2657,11 +2729,13 @@ end
 
 DIAG_FRESH = 30.0
 
+-- Returns whether a time is inside the diagnostic freshness window.
 local function fresh(at)
   if at == nil then return false end
   return (world.time() - at) < DIAG_FRESH
 end
 
+-- Returns the diagnostics the pane shows, newest and most severe first.
 local function paneDiagnostics()
   local out = {}
 
@@ -2703,6 +2777,7 @@ local function paneDiagnostics()
   return out
 end
 
+-- Returns the socketed item's short description.
 local function paneSpecies()
   local item = socketedItem()
   if item == nil or item.name == nil then return nil end
@@ -2725,10 +2800,12 @@ MODULE_SLOTS_BY_RARITY = {
 
 MODULE_SLOTS_MAX = 5
 
+-- Returns the socketed item's module slot count, from its parameters, its config, or its rarity.
 function petportModuleSlots()
   local item = socketedItem()
   if item == nil then return 0 end
 
+  -- Clamps a slot count to the maximum.
   local function clamp(n)
     return math.max(0, math.min(MODULE_SLOTS_MAX, math.floor(n)))
   end
@@ -2756,12 +2833,14 @@ end
 
 MODULE_TAG = "petports_module"
 
+-- Returns whether an item is tagged as a module.
 function petportIsModuleItem(item)
   if type(item) ~= "table" or item.name == nil then return false end
   local ok, has = pcall(root.itemHasTag, item.name, MODULE_TAG)
   return ok and has == true
 end
 
+-- Returns a module item's list field from its parameters or its config.
 local function moduleFieldOf(item, field)
   if type(item) ~= "table" or item.name == nil then return {} end
 
@@ -2779,6 +2858,7 @@ local function moduleFieldOf(item, field)
   return value
 end
 
+-- Returns the sorted union of a list field across every socketed module.
 local function moduleFieldUnion(field)
   if self.petData == nil or type(self.petData.modules) ~= "table" then return {} end
 
@@ -2800,14 +2880,17 @@ local function moduleFieldUnion(field)
   return out
 end
 
+-- Returns the status effects the socketed modules grant.
 function petportModuleEffects()
   return moduleFieldUnion("petports_moduleEffects")
 end
 
+-- Returns the liquids the socketed modules permit.
 function petportModuleLiquids()
   return moduleFieldUnion("petports_moduleLiquids")
 end
 
+-- Returns the flags the socketed modules carry.
 function petportModuleFlags()
   return moduleFieldUnion("petports_moduleFlags")
 end
@@ -2842,6 +2925,7 @@ METABOLISM_SPEED = {
   metabolism3 = 0.30
 }
 
+-- Returns the fuel drain multiplier from the best fuel efficiency and metabolism modules.
 function petportFuelScale()
   local bonus = 0
   local penalty = 0
@@ -2867,6 +2951,7 @@ function petportFuelScale()
   return scale
 end
 
+-- Returns the speed multiplier from the best metabolism module.
 function petportSpeedScale()
   local bonus = 0
 
@@ -2903,6 +2988,7 @@ FISHING_FISH_PARAMETERS = {
 
 FISHING_SPAWNER_CONFIG = "/scripts/fishing/fishingspawner.config"
 
+-- Returns whether a fishing module is socketed.
 function petportFishing()
   for _, flag in ipairs(petportModuleFlags()) do
     if flag == FISHING_FLAG then return true end
@@ -2917,6 +3003,7 @@ MEDIC_PROJECTILE = "petports_medicburst"
 
 MEDIC_REACH = 6
 
+-- Returns whether an oblivious module is socketed.
 function petportOblivious()
   for _, flag in ipairs(petportModuleFlags()) do
     if flag == OBLIVIOUS_FLAG then return true end
@@ -2924,6 +3011,7 @@ function petportOblivious()
   return false
 end
 
+-- Returns whether a medic module is socketed.
 function petportMedic()
   for _, flag in ipairs(petportModuleFlags()) do
     if flag == MEDIC_FLAG then return true end
@@ -2931,6 +3019,7 @@ function petportMedic()
   return false
 end
 
+-- Returns the held medkit, or nil.
 function petportMedkit()
   if self.petData == nil then return nil end
 
@@ -2940,6 +3029,7 @@ function petportMedkit()
   return held
 end
 
+-- Returns whether the unit shows carried-item bubbles.
 function petportBubbles()
   if self.petData == nil then return false end
 
@@ -2948,6 +3038,7 @@ function petportBubbles()
   return toggles.carried ~= false
 end
 
+-- Returns whether the unit shows its cargo in bubbles.
 function petportBubbleCargo()
   if self.petData == nil then return false end
 
@@ -2956,10 +3047,12 @@ function petportBubbleCargo()
   return toggles.showCargo ~= false
 end
 
+-- Returns whether the unit shows bubbles at all.
 function petportBubbleChannel()
   return petportBubbles() or petportBubbleCargo()
 end
 
+-- Returns whether the unit shows its nametag.
 function petportNametag()
   if self.petData == nil then return false end
 
@@ -2968,6 +3061,7 @@ function petportNametag()
   return toggles.nametag == true
 end
 
+-- Returns whether a farming module is socketed.
 function petportFarming()
   for _, flag in ipairs(petportModuleFlags()) do
     if flag == FARMING_FLAG then return true end
@@ -2975,6 +3069,7 @@ function petportFarming()
   return false
 end
 
+-- Returns whether a defrag module is socketed.
 function petportDefrag()
   for _, flag in ipairs(petportModuleFlags()) do
     if flag == DEFRAG_FLAG then return true end
@@ -2982,6 +3077,7 @@ function petportDefrag()
   return false
 end
 
+-- Returns whether a hydrator module is socketed.
 function petportHydrator()
   for _, flag in ipairs(petportModuleFlags()) do
     if flag == HYDRATOR_FLAG then return true end
@@ -2989,6 +3085,7 @@ function petportHydrator()
   return false
 end
 
+-- Returns whether an asterite module is socketed.
 function petportAsterite()
   for _, flag in ipairs(petportModuleFlags()) do
     if flag == ASTERITE_FLAG then return true end
@@ -2996,11 +3093,13 @@ function petportAsterite()
   return false
 end
 
+-- Returns how much water the unit carries, raised by a hydrator.
 function petportWaterCarry()
   if petportHydrator() then return WATER_CARRY_HYDRATED end
   return WATER_CARRY
 end
 
+-- Returns whether a class of farming work is turned on.
 function petportFarmingDoes(class)
   if self.petData == nil then return false end
 
@@ -3011,6 +3110,7 @@ end
 
 MODULE_EFFECT_CATEGORY = "petports_modules"
 
+-- Sends the module effects, liquids, flags, team and scales to the unit when they change.
 function pushModuleEffects()
   if self.petId == nil or not world.entityExists(self.petId) then
     self.pushedModuleEffects = nil
@@ -3052,6 +3152,7 @@ function pushModuleEffects()
 end
 
 
+-- Returns the unit's stored light colour, defaulting each channel.
 function petportLightColor()
   local stored = (self.petData and self.petData.light) or {}
   local out = {}
@@ -3064,6 +3165,7 @@ function petportLightColor()
   return out
 end
 
+-- Sends the light colour to the unit when it changes.
 function pushUnitLight()
   if self.petId == nil or not world.entityExists(self.petId) then
     self.pushedUnitLight = nil
@@ -3085,6 +3187,7 @@ function pushUnitLight()
     color.r, color.g, color.b)
 end
 
+-- Sends the bubble on or off state to the unit when it changes.
 function pushUnitBubbles()
   if self.petId == nil or not world.entityExists(self.petId) then
     self.pushedUnitBubbles = nil
@@ -3104,6 +3207,7 @@ function pushUnitBubbles()
   world.callScriptedEntity(self.petId, "petports_setUnitBubbles", show)
 end
 
+-- Returns up to three cargo items as bubble tokens, or nil.
 local function bubbleSpec()
 
   if petportBubbleCargo() and self.petData ~= nil
@@ -3128,6 +3232,7 @@ local function bubbleSpec()
   return nil
 end
 
+-- Sends the bubble tokens to the unit when they change.
 function pushUnitBubble()
   if self.petId == nil or not world.entityExists(self.petId) then
     self.pushedUnitBubble = nil
@@ -3152,6 +3257,7 @@ function pushUnitBubble()
   world.callScriptedEntity(self.petId, "petports_setUnitBubbleSpec", tokens)
 end
 
+-- Sends the unit's name and nametag setting when they change.
 function pushPetName()
   if self.petId == nil or not world.entityExists(self.petId) then
     self.pushedPetName = nil
@@ -3177,12 +3283,14 @@ function pushPetName()
   world.callScriptedEntity(self.petId, "petports_setUnitName", name, show)
 end
 
+-- Returns the unit's seed as a six digit serial.
 local function paneSerial()
   local seed = self.petData and self.petData.seed
   if seed == nil then return nil end
   return string.format("%06d", math.floor(tonumber(seed) or 0) % 1000000)
 end
 
+-- Returns the stat counters for the pane, with the per-tier and per-flavor rows gathered up.
 metrics.paneStats = function()
   local stats = (self.petData and self.petData.stats) or {}
 
@@ -3237,6 +3345,7 @@ metrics.paneStats = function()
   }
 end
 
+-- Writes the pane state parameter on an interval from the unit's name, fuel, cargo, task and diagnostics.
 function mirrorPaneState(dt)
   self.paneTimer = (self.paneTimer or 0) - (dt or 0)
   if self.paneTimer > 0 then return end
@@ -3306,6 +3415,7 @@ function mirrorPaneState(dt)
 end
 
 
+-- Returns the socketed chassis's habitat capabilities.
 local function unitCapabilities()
   if self.petData == nil or self.petData.monsterType == nil then return nil end
 
@@ -3313,6 +3423,7 @@ local function unitCapabilities()
     petports_habitatPermittedSet(petportModuleLiquids()))
 end
 
+-- Returns whether the port's own spaces are submerged, dry, and which liquids they hold.
 local function portMedia()
   local spaces = world.objectSpaces(entity.id())
   if spaces == nil or #spaces == 0 then return false, true, {} end
@@ -3346,6 +3457,7 @@ local function portMedia()
   return wet, dry, ids
 end
 
+-- Asks whether the chassis can inhabit the port's own footprint, and retires the unit when it cannot.
 local function environmentCheck()
   if self.petData == nil or self.petData.monsterType == nil then
     self.envUnsuitable = nil
@@ -3419,6 +3531,7 @@ RECT_CHECKED_TYPES = {
   ["diag"] = true
 }
 
+-- Returns work whose type is allowed outside this port's own rect, otherwise nil.
 local function dispatchable(work)
   if work == nil then return nil end
 
@@ -3443,6 +3556,7 @@ local function dispatchable(work)
 end
 
 
+-- Returns the unit's unique id, assigning one when it has none.
 local function petUniqueId()
   if self.petId == nil or not world.entityExists(self.petId) then return nil end
 
@@ -3456,6 +3570,7 @@ local function petUniqueId()
   return uniqueId
 end
 
+-- Asks the unit for a standable point near a position.
 local function standingPointNear(position, radius, mediumVerified)
   if self.petId ~= nil and world.entityExists(self.petId) then
     local ok, resolved = pcall(world.callScriptedEntity, self.petId,
@@ -3470,6 +3585,7 @@ local function standingPointNear(position, radius, mediumVerified)
   return nil
 end
 
+-- Asks the unit for a standable point at the port.
 local function homePointNear()
   if self.petId == nil or not world.entityExists(self.petId) then return nil end
 
@@ -3483,6 +3599,7 @@ local function homePointNear()
   return nil
 end
 
+-- Returns whether the chassis can work at a target, with the refusal reason.
 local function targetSuits(position, entityId)
   local caps = unitCapabilities()
   if caps == nil then return true end
@@ -3501,6 +3618,7 @@ local function targetSuits(position, entityId)
   return false, petports_habitatTargetReason(verdict.cause)
 end
 
+-- Records a target refusal against a label, once per distinct reason and chassis.
 local function targetRefused(label, reason)
   local chassis = self.petData ~= nil and self.petData.monsterType or nil
 
@@ -3519,6 +3637,7 @@ local function targetRefused(label, reason)
   end
 end
 
+-- Returns whether a target suits the chassis, recording the refusal when it does not.
 local function targetEligible(label, position, entityId)
   local ok, reason = targetSuits(position, entityId)
   if ok then return true end
@@ -3527,6 +3646,7 @@ local function targetEligible(label, position, entityId)
   return false
 end
 
+-- Asks the unit for a standable point beside a target's object bounds, or near its position.
 local function standingPointForTarget(position, entityId, radius, mediumVerified)
   local bounds = petports_habitatObjectBounds(entityId)
 
@@ -3548,6 +3668,7 @@ local function standingPointForTarget(position, entityId, radius, mediumVerified
   return nil
 end
 
+-- Returns the point the unit works a target from, or nil with the reason.
 local function servicePointNearUncached(label, entityId, position, radius)
   local suits, why = targetSuits(position, entityId)
 
@@ -3575,6 +3696,7 @@ end
 SERVICE_POINT_TTL = 30.0
 SERVICE_POINT_RETRY = 5.0
 
+-- Returns a target's service point, cached, with a shorter hold on failures.
 local function servicePointNear(label, entityId, position, radius)
   self.servicePoints = self.servicePoints or {}
 
@@ -3594,6 +3716,7 @@ local function servicePointNear(label, entityId, position, radius)
   return stand, why
 end
 
+-- Returns a random floor tile inside a rect, or nil.
 local function findStandingPoint(rect)
   for _ = 1, 12 do
     local x = math.floor(rect[1] + math.random() * (rect[3] - rect[1])) + 0.5
@@ -3611,6 +3734,7 @@ local function findStandingPoint(rect)
   return nil
 end
 
+-- Returns a task that walks the unit to a floor tile in this port's rect.
 local function diagnosticWork()
   local rect = coverageRect()
   local position = findStandingPoint(rect)
@@ -3630,6 +3754,7 @@ end
 
 DEFER_GRACE = 12.0
 
+-- Returns whether an idle unit elsewhere in the network is nearer a position.
 local function anotherUnitIsCloser(position, ourDistance)
   for _, entry in ipairs(petports_networkMembers(stationUniqueId())) do
     if entry.unitPosition ~= nil and not entry.busy and entry.hasUnit ~= false then
@@ -3641,6 +3766,7 @@ local function anotherUnitIsCloser(position, ourDistance)
   return false
 end
 
+-- Returns whether a drop would stack onto cargo the unit already carries.
 local function dropMergesWithCargo(dropId)
   if self.petData == nil or self.petData.cargo == nil then return false end
 
@@ -3669,6 +3795,7 @@ local function dropMergesWithCargo(dropId)
   return false
 end
 
+-- Returns a task to fetch the nearest unclaimed drop in the network, or nil with a tally of why each was passed over.
 local function collectionWork(mergeOnly)
   local rects = self.networkRects
   if rects == nil or #rects == 0 then rects = { coverageRect() } end
@@ -3815,6 +3942,7 @@ local function collectionWork(mergeOnly)
   }
 end
 
+-- Saves and despawns the unit, and clears the recall and unreachable counts.
 local function rehomeUnit(reason)
   sb.logInfo("PETPORT %s re-homing unit: %s", stationUniqueId(), reason)
 
@@ -3827,6 +3955,7 @@ end
 
 MEDIC_CLASSES = { "player", "crew", "npc", "podpet", "animal", "unit" }
 
+-- Returns which medic class an entity falls into, or nil when it is not friendly.
 local function medicClassOf(id)
   local ok, kind = pcall(world.monsterType, id)
   if not ok then kind = nil end
@@ -3850,6 +3979,7 @@ local function medicClassOf(id)
   return "animal"
 end
 
+-- Returns whether a medic class is turned on.
 function petportMedicHeals(class)
   if self.petData == nil then return false end
 
@@ -3858,6 +3988,7 @@ function petportMedicHeals(class)
   return settings[class] ~= false
 end
 
+-- Returns the hurt entities in the network the medic settings allow, most hurt first.
 local function medicPatients()
   local rects = self.networkRects
   if rects == nil or #rects == 0 then rects = { coverageRect() } end
@@ -3904,6 +4035,7 @@ local function medicPatients()
   return out
 end
 
+-- Counts the ticks the unit spends outside its medium and re-homes it once the strikes run out.
 local function mediumCheck()
   if self.petId == nil or not world.entityExists(self.petId) then
     self.mediumStrikes = 0
@@ -3937,12 +4069,14 @@ local function mediumCheck()
   end
 end
 
+-- Returns the rects fishing may use.
 local function fishingRects()
   local rects = self.networkRects
   if rects == nil or #rects == 0 then rects = { coverageRect() } end
   return rects
 end
 
+-- Returns a random deep, clear water point inside the fishing rects below a ceiling, or nil.
 local function submergedSpot(cfg, ceiling)
   local rects = fishingRects()
   local threshold = cfg.liquidThreshold or 0.9
@@ -3973,6 +4107,7 @@ local function submergedSpot(cfg, ceiling)
   return nil
 end
 
+-- Returns a lure spot, preferring the vanilla depth band, with the reason when there is none.
 local function fishingSpot()
   local ok, cfg = pcall(root.assetJson, FISHING_SPAWNER_CONFIG)
   if not ok or type(cfg) ~= "table" or type(cfg.pools) ~= "table"
@@ -3992,6 +4127,7 @@ local function fishingSpot()
   return nil, "no clear submerged spot anywhere in network coverage"
 end
 
+-- Keeps one lure alive while fishing is wanted, and clears the lure and fish entry when it is not.
 local function fishingCheck()
   local wanted = petportEnabled() and self.petId ~= nil
     and world.entityExists(self.petId) and petportFishing()
@@ -4056,6 +4192,7 @@ local function fishingCheck()
   end
 end
 
+-- Returns whether this chassis can reach a fish at all, with the reason when it cannot.
 local function petportCanFish()
   if not petportFishing() then return false, "no fishing module" end
 
@@ -4083,6 +4220,7 @@ local function petportCanFish()
     tostring(monsterType))
 end
 
+-- Returns a task to catch the nearest published fish the unit can reach, or nil with a tally of why each was passed over.
 local function fishWork()
   local canFish, why = petportCanFish()
   if not canFish then return nil, why end
@@ -4102,6 +4240,7 @@ local function fishWork()
     from = world.entityPosition(self.petId) or from
   end
 
+  -- Returns whether a position lies in one of the fishing rects.
   local function reachableWater(position)
     for _, area in ipairs(fishingRects()) do
       if petports_rectContains(area, position) then return true end
@@ -4191,6 +4330,7 @@ local function fishWork()
   }
 end
 
+-- Counts the intervals the unit sits motionless away from the port and re-homes it once the stalls run out.
 local function healthCheck()
   if self.petId == nil or not world.entityExists(self.petId) then
     self.healthAnchor = nil
@@ -4231,6 +4371,7 @@ local function healthCheck()
 end
 
 
+-- Returns the point the unit returns to, from its tethering type or a standable spot near the port.
 local function homePosition()
   local tether = PETPORTS_TETHER_FLOOR
 
@@ -4262,6 +4403,7 @@ local function homePosition()
   }) or findStandingPoint(coverageRect())
 end
 
+-- Returns a task to walk the unit home when it is stranded or outside the network, re-homing it once the recalls run out.
 local function returnWork()
   local rect = coverageRect()
 
@@ -4315,6 +4457,7 @@ local function returnWork()
   }
 end
 
+-- Returns whether a container would accept any of the unit's cargo, or false when its filter refuses all of it.
 local function containerTakesAny(containerId, filter)
   if self.petData == nil or self.petData.cargo == nil then return nil end
 
@@ -4350,6 +4493,7 @@ MACHINE_SLOT_REAGENT = 1
 
 MACHINE_MIN_BATCH = 0.25
 
+-- Returns how much of a stack a machine slot has room for.
 local function machineSlotRoom(machineId, slot, stack)
   local ok, held = pcall(world.containerItemAt, machineId, slot)
   if not ok then return 0 end
@@ -4370,6 +4514,7 @@ local function machineSlotRoom(machineId, slot, stack)
   return room
 end
 
+-- Returns how much of a stack a machine's rule allows into its input and reagent slots.
 local function machineRuleRoom(machine, rule, stack)
   local room = 0
 
@@ -4384,6 +4529,7 @@ local function machineRuleRoom(machine, rule, stack)
   return room
 end
 
+-- Returns how much room a machine's input slot has left.
 local function machineInputFree(machineId)
   local ok, held = pcall(world.containerItemAt, machineId, MACHINE_SLOT_INPUT)
   if not ok then return 0 end
@@ -4398,6 +4544,7 @@ local function machineInputFree(machineId)
   return free
 end
 
+-- Returns whether any deposit beacon would accept any of the cargo.
 local function storageWouldTakeAny()
   if self.petData == nil then return false end
 
@@ -4419,6 +4566,7 @@ local function storageWouldTakeAny()
   return false
 end
 
+-- Returns whether an upcycler wants any of the cargo, with the reason each stack was refused.
 local function machineWantsAny(machine, floorWaived)
   if machine.kind ~= "upcycler" then return false, "not an upcycler" end
   if not machine.enabled then return false, "switched off" end
@@ -4470,6 +4618,7 @@ local function machineWantsAny(machine, floorWaived)
   return false, table.concat(reasons, "; ")
 end
 
+-- Returns how much surplus cargo a machine could take.
 local function machineRoomFor(machine)
   local room = 0
 
@@ -4489,6 +4638,7 @@ local function machineRoomFor(machine)
   return room
 end
 
+-- Returns a task to feed the upcycler with the most room, waiving the batch floor when storage is full.
 local function upcyclerWork()
   if self.petData == nil then return nil end
   if self.petData.cargo == nil or #self.petData.cargo == 0 then return nil end
@@ -4603,6 +4753,7 @@ local function upcyclerWork()
 end
 
 
+-- Returns the crate an item belongs in, cached per beacon scan.
 local function defragHomeFor(name, targets, descriptor)
   local version = self.beaconVersion or 0
 
@@ -4632,6 +4783,7 @@ local function defragHomeFor(name, targets, descriptor)
   return target.id
 end
 
+-- Reorders the deposit beacons to favour the homes the cargo belongs in, skipping a crate an item was just pulled from.
 local function defragPreferredTargets(targets)
   if not petportDefrag() then return targets end
   if not petportParticipates("defrag") then return targets end
@@ -4701,6 +4853,7 @@ local function defragPreferredTargets(targets)
   return out
 end
 
+-- Returns a task to unload the cargo: the upcycler first, then the nearest deposit beacon that will take any of it.
 local function depositWork()
   if self.petData == nil then return nil end
   if self.petData.cargo == nil or #self.petData.cargo == 0 then return nil end
@@ -4798,6 +4951,7 @@ end
 
 SLOT_KEY_TO_OFFSET = -1
 
+-- Counts a tidy when taking an item leaves a crate holding none of it.
 metrics.noteStorageTake = function(containerId, name)
   if containerId == nil or name == nil then return end
   if machineAt(containerId) ~= nil then return end
@@ -4812,6 +4966,7 @@ metrics.noteStorageTake = function(containerId, name)
     sb.printJson((self.petData and self.petData.stats and self.petData.stats.tidy) or 0))
 end
 
+-- Takes items from a container slot, putting them back when what came out is not what was expected.
 local function takeFromSlot(containerId, slot, count, expected)
   if count == nil or count < 1 then return nil end
 
@@ -4840,10 +4995,12 @@ local function takeFromSlot(containerId, slot, count, expected)
   return taken
 end
 
+-- Takes a number of a seed out of a crate across its slots and adds it to the cargo.
 function withdrawSeed(containerId, seedName, workId, count)
   if seedName == nil then return end
   count = count or 1
 
+  -- Logs the withdrawal coming back empty and backs the task off.
   local function empty(reason)
     sb.logInfo("PETPORT %s withdraw of %s from %s took nothing: %s",
       stationUniqueId(), tostring(seedName), sb.printJson(containerId), reason)
@@ -4918,10 +5075,12 @@ function withdrawSeed(containerId, seedName, workId, count)
   metrics.noteStorageTake(containerId, seedName)
 end
 
+-- Takes a named stack out of one crate slot, refusing when that slot now holds something else.
 function withdrawMisfit(containerId, name, count, workId, slot)
   if name == nil then return end
   count = count or 1
 
+  -- Logs the withdrawal coming back empty and backs the task off.
   local function empty(reason)
     sb.logInfo("PETPORT %s tidy of %s from %s took nothing: %s",
       stationUniqueId(), tostring(name), sb.printJson(containerId), reason)
@@ -4976,6 +5135,7 @@ function withdrawMisfit(containerId, name, count, workId, slot)
   receiveCargo(taken)
 end
 
+-- Uses one medkit charge and writes the item back.
 function spendMedkit()
   if self.petData == nil then return end
 
@@ -5004,6 +5164,7 @@ function spendMedkit()
   writeBackToItem()
 end
 
+-- Returns the held medkit to the cargo once the medic module is gone.
 function reconcileMedkit()
   if self.petData == nil then return end
 
@@ -5031,6 +5192,7 @@ function reconcileMedkit()
   receiveCargo(held)
 end
 
+-- Uses one seed out of the cargo and writes the item back.
 function spendSeed(seedName)
   if self.petData == nil or self.petData.cargo == nil then return end
 
@@ -5057,6 +5219,7 @@ function spendSeed(seedName)
     stationUniqueId(), tostring(seedName))
 end
 
+-- Adds a stack to a container in its own maximum-sized chunks, and returns what would not fit.
 local function placeStack(containerId, stack)
   if type(stack) ~= "table" or stack.name == nil then return 0 end
 
@@ -5086,6 +5249,7 @@ local function placeStack(containerId, stack)
   return 0
 end
 
+-- Places the whole cargo into a container, keeps what will not fit, and compacts the container.
 function depositCargo(containerId)
   if self.petData == nil or self.petData.cargo == nil then return end
 
@@ -5148,6 +5312,7 @@ function depositCargo(containerId)
   flushCargo()
 end
 
+-- Places the cargo a machine's rules want into its input and reagent slots.
 function depositCargoToMachine(machineId, workId)
   if self.petData == nil or self.petData.cargo == nil then return end
 
@@ -5277,6 +5442,7 @@ function depositCargoToMachine(machineId, workId)
   flushCargo()
 end
 
+-- Places only the named item from the cargo into a container, and compacts it.
 function depositCargoOnly(containerId, name)
   if self.petData == nil or self.petData.cargo == nil then return end
   if name == nil then return end
@@ -5338,6 +5504,7 @@ function depositCargoOnly(containerId, name)
 end
 
 
+-- Returns the engine's default max stack, read once.
 local function defaultMaxStack()
   if self.defaultStack == nil then
     local ok, config = pcall(root.assetJson, "/items/defaultParameters.config")
@@ -5349,6 +5516,7 @@ local function defaultMaxStack()
   return self.defaultStack or nil
 end
 
+-- Returns an item's max stack size, cached, falling back to the default.
 stackSizeOf = function(name)
   self.stackSizes = self.stackSizes or {}
 
@@ -5378,6 +5546,7 @@ stackSizeOf = function(name)
   return self.stackSizes[name]
 end
 
+-- Returns a stack's max size, taking a maxStack parameter over the item's own.
 stackSizeFor = function(name, parameters)
   if type(parameters) == "table" then
     local override = tonumber(parameters.maxStack)
@@ -5387,6 +5556,7 @@ stackSizeFor = function(name, parameters)
   return stackSizeOf(name)
 end
 
+-- Returns whether two values are equal, comparing tables field by field.
 local function sameValue(a, b)
   if a == b then return true end
   if type(a) ~= "table" or type(b) ~= "table" then return false end
@@ -5402,6 +5572,7 @@ local function sameValue(a, b)
   return true
 end
 
+-- Returns a printable key for a stack's parameters.
 local function parameterKey(parameters)
   if parameters == nil then return "" end
 
@@ -5411,6 +5582,7 @@ local function parameterKey(parameters)
   return "?" .. tostring(parameters)
 end
 
+-- Returns every item held across more slots than its stack sizes need, with its parameter buckets.
 local function fragmentation(items)
   if type(items) ~= "table" then return {} end
 
@@ -5482,6 +5654,7 @@ local function fragmentation(items)
   return out
 end
 
+-- Merges each fragmented item in a container back into full stacks, taking anything that will not fit into the cargo.
 function compactContainer(containerId)
   if not world.entityExists(containerId) then return false end
 
@@ -5630,6 +5803,7 @@ SORT_MOVE_CAP = 64
 
 SORT_BEACONS_FIRST = true
 
+-- Returns an item's sort rank by item type, cached.
 local function sortTypeRank(name)
 	self.sortTypes = self.sortTypes or {}
 
@@ -5653,6 +5827,7 @@ local function sortTypeRank(name)
 	return self.sortTypes[name]
 end
 
+-- Returns an item's sort rank by rarity, cached, taking a rarity parameter over the item's own.
 local function sortRarityRank(name, parameters)
 	if type(parameters) == "table" and type(parameters.rarity) == "string" then
 		local stated = SORT_RARITY_ORDER[string.lower(parameters.rarity)]
@@ -5678,6 +5853,7 @@ local function sortRarityRank(name, parameters)
 	return self.sortRarities[name]
 end
 
+-- Orders stacks by type, rarity, name, count, parameters and then slot.
 local function sortLess(a, b)
 	if a.type ~= b.type then return a.type < b.type end
 	if a.rarity ~= b.rarity then return a.rarity < b.rarity end
@@ -5687,6 +5863,7 @@ local function sortLess(a, b)
 	return a.key < b.key
 end
 
+-- Returns the slot order a container should hold, beacons pinned first, and how many stacks are out of place.
 local function sortPlan(items)
 	if type(items) ~= "table" then return {}, 0 end
 
@@ -5730,6 +5907,7 @@ local function sortPlan(items)
 	return order, disorder
 end
 
+-- Takes a stack out of a slot for sorting, putting it back when it is not what was expected.
 local function sortLift(containerId, record, key)
 	local offset = key + SLOT_KEY_TO_OFFSET
 	local ok, taken = pcall(world.containerTakeNumItemsAt, containerId, offset,
@@ -5763,6 +5941,7 @@ local function sortLift(containerId, record, key)
 	return taken
 end
 
+-- Puts a stack into a slot, returning it to the container when the slot refuses any of it.
 local function sortLay(containerId, stack, key)
 	local offset = key + SLOT_KEY_TO_OFFSET
 	local ok, leftover = pcall(world.containerPutItemsAt, containerId, stack, offset)
@@ -5788,6 +5967,7 @@ local function sortLay(containerId, stack, key)
 	return true
 end
 
+-- Returns the count of each item name in a container.
 local function sortTally(items)
 	local tally = {}
 
@@ -5802,6 +5982,7 @@ local function sortTally(items)
 	return tally
 end
 
+-- Moves a container's stacks into sorted order, stopping at the move cap or the first refused move.
 function sortContainer(containerId)
 	if not world.entityExists(containerId) then return false end
 
@@ -5933,6 +6114,7 @@ function sortContainer(containerId)
 end
 
 
+-- Returns whether a work claim is free for this port to take.
 claimFree = function(workId)
 	local claim = petports_claimGet(workId)
 
@@ -5946,6 +6128,7 @@ local soilCache = {}
 
 local wetNameCache = nil
 
+-- Returns the wet matmod a dry soil turns into, confirmed against farming.config's inverse table.
 local function wetModName(dryName, transformModId)
 	if wetNameCache == nil then
 		wetNameCache = {}
@@ -5987,6 +6170,7 @@ local function wetModName(dryName, transformModId)
 	return inverted, "farming.config inverse, modId confirmed"
 end
 
+-- Returns whether a matmod is tilled and dry, and which liquids it takes, cached.
 local function soilInfo(modName)
 	if modName == nil then return nil end
 
@@ -6011,6 +6195,7 @@ local function soilInfo(modName)
 					local colour = liquid.config.color
 
 					if type(colour) == "table" and #colour >= 3 then
+						-- Clamps a colour channel to 0-255.
 						local function channel(value)
 							return math.max(0, math.min(255, math.floor(tonumber(value) or 0)))
 						end
@@ -6050,6 +6235,7 @@ local function soilInfo(modName)
 	return info
 end
 
+-- Returns the dry tilled soil at a tile and what it wants, or nil.
 local function drySoilAt(tile)
 	local modName = world.mod({ tile[1], tile[2] }, "foreground")
 	if modName == nil then return nil end
@@ -6060,6 +6246,7 @@ local function drySoilAt(tile)
 	return { mod = tostring(modName), wants = info.wants }
 end
 
+-- Returns a crop's stage list from the object or its item config.
 local function farmableStages(id)
 	local ok, stages = pcall(world.getObjectParameter, id, "stages")
 	if ok and type(stages) == "table" and #stages > 0 then
@@ -6078,6 +6265,7 @@ local function farmableStages(id)
 	return nil
 end
 
+-- Returns the first stage that carries a harvest pool.
 local function harvestStageOf(stages)
 	for index, stage in ipairs(stages) do
 		if type(stage) == "table" and stage.harvestPool ~= nil then
@@ -6088,6 +6276,7 @@ local function harvestStageOf(stages)
 	return nil
 end
 
+-- Returns a trap's ripening age, active window and whether it can ever ripen, cached by name.
 local function trapProfile(id)
 	local name = world.entityName(id)
 	if name == nil then return nil end
@@ -6157,6 +6346,7 @@ local function trapProfile(id)
 	return profile
 end
 
+-- Returns a trap's active age, or nil.
 local function trapAge(id)
 	local ok, age = pcall(world.callScriptedEntity, id, "activeAge")
 
@@ -6164,6 +6354,7 @@ local function trapAge(id)
 	return age
 end
 
+-- Logs the traps and their ages when the picture changes, warning once per trap that can never ripen.
 local function reportTraps(traps)
 	self.trapWarned = self.trapWarned or {}
 
@@ -6206,6 +6397,7 @@ local function reportTraps(traps)
 	end
 end
 
+-- Scans the network for crops and traps, returning each with its stage and whether it is ripe.
 local function scanFarmables()
 	local rects = self.networkRects
 	if rects == nil or #rects == 0 then rects = { coverageRect() } end
@@ -6269,6 +6461,7 @@ local function scanFarmables()
 	return found, objects, traps
 end
 
+-- Rescans the crops and traps on an interval.
 local function refreshFarmables(dt)
 	self.harvestTimer = (self.harvestTimer or 0) - dt
 	if self.harvestTimer > 0 then return end
@@ -6304,6 +6497,7 @@ end
 
 local animalTypeCache = {}
 
+-- Returns whether a monster type can be harvested at all.
 local function animalHarvestable(monsterType)
 	if monsterType == nil then return false end
 
@@ -6334,6 +6528,7 @@ local function animalHarvestable(monsterType)
 	return harvestable
 end
 
+-- Scans the network for harvestable farm animals.
 local function scanAnimals()
 	local rects = self.networkRects
 	if rects == nil or #rects == 0 then rects = { coverageRect() } end
@@ -6374,6 +6569,7 @@ local function scanAnimals()
 	return found, monsters
 end
 
+-- Rescans the farm animals on an interval.
 local function refreshAnimals(dt)
 	self.animalTimer = (self.animalTimer or 0) - dt
 	if self.animalTimer > 0 then return end
@@ -6402,6 +6598,7 @@ local function refreshAnimals(dt)
 	end
 end
 
+-- Returns a task to harvest the nearest ready animal, or nil with a tally of why each was passed over.
 local function animalWork()
 	local animals = self.animals
 
@@ -6481,6 +6678,7 @@ local function animalWork()
 	}
 end
 
+-- Returns a task to harvest the nearest ripe crop, or nil with a tally of why each was passed over.
 local function harvestWork()
 	local crops = self.farmables
 
@@ -6568,6 +6766,7 @@ local function harvestWork()
 	}
 end
 
+-- Returns a task to empty the nearest ripe trap, or nil with a tally of why each was passed over.
 local function trapWork()
 	local traps = self.traps
 
@@ -6651,6 +6850,7 @@ local function trapWork()
 	}
 end
 
+-- Returns whether a position lies in the network's rects.
 local function inNetworkCoverage(position)
 	local rects = self.networkRects
 	if rects == nil or #rects == 0 then rects = { coverageRect() } end
@@ -6662,7 +6862,9 @@ local function inNetworkCoverage(position)
 	return false
 end
 
+-- Returns the unbroken run of dry tilled tiles reaching out from an anchor, and the liquids they take.
 local function waterRunFrom(anchor)
+	-- Returns the tilled soil at a tile inside coverage, or nil.
 	local function farmlandAt(tile)
 		if not inNetworkCoverage({ tile[1] + 0.5, tile[2] + 0.5 }) then
 			return nil
@@ -6712,6 +6914,7 @@ local function waterRunFrom(anchor)
 	return { tiles = tiles, wants = soil.wants, mod = soil.mod }
 end
 
+-- Returns every dry soil run under the crops in coverage.
 local function waterRuns()
 	local runs = {}
 	local seen = {}
@@ -6745,6 +6948,7 @@ local function waterRuns()
 	return runs
 end
 
+-- Returns the carried stack that waters a run, with the liquid it matches.
 local function carriedWaterFor(run)
 	if self.petData == nil or self.petData.cargo == nil then return nil end
 
@@ -6759,6 +6963,7 @@ local function carriedWaterFor(run)
 	return nil
 end
 
+-- Returns whether the unit can stand over a run's first tile.
 local function waterRunWorkable(run, tile)
 	if run == nil or tile == nil then return false end
 
@@ -6766,6 +6971,7 @@ local function waterRunWorkable(run, tile)
 		{ tile[1] + 0.5, tile[2] + 1.5 }, nil)
 end
 
+-- Returns a task to water a run from its nearer end, as far as the carried water reaches.
 local function waterWork()
 	local runs = waterRuns()
 	if #runs == 0 then return nil, "no dry soil under any crop in coverage" end
@@ -6832,6 +7038,7 @@ end
 
 local seedSpacesCache = {}
 
+-- Returns the spaces a seed occupies, cached.
 local function seedSpaces(seedName)
 	if seedName == nil then return { {0, 0}, {0, 1} } end
 	if seedSpacesCache[seedName] ~= nil then return seedSpacesCache[seedName] end
@@ -6863,6 +7070,7 @@ local function seedSpaces(seedName)
 	return spaces
 end
 
+-- Returns the tiles a seed would fill at a position.
 local function seedTiles(position, seedName)
 	local anchor = { math.floor(position[1]), math.floor(position[2]) }
 	local tiles = {}
@@ -6874,6 +7082,7 @@ local function seedTiles(position, seedName)
 	return tiles
 end
 
+-- Returns whether an object covers any of a set of tiles.
 local function objectOccupies(objectId, tiles)
 	local spaces = world.objectSpaces(objectId)
 	if spaces == nil then return false end
@@ -6893,6 +7102,7 @@ local function objectOccupies(objectId, tiles)
 	return false
 end
 
+-- Returns whether nothing already stands where a seed would go.
 local function replantFootprintClear(position, seedName)
 	local tiles = seedTiles(position, seedName)
 
@@ -6920,6 +7130,7 @@ local function replantFootprintClear(position, seedName)
 	return true
 end
 
+-- Returns whether the tile under a replant position is tilled.
 local function replantGroundTilled(position)
 	local under = world.mod({ position[1], position[2] - 1 }, "foreground")
 	local at = world.mod({ position[1], position[2] }, "foreground")
@@ -6940,6 +7151,7 @@ end
 
 REPLANT_SWEEP_INTERVAL = 5.0
 
+-- Drops replant intents whose footprint filled, whose ground was untilled, or that no port covers.
 local function sweepReplants(dt)
 	self.replantSweepTimer = (self.replantSweepTimer or 0) - dt
 	if self.replantSweepTimer > 0 then return end
@@ -6981,6 +7193,7 @@ local function sweepReplants(dt)
 	end
 end
 
+-- Returns the nearest reachable beacon holding a seed.
 local function containerWithSeed(seedName, wantDeposit, wantRestock)
 	local sources = {}
 
@@ -7013,6 +7226,7 @@ local function containerWithSeed(seedName, wantDeposit, wantRestock)
 	return nil
 end
 
+-- Returns the replant intent a carried seed matches, with the intent's key and the stack.
 local function carriedSeedIntent()
 	if self.petData == nil or self.petData.cargo == nil then return nil end
 
@@ -7058,6 +7272,7 @@ local function carriedSeedIntent()
 	return nil
 end
 
+-- Returns a task to plant a carried seed at its intent tile, clearing the intent when the tile has filled.
 local function replantWork()
 	local key, intent = carriedSeedIntent()
 	if key == nil then return nil, "no carried seed matches an intent" end
@@ -7097,6 +7312,7 @@ local function replantWork()
 	}
 end
 
+-- Returns a task to fetch water from a beacon for the first dry run the unit can reach.
 local function withdrawWaterWork()
 	local runs = waterRuns()
 	if #runs == 0 then return nil, "no dry soil needing water" end
@@ -7166,6 +7382,7 @@ local function withdrawWaterWork()
 	return nil, string.format("%s dry run(s), no liquid in storage for any", #runs)
 end
 
+-- Returns the treats worth fetching with their fuel value, the preferred flavor first.
 local function fuelTreatOrder(preferred)
   local wanted = {}
 
@@ -7190,12 +7407,14 @@ end
 
 FUEL_MEAL_LIMIT = 32
 
+-- Returns whether an item is tagged as fuel.
 local function isTreat(name)
 	if type(name) ~= "string" then return false end
 	local ok, tagged = pcall(root.itemHasTag, name, "petports_fuel")
 	return ok and tagged == true
 end
 
+-- Feeds the unit treats out of its own cargo while its fuel is low, preferring its own flavor.
 local function nibbleFromCargo()
 	if self.petId == nil or not world.entityExists(self.petId) then return end
 	if not petportFuelWanted() then return end
@@ -7273,6 +7492,7 @@ local function nibbleFromCargo()
 	end
 end
 
+-- Feeds the unit treats out of a crate until it is full or the meal limit is reached.
 function feedFromCrate(containerId, treatName, workId, slot)
   if containerId == nil or treatName == nil then return end
   if not world.entityExists(containerId) then return end
@@ -7355,6 +7575,7 @@ function feedFromCrate(containerId, treatName, workId, slot)
     stationUniqueId(), tostring(meals), tostring(containerId))
 end
 
+-- Returns a task to fetch a treat from a feeder crate or an upcycler's output while the unit is hungry.
 local function fuelFetchWork()
   if not petportFuelWanted() then
     return nil, "unit is above the fuel low-water mark"
@@ -7452,6 +7673,7 @@ local function fuelFetchWork()
     crates, tostring(math.floor(headroom)))
 end
 
+-- Returns a task to pick up the nearest treat lying in coverage while the unit is hungry.
 local function fuelGroundWork()
   if not petportFuelWanted() then
     return nil, "unit is above the fuel low-water mark"
@@ -7543,6 +7765,7 @@ local function fuelGroundWork()
   }
 end
 
+-- Returns a task to fetch the seed a replant intent needs from storage.
 local function withdrawWork()
 	if carriedSeedIntent() ~= nil then
 		return nil, "unit is already carrying a seed for an intent"
@@ -7613,6 +7836,7 @@ local function withdrawWork()
 end
 
 
+-- Returns how much of an item a container holds.
 local function restockHeld(containerId, name)
   if not world.entityExists(containerId) then return nil end
 
@@ -7630,6 +7854,7 @@ local function restockHeld(containerId, name)
   return total
 end
 
+-- Returns the live restock beacons that carry requests.
 local function restockBeacons()
   local out = {}
 
@@ -7642,12 +7867,14 @@ local function restockBeacons()
   return out
 end
 
+-- Returns a task to fetch a medkit, or to dose the first reachable patient.
 local function medicWork(preloadOnly)
   if petportOblivious() then return nil, "oblivious" end
   if not petportMedic() then return nil, "no medic module socketed" end
 
   local carried = petportMedkit()
 
+  -- Returns a task to fetch a dose from storage, or nil with the reason.
   local function fetchDose()
     local containerId = containerWithSeed(MEDIC_ITEM,
       petportParticipates("medicdeposit"),
@@ -7741,6 +7968,7 @@ local function medicWork(preloadOnly)
   return nil, string.format("%s patient(s), none actionable", #patients)
 end
 
+-- Returns a task to deliver carried cargo into a restock beacon that is short of it.
 local function restockDeliverWork()
   if self.petData == nil or self.petData.cargo == nil then return nil end
   if #self.petData.cargo == 0 then return nil end
@@ -7803,6 +8031,7 @@ local function restockDeliverWork()
   return nil
 end
 
+-- Returns a task to fetch stock from a deposit crate for a restock beacon that has fallen below its minimum.
 local function restockFetchWork()
   local beacons = restockBeacons()
   if #beacons == 0 then return nil, "no configured restock beacon in coverage" end
@@ -7913,6 +8142,7 @@ local function restockFetchWork()
     short, unstocked, noRoom, unreachable)
 end
 
+-- Returns the crates this unit is allowed to tidy out of.
 local function tidySources(wantDeposit, wantRestock)
   local sources = {}
 
@@ -7933,6 +8163,7 @@ local function tidySources(wantDeposit, wantRestock)
   return sources
 end
 
+-- Returns a task to move the most valuable misfiled stack out of a crate into one that accepts it.
 local function tidyWork(doDeposit, doRestock)
   local destinations = petports_beaconsFor("deposit")
 
@@ -8065,6 +8296,7 @@ local function tidyWork(doDeposit, doRestock)
     misfiled, homeless, full)
 end
 
+-- Returns a task to move over-quota stock out of storage into the upcycler with the most input room.
 local function drainWork()
   if self.petData == nil then return nil end
   if self.petData.cargo ~= nil and #self.petData.cargo > 0 then return nil end
@@ -8244,6 +8476,7 @@ MACHINE_FUEL_TAG = "petports_fuel"
 
 local fuelItemCache = {}
 
+-- Returns whether an item carries the machine fuel tag, cached.
 local function isFuelItem(name)
   if type(name) ~= "string" then return false end
   if fuelItemCache[name] ~= nil then return fuelItemCache[name] end
@@ -8261,6 +8494,7 @@ local function isFuelItem(name)
   return verdict
 end
 
+-- Returns a task to clear an upcycler's output slot into a deposit or restock beacon.
 local function fuelWork()
   if self.petData == nil then return nil end
   if self.petData.cargo ~= nil and #self.petData.cargo > 0 then return nil end
@@ -8450,6 +8684,7 @@ local function fuelWork()
     waiting, table.concat(parts, "; and "))
 end
 
+-- Returns a task to merge the split stacks in the first crate that has any.
 local function compactWork()
   for _, source in ipairs(tidySources(true, true)) do
     if world.entityExists(source.id) then
@@ -8497,6 +8732,7 @@ local function compactWork()
   return nil, "no crate has stacks worth merging"
 end
 
+-- Returns a task to pull a scattered or misplaced item out of a crate toward the one it belongs in.
 local function defragWork()
   if self.petData == nil then return nil end
   if self.petData.cargo ~= nil and #self.petData.cargo > 0 then return nil end
@@ -8637,6 +8873,7 @@ local function defragWork()
   return nil, why
 end
 
+-- Returns a task to sort one crate, stepping round the crates and leaving each alone for a while after.
 local function sortWork()
 	self.sortScan = (self.sortScan or 0) - (WORK_INTERVAL or 1.0)
 	if self.sortScan > 0 then return nil, "one crate is looked at every few seconds" end
@@ -8728,6 +8965,7 @@ ASTERITE_CACHE_TTL = 5.0
 
 ASTERITE_STAND_TRIES = 6
 
+-- Returns a task to mine the nearest known asterite deposit the unit can stand at.
 function asteriteWork()
 	if self.asteriteCacheAt == nil or world.time() >= self.asteriteCacheAt then
 		self.asteriteCacheAt = world.time() + ASTERITE_CACHE_TTL
@@ -8843,6 +9081,7 @@ function asteriteWork()
 	return nil, reason
 end
 
+-- Calls every work generator in priority order in one pass and returns the first task, or nil with the reason and the switched-off work.
 local function findWork()
   local oblivious = petportOblivious()
 
@@ -9044,12 +9283,14 @@ local function findWork()
     optedOut = "port does not participate in " .. table.concat(off, ", ")
   end
 
+  -- Appends the switched-off work to a reason.
   local function withOptOut(reason)
     if optedOut == nil then return reason end
     if reason == nil then return optedOut end
     return reason .. "; " .. optedOut
   end
 
+  -- Joins the place and fetch halves of a generator's reason, or falls back to a quiet one.
   local function bothLegs(place, fetch, quiet)
     if place ~= nil and fetch ~= nil then return place .. ", and " .. fetch end
     return place or fetch or quiet
@@ -9075,6 +9316,7 @@ local function findWork()
   return nil, withOptOut(why)
 end
 
+-- Logs why no work was taken, at most once per repeat window for a given reason.
 local function reject(reason)
   if reason == self.lastReject
      and (self.lastRejectAt or 0) + REJECT_REPEAT > world.time() then
@@ -9088,6 +9330,7 @@ local function reject(reason)
 end
 
 
+-- Takes the claim on the chosen work, attaches the cargo manifest, and hands the task to the unit.
 local function dispatchWork()
   if self.petId == nil or not world.entityExists(self.petId) then
     return reject("no unit")
@@ -9132,6 +9375,7 @@ local function dispatchWork()
     stationUniqueId(), work.id, sb.printJson(work.position))
 end
 
+-- Refreshes the running task's claim, and drops it on the deadline or once the unit stops holding it.
 local function trackWork()
   self.taskAge = (self.taskAge or 0) + WORK_INTERVAL
   if self.taskAge >= TASK_DEADLINE then
@@ -9197,6 +9441,7 @@ CROSSHAIR_PRIORITY = {
   unclaimed = 1
 }
 
+-- Returns the claim id for a drop's marker.
 local function crosshairClaimId(dropId)
   return "mark:" .. tostring(dropId)
 end
@@ -9204,6 +9449,7 @@ end
 CROSSHAIR_CLAIM_TTL = 4.0
 CROSSHAIR_CLAIM_RENEW = 1.5
 
+-- Takes or renews the marker claim on a drop, taking it off another port only for a higher priority state.
 local function crosshairClaim(dropId, state)
   local claimId = crosshairClaimId(dropId)
   local existing = petports_claimGet(claimId)
@@ -9234,10 +9480,12 @@ local function crosshairClaim(dropId, state)
     world.entityPosition(dropId), CROSSHAIR_CLAIM_TTL)
 end
 
+-- Releases this port's marker claim on a drop.
 local function crosshairRelease(dropId)
   petports_claimRelease(crosshairClaimId(dropId), stationUniqueId())
 end
 
+-- Returns the marker colour for a state, preferring the unit's own override.
 local function crosshairColor(state)
   local overrides = self.petData ~= nil and self.petData.crosshairColors or nil
 
@@ -9248,6 +9496,7 @@ local function crosshairColor(state)
   return CROSSHAIR_COLORS[state]
 end
 
+-- Returns every drop in the network rects.
 local function crosshairDrops()
   local rects = self.networkRects
   if rects == nil or #rects == 0 then return {} end
@@ -9271,6 +9520,7 @@ local function crosshairDrops()
   return drops
 end
 
+-- Returns whether any deposit beacon would accept a drop, caching the verdict per item and beacon.
 local function crosshairStorable(dropId, cache)
   local ok, descriptor = pcall(world.itemDropItem, dropId)
 
@@ -9313,6 +9563,7 @@ local function crosshairStorable(dropId, cache)
   return storable
 end
 
+-- Returns the marker state each drop should carry: routing, enroute, unroutable, blocked or unclaimed.
 local function crosshairWanted()
   local wanted = {}
 
@@ -9356,6 +9607,7 @@ local function crosshairWanted()
   return wanted
 end
 
+-- Kills a marker projectile.
 local function crosshairKill(marker)
   if marker == nil or marker.id == nil then return end
 
@@ -9372,6 +9624,7 @@ CROSSHAIR_IMMEDIATE = {
   routing = { enroute = true }
 }
 
+-- Spawns, moves and kills the drop markers to match the wanted states, holding each one briefly before it changes.
 local function crosshairRefresh(dt)
   self.crosshairs = self.crosshairs or {}
 
@@ -9500,6 +9753,7 @@ local function crosshairRefresh(dt)
   end
 end
 
+-- Kills every marker and releases its claim.
 crosshairClear = function()
   for dropId, marker in pairs(self.crosshairs or {}) do
     crosshairKill(marker)
@@ -9511,6 +9765,7 @@ end
 
 local workBeatDispatch
 
+-- Runs the work beat: the sweeps and network refresh, then the beacon, farmable and animal scans across three ticks, then the dispatch.
 local function workUpdate(dt)
   if self.beatStage ~= nil then
     local stage = self.beatStage
@@ -9555,6 +9810,7 @@ local function workUpdate(dt)
   self.beatStage = 1
 end
 
+-- Dispatches new work, or tracks the running task.
 workBeatDispatch = function()
   local tickState = string.format("%s/%s", tostring(self.petId),
     self.task and self.task.id or "none")
@@ -9574,6 +9830,7 @@ workBeatDispatch = function()
   end
 end
 
+-- Starts the hull opening or closing unless it is already in or heading for that state.
 function setHullAnimationStateIntent(intent)
 
 	local currentHullState = animator.animationState("hullState")
@@ -9595,6 +9852,7 @@ function setHullAnimationStateIntent(intent)
 	end
 end
 
+-- Sets the hull, door and interior animations to the same state.
 function setAnimationStateForAllHullComponents(anim)
 	if not anim then return end
 	animator.setAnimationState("hullState", anim)
@@ -9602,6 +9860,7 @@ function setAnimationStateForAllHullComponents(anim)
     animator.setAnimationState("interiorState", anim)
 end
 
+-- Runs the port's tick: markers, replant sweep, asterite scan, pane mirror, the socketed item, the environment and health checks, the spawn, and the work beat.
 local function updateInner(dt)
   if self.firstUpdate then
     self.firstUpdate = false
@@ -9697,6 +9956,7 @@ local function updateInner(dt)
     end
   end
 
+-- Records the unit's damage team when it changes.
 local function teamWatch()
   if self.petId == nil or not world.entityExists(self.petId) then
     self.watchedTeam = nil
@@ -9781,6 +10041,7 @@ end
   portProfReport()
 end
 
+-- Returns the configured interact action.
 function onInteraction(args)
   return config.getParameter("interactAction")
 end
@@ -9788,6 +10049,7 @@ end
 local PETPORT_SLOW_TICK_MS = 30
 local PETPORT_STALL_MS = 250
 
+-- Runs the tick inside the claim snapshot, logging a stall between ticks and a slow tick.
 function update(dt)
   local began = nil
   if type(os) == "table" and type(os.clock) == "function" then
@@ -9819,6 +10081,7 @@ function update(dt)
   end
 end
 
+-- Refreshes the pane at once, and the work beat too when no task is running.
 function containerCallback()
   self.paneTimer = 0
   if self.task == nil then self.workTimer = 0 end

@@ -1,3 +1,5 @@
+-- Vent object that teleports units between wired vents.
+
 require "/scripts/util.lua"
 require "/scripts/vec2.lua"
 
@@ -6,6 +8,7 @@ require "/scripts/lofty_petports/petports_work.lua"
 
 local VENT_DEBUG = false
 
+-- Adds every entity id in a node result to a set, skipping this vent.
 local function collectIds(result, into)
   if result == nil then return end
   for id, _nodeIndex in pairs(result) do
@@ -16,6 +19,7 @@ local function collectIds(result, into)
 end
 
 
+-- Returns the vents wired to this one's input or output nodes.
 local function ventsOnNodes(useInputNodes)
   local ids = {}
 
@@ -55,14 +59,17 @@ local function ventsOnNodes(useInputNodes)
   return vents
 end
 
+-- Returns the vents wired to the input nodes.
 function exitIds()
   return ventsOnNodes(true)
 end
 
+-- Returns the vents wired to the output nodes.
 function entryIds()
   return ventsOnNodes(false)
 end
 
+-- Returns every vent wired to this one, without duplicates.
 function partnerIds()
   local seen = {}
   local all = {}
@@ -82,6 +89,7 @@ end
 
 local VENT_COVERAGE = 12
 
+-- Returns this vent's unique id, assigning one when it has none.
 local function ventUniqueId()
   local uniqueId = entity.uniqueId()
   if not uniqueId then
@@ -91,12 +99,14 @@ local function ventUniqueId()
   return uniqueId
 end
 
+-- Returns the residency unique id for this vent's position.
 local function residencyUniqueId()
   local position = entity.position()
   return string.format("petports_ventres_%s_%s",
     math.floor(position[1]), math.floor(position[2]))
 end
 
+-- Spawns the residency stagehand for this vent when it is wired and none exists.
 local function ensureVentResidency()
   if not config.getParameter("petports_ventResidency", true) then return end
 
@@ -117,16 +127,19 @@ local function ensureVentResidency()
     entity.id(), residencyId, tostring(ok), tostring(result))
 end
 
+-- Tells this vent's residency stagehand to stop.
 local function stopVentResidency()
   local residencyId = world.loadUniqueEntity(residencyUniqueId())
   if residencyId == nil then return end
   world.sendEntityMessage(residencyId, "petports_residencyStop")
 end
 
+-- Stops the residency.
 function die()
   stopVentResidency()
 end
 
+-- Clears the partner lists, turns off interaction and reads the wiring.
 function init()
   self.partners = {}
   self.exits = {}
@@ -135,16 +148,19 @@ function init()
   refreshPartners()
 end
 
+-- Rereads the wiring when an output connection changes.
 function onNodeConnectionChange(args)
   sb.logInfo("VENT %s output wiring changed", entity.id())
   refreshPartners()
 end
 
+-- Rereads the wiring when an input connection changes.
 function onInputNodeChange(args)
   sb.logInfo("VENT %s input wiring changed", entity.id())
   refreshPartners()
 end
 
+-- Returns a sorted comma-joined string of entity ids.
 local function partnerSignature(ids)
   local copy = {}
   for _, id in ipairs(ids) do table.insert(copy, tostring(id)) end
@@ -152,10 +168,12 @@ local function partnerSignature(ids)
   return table.concat(copy, ",")
 end
 
+-- Returns a signature covering both the exits and the entries.
 local function linkSignature()
   return partnerSignature(exitIds()) .. "|" .. partnerSignature(entryIds())
 end
 
+-- Rereads the wiring, touches the registry when it changed, and sets the linked animation state.
 function refreshPartners()
   self.exits = exitIds()
   self.partners = partnerIds()
@@ -182,14 +200,17 @@ function refreshPartners()
 end
 
 
+-- Returns whether this vent has any partners.
 function petports_ventLinked()
   return #self.partners > 0
 end
 
+-- Returns the absolute position of this vent's entry offset.
 function petports_ventEntryPosition()
   return object.toAbsolutePosition(config.getParameter("entryOffset", {0, 1}))
 end
 
+-- Returns the id and entry position of every readable exit vent.
 function petports_ventDestinations()
   local destinations = {}
   for _, id in ipairs(self.exits or {}) do
@@ -213,6 +234,7 @@ function petports_ventDestinations()
   return destinations
 end
 
+-- Teleports a rider to the named exit vent, or a random one, and returns where it landed.
 function petports_ventTravel(entityId, destinationId)
   sb.logInfo("VENT %s travel request: rider %s wants exit %s (our exits %s)",
     entity.id(), sb.printJson(entityId), sb.printJson(destinationId),
@@ -269,12 +291,14 @@ function petports_ventTravel(entityId, destinationId)
   return chosen.position
 end
 
+-- Plays the vent sound and particles for an incoming rider.
 function petports_ventArrival()
   sb.logInfo("VENT %s receiving an arrival", entity.id())
   animator.playSound("vent")
   animator.burstParticleEmitter("vent")
 end
 
+-- Rereads the wiring and checks the residency every two seconds.
 function update(dt)
   self.refreshTimer = self.refreshTimer - dt
   if self.refreshTimer <= 0 then

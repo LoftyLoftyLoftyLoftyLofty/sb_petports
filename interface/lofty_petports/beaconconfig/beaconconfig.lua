@@ -1,3 +1,5 @@
+-- Pane for a Deposit Beacon: edits its enabled flag, feeder flag and item filter.
+
 require "/scripts/lofty_petports/petports_filters.lua"
 
 require "/scripts/lofty_petports/petports_strings.lua"
@@ -15,12 +17,14 @@ local DEBUG = false
 
 local BUILD_STAMP = "2026-08-30c state-driven title icon"
 
+-- Logs a formatted line when DEBUG is set.
 local function dbg(fmt, ...)
 	if not DEBUG then return end
 	local ok, text = pcall(string.format, fmt, ...)
 	sb.logInfo("petports pane: %s", ok and text or ("<badformat> " .. tostring(fmt)))
 end
 
+-- Returns a value printed as JSON, or a placeholder.
 local function j(value)
 	if value == nil then return "nil" end
 	local ok, text = pcall(sb.printJson, value)
@@ -50,6 +54,7 @@ local ruleRowPaths = {}
 local groupRowPaths = {}
 
 
+-- Returns whether the beacon this pane's token belongs to is still held.
 local function heldBeacon()
 	local promise = world.sendEntityMessage(player.id(), "petports_beaconHeld", self.token)
 	local result = promise:result()
@@ -62,6 +67,7 @@ local function heldBeacon()
 	return result == true
 end
 
+-- Sends the current state to the beacon.
 local function write()
 	dbg("write token=%s state=%s", tostring(self.token), j(self.state))
 
@@ -77,12 +83,14 @@ end
 
 local RULE_LABEL_CHARS = 26
 
+-- Shortens a label to the rule row's character limit.
 local function truncate(text)
 	if #text <= RULE_LABEL_CHARS then return text end
 	return text:sub(1, RULE_LABEL_CHARS - 2) .. ".."
 end
 
 
+-- Returns a rule's row text: its item name, or its group label with the included subgroup count.
 local function ruleLabel(rule)
 	if rule.item ~= nil then
 		return truncate(tostring(rule.item))
@@ -102,6 +110,7 @@ local function ruleLabel(rule)
 	return truncate(name)
 end
 
+-- Sets each rule row's background to the plain, alternate or selected art.
 local function paintRuleRows()
 	for index, path in pairs(ruleRowPaths) do
 		local art = RULE_ROW_ART_ALT
@@ -117,6 +126,7 @@ local function paintRuleRows()
 end
 
 
+-- Sets each group row's background to the plain or alternate art.
 local function paintGroupRows()
 	for index, path in ipairs(groupRowPaths) do
 		pcall(widget.setImage, path .. ".rowBGShade",
@@ -124,6 +134,7 @@ local function paintGroupRows()
 	end
 end
 
+-- Rebuilds the rule list from the filter and drops the selection.
 local function refreshRules()
 	widget.clearListItems("rulesScroll.rulesList")
 	ruleRowIds = {}
@@ -172,6 +183,7 @@ local function refreshRules()
 	paintRuleRows()
 end
 
+-- Rebuilds the group list from the filter manifest.
 local function refreshGroups()
 	widget.clearListItems("groupsScroll.groupsList")
 	groupRowIds = {}
@@ -200,6 +212,7 @@ local function refreshGroups()
 	paintGroupRows()
 end
 
+-- Returns a printable description of a callback's arguments.
 local function describeArgs(...)
 	local args = {...}
 	local parts = {}
@@ -219,6 +232,7 @@ local shownGroup = nil
 local shownSubgroups = {}
 
 
+-- Rebuilds the subgroup tiles for a rule's group, ticked where not excluded, and returns whether any were shown.
 local function refreshSubgroups(rule)
 	widget.clearListItems("subgroupsScroll.subgroupsList")
 	tileWidgetPath = {}
@@ -265,6 +279,7 @@ local function refreshSubgroups(rule)
 	return true
 end
 
+-- Returns the subgroup panel heading for a rule's action and group.
 local function narrowLabel(rule, group, nothingToNarrow)
 	local verb = petports_stringOr((rule.action == "deny")
 		and "beacon.verb.deny" or "beacon.verb.allow")
@@ -273,6 +288,7 @@ local function narrowLabel(rule, group, nothingToNarrow)
 		and "beacon.narrownothing" or "beacon.narrow", verb, group.label or group.id)
 end
 
+-- Shows the subgroup tiles and heading for a rule, keeping them when the same group is already displayed.
 local function showPanelFor(rule)
 	if rule ~= nil and shownRuleIndex ~= nil and shownRuleIndex == self.selected
 	   and shownGroup ~= nil and shownGroup.id == rule.group then
@@ -294,6 +310,7 @@ local function showPanelFor(rule)
 	end
 end
 
+-- Rebuilds a rule's except list from the tile states and writes it.
 local function subgroupToggled(...)
 	dbg("subgroupToggled fired with %s", describeArgs(...))
 
@@ -363,6 +380,7 @@ local function subgroupToggled(...)
 end
 
 
+-- Returns the first callback argument that is a valid rule index.
 local function rowIndexFrom(...)
 	local args = {...}
 
@@ -374,6 +392,7 @@ local function rowIndexFrom(...)
 
 	return nil, "unresolved -- no argument carried a usable rule index"
 end
+-- Flips a rule between accept and deny from its row checkbox.
 local function ruleRowAction(...)
 	dbg("ruleRowAction fired with %s", describeArgs(...))
 
@@ -405,6 +424,7 @@ local function ruleRowAction(...)
 	selectRuleAt(index, "ruleRowAction")
 end
 
+-- Removes a rule from the filter.
 local function ruleRowRemove(...)
 	dbg("ruleRowRemove fired with %s", describeArgs(...))
 
@@ -420,6 +440,7 @@ local function ruleRowRemove(...)
 	refreshRules()
 end
 
+-- Registers the member callbacks on the rule, subgroup and group lists.
 local function registerRowCallbacks()
 	local ok, err = pcall(function()
 		widget.registerMemberCallback("rulesScroll.rulesList",
@@ -445,6 +466,7 @@ local function registerRowCallbacks()
 	return ok
 end
 
+-- Selects the row holding a rule index and returns whether one was found.
 function selectRuleAt(index, why)
 	if index == nil then return false end
 
@@ -463,6 +485,7 @@ function selectRuleAt(index, why)
 end
 
 
+-- Reads the beacon's config, seeds the checkboxes and builds the group and rule lists.
 function init()
 	sb.logInfo("PETPORTS beaconconfig build: %s", BUILD_STAMP)
 
@@ -512,6 +535,7 @@ function init()
 	dbg("init: complete")
 end
 
+-- Dismisses the pane once the beacon is no longer held.
 function update(dt)
 	self.holdTimer = self.holdTimer - dt
 	if self.holdTimer > 0 then return end
@@ -522,11 +546,13 @@ function update(dt)
 	end
 end
 
+-- Tells the beacon its pane closed.
 function dismissed()
 	world.sendEntityMessage(player.id(), "petports_beaconPaneClosed", self.token)
 end
 
 
+-- Stores the enabled checkbox, sets the title icon and writes.
 function enabledToggled()
 	self.state.enabled = widget.getChecked("enabledCheckbox")
 	dbg("enabledToggled -> %s", tostring(self.state.enabled))
@@ -534,18 +560,21 @@ function enabledToggled()
 	write()
 end
 
+-- Stores the feeder checkbox and writes.
 function feederToggled()
 	self.state.feeder = widget.getChecked("feederCheckbox")
 	dbg("feederToggled -> %s", tostring(self.state.feeder))
 	write()
 end
 
+-- Stores the base checkbox as accept or deny and writes.
 function baseToggled()
 	self.state.filter.base = widget.getChecked("baseCheckbox") and "accept" or "deny"
 	dbg("baseToggled -> %s", tostring(self.state.filter.base))
 	write()
 end
 
+-- Records the selected rule and shows its subgroup panel.
 function ruleSelected()
 	local rowId = widget.getListSelected("rulesScroll.rulesList")
 	self.selected = rowId and ruleRowIds[rowId] or nil
@@ -559,6 +588,7 @@ function ruleSelected()
 
 	showPanelFor(rule)
 end
+-- Appends an accept rule for a group, flipping the base to deny when it is the first rule.
 local function addGroupRule(groupId, why)
 	if groupId == nil then return end
 
@@ -582,10 +612,12 @@ local function addGroupRule(groupId, why)
 
 end
 
+-- Adds a group rule from a group row button.
 function groupRowPicked(_, data)
 	addGroupRule(data, "row button")
 end
 
+-- Returns the tooltip for whichever subgroup tile is under the cursor.
 function createTooltip(screenPosition)
 	for path, subgroup in pairs(tileSubgroup) do
 		local ok, inside = pcall(widget.inMember, path, screenPosition)
@@ -606,5 +638,6 @@ function createTooltip(screenPosition)
 	end
 end
 
+-- Does nothing.
 function rowHovered()
 end

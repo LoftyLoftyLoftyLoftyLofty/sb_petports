@@ -1,5 +1,8 @@
+-- Upcycler object: burns input for points, spends reagents as flavor charge and emits fuel.
+
 local DEBUG = true
 
+-- Logs a formatted line when DEBUG is set.
 local function dbg(fmt, ...)
 	if not DEBUG then return end
 	local ok, text = pcall(string.format, fmt, ...)
@@ -35,6 +38,7 @@ local OBJECT_BUILD_STAMP = "2026-09-14a a hand-pressed burn forces the input slo
 local EXEMPT_TAG = "petports_no_upcycling"
 
 
+-- Returns the stored rules as item, max, reagent and burn fields.
 local function storedRules()
 	local stored = config.getParameter(RULES_KEY)
 	if type(stored) ~= "table" then return {} end
@@ -55,17 +59,20 @@ local function storedRules()
 	return rules
 end
 
+-- Returns whether the machine is switched on.
 local function storedEnabled()
 	local stored = config.getParameter(ENABLED_KEY)
 	if stored == nil then return false end
 	return stored == true
 end
 
+-- Returns whether the feeder flag is set.
 local function storedFeeder()
 	local stored = config.getParameter(FEEDER_KEY)
 	return stored ~= false
 end
 
+-- Returns the stored rule naming an item, or nil.
 local function ruleFor(name)
 	if type(name) ~= "string" then return nil end
 
@@ -76,6 +83,7 @@ local function ruleFor(name)
 	return nil
 end
 
+-- Returns a one-line summary of the enabled flag, the points and the rules.
 local function stateSummary()
 	local parts = {}
 
@@ -89,12 +97,14 @@ local function stateSummary()
 end
 
 
+-- Returns an item's price, floored at the configured value floor.
 local function valueOf(descriptor)
 	local price = petports_itemValue(descriptor)
 	if price > self.valueFloor then return price end
 	return self.valueFloor
 end
 
+-- Returns whether an item is a plain treat.
 local function plainTreat(descriptor)
 	if type(descriptor) ~= "table" or type(descriptor.name) ~= "string" then
 		return false
@@ -103,6 +113,7 @@ local function plainTreat(descriptor)
 	return petports_upcyclerPlainTreat(descriptor.name)
 end
 
+-- Returns whether an item carries the no-upcycling tag, cached.
 local function exempt(descriptor)
 	if type(descriptor) ~= "table" or type(descriptor.name) ~= "string" then
 		return true
@@ -130,6 +141,7 @@ local function exempt(descriptor)
 end
 
 
+-- Returns the item name a forced burn covers, clearing it once the input slot holds something else.
 local function forcedBurn(input)
 	local wanted = storage.forceBurn
 
@@ -153,6 +165,7 @@ local function forcedBurn(input)
 end
 
 
+-- Logs a state line when it differs from the last one.
 local function state(text)
 	if self.state == text then return end
 	self.state = text
@@ -160,6 +173,7 @@ local function state(text)
 end
 
 
+-- Returns the stored blip queue, rebuilding it as an array if it came back string-keyed.
 local function blipQueue()
 	local q = storage.blips
 	if type(q) ~= "table" then
@@ -181,12 +195,14 @@ local function blipQueue()
 	return q
 end
 
+-- Removes and returns the first blip.
 local function blipTake()
 	local queue = blipQueue()
 	if #queue == 0 then return nil end
 	return table.remove(queue, 1)
 end
 
+-- Logs a reagent line when it differs from the last one.
 local function reagentState(fmt, ...)
 	local text = string.format(fmt, ...)
 	if self.lastReagentState == text then return end
@@ -194,6 +210,7 @@ local function reagentState(fmt, ...)
 	sb.logInfo("PETPORTS upcycler reagent: %s", text)
 end
 
+-- Spends one reagent from its slot into the blip queue when there is room for its weight.
 local function consumeReagent()
 	local queue = blipQueue()
 	local room = BLIP_CAPACITY - #queue
@@ -269,6 +286,7 @@ local function consumeReagent()
 	return true
 end
 
+-- Logs a shuttle line when it differs from the last one.
 local function shuttleState(fmt, ...)
 	local text = string.format(fmt, ...)
 	if self.lastShuttleState == text then return end
@@ -276,6 +294,7 @@ local function shuttleState(fmt, ...)
 	sb.logInfo("PETPORTS upcycler shuttle: %s", text)
 end
 
+-- Moves a whole stack between two slots, returning whatever the destination refuses.
 local function bulkRescue(source, destination, held, blocker, why)
 	if blocker ~= nil and blocker.name ~= held.name then
 		shuttleState("rescue of %s waiting: slot %s holds %s",
@@ -312,6 +331,7 @@ local function bulkRescue(source, destination, held, blocker, why)
 	end
 end
 
+-- Returns whether an item's reagent weight fits in the remaining charge.
 local function chargeFits(name)
 	local entry = petports_reagentFor(name)
 	if entry == nil then return false end
@@ -322,6 +342,7 @@ local function chargeFits(name)
 	return weight <= (BLIP_CAPACITY - #blipQueue())
 end
 
+-- Moves one item between two slots, returning it when the destination refuses.
 local function moveOne(source, destination, held)
 	local taken = world.containerTakeNumItemsAt(entity.id(), source, 1)
 	if type(taken) ~= "table" or (taken.count or 0) < 1 then return end
@@ -358,6 +379,7 @@ local function moveOne(source, destination, held)
 	end
 end
 
+-- Exchanges the contents of the input and reagent slots.
 local function swapSlots(input, reagent)
 	local tookInput = world.containerTakeNumItemsAt(entity.id(), SLOT_INPUT,
 		input.count or 1)
@@ -398,6 +420,7 @@ local function swapSlots(input, reagent)
 		.. "other's slot", tostring(input.name), tostring(reagent.name))
 end
 
+-- Moves the input and reagent slot contents to the slot each one's rule allows.
 local function shuttleSlots()
 	self.shuttleTick = (self.shuttleTick or 0) + 1
 
@@ -462,6 +485,7 @@ local function shuttleSlots()
 	end
 end
 
+-- Turns one plain treat into the item of the first charged flavor.
 local function flavorTreat(input)
 	local queue = blipQueue()
 	local flavor = queue[1]
@@ -510,6 +534,7 @@ local function flavorTreat(input)
 		input.name, item, tostring(#blipQueue())))
 end
 
+-- Spends banked points into fuel or flavored items until they run out or the output refuses.
 local function emitFuel()
 	while (storage.points or 0) >= self.pointsPerFuel do
 		local queue = blipQueue()
@@ -556,6 +581,7 @@ local function emitFuel()
 	return true
 end
 
+-- Writes the points, blips and blocked flag into the object config on an interval when they change.
 local function flushPoints(dt)
 	self.flushTimer = (self.flushTimer or 0) - dt
 	if self.flushTimer > 0 then return end
@@ -582,6 +608,7 @@ local function flushPoints(dt)
 	object.setConfigParameter(BLIPS_KEY, queue)
 end
 
+-- Runs the reagent and shuttle steps, emits fuel, then burns input into points.
 function update(dt)
 	storage.points = storage.points or 0
 	flushPoints(dt)
@@ -666,6 +693,7 @@ function update(dt)
 	emitFuel()
 end
 
+-- Adopts the stored points and blips, reads the rate parameters and installs the pane handlers.
 function init()
 	sb.logInfo("PETPORTS upcycler build: %s", OBJECT_BUILD_STAMP)
 
@@ -830,6 +858,7 @@ function init()
 	object.setInteractive(true)
 end
 
+-- Switches the machine off and banks the points into the object config.
 function die()
 	dbg("destroyed -- forcing enabled off (was %s), banking %s point(s)",
 		tostring(storedEnabled()), tostring(storage.points or 0))
