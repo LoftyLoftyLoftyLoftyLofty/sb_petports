@@ -50,7 +50,7 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-13 (the fuel motion gate; nav store wiped on purpose)
+### What is built, as of 2026-09-14 (the upcycler's manual burn button)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
@@ -63,64 +63,67 @@ the list to work from. BACKLOG below is still real but is no longer the
 authority on what is next. A human audit of this document is itself an item on
 that page.
 
-ONE FEATURE, ONE FILE. Everything this session touched is
-`petportsTaskAction.lua`; coarsenav, the port and the pane were not opened.
+ONE FEATURE, FIVE FILES, AND NO NAV WORK AT ALL. This session is entirely the
+upcycler: the object, its pane and config, the shared state ladder, and the
+string table. `petportsTaskAction.lua`, coarsenav and the port were not opened.
 
 **VERIFIED IN GAME:**
-- taskAction 13g: the fuel motion gate (arch.fuel.burn). Two holds with a
-  dispatched unit inside them, `petports_fuel` and `traveled` both flat
-  across the whole of each; burn rate while moving unchanged at the chassis
-  1.0/sec. The 19:42 hold spanned three complete dispatch-strike-fail
-  cycles, which is the case the feature exists for.
+- The manual burn button (arch.upcycler.forcedburn). A Burn now / Stop
+  burning control on the upcycler pane forces whatever is in the input slot
+  through the furnace, past its rule, past its burn box, past the off switch
+  and past `petports_no_upcycling`. Confirmed working by Lofty 2026-09-14.
 
-**BUILT, NOT VERIFIED:**
-- taskAction 13h: `FUEL_TRACE`, off, gating the gate's two transition lines.
-  Written after the verifying log, so no run has yet confirmed the lines are
-  silent. Trivially checkable: grep the next log for `UNIT fuel:`.
+**THE EXEMPT TAG YIELDS TO IT, AND THAT IS A REVERSAL.** The first build of this
+feature kept `petports_no_upcycling` absolute and was wrong to -- see
+dd.upcycler.forcedexempt, which is filed precisely so it is not quietly put
+back. The tag governs the rule list and the couriers. A button is neither.
 
-**MEASURED, AND WORTH KEEPING:** the fuel lines were 14 of 18,658 logged lines
--- 0.075%. The volume in that run was `NAV probe START` 2,595, `NAV neighbours
-of` 1,116, `NAV sweep of` 1,104 and `UNIT standable candidate` 1,012, or 26% of
-the file for nav alone. Bucketing a log by its first three words before
-deciding what to silence takes one pass and settles the question; reasoning
-about which flag is loud does not.
+**WHAT IS NOW DESTRUCTIBLE BY HAND:** a unit, a configured beacon, a stack of
+treats. No exploit comes with it -- all three are `price` 0, so the value floor
+makes one worth a single point against a 1000-point treat, and burning treats is
+a thousand-to-one loss rather than a loop. The grant is logged unconditionally
+and branches, so an exempt item gets its own line naming the tag it went past;
+that line is the only record a unit was pointed at.
 
-**THE NAV STORE WAS WIPED DELIBERATELY at the end of the session**, so the next
-log is a cold graph build against the larger base. Expect many failed tasks.
-`no vent route (hops used 0)` already failed six drop tasks in the 19:41-19:42
-window with a WARM store, from around [2511-2518, 1152.8] toward [2527-2535,
-1184.9] -- a 32-tile vertical gap the graph had nothing for. That is the signal
-worth reading in the cold run, and it is plausibly plan.pathing.cityscale
-showing its edges rather than a defect.
+**LEFT AS-IS, KNOWINGLY:** the button sits at `[206, 320]`, above the input slot
+and sharing its x, because `/interface/button.png`'s width is not measured
+anywhere in this mod -- the two tabs sit on a 94px pitch, which is an upper
+bound and not a measurement, and the slot row has only 95px between
+`btnClearCharge` and the output grid. Moving it is one coordinate pair once that
+width is known. The running light also still reads "off" during a forced burn on
+a switched-off machine, which is true of the switch and not of the machine.
 
 **DO NOT REPEAT:**
-- Reading `petports_fuel` out of a `writing back to item` line as if it were
-  the live resource. It is `storage.petResources`, a MIRROR the port
-  resamples on its anchor tick, so two write-backs 0.18 s apart can carry
-  an identical value and short windows read impossible rates (-0.332/sec
-  inside a fully-charging stretch). Only windows of several seconds are
-  trustworthy for a rate.
-- Asserting a log is being spammed by a feature without counting. See
-  MEASURED above: the suspected source was 0.075% of the file.
-- Everything in the 13th's DO NOT REPEAT list still stands; it was dropped
-  from this rewrite only because none of it was in play this session. It is
-  in git at the previous STATUS.
+- Substituting a judgement call for a stated requirement. The ask said the
+  button honours items marked not to upcycle automatically; the first build
+  kept the exempt tag absolute anyway, on a safety argument that was real but
+  was not the decision being made. The argument belonged in the reply, and it
+  was there -- the build should still have been the one asked for.
+- Fabricating an intermediate stamp to carry a correction. The first two
+  patches were reverted with `git checkout` and the feature was rebuilt as one
+  clean patch, so there is no `2026-09-14a` in git that ever had the exempt
+  guard in it.
+- Everything in the 13th's DO NOT REPEAT list still stands, including the
+  two fuel-log items; they were dropped from this rewrite only because none
+  of it was in play this session. Both are in git at the previous STATUS.
 
-**BUILD STAMPS IN PLAY:** port `2026-09-13e`, pane `2026-09-13f`, coarsenav
-`2026-09-13c`, taskAction `2026-09-13h`, contract `2026-09-12d`, flyapproach
-`2026-09-10c`, work `2026-09-11b`, overlay `2026-09-11d`.
+**BUILD STAMPS IN PLAY:** upcycler `2026-09-14a`, upcyclerconfig `2026-09-14a`,
+port `2026-09-13e`, petportconfig `2026-09-13f`, coarsenav `2026-09-13c`,
+taskAction `2026-09-13h`, contract `2026-09-12d`, flyapproach `2026-09-10c`,
+work `2026-09-11b`, overlay `2026-09-11d`.
 
 **NEXT, IN ORDER:** (1) whatever the plan.drawio table says; (2) read the cold
-nav build log for `no vent route`, which is the one open question this session
-raised and did not touch; (3) todo.port.tickyield, still designated a first
-build for a future session.
+nav build log for `no vent route` -- the nav store was wiped at the end of the
+13th and no run has been read since, so that question is still open and
+untouched; (3) todo.port.tickyield, still designated a first build for a future
+session.
 
-**COMMIT STATE:** af1c70e is the last commit. 3914a4b and af1c70e landed after
-the previous STATUS was written -- they are the pane and beacon work that
-STATUS described as sitting uncommitted in the working tree, so they are
-already filed under arch.beacon.sourcegates and dd.pane.flavorcolor and need no
-new entry. This session's change is `petportsTaskAction.lua` alone, in the
-working tree, uncommitted.
+**COMMIT STATE:** 6ccc8aa is the last commit -- the fuel motion gate, which the
+13th's STATUS described as sitting uncommitted and which is already filed under
+arch.fuel.burn, so it needs no new entry. This session's change is five files in
+the working tree, uncommitted: `petports_upcycler.lua`, `upcyclerconfig.lua`,
+`upcyclerconfig.config`, `petports_upcyclerstate.lua` and
+`petports_strings.config`.
 
 ## ARCHITECTURE
 
@@ -2122,6 +2125,15 @@ message wins and the specific one never fires -- every exempt item is also absen
 from the reagent manifest, so a manifest-first ladder answers "not a reagent" for
 a pet. That shipped once.
 
+**`ctx.forced` DELETES THE WHOLE INPUT BLOCK RATHER THAN DOWNGRADING IT, added
+2026-09-14.** Every input rung answers "why will the machine not burn this", and
+while `arch.upcycler.forcedburn` is live the answer is "it will" -- so there is
+nothing left to warn about and a surviving rung is the pane arguing with an
+instruction it delivered itself. Written as ONE guard around the block, not as
+four `not forced` conditions: the rule is about the block, and four conditions
+are four chances for a rung added later to be missed. The rung most likely to be
+added there is another refusal.
+
 ### The slot shuttle runs on one priority
 `arch.upcycler.shuttlepriority` -- see also `arch.upcycler.stateladder`
 
@@ -3888,6 +3900,77 @@ lie.
 the burner refusing, with a state line saying why -- a checkbox that only
 guards the couriers while the machine eats hand-drops also lies. See
 `todo.upcycler.cantburnlight` for making that state visible without a log.
+
+**AND IT HAS ONE EXCEPTION AS OF 2026-09-14**, which is the burn button:
+`arch.upcycler.forcedburn` overrules both boxes, and the exempt tag with them,
+for one named stack the player has pressed on. That does not weaken anything
+above. Every claim here is about what the machine does to items it was not
+asked about, and the button is the ask.
+
+### A hand-pressed burn overrules every refusal the machine has
+`arch.upcycler.forcedburn` -- see also `arch.upcycler.burnbox`, `arch.upcycler.stateladder`, `arch.upcycler.plaintreat`, `dd.upcycler.forcedexempt`, `arch.upcycler.shuttle`
+
+BUILT AND VERIFIED 2026-09-14 (upcycler 14a, pane 14a). A `Burn now` button on
+the pane forces whatever is in the input slot through the furnace. It bypasses
+the missing rule, an unticked burn box, the off switch, the plain-treat
+flavoring detour and `petports_no_upcycling`. The only thing it does not bypass
+is `canEmit`.
+
+**THE RULE LIST WAS ONLY EVER ABOUT WHAT ARRIVES WITHOUT A HUMAN.** The object's
+header says it is the destroy list and the only authority, and that is still
+true of every courier delivery and of anything a player left in the slot and
+walked away from. It was never meant to bind the player themselves: putting a
+stack in by hand and then pressing a second control that says Burn now is the
+consent the rule list exists to obtain, given twice, about one named stack. The
+hand-drop paragraph worries about "I dropped it in to see what happened", and
+pressing a second control is exactly what that player does not do.
+
+**`canEmit` STAYS BECAUSE IT IS NOT A REFUSAL.** Every other guard is the
+machine declining to do what it was told. That one is the machine doing it
+badly -- eating input it cannot pay for destroys the stack and shows nothing for
+it -- and being asked for it does not improve the outcome.
+
+**KEYED ON THE ITEM NAME, NOT A BOOLEAN, AND THAT IS THE WHOLE SAFETY.**
+`storage.forceBurn` holds a name. A force that outlives its stack is a machine
+that eats the NEXT thing dropped in unasked -- the rule list defeated by the back
+door, and with the exempt tag yielding the next thing could be a unit. Holding
+the name means the permission expires on its own the moment the slot holds
+something else, or nothing, with no timer and nothing to remember to clear.
+`forcedBurn(input)` is both the resolver and the expiry, and clearing is
+idempotent because two callers reach it in one tick.
+
+**IN `storage`, DELIBERATELY NOT MIRRORED TO A PARAMETER.** It survives a
+reload, because a player who set a thousand burning and logged out asked for the
+stack and not for the session. It does not follow a mined machine: a re-placed
+upcycler comes back inert, the same guarantee `die()` gives `enabled`.
+
+**THE SHUTTLE HAD TO BE GATED OR THE FEATURE DOES THE WRONG THING QUIETLY.**
+`arch.upcycler.shuttlepriority` says feeding the charge outranks burning, so
+without a gate a forced REAGENT is lifted straight out of the burner and spent
+as flavor -- the machine doing the other thing with the one stack the player
+pointed at. The deadlock swap reaches the same wrong place by another route, so
+both are gated and the reagent side is left running (its own guard already
+declines while the input is occupied, which it is).
+
+**A TOGGLE, AND IT IS NOW THE ONLY SAFETY THERE IS.** Pressing again cancels. At
+five items a second a full stack is over three minutes and the stack could be
+units; "pull it out of the slot" works but asking someone to reach into a
+running furnace to correct a misclick is an escape, not a control. The pane
+sends ONE message for both presses and the machine works out which it was, so
+the flag has exactly one author -- the same arrangement as the charge.
+
+**THE PANE CAPTION IS DOING A TOOLTIP'S JOB ON PURPOSE.** `Burn now` becomes
+`Stop burning` while a force runs. A ContainerPane never calls `createTooltip`
+(`dd.upcycler.bakedindicators`), so there is no hover layer to explain the
+second press, and the second press is the only way to call a burn back. Not
+`checkable`: the state belongs to the machine and the pane only asks, so a
+self-toggling widget would disagree with the truth for one poll on every press
+and permanently on a refusal -- `fact.pane.checkedpostoggle` from the other side.
+
+**THE GRANT LOG BRANCHES ON THE TAG.** With nothing refusing, that line is the
+whole record. An exempt item gets its own message naming the tag it went past,
+because "did the player really point at a unit" has to be answerable from a log
+without reconstructing it.
 
 ### The slot shuttle
 `arch.upcycler.shuttle` -- see also `arch.upcycler.burnbox`
@@ -6420,6 +6503,14 @@ let a player name it. It matters more that the SHUTTLE reads `exempt`: a blank
 treat shuttled into the reagent slot has no flavor to give and would sit there
 blocking the one input that can refill the charge.
 
+**THE DETOUR YIELDS TO A FORCED BURN, 2026-09-14.** A blank in the input is
+normally flavored rather than burned and that is the right default by a wide
+margin, but the button says Burn now: a player who selects a stack of blanks and
+presses it has asked for the furnace, not for the thing the machine would rather
+do. Forcing a blank is a thousand-to-one loss and they are allowed to take it.
+Unforced behaviour is unchanged -- `forced` is nil on every tick nobody pressed
+anything. See `arch.upcycler.forcedburn`.
+
 **TAKE FIRST, PLACE SECOND, PUT BACK ON REFUSAL.** Placing first and failing to
 take is a free treat; taking first and failing to place goes back to the input
 slot, merging with the remainder. Only one of those is recoverable.
@@ -8844,6 +8935,48 @@ that never arrives has still spent the unit. It sits alongside the existing
 `FAILURE_BACKOFF` check, which answers a different question: that ramp is "the
 last trip to this crate failed", this is "the last trip to this crate happened".
 Nothing anywhere asks whether a crate is BUSY -- see `dead.cargo.sortsettle`.
+
+### The no-upcycling tag yields to the burn button, reversing the first build
+`dd.upcycler.forcedexempt` -- see also `arch.upcycler.forcedburn`, `arch.upcycler.plaintreat`, `proc.tooling.onechange`
+
+DECIDED 2026-09-14, AFTER THE FIRST BUILD GOT IT WRONG. The feature was asked
+for as "force the burn, including items marked not to upcycle automatically".
+The first build kept `petports_no_upcycling` absolute anyway. This entry exists
+so that guard is not quietly put back by someone reading the tag's own header
+and concluding it was an oversight.
+
+**THE ARGUMENT FOR KEEPING IT WAS REAL AND IS KEPT HERE.** The tag is the guard
+on items whose loss cannot be undone. A player can drag a unit into the input
+slot as easily as dirt, losing a unit is the worst outcome available in this
+mod, and a button that can eat one is a button that can end a save's worth of
+investment in a misclick. That is not a bad argument. It is an argument about a
+decision that had already been made.
+
+**WHAT ANSWERS IT IS WHAT THE TAG IS FOR.** `petports_no_upcycling` governs the
+RULE LIST and everything that reads it: no rule can name a tagged item into the
+furnace, no courier will deliver one, and a tagged item left in the slot sits
+there forever. A rule is a standing instruction that fires on things the player
+is not watching. The button is a person pointing at one stack in one slot and
+pressing. The same guard should not answer both, and a guard that fires against
+an explicit instruction is not a safeguard -- it is the machine disbelieving its
+owner.
+
+**NO EXPLOIT CAME WITH IT, WHICH IS WHY THE REVERSAL IS CHEAP.** Treats, units
+and beacons are all `price` 0, so the value floor makes one worth a single point
+against a 1000-point treat. Burning treats is a thousand-to-one loss, not the
+laundering loop the tag also closes. The tag's OTHER job -- output can never be
+laundered back into output -- is untouched, because that job runs through the
+rule list too.
+
+**WHAT REPLACED THE GUARD IS A CANCEL AND A LOG LINE**, not nothing. The button
+toggles, so a misclick is one press away from being undone; the grant is logged
+unconditionally and branches on the tag, so an exempt item produces its own line
+naming what went past. A confirm dialog was NOT added and was not asked for.
+
+**THE PROCESS LESSON IS THE DURABLE PART.** Making the argument in the reply was
+correct. Building something other than what was asked for, on the strength of
+it, was not -- it cost a full rebuild, and the argument would have been read
+either way.
 
 ### The upcycler's pet feeder box defaults ON, reversing the original call
 `dd.upcycler.feederdefault` -- see also `arch.fuel.machinefeed`, `dd.fuel.selffeed`
