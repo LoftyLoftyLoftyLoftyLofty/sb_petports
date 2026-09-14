@@ -1,17 +1,5 @@
-//  M.A.U.S. UTILITY VENT
-//
-//  Wire two together with the wiring tool to link them. One wire is enough --
-//  see petports_petvent.lua for why.
-
 {
   "objectName" : "petports_petvent",
-  //  itemTags, NOT colonyTags, FOR SORTING -- this object had only the latter and
-  //  so never appeared in the Petports group.
-  //
-  //  FILED UNDER MACHINES rather than getting a subgroup of its own. A vent is
-  //  infrastructure rather than a machine in the strict sense, but it is wired,
-  //  placed and wall-mounted like one, and a subgroup holding exactly one object
-  //  type is a row in the picker that never earns its place.
   "itemTags" : [ "petports", "petports_machine" ],
 
   "colonyTags" : ["petports"],
@@ -23,12 +11,9 @@
   "shortdescription" : "Utility Vent",
   "race" : "generic",
 
-  //  ONE input, ONE output. A single wire from one vent's output to another's
-  //  input links the pair in both directions.
   "inputNodes" : [ [-1, 0] ],
   "outputNodes" : [ [0, 1] ],
 
-  //  Where a unit stands to enter, relative to the object.
   "entryOffset" : [0, 1],
 
   "inventoryIcon" : "petports_petvent_icon.png",

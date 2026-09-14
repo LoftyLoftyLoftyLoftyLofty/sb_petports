@@ -15,30 +15,11 @@
 		"value" : "Petport Fuel"
 	},
 	{
-		//  MODULES. Its own category so a module sorts as a module rather
-		//  than falling into a vanilla bucket -- and so the filter subgroup
-		//  in petports_filtergroups.config has something to name.
-		//
-		//  A CATEGORY WITH NO LABEL IS THE FAILURE WORTH AVOIDING, which is
-		//  why petports_machine below is kept despite nothing using it.
 		"op" : "add",
 		"path" : "/labels/petports_module",
 		"value" : "Petport Module"
 	},
 	{
-		//  NOTHING USES THIS LABEL RIGHT NOW, AND IT IS KEPT ANYWAY.
-		//
-		//  It was added so the upcycler could carry a petports_machine
-		//  category instead of "crafting". That object now declares no
-		//  category at all, because ContainerPane only overwrites a pane's
-		//  title and subtitle when the object HAS one -- see the comment in
-		//  petports_upcycler.object for the measurements.
-		//
-		//  Kept because the petport and the vent still carry vanilla
-		//  categories ("storage" and "wire"), so they double-sort into
-		//  Furniture, and this is the label they would move to. An unused
-		//  label costs nothing; a category referencing a missing label is
-		//  the failure worth avoiding.
 		"op" : "add",
 		"path" : "/labels/petports_machine",
 		"value" : "Petport Machine"

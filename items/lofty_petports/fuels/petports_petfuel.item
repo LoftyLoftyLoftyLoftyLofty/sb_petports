@@ -1,25 +1,3 @@
-//  PETPORTS -- PET TREAT
-//
-//  What the upcycler makes. Nothing consumes it yet: the fuel system is
-//  designed and unbuilt, so for now this accumulates in storage and does
-//  nothing, which is deliberate and better than the alternative.
-//
-//  THE OUTPUT EXISTS BEFORE THE CONSUMER ON PURPOSE. An upcycler whose output
-//  were nothing at all would be a trash can, and a trash can is what this
-//  feature stopped being several design passes ago. A visible pile of Pet
-//  Treats is also the failure signal that makes a misconfigured machine
-//  survivable -- "why is there 40 of these in here" is a question a player can
-//  ask, where a silent absence is not.
-//
-//  ONE ITEM, NOT A FAMILY, YET. The reagent slot on the upcycler is reserved
-//  for a brewing-style second input -- a scorched core making a Spicy Pet
-//  Treat, with unit preferences running on flavor rather than on individual
-//  item names. That is a V2 branch and this is the stock version it branches
-//  from.
-//
-//  PLACEHOLDER ART: a flat pink square. Not a plain sprite -- an obviously
-//  unfinished one, so it cannot be mistaken for a design decision.
-
 {
 	"itemName" : "petports_petfuel",
 	"price" : 0,
@@ -28,39 +6,7 @@
 	"inventoryIcon" : "petports_petfuel.png",
 	"description" : "Reclaimed surplus, pressed into something a utility unit will eat.",
 	"shortdescription" : "Pet Treat",
-	//  petports_flavor_plain KEEPS THE SET SYMMETRICAL. Every treat carries
-	//  exactly one flavor tag and the deposit-beacon subgroups match on
-	//  those, so the unflavored one needs its own rather than being the
-	//  odd entry matched by name. It also leaves room for the rarity tiers
-	//  the flavored treats are set up for: an uncommon plain treat sorts
-	//  into the same crate without a manifest edit.
-	//  petports_plain_treat IS THE ONE EXCEPTION TO petports_no_upcycling, AND
-	//  IT IS A TAG SO THAT IT IS NOT ABOUT THIS ITEM.
-	//
-	//  Every treat carries petports_no_upcycling so output can never be
-	//  laundered back into output. That closes the loop and it also closes the
-	//  one conversion that SHOULD happen: a blank treat plus a flavor charge is
-	//  a flavored treat, one for one, no points earned and none spent. The
-	//  machine made the blank; flavoring it later is finishing the job, not
-	//  reprocessing it.
-	//
-	//  A TAG RATHER THAN A NAME CHECK because a third party adding their own
-	//  plain treat should get this for free. The upcycler asks "is this a blank
-	//  treat", never "is this petports_petfuel", so a modded blank flavors the
-	//  same way with no edit here or there.
-	//
-	//  FLAVORED TREATS DELIBERATELY DO NOT CARRY IT. They are already finished,
-	//  and a spicy treat that could be re-flavored is the laundering loop back
-	//  again with an extra step.
 	"itemTags" : [ "petports", "petports_fuel", "petports_flavor_plain", "petports_no_upcycling", "petports_plain_treat" ],
 
-	//  PRICE ZERO, AND THAT IS LOAD-BEARING RATHER THAN LAZY.
-	//
-	//  The upcycler values its input by `price`. A Pet Treat worth anything
-	//  would be convertible back into Pet Treats, and the floor of 1 point per
-	//  item means even a zero price is not quite zero -- so the upcycler
-	//  additionally refuses its own output by name. Both guards, because a
-	//  laundering loop that pays out slowly is harder to notice than one that
-	//  pays out fast.
 	"maxStack" : 1000
 }

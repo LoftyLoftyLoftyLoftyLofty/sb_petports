@@ -1,74 +1,12 @@
---  PETPORTS -- WORK CLAIMS AND COVERAGE RECTS
---
---  Shared by the petport (object script) and the unit (monster script list).
---  Required from both, so it must define PREFIXED FUNCTIONS ONLY -- a monster's
---  scripts share one Lua environment, and a second definition of init/update/
---  uninit silently replaces groundPet.lua's.
---
---  CLAIMS
---
---  Claims live in world.properties so that two units never chase the same job.
---  This is replicated state written frequently, so the structure is kept small
---  and flat.
---
---      world property "petports_claims" = {
---        [workId] = {
---          owner    = <petport uniqueId>   -- who issued it
---          unit     = <unit uniqueId>      -- who is executing it
---          type     = <string>             -- what kind of work
---          position = {x, y}               -- corroborating detail, see below
---          expires  = <world.time() + ttl>
---        }
---      }
---
---  The KEY is the work id. Corroborating fields are checked at use, never
---  folded into the key: two claims for the same job must not be able to coexist
---  because one of them computed a position half a tile differently.
---
---  STALE CLAIMS AND WORLD RELOAD
---
---  A world unload orphans every claim held at that moment. Rather than a global
---  session token, each petport CLEARS ITS OWN claims at init -- a port's init
---  runs exactly once per load, so its stale entries are gone before it issues
---  anything new, and no port ever touches another's. Expiry then covers the
---  mid-session cases (unit died, port stopped refreshing, task abandoned).
---
---  Entity ids are NOT stable across a reload, so nothing here may key on one.
---  Owner and unit are uniqueIds, which we assign and persist.
-
---  BUILD STAMP, AND IT IS LOGGED RATHER THAN MERELY WRITTEN.
---
---  A stamp exists so a log can say which build is loaded. This file is a
---  library with no init of its own and printed nothing, so its stamp could
---  only ever be read out of the working copy -- which is the one place the
---  question never needs asking. The petport prints it beside its own.
 PETPORTS_WORK_BUILD_STAMP = "2026-09-11b removal is replacement: petports_cleared, because metamod:none is not a real mod"
 
 local CLAIM_KEY = "petports_claims"
 
---------------------------------------------------------------------------------
---  CLAIMS
---------------------------------------------------------------------------------
 
 function petports_claimsAll()
   return world.getProperty(CLAIM_KEY) or {}
 end
 
---  ONE READ PER findWork, 2026-09-07h. MEASURED 01:20 on a seven-port islet:
---  findWork mean 32 ms, max 164, port ticks to 185 ms and 106 slow ticks in
---  80 s. Every generator loop asked petports_claimGet per object -- and
---  claimGet was a whole-table world.getProperty, converted JSON to Lua on
---  every call: harvestWork alone made 54 of them per beat per port. The
---  same shape the coarse-nav index had before 07k, one level down.
---
---  THE MEMO IS A SNAPSHOT FOR THE DURATION OF ONE PORT TICK, opened and
---  closed by the port's update (07i; 07h opened it around findWork only and
---  crosshairRefresh, outside it, was the next 200 ms call). Outside that window nothing is cached, so units
---  and the port's own take/release/refresh paths read the store as before.
---  Inside it, a write by THIS context replaces the snapshot with the table
---  it just wrote, which is the truth; a write by ANOTHER port during the
---  same window is invisible until claimTake, which reads fresh and refuses
---  -- the path that already handles two ports choosing the same target.
 local claimsMemo = nil
 
 function petports_claimsMemoBegin()
@@ -84,7 +22,6 @@ local function writeClaims(claims)
   if claimsMemo ~= nil then claimsMemo = claims end
 end
 
---  Drop everything this owner holds. Called by a petport at init.
 function petports_claimsClearOwner(ownerId)
   if ownerId == nil then return end
 
@@ -101,11 +38,6 @@ function petports_claimsClearOwner(ownerId)
   if changed then writeClaims(claims) end
 end
 
---  Drop anything past its expiry. Cheap enough to run on the same slow timer a
---  petport already has.
---  DROP EVERY CLAIM OF ONE TYPE. Added 2026-09-06 for the nav wipe: a
---  survey claim (type "nav") outliving the store it was protecting keeps
---  other units off cells that no longer exist for up to NAV_CLAIM_TTL.
 function petports_claimsClearType(workType)
   if workType == nil then return 0 end
   local claims = petports_claimsAll()
@@ -127,10 +59,6 @@ function petports_claimsSweep()
 
   for workId, claim in pairs(claims) do
     if (claim.expires or 0) <= now then
-      --  Expiry is the safety net for an interruption nobody reported: the unit
-      --  died, the port unloaded mid-task, the world stopped. Logged because an
-      --  expiry firing is a signal that something upstream failed to clean up
-      --  after itself, not routine housekeeping.
       sb.logInfo("PETPORTS claim %s expired (owner %s, unit %s)",
         workId, tostring(claim.owner), tostring(claim.unit))
       claims[workId] = nil
@@ -146,7 +74,6 @@ function petports_claimGet(workId)
   return petports_claimsAll()[workId]
 end
 
---  Take a claim if it is free or already ours. Returns true on success.
 function petports_claimTake(workId, ownerId, unitId, workType, position, ttl)
   local claims = petports_claimsAll()
   local existing = claims[workId]
@@ -177,9 +104,6 @@ function petports_claimTake(workId, ownerId, unitId, workType, position, ttl)
   return true
 end
 
---  Push the expiry out. The petport does this while it believes the work is in
---  flight; if the port unloads or the unit dies, refreshing stops and the claim
---  ages out on its own.
 function petports_claimRefresh(workId, ownerId, ttl)
   local claims = petports_claimsAll()
   local claim = claims[workId]
@@ -210,16 +134,6 @@ function petports_claimRelease(workId, ownerId)
   return true
 end
 
---------------------------------------------------------------------------------
---  COVERAGE RECTS
---------------------------------------------------------------------------------
---
---  A rect is {xMin, yMin, xMax, yMax} in world tile coordinates -- the same
---  shape world.loadRegion and the world query calls take.
---
---  The VISUAL rect is authoritative for what work may be claimed and for what
---  gets kept resident. The inflated rect exists only for network adjacency
---  testing and must not leak into either -- see the handoff.
 
 function petports_coverageRect(centre, size)
   local half = size / 2
@@ -236,9 +150,6 @@ function petports_rectContains(rect, position)
      and position[2] >= rect[2] and position[2] <= rect[4]
 end
 
---  Touch-or-overlap, tested by inflating ONE side. Inflating both would double
---  the tolerance -- two rects with a visible one-tile gap would connect,
---  because each side's inflation eats half the gap.
 function petports_rectsAdjacent(a, b, pad)
   pad = pad or 1
   local inflated = { a[1] - pad, a[2] - pad, a[3] + pad, a[4] + pad }
@@ -247,24 +158,6 @@ function petports_rectsAdjacent(a, b, pad)
            or inflated[2] > b[4] or inflated[4] < b[2])
 end
 
---------------------------------------------------------------------------------
---  REGISTRY AND NETWORKS
---------------------------------------------------------------------------------
---
---  Each petport publishes ONE small entry. This is the only thing that crosses
---  the wire, written on placement, removal, or an edit -- never on a tick.
---
---      world property "petports_registry" = {
---        version = <int>,
---        ports = { [portUniqueId] = { rect, participate, id, position } }
---      }
---
---  A version counter lets a port cheaply notice "something changed" without
---  diffing the whole structure every second.
---
---  NO PORT EVER MESSAGES ANOTHER PORT. Membership is DERIVED independently by
---  each port from shared state, so there is no ordering problem and nothing to
---  keep in sync.
 
 local REGISTRY_KEY = "petports_registry"
 
@@ -276,7 +169,6 @@ function petports_registryVersion()
   return petports_registry().version or 0
 end
 
---  Publish or update this port's entry. Bumps the version.
 function petports_registryPublish(portId, entry)
   local registry = petports_registry()
   registry.ports = registry.ports or {}
@@ -290,13 +182,6 @@ function petports_registryPublish(portId, entry)
     tostring(entry.busy))
 end
 
---  Remove an entry. MUST be called from die(), never uninit -- uninit also
---  fires on world unload, and dropping every entry then would wipe the network
---  on each reload.
---
---  A lingering entry is the same shape of problem as an orphaned stagehand:
---  invisible, cumulative, and it creates a phantom coverage zone that merges
---  networks which should be separate, with nothing on screen to explain why.
 function petports_registryRemove(portId)
   local registry = petports_registry()
   if registry.ports == nil or registry.ports[portId] == nil then return end
@@ -309,20 +194,6 @@ function petports_registryRemove(portId)
   world.setProperty(REGISTRY_KEY, registry)
 end
 
---  Bump the version without changing any entry.
---
---  For structural changes that are NOT a port coming or going -- a vent being
---  rewired is the case this exists for. A rewired vent changes what routes are
---  possible without changing coverage by one tile, so nothing in `ports` moves
---  and a port diffing rects alone would see nothing at all.
---
---  Deliberately routed through the SAME version counter as coverage rather than
---  a second notification channel. Ports already poll this once and re-derive
---  everything they care about; giving vents their own path would mean two
---  mechanisms that can disagree about whether an update happened.
---
---  Callers must only touch on an ACTUAL change. A vent that touches on every
---  refresh tick turns a cheap poll into a permanent cache invalidation storm.
 function petports_registryTouch()
   local registry = petports_registry()
   registry.version = (registry.version or 0) + 1
@@ -331,24 +202,6 @@ function petports_registryTouch()
   sb.logInfo("PETPORTS registry touched -> version %s", sb.printJson(registry.version))
 end
 
---  Drop any entry standing on THIS EXACT TILE. Called by a port when it
---  publishes at init, so a port that was mined and replaced does not leave its
---  predecessor behind as a phantom.
---
---  TAKES A POSITION, NOT A RECT.
---
---  It used to take the port's whole COVERAGE RECT and clear every entry inside
---  it, which is the whole coverage square. Any two ports built within half of
---  each other therefore evicted one another from the registry at init, and
---  since publishRegistry only ever runs on the first update, the loser never
---  came back. It then reported "network now 0 ports" -- not even counting
---  itself -- and union dispatch was dead for the rest of the session.
---
---  Observed with six ports on a test planet: the last one to initialise cleared
---  four of the other five, including the only port holding a unit.
---
---  A replaced port occupies the SAME TILE as its predecessor. That is the whole
---  case this exists for, so that is the whole test.
 function petports_registryClearAt(position, exceptPortId)
   local registry = petports_registry()
   if registry.ports == nil then return end
@@ -371,42 +224,12 @@ function petports_registryClearAt(position, exceptPortId)
   end
 end
 
---  Can these two registry entries belong to the same network?
---
---  EXPORTED, AND THAT IS THE POINT. The player-side coverage overlay groups
---  the WHOLE registry into networks rather than flood filling out from one
---  port, so it cannot call networkMemberMap -- but it must reach the identical
---  verdict, or the overlay draws a merge the ports do not believe in. A second
---  hand-written copy of these five lines is the `coverageRect()` trap in a new
---  place. There is one rule and this is it.
---
---  NON-PARTICIPATION IS MUTUAL. If A participates and B does not, they are not
---  connected regardless of what A wants -- otherwise one auto port placed
---  beside a deliberately separated one defeats the subdivision.
 function petports_entriesCompatible(a, b)
   if a.participate and b.participate then return true end
   if not a.participate and not b.participate then return a.id == b.id end
   return false
 end
 
---  The network containing this port: contiguous coverage first, ID second.
---
---  Two passes, exactly as the design says:
---    1. union-find over OVERLAPPING (touch-or-overlap) rects -> clusters
---    2. partition each cluster by network ID -> networks
---
---  IDs are PER-CLUSTER NAMESPACES, not planetary ones. Network 1 on one side of
---  a planet and network 1 on the other are unrelated, and plausibly belong to
---  two different players.
---
---  Non-participation is MUTUAL: if A participates and B does not, they are not
---  connected, regardless of what A wants.
---
---  Returns a list of member entries, always including this port.
---
---  THE FLOOD FILL IS EXTRACTED because two callers need it and they want
---  different halves of the answer -- see petports_networkMemberIds below for
---  why reading a port id out of an entry is a silent wrong answer.
 local function networkMemberMap(portId)
   local registry = petports_registry()
   local ports = registry.ports or {}
@@ -414,7 +237,6 @@ local function networkMemberMap(portId)
 
   if self_ == nil then return {} end
 
-  --  Flood fill outward from us. Small n, so a queue beats a real union-find.
   local members = { [portId] = self_ }
   local frontier = { portId }
 
@@ -436,8 +258,6 @@ local function networkMemberMap(portId)
   return members
 end
 
---  SORTED. pairs() order is nondeterministic, and an unsorted list would
---  compare unequal to itself and re-push to the unit every tick.
 local function sortedMemberIds(members)
   local ids = {}
   for memberId, _ in pairs(members) do table.insert(ids, memberId) end
@@ -445,20 +265,10 @@ local function sortedMemberIds(members)
   return ids
 end
 
---  The member PORT IDS, sorted.
---
---  READING `entry.id` FOR THIS IS WRONG AND DOES NOT LOOK WRONG. An entry's
---  `id` is the NETWORK id -- the pinned number two non-participating ports must
---  share to be connected -- and it is 0 on every port that never touched the
---  setting. Anything looking a member up in a table keyed by port needs this
---  instead, and getting it confused returns a plausible number rather than nil.
 function petports_networkMemberIds(portId)
   return sortedMemberIds(networkMemberMap(portId))
 end
 
---  TAKES THE MAP IT ALREADY HAS. Calling petports_networkMemberIds here would
---  run the flood fill a second time on every call, and this one is hot --
---  anotherUnitIsCloser calls it per candidate.
 function petports_networkMembers(portId)
   local members = networkMemberMap(portId)
 
@@ -469,7 +279,6 @@ function petports_networkMembers(portId)
   return list
 end
 
---  Just the rects, for the unit's idle leash.
 function petports_networkRects(portId)
   local rects = {}
   for _, entry in ipairs(petports_networkMembers(portId)) do
@@ -478,8 +287,6 @@ function petports_networkRects(portId)
   return rects
 end
 
---  Do two rect lists describe the same coverage? Used to avoid pushing an
---  unchanged list to the unit.
 function petports_rectListsEqual(a, b)
   if a == nil or b == nil then return a == b end
   if #a ~= #b then return false end
@@ -492,48 +299,6 @@ function petports_rectListsEqual(a, b)
   return true
 end
 
---------------------------------------------------------------------------------
---  FISH IN THE WATER
---------------------------------------------------------------------------------
---
---  "My lure has a fish, here is what it is, and here is when to stop believing
---  me."
---
---      world property "petports_fish" = {
---        [portUniqueId] = {
---          id      = <entity id>   -- the fish
---          type    = <string>      -- monster type, for the treasure pool
---          rarity  = <string>      -- tier, counted and nothing else
---          expires = <world.time() + lure lifetime>
---        }
---      }
---
---  ONE ENTRY PER PORT, because a lure holds one fish at a time and enforces
---  that itself. This is only the publication of a budget kept elsewhere.
---
---  WHY A PROPERTY AND NOT A MESSAGE. No port ever messages another port -- see
---  the registry above -- because membership derived from shared state has no
---  ordering problem and nothing to keep in sync. A fish is the same shape of
---  fact as a coverage rect: one port knows it, every member needs it.
---
---  AND NOT THE REGISTRY, WHICH IS THE SAME ARGUMENT FROM THE OTHER END. The
---  registry is written on placement, removal or an edit and NEVER on a tick,
---  and every write bumps a version that makes every port re-derive its network
---  and re-gather its vents. A lure produces a fish every few seconds. Putting
---  one in the other would turn a change notification into a heartbeat -- which
---  is a measured failure in this file already, not a hypothetical one.
---
---  IT HOLDS AN ENTITY ID, WHICH IS WHY IT EXPIRES.
---
---  Ids do not survive a reload, and a stale entry naming a reused id would send
---  a unit at whatever now holds that number. Three defences, and they are the
---  ones claims already use: the owner withdraws its own at uninit, again on its
---  first update, and anything left over ages out.
---
---  THE TTL IS THE LURE'S LIFETIME, so it needs no refresh and is not a tuned
---  number. A fish cannot outlive the lure that spawned it -- the lure dying
---  nils the fish's lureId, which lets the fish despawn itself -- so an entry
---  older than one lure is describing something that cannot exist.
 
 local FISH_KEY = "petports_fish"
 
@@ -549,8 +314,6 @@ function petports_fishPublish(portId, entry)
 	world.setProperty(FISH_KEY, fish)
 end
 
---  Withdraw this port's entry. Called when the fish goes, when the lure is
---  dismissed, at uninit and on the first update after a load.
 function petports_fishClearOwner(portId)
 	if portId == nil then return end
 
@@ -564,11 +327,6 @@ function petports_fishClearOwner(portId)
 	world.setProperty(FISH_KEY, fish)
 end
 
---  Drop anything past its expiry, whoever owns it. Rides the same slow timer as
---  petports_claimsSweep, and for the same reason: the owner is the one that
---  should have tidied up, so anything reaching here is a signal rather than
---  routine housekeeping. Not logged per entry at claim volume, though -- a port
---  killed mid-session leaves exactly one.
 function petports_fishSweep()
 	local fish = petports_fishAll()
 	local now = world.time()
@@ -586,43 +344,6 @@ function petports_fishSweep()
 	if changed then world.setProperty(FISH_KEY, fish) end
 end
 
---------------------------------------------------------------------------------
---  ROUTE CACHE KEYS
---------------------------------------------------------------------------------
---
---  The routing question is always the same shape: "can a unit walk to TARGET
---  from vent exit E?" Terrain decides that, not the drop -- so the answer is
---  reusable for every future target in the same neighbourhood.
---
---  Position keys are TILE-EXACT: math.floor of each coordinate, nothing more.
---
---  These were quantised into 16-tile buckets so that every drop in a
---  neighbourhood shared one cached answer. That traded correctness for reuse,
---  and the trade was bad in both directions.
---
---  A bucket is larger than a room. A unit shut in a cage and the port outside
---  it landed in the same bucket, so probes ran from the wrong side of a wall
---  and every edge came back reachable; the unit then stood still for the full
---  approach timeout walking into solid ground. The cache also held the reverse
---  error -- the cage's own vent recorded unreachable, from a probe taken
---  outside the cage -- and because the key was identical either way, nothing
---  could re-ask the question.
---
---  Subdividing does not fix that. The quantisation is GEOMETRIC and the cached
---  fact is TOPOLOGICAL: two points either side of a wall are adjacent by every
---  distance metric and unreachable from each other in fact. A smaller bucket
---  only makes a straddling wall rarer.
---
---  The reuse given up is smaller than it looks. The expensive part of this
---  cache is the vent-to-vent graph, keyed by ENTITY ID and never quantised at
---  all -- that is the V^2 term, and a cold one measured 47 seconds. Only the
---  unit-to-vent and vent-to-target edges lose sharing, and those are O(V). A
---  target key rarely hit anyway, since every drop lands somewhere new.
---
---  If reuse ever needs recovering, the answer is a key derived from CONNECTED
---  REGION rather than a coarser grid: two positions share a key when a unit can
---  actually walk between them. Correct by construction, and considerably more
---  machinery than this needs.
 
 function petports_tileKey(position)
   return string.format("%s,%s",
@@ -630,23 +351,6 @@ function petports_tileKey(position)
     math.floor(position[2]))
 end
 
---------------------------------------------------------------------------------
---  REPLANT INTENTS
---------------------------------------------------------------------------------
---
---  "This tile had a crop on it, and a unit destroyed that crop harvesting it."
---
---  DELIBERATELY NOT A CLAIM, and it must never grow a TTL. A claim expires
---  because an interrupted unit would otherwise poison a work item forever. An
---  intent is a persisted record of what the PLAYER had growing, and it should
---  survive a week of nobody visiting the world -- a field that forgets itself
---  because the player was away is a worse failure than a stale entry.
---
---  It is invalidated by STATE instead, in the port's sweep: an object standing
---  in the footprint, or ground that is no longer tilled. See the handoff.
---
---  Keyed by petports_tileKey so it is one entry per tile, and any second
---  harvest of the same tile overwrites rather than accumulating.
 local REPLANT_KEY = "petports_replants"
 
 function petports_replantsAll()
@@ -657,16 +361,12 @@ function petports_replantGet(tileKey)
 	return petports_replantsAll()[tileKey]
 end
 
---  seedName is the crop's OWN object name: the seed and the farmable share one
---  name, so nothing has to be looked up or mapped.
 function petports_replantSet(position, seedName, ownerId)
 	local key = petports_tileKey(position)
 	local intents = petports_replantsAll()
 
 	intents[key] = {
 		name = seedName,
-		--  Stored floored, so the tile the crop was rooted in is what gets
-		--  replanted rather than wherever its float position rounded to.
 		position = { math.floor(position[1]), math.floor(position[2]) },
 		owner = ownerId,
 		created = world.time()
@@ -679,14 +379,6 @@ function petports_replantSet(position, seedName, ownerId)
 	return key
 end
 
---  Drop several intents at once, for one property write.
---
---  ONE WRITE, NOT ONE PER KEY. petports_replantClear rewrites the whole property
---  every call, so pruning a hundred orphans through it is a hundred writes in a
---  single tick. This exists because the orphan prune can genuinely find that
---  many at once on a world that has been farmed and rebuilt.
---
---  Returns how many went, so a caller can log a count instead of a line each.
 function petports_replantClearMany(keys, why)
 	if type(keys) ~= "table" or #keys == 0 then return 0 end
 
@@ -709,20 +401,6 @@ function petports_replantClearMany(keys, why)
 	return cleared
 end
 
---  Does ANY port in the registry cover this tile, on any network?
---
---  THE QUESTION THE SWEEP CANNOT ASK ITSELF. A port only evaluates intents
---  inside its own network's coverage, and that gate is correct: outside it the
---  chunk is not loaded, so a footprint or tile test would answer from nothing
---  and clear a farm the moment the player walked away.
---
---  The consequence is that an intent nobody covers is never evaluated by
---  anybody, and can never be cleared. This is how to tell that case apart from
---  "somebody else's problem": if no port ANYWHERE has a rect over the tile, no
---  port will ever sweep it, so it is unreachable rather than merely elsewhere.
---
---  Reads the registry rather than the caller's network on purpose. A port must
---  not prune an intent that a DIFFERENT network's port is still looking after.
 function petports_anyPortCovers(position)
 	if type(position) ~= "table" then return false end
 
@@ -749,34 +427,10 @@ function petports_replantClear(tileKey, why)
 	return true
 end
 
---  One cache entry per (destination tile, vent exit).
 function petports_routeKey(position, exitId)
   return petports_tileKey(position) .. "|" .. tostring(exitId)
 end
 
---  IS THIS MONSTER TYPE ONE OF OUR UNITS?
---
---  A DECLARED PARAMETER, NOT A NAME PREFIX. Every chassis this mod ships is
---  called petports_something, and checking for that prefix would work today and
---  quietly stop working the moment somebody builds their own chassis on top of
---  this -- which is the intended path, not an edge case. A convention nobody is
---  forced to follow is not a check.
---
---  NONE OF THE EXISTING CHASSIS FIELDS CAN DO THIS JOB. A third-party unit
---  already declares petports_canFly, petports_canSwim and petports_avoidLiquid,
---  but all three have defaults, so a plain vanilla monster answers them exactly
---  the way a chassis that omitted them would. Absence has to be distinguishable
---  from a default, and only a field with no meaning outside this mod is.
---
---  WHAT IT IS FOR. Once units run on the `friendly` damage team they are
---  indistinguishable from a farm animal by damage team alone -- both are
---  monster / friendly / team 2 -- so the medic scan needs this to tell a
---  wounded unit apart from a wounded Mooshi. They are different patient classes
---  with different settings, not a distinction the engine can draw for us.
---
---  CACHED PER TYPE, and safe to be: this is authored and cannot change for the
---  life of the world. root.monsterParameters is checked at both levels for the
---  same undocumented-shape reason as everywhere else in this mod.
 local unitTypeCache = {}
 
 function petports_isUnitType(monsterType)
@@ -787,8 +441,6 @@ function petports_isUnitType(monsterType)
 
 	local ok, params = pcall(root.monsterParameters, key)
 	if not ok or type(params) ~= "table" then
-		--  NOT CACHED ON FAILURE. A read that threw is not an answer, and
-		--  remembering it would make one bad call permanent for the session.
 		return false
 	end
 
@@ -801,35 +453,13 @@ function petports_isUnitType(monsterType)
 	return verdict
 end
 
---------------------------------------------------------------------------------
---  HEAL COOLDOWNS
---------------------------------------------------------------------------------
 
---  WHO HAS BEEN DOSED RECENTLY, SHARED ACROSS THE WHOLE NETWORK.
---
---  A world property rather than port-local state, for the same reason claims are.
---  Two ports that cannot see each other's doses both dispatch to the same patient
---  and the second delivery is a medical good spent on nothing -- and unlike a
---  contested crop, nothing about the world changes to reveal the mistake.
---
---  A TTL, NOT A QUERY OF THE PATIENT. Asking whether an entity already carries
---  the regen effect would be the direct question, and there is no reliable API
---  for reading another entity's status effects across every class we treat --
---  players, NPCs, farm animals and capture-pod pets are four different sorts of
---  thing. Recording what we DID is something we can always answer.
---
---  KEYED BY ENTITY ID, which does not survive a world reload. That is correct
---  here rather than merely tolerable: a reload means the buff is gone too, so a
---  cooldown surviving it would suppress a dose that is genuinely needed.
 local HEAL_KEY = "petports_heals"
 
 function petports_healsAll()
 	return world.getProperty(HEAL_KEY) or {}
 end
 
---  PRUNED ON EVERY READ-MODIFY, not on a timer. Ids of entities that died or
---  left accumulate otherwise, and this table is replicated as a world property.
---  Nicemice's buffCooldowns learned the same lesson in a local table.
 local function pruneHeals(heals)
 	local now = world.time()
 
@@ -844,9 +474,6 @@ local function pruneHeals(heals)
 	return heals
 end
 
---  STRING KEYS THROUGHOUT. A table written to a world property comes back as
---  JSON, and an integer key does not survive that round trip -- `heals[12]`
---  misses a value stored under "12". Same trap as arch.module.slots.
 local function healKey(entityId)
 	return tostring(entityId)
 end
@@ -861,10 +488,6 @@ function petports_healCooldownRemaining(entityId)
 	return math.max(readyAt - world.time(), 0)
 end
 
---  RECORDED WHEN THE DOSE IS ACTUALLY APPLIED, never at dispatch. A unit that is
---  dispatched and then fails to arrive has healed nobody, and marking the patient
---  at dispatch would lock them out for the full duration over a trip that never
---  happened.
 function petports_healRecord(entityId, duration)
 	if entityId == nil then return false end
 
@@ -877,34 +500,10 @@ function petports_healRecord(entityId, duration)
 	return true
 end
 
---  A DISPATCH RESERVATION IS A CLAIM, NOT A HEAL. Two ports choosing the same
---  patient in the same tick is the claim system's job -- see petports_claimTake
---  -- and this key is deliberately shaped to match one.
 function petports_healWorkId(entityId)
 	return "heal:" .. tostring(entityId)
 end
 
---  THE DAMAGE TEAM A CHASSIS IS AUTHORED WITH.
---
---  READ FROM THE TYPE, NEVER FROM THE ENTITY, and that is the whole point of
---  this function. Camouflage swaps a unit to `ghostly` and has to be able to put
---  it back, so something must remember what "back" is.
---
---  ASKING THE ENTITY DOES NOT WORK, AND WAS MEASURED NOT TO 2026-08-30. Units
---  are spawned persistent, so a unit saved to the world chunk while camouflaged
---  is RESTORED with ghostly baked in rather than respawned -- and every read of
---  entity.damageTeam(), at init or later, then reports ghostly as the default.
---  The unit cached it, the change gate saw have == want forever, and socketing
---  the module became a silent no-op with no log line at all.
---
---  THIS IS THE THIRD TIME THE TYPE/ENTITY SPLIT HAS DECIDED SOMETHING. It
---  exposed spawnPet overriding the monstertype, it settled that the marker file
---  had loaded, and it is the only trustworthy source here. See
---  fact.unit.spawnoverride.
---
---  TEAM NUMBER DEFAULTS TO 2 because that is what every monster in the
---  2026-08-30 census reported -- our four chassis, Mooshi, Fluffalo, poptops and
---  critters alike. A chassis that states its own overrides this.
 local chassisTeamCache = {}
 
 function petports_chassisTeam(monsterType)
@@ -936,106 +535,11 @@ function petports_chassisTeam(monsterType)
 end
 
 
---------------------------------------------------------------------------------
---  ASTERITE DEPOSITS
---------------------------------------------------------------------------------
---
---  "There is a minable surface mod on this tile, and somebody found it."
---
---  A MATMOD IS NOT AN ENTITY. There is no entityQuery for "tiles carrying a
---  surface mod" and no batched read of a region, so nothing here can be
---  discovered the way a crate or a crop or a fish is, and nothing can be
---  claimed by entity id. The port walks its own coverage rect one tile per
---  update and records what it finds here, so a unit dispatched by ANY port
---  can take a deposit ANY port discovered -- discovery belongs to the port
---  (dd.dispatch.portdiscovery) and the record belongs to the world.
---
---      world property "petports_asterite" = {
---        [tileKey] = {
---          position = {x, y}      -- floored, the tile itself
---          mod      = <string>    -- the matmod name that was read there
---          found    = <world.time()>
---          finder   = <petport uniqueId>
---        }
---      }
---
---  KEYED BY petports_tileKey AND NOT BY NETWORK, for the reason the replant
---  intents are keyed by tile (arch.farming.intents). Networks are geography
---  first and their identity moves underneath them: two ports placed between
---  existing rects merge two networks into one, and a port mined out of the
---  middle splits one into two (arch.network.membership). A network-keyed
---  store would orphan half of itself on every such event. Tile-keyed, two
---  networks overlapping the same ground share every discovery, a split costs
---  nothing, and an entry outlives the port that found it.
---
---  NOT A CLAIM, AND IT MUST NEVER GROW A TTL. Same argument the intents
---  make: an entry records something PHYSICALLY PRESENT in the world, and it
---  should survive a week of nobody visiting. A claim expires because an
---  interrupted unit would otherwise poison a work item forever; there is no
---  equivalent failure here. It is invalidated by STATE -- a unit mining it,
---  or the tile reading as something else when the miner arrives -- and by
---  nothing else.
---
---  THE MOD NAME IS STORED RATHER THAN ASSUMED. Nothing in this store is
---  asterite-specific; the port is TOLD which matmod to look for and writes
---  down which one it read. The mining step re-reads the tile before it
---  touches anything, so an entry naming a mod the tile no longer carries is
---  discarded rather than acted on.
---
---  READ WHOLE ON EVERY NOTE, WHICH IS AFFORDABLE HERE AND ONLY HERE.
---  petports_asteriteNote runs once per tile that actually HAS a deposit,
---  which is a few percent of a sweep -- well under one read a second across
---  six ports. THE MOMENT A WORK GENERATOR STARTS ASKING PER DISPATCH this
---  needs the per-tick snapshot the claims table has (petports_claimsMemoBegin),
---  for exactly the reason fact.pathing.indexparse records: a whole-property
---  parse on a hot path IS the lag, not a contributor to it. Written down here
---  because the generator is a later build and the trap is invisible from
---  inside it.
 local ASTERITE_KEY = "petports_asterite"
 
---  THE MATMOD WE LOOK FOR, AND THE ONE WE LEAVE BEHIND.
---
---  HERE RATHER THAN IN EITHER CALLER, because both need them and they must
---  agree. The port reads world.mod and compares against the first; the unit
---  writes the second over the top of it. A copy in each context is a rename
---  away from a port that scans for something no unit will remove.
---
---  THE SECOND ONE USED TO BE "metamod:none" AND THAT CANNOT WORK.
---
---  It is vanilla's own spelling for the absence of a mod and it resolves
---  correctly through MaterialDatabase::modId -- but WorldImpl::canPlaceMod
---  opens with `if (!isRealMod(mod)) return false;`, and NoModId is a meta mod.
---  Measured 2026-09-11: placeMod ran from a monster, returned false, and left
---  both the mod and the tile untouched, identically under allowOverlap true
---  and false -- because that flag is never consulted on the PlaceMod branch
---  at all.
---
---  SO REMOVAL IS REPLACEMENT. petports_cleared is a real mod that draws
---  nothing, drops nothing, sounds like nothing and adds no health to its host.
---  See tiles/mods/lofty_petports/petports_cleared.matmod for why each of those
---  is true and which one to suspect first if a cleared tile misbehaves.
---
---  THE FIRST IS THE ONLY ASTERITE-SPECIFIC STRING IN THE FEATURE. Everything
---  else -- what it drops, how much health it has, what it sounds like being
---  mined -- is read off the matmod at runtime, so pointing this at another
---  surface mod is the whole of what it would take to mine that one instead.
 PETPORTS_ASTERITE_MOD = "asterite"
 PETPORTS_ASTERITE_CLEARED = "petports_cleared"
 
---  A CEILING, BECAUSE THIS FEEDS THE 30 s WORLD STORAGE FLUSH.
---
---  Retail serialises every world property on its per-world storage sync
---  (fact.tooling.worldstorage), and the nav store is already most of that
---  payload. A deposit store is genuinely small beside it -- a few hundred
---  entries on a base that has been rained on for hours -- but "small next to
---  the thing that is already too big" is precisely how the nav store started,
---  so it gets a number before it needs one.
---
---  FULL REFUSES; IT DOES NOT EVICT. An entry names a deposit that is really
---  out there, so dropping the oldest to make room would discard a real one in
---  order to record a duplicate discovery. A full store means the fleet is
---  behind rather than that the store is wrong, and mining anything at all
---  frees a slot.
 local ASTERITE_CAP = 2000
 
 function petports_asteriteCap()
@@ -1056,17 +560,6 @@ function petports_asteriteCount()
 	return n
 end
 
---  RECORD A DEPOSIT. Returns added, count, full.
---
---  `added` IS FALSE FOR A TILE ALREADY IN THE STORE, which is the ordinary
---  result on every sweep after the first and is why the caller logs on
---  `added` and not on the call (proc.tooling.gatereset). A deposit re-found
---  is not news; a deposit found is.
---
---  THE COUNT IS RETURNED SO THE CALLER NEED NOT RE-READ. Counting means
---  walking the table we already hold, and a caller that wanted the number
---  would otherwise call petports_asteriteCount and parse the whole property
---  a second time in the same tick.
 function petports_asteriteNote(position, modName, ownerId)
 	if type(position) ~= "table" or type(modName) ~= "string" then
 		return false, 0, false
@@ -1082,9 +575,6 @@ function petports_asteriteNote(position, modName, ownerId)
 	if count >= ASTERITE_CAP then return false, count, true end
 
 	deposits[key] = {
-		--  FLOORED, so the tile that was READ is the tile that gets recorded
-		--  rather than wherever a float rounded to. The scan already hands
-		--  integers; this is the guard for every later caller that will not.
 		position = { math.floor(position[1]), math.floor(position[2]) },
 		mod = modName,
 		found = world.time(),
@@ -1095,11 +585,6 @@ function petports_asteriteNote(position, modName, ownerId)
 	return true, count + 1, false
 end
 
---  DROP ONE. The mining step's last act, and the state check's only lever.
---
---  Returns whether anything was actually removed, so a caller can tell
---  "cleared" from "was not there" -- two ports racing the same deposit
---  produce the second, and it is not a failure.
 function petports_asteriteClear(tileKey)
 	if tileKey == nil then return false end
 
@@ -1111,8 +596,6 @@ function petports_asteriteClear(tileKey)
 	return true
 end
 
---  DROP EVERYTHING. For a test cycle, not for the game: there is no in-world
---  event that should ever empty this store wholesale.
 function petports_asteriteWipe()
 	local n = petports_asteriteCount()
 	world.setProperty(ASTERITE_KEY, {})

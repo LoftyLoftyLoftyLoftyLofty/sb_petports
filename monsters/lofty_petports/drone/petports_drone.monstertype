@@ -1,47 +1,8 @@
-//  M.A.U.S. UTILITY UNIT
-//
-//  Built on vanilla's ship-pet script stack (groundPet.lua and its action
-//  states) so the spawn pipeline can be tested before the behavior work starts.
-//  The scripts list is where the petports replacements go.
-//
-//  MODELLED ON petbunny, NOT ON A BEHAVIOR-TREE MONSTER
-//
-//  Ship pets and ordinary monsters are different animals structurally. A
-//  behavior-tree monster (firepteropod and most of the bestiary) runs
-//  monster.lua, names its animation state type "body", and drives states from
-//  behaviorConfig. Ship pets run groundPet.lua, which calls
-//  animator.setAnimationState("movement", ...) directly. Copying a
-//  behavior-tree monster's animation onto a pet raises on the first movement
-//  tick.
-//
-//  PARTS AND MONSTERPARTS
-//
-//  "parts" declares part SLOTS, not files. The engine gathers every
-//  .monsterpart whose "category" matches an entry in "categories" and whose
-//  "type" matches a slot here, then picks one at random when the monster is
-//  instantiated. That monsterpart's "frames" map is what <partImage> resolves
-//  against in the animation.
-//
-//  Consequence: "categories" is the binding key for the part pool, so it must
-//  be unique per monster type. A second unit type sharing this category would
-//  randomly wear the drone's body.
-//
-//  anchorName points at the port object rather than the SAIL console.
-//  groundPet.lua kills the pet outright if it cannot find an anchor object of
-//  this name within 5 tiles of its last anchor position, so this must match the
-//  station's objectName exactly.
-//
-//  metaBoundBox is the box the cursor hit-tests against. petbunny's is
-//  [-1.625, -2.375, 1.75, 2.0] -- 3.4 x 4.4 tiles around a creature whose
-//  collisionPoly is about 1.5 x 1.5. That is why vanilla ship pets swallow
-//  clicks meant for whatever is behind them. Ours is sized to the body.
-
 {
   "type" : "petports_drone",
   "shortdescription" : "Utility Unit",
   "description" : "A M.A.U.S. utility unit. Small, tireless, and quietly opinionated about where things belong.",
 
-  //  Binding key for this type's monsterpart pool. Unique per unit type.
   "categories" : [ "petports_drone" ],
   "parts" : [ "body" ],
 
@@ -49,63 +10,12 @@
 
   "dropPools" : [ ],
 
-  //  petbunny omits this and relies on the default. Stated explicitly because a
-  //  utility unit is ship equipment: capture-podding one out of its station
-  //  would strand the item and drag it into the capture-pod economy.
   "capturable" : false,
 
   "baseParameters" : {
     "persistent" : true,
-    //  FRIENDLY SINCE 2026-08-30. It was "ghostly", which sits OUTSIDE damage
-    //  resolution entirely -- useful while the fleet was being brought up and
-    //  wrong now. dd.unit.destructible always recorded units as MEANT to be
-    //  destructible and flagged the ghostly question as unverified; this is
-    //  that question being answered by changing the answer.
-    //
-    //  IT IS ALSO WHAT MAKES ALLY DETECTION POSSIBLE. The medic task picks a
-    //  patient by comparing damage teams, and a ghostly unit's team matches
-    //  nothing -- so every candidate would have failed the ally test and the
-    //  medic would never have found anyone to heal.
-    //
-    //  CONSEQUENCES ARE LIVE NOW, NOT HYPOTHETICAL: a unit can be killed
-    //  mid-task, its claim is left for the TTL to collect, and the port
-    //  respawns a replacement after RESPAWN_GRACE as though nothing happened.
-    //  dd.unit.destructible calls that last one arguably wrong and undecided.
     "damageTeamType" : "friendly",
 
-    //  THE MARKER THAT SAYS "THIS IS A PETPORTS UNIT".
-    //
-    //  Read by petports_isUnitType. It exists because once these run on the
-    //  friendly damage team they are indistinguishable from a farm animal --
-    //  monster / friendly / team 2 describes a Mooshi exactly as well as it
-    //  describes this. The medic scan has to tell a wounded unit from a
-    //  wounded cow, and no engine field draws that line.
-    //
-    //  ANY THIRD-PARTY CHASSIS MUST DECLARE THIS. Checking for a
-    //  petports_ name prefix would have worked for the four types shipped
-    //  here and quietly failed for everyone building on top of this, which
-    //  is the intended path rather than an edge case.
-    //  WHAT THIS CHASSIS WILL NOT WALK INTO, BY NAME.
-    //
-    //  ADDED 2026-09-11, AND ITS ABSENCE WAS THE BUG. A drone with no Lava
-    //  Blocker Module waded into lava, stood in it and died, and every
-    //  mechanism that should have stopped it was asking a question this file
-    //  never answered:
-    //
-    //    avoidedLiquids() built an EMPTY set, so petports_liquidDenied said
-    //    lava was fine -- to the nav layer, to the boundary store, and to the
-    //    wade watchdog that was written specifically to catch this.
-    //
-    //    AND THE LAVA BLOCKER MODULE UNLOCKED NOTHING. Module permissions
-    //    work by REMOVING names from this set, so on a chassis with an empty
-    //    set the grant is a no-op and the module's only real effect is its
-    //    status immunity.
-    //
-    //  petports_avoidLiquid, the blanket boolean above, is NOT a substitute.
-    //  It gates where the unit may STAND -- findGroundPosition and
-    //  validStandingPosition -- and says nothing about what it may walk
-    //  through on the way. Every other walking chassis already carries this
-    //  list; the two that did not are the two that had it left off.
     "petports_avoidLiquids" : [ "lava", "corelava", "poison" ],
     "petports_unit" : true,
 
@@ -117,121 +27,41 @@
       "/scripts/util.lua",
       "/scripts/vec2.lua",
 
-      //  BEACHED FLOP -- LISTED BEFORE idleState AND wanderState ON PURPOSE.
-      //
-      //  A plain %a+State, so petports_petBehavior runs it only while no action
-      //  state holds the unit. That is why petportsTaskAction.update yields on
-      //  petports_outOfMedium AND petBehavior.run suppresses every action while
-      //  beached -- measured 2026-09-01: yielding alone produced 91 yields in 8
-      //  seconds and the flop was never reached once.
-      //
-      //  ORDER IS A HEDGE, NOT A GUARANTEE. If stateMachine.pickState takes the
-      //  first state whose enter() returns non-nil, being ahead of idle and
-      //  wander is what wins the pick. If it round-robins via moveStateToEnd
-      //  instead, order buys nothing and the forced pick in petBehavior.run is
-      //  what does the work. Both are in place because /scripts/stateMachine.lua
-      //  and /monsters/pets/groundPet.lua have not been read.
-      //
-      //  LOADED BY EVERY CHASSIS, INCLUDING WALKERS. petportsFlopState.enter
-      //  returns nil for anything petports_outOfMedium reports as unchecked, so
-      //  a ground or amphibious unit can never enter it.
       "/monsters/lofty_petports/petportsFlopState.lua",
       "/monsters/pets/idleState.lua",
       "/monsters/pets/wanderState.lua",
 
-      //  Vanilla petBehavior.lua is deliberately ABSENT -- replaced by our fork
-      //  below, which defines the same global. See petports_petBehavior.lua.
       "/monsters/pets/actions/followAction.lua",
       "/monsters/pets/actions/inspectAction.lua",
       "/monsters/pets/actions/pounceAction.lua",
 
-      //  OURS. Vanilla's sleepAction.lua is deliberately absent -- both would
-      //  register as action states answering the same args key, and whichever
-      //  the state machine reached first would win.
-      //
-      //  petports_placement.lua must be present or petportsSleepAction calls a
-      //  nil global.
       "/scripts/lofty_petports/petports_work.lua",
       "/scripts/lofty_petports/petports_habitat.lua",
       "/scripts/lofty_petports/petports_flavors.lua",
 
-      //  COARSE NAVIGATION, v1. Defines globals only -- nothing in it runs
-      //  at load -- so its position in this list carries no ordering
-      //  requirement the way petports_flyapproach.lua does. Listed beside
-      //  the other shared scripts rather than after groundPet.lua for that
-      //  reason: it shadows nothing.
       "/scripts/lofty_petports/petports_coarsenav.lua",
       "/monsters/lofty_petports/petports_petBehavior.lua",
       "/monsters/lofty_petports/petports_contract.lua",
       "/monsters/lofty_petports/petports_placement.lua",
       "/monsters/lofty_petports/petports_think.lua",
 
-      //  CHAT BUBBLE render layer. Defines globals only; nothing
-      //  in it runs at load, so its position here carries no
-      //  ordering requirement. Listed next to petports_think.lua
-      //  because it is the same kind of thing: an indicator that
-      //  drives its own animation state type.
       "/monsters/lofty_petports/petports_bubble.lua",
       "/monsters/lofty_petports/petportsSleepAction.lua",
       "/monsters/lofty_petports/petportsTaskAction.lua",
 
-      //  LOADED BY A GROUND CHASSIS TOO, AND THAT IS NEW.
-      //
-      //  This file was flyer-only, on the reasoning that a ground unit which
-      //  never loads it cannot be affected by it. Two things changed that.
-      //
-      //  It defines petportsFreeMover, which petportsTaskAction.freshPather
-      //  binds to moveSwim for EVERY chassis -- because the pathfinder picks
-      //  edge type by MEDIUM, not by chassis, and a ground unit dropped in deep
-      //  water gets planned a route of Swim edges. Without this file that
-      //  binding is a nil global.
-      //
-      //  And its approachPoint shadow is where the avoidLiquid correction will
-      //  live for an amphibious ground chassis.
-      //
-      //  SAFE, BECAUSE THE SHADOWS DELEGATE. approachPoint and setJumpState both
-      //  capture vanilla's version and hand straight back to it whenever
-      //  gravityEnabled is true, which for this chassis is always. The ground
-      //  unit's behaviour is vanilla's, unchanged, plus one mover binding it
-      //  previously lacked.
-      //
-      //  MUST STAY AFTER groundPet.lua -- the capture binds nil otherwise.
       "/monsters/lofty_petports/petports_flyapproach.lua"
     ],
 
-    //  SEARCH COSTS. Vanilla's defaults, STATED rather than inherited.
-    //
-    //  swimCost 5 already encodes "get out of the water and back onto land",
-    //  which is exactly what this chassis wants, and it is the one locomotion
-    //  class with no reported pathing problem. Changing search costs here would
-    //  be untested churn against something that works -- so the value is written
-    //  down to make the choice deliberate, not to change it.
     "petports_swimCost" : 5,
 
-    //  WHERE THIS CHASSIS TETHERS -- see petports_habitatTether.
-    //
-    //  "floor" IS ALSO THE DEFAULT, and it is stated explicitly anyway. A walker
-    //  wanting the floor is a real decision rather than an omission, and the two
-    //  are indistinguishable when the line is absent -- which matters the day
-    //  somebody reads these four files side by side to work out which chassis
-    //  had been considered.
     "petports_portTetheringLocationType" : "floor",
 
     "petBehavior" : "petBehavior",
 
-    //  MUST match the port object's objectName exactly. groundPet.lua kills the
-    //  unit outright if it cannot find an anchor of this name.
     "anchorName" : "petports_petport",
 
-    //  SLEEP KILL SWITCH. False while dispatch and routing are being tested --
-    //  a unit that nods off mid-diagnosis produces a stationary unit that looks
-    //  identical to a stalled one.
     "petports_allowSleep" : false,
 
-    //  FUEL BURNED PER SECOND OF WORK, and only of WORK -- a parked fleet
-    //  is free. 900 capacity at 1.0 is fifteen minutes of uptime on a full
-    //  tank. Per chassis so a heavier unit can cost more without touching
-    //  code; an efficiency module divides it.
     "petports_fuelDrain" : 1.0,
 
     "petResources" : {
@@ -243,23 +73,6 @@
     },
     "petResourceDeltas" : {
       "sleepy" : 1,
-      //  FUEL IS ITS OWN RESOURCE, AND VANILLA HUNGER IS PINNED DEAD.
-      //
-      //  hunger COUNTS UP and 900 counting DOWN is what a fuel bar is, so this
-      //  does not reuse it. Redefining hunger to mean fullness would leave
-      //  status.resource("hunger") returning its own opposite forever, for every
-      //  future reader, to save one resource declaration.
-      //
-      //  THE DELTA BELOW IS ZERO RATHER THAN THE LINE BEING DELETED. Absent means
-      //  groundPet.lua's tickResources never touches it, which is the same result
-      //  by accident instead of on purpose -- and a zero is where a reader looks
-      //  when asking why hunger never moves.
-      //
-      //  eatAction.lua and begAction.lua are gone from the scripts list above, so
-      //  hungerStarvingLevel and the eat / beg / starving actionParams below are
-      //  now INERT. Left in place rather than stripped: they are vanilla's shape
-      //  and the behaviour rewrite may want them back. Do not tune them expecting
-      //  the fuel system to answer.
       "hunger" : 0,
       "playful" : 1,
       "curiosity" : 1
@@ -269,12 +82,6 @@
       "hungerStarvingLevel" : 80,
       "beg" : { "minScore" : 50, "cooldown" : 5, "distance" : 3, "emoteCooldown" : 2 },
 
-      //  Vanilla's follow is the source of the shadowing complaint: curiosity
-      //  regenerates at 1/sec against a minScore of 35, while followAction only
-      //  drains it at 5/sec and its boredTimer does not start until the pet has
-      //  arrived. Net effect is a permanent 3-tile tail. Raised the bar, made it
-      //  bore quickly, and pushed stopDistance out of the player's footprint.
-      //  This is tuning, not a fix -- the behavior rewrite comes later.
       "follow" : {
         "minScore" : 70,
         "cooldown" : 30,
@@ -288,9 +95,6 @@
       "inspect" : { "minScore" : 20, "cooldown" : 8 },
       "eat" : { "minScore" : 0, "minHunger" : 40, "cooldown" : 0, "distance" : 2 },
 
-      //  petbunny carries this block too and there is no playAction.lua in
-      //  either scripts list, so it is inert in vanilla as well. Kept for the
-      //  behavior rewrite.
       "play" : { "minScore" : 20, "cooldown" : 2 },
 
       "sleep" : { "minScore" : 50, "minSleepy" : 75, "cooldown" : 10 },
@@ -299,7 +103,6 @@
 
     "pathing" : { "canOpenDoors" : false },
 
-    //  Sized to the body, not to vanilla's oversized click target.
     "metaBoundBox" : [-0.5, -0.75, 0.5, 0.6],
     "scale" : 1.0,
 
@@ -313,14 +116,10 @@
     "idle" : { "idleTime" : [4, 8], "standTime" : 2 },
     "pounce" : { "maxRange" : 10, "minRange" : 5 },
 	
-	//	go to the port and stay there when idle. do not wander
 	"strictPortTethering" : true,
 
     "movementSettings" : {
 	
-	  //  a width and height of 1.6 here is deliberate:
-	  //  it must be larger than 1.5 for the pathfinder to reject 1-tile-high tunnels, 
-	  //  and it must be small enough to thread the needle into 2-tile-high gaps when coming out of a jump arc
 	  
       "collisionPoly" :  [ [-0.8, -0.4], [-0.4, -0.8], [0.4, -0.8], [0.8, -0.4],
                     [0.8, 0.4], [0.4, 0.8], [-0.4, 0.8], [-0.8, 0.4] ],
@@ -335,41 +134,16 @@
 
     "bodyMaterialKind" : "robotic",
 
-    //  petbunny's values. knockoutEffect "blink" is defined in the animation.
     "knockoutTime" : 0,
     "knockoutEffect" : "blink",
     "deathParticles" : "deathPoof",
 
-    //  petbunny does 15 lash damage on touch, which is vanilla being careless
-    //  with a pet. A utility unit should never hurt anyone.
     "touchDamage" : { "poly" : [], "damage" : 0, "teamType" : "ghostly", "damageSourceKind" : "default" },
 
     "statusSettings" : {
-      //  THE MATERIALISE / DEMATERIALISE COLOUR, read by
-      //  petports_unitfade.lua off the parent's status controller. A status
-      //  property rather than a spawn parameter or a message: it is already on
-      //  the controller before the effect is ever applied, so the effect script
-      //  stays generic and each chassis can differ with no code.
-      //
-      //  TEST VALUE. ff00ff is deliberately unmissable so the first in-game
-      //  check cannot confuse "the fade works" with "the colour is wrong".
-      //  Six hex digits, no alpha -- the directive is fade=RRGGBB=amount and
-      //  alpha is carried separately by ?multiply.
       "statusProperties" : { "targetMaterialKind" : "robotic", "petports_fadeColor" : "ef91a9" },
 
       "appliesEnvironmentStatusEffects" : false,
-      //  TRUE SO THAT WEATHER CAN ACTUALLY HURT A UNIT. It was false, which made
-      //  every petport chassis accidentally immune to toxic rain -- not by any
-      //  design, but because a blanket flag suppressed the whole category. That
-      //  made the poison module a liquid-only feature and left the toxic-planet
-      //  deploy route protected for a reason nobody chose and nothing recorded.
-      //
-      //  THIS ADMITS EVERY WEATHER EFFECT, NOT JUST POISON. There is no per-type
-      //  gate -- the flag is all or nothing -- so electrical storms, blizzards
-      //  and ember fall now reach these units too, and only poison has a module
-      //  answering it. That surface is accepted deliberately rather than
-      //  overlooked; the alternative was a baseline immunity stats block on all
-      //  four chassis, which reads as arbitrary the moment this note is lost.
       "appliesWeatherStatusEffects" : true,
       "minimumLiquidStatusEffectPercentage" : 0.1,
 
@@ -385,8 +159,6 @@
         "powerMultiplier" : { "baseValue" : 1.0 }
       },
 
-      //  Mirrors petbunny's shape: defaultPercentage, not initialValue, and the
-      //  stunned resource that knockout drains.
       "resources" : {
         "stunned"   : { "deltaValue" : -1.0, "initialValue" : 0.0 },
         "health"    : { "maxStat" : "maxHealth", "deltaStat" : "healthRegen", "defaultPercentage" : 100 },

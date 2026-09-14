@@ -1,11 +1,3 @@
-//  PETPORTS -- UPCYCLER FRAMES
-//
-//  Two frames: closed and open. The object's `image` uses the engine's
-//  `<frame>` substitution, which is ZERO-INDEXED in object orientations --
-//  unlike `.animation` files, where it is one-indexed. The aliases below cover
-//  both conventions so a later animation file cannot silently resolve to the
-//  wrong strip.
-
 {
 	"frameGrid" : {
 		"size" : [24, 24],

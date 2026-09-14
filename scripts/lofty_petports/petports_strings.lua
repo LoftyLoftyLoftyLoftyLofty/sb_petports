@@ -1,26 +1,5 @@
---  SHARED STRING TABLE, LOADED ONCE PER PANE.
---
---  Every visible string in every pane lives in one asset; this resolves dotted
---  keys against it and sweeps them onto widgets. See the header of
---  petports_strings.config for the shape of the file and why there is one.
---
---  WHY THE CODE IS HERE AND THE DATA IS NOT. The .config sits under
---  /interface/lofty_petports/shared/ because that is where pane assets live and
---  it is read by path, which works from anywhere. This file is REQUIRED, and
---  every proven require path in this mod points at /scripts/lofty_petports/ --
---  petports_filters.lua and petports_flavors.lua both load from here. Whether
---  require resolves out of /interface is not something we know, and finding out
---  costs a pane that will not open. Move it if you would rather have the pair
---  together; it is a path in four pane scripts.
-
 PETPORTS_STRINGS_PATH = "/interface/lofty_petports/shared/petports_strings.config"
 
---  WHAT A MISSING STRING RENDERS AS.
---
---  Two dashes, and the same two dashes are declared as the `value` of every
---  migrated widget in every pane config. So a file that fails to load produces
---  a pane of dashes -- obvious in testing, and a state that cannot be reached
---  in a shipped build without the asset being absent outright.
 PETPORTS_STRING_MISSING = "--"
 
 local stringTable = nil
@@ -32,10 +11,6 @@ local function slog(fmt, ...)
 	sb.logInfo("PETPORTS strings: %s", ok and text or ("<badformat> " .. tostring(fmt)))
 end
 
---  LOADED ONCE, AND A FAILURE IS REMEMBERED AS A FAILURE.
---
---  Without the attempted flag a missing asset is re-fetched on every lookup,
---  which is a throw per string per pane open.
 local function stringsLoaded()
 	if loadAttempted then return stringTable end
 	loadAttempted = true
@@ -53,9 +28,6 @@ local function stringsLoaded()
 	return stringTable
 end
 
---  A DOTTED KEY, WALKED. Returns whatever is at the end of it -- a string for a
---  label, a table for a tooltip -- or nil, which every caller treats as
---  "leave the widget alone".
 function petports_string(key)
 	local root_ = stringsLoaded()
 	if root_ == nil or type(key) ~= "string" then return nil end
@@ -70,27 +42,12 @@ function petports_string(key)
 	return node
 end
 
---  THE SAME LOOKUP WITH THE FALLBACK ALREADY APPLIED, which is what a pane
---  wants almost every time.
---
---  IT EXISTS SO PANES NEVER NAME PETPORTS_STRING_MISSING. A constant read
---  across a file boundary is exactly the shape petports_paneheck.py flags as a
---  possible nil global -- correctly, since that is how it fails when a require
---  is missing -- and four panes writing `or PETPORTS_STRING_MISSING` would bury
---  a real finding in noise. One definition, and nothing outside this file has
---  to know its name.
 function petports_stringOr(key)
 	local value = petports_string(key)
 	if type(value) == "string" then return value end
 	return PETPORTS_STRING_MISSING
 end
 
---  A FORMAT STRING FROM THE TABLE, FILLED IN.
---
---  Runtime text is assembled from a PATTERN rather than by concatenation, so
---  "Allow" .. " " .. name does not bake English word order into every pane. A
---  missing key, a non-string, or a pattern whose specifiers do not match the
---  arguments all land on the dash rather than throwing.
 function petports_format(key, ...)
 	local pattern = petports_string(key)
 	if type(pattern) ~= "string" then return PETPORTS_STRING_MISSING end
@@ -99,17 +56,6 @@ function petports_format(key, ...)
 	return ok and text or PETPORTS_STRING_MISSING
 end
 
---  SWEEPS THE PANE'S OWN gui TABLE AND APPLIES EVERY petportsString IT FINDS.
---
---  ONE PASS, AT INIT, and no per-frame cost: these strings cannot change while
---  the pane is open. A widget whose key does not resolve is LEFT AS DECLARED,
---  which is what makes the config's "--" the visible failure rather than
---  something this file has to write.
---
---  widget.setText SETS A BUTTON'S CAPTION AS WELL AS A LABEL'S VALUE, so both
---  go through the same call and the config does not have to say which is which.
---  UNVERIFIED for buttons on this engine build; if a caption comes out as "--"
---  while the labels beside it are correct, that is what happened.
 function petports_applyStrings()
 	local gui = config.getParameter("gui")
 
@@ -147,14 +93,6 @@ function petports_applyStrings()
 	end
 end
 
---  RESOLVES EVERY petportsTip IN THE PANE INTO name -> { title = , body = }.
---
---  The hover layer stays in the pane that owns it -- only the petport has one --
---  so this hands back the table rather than doing anything with it.
---
---  AN UNRESOLVED TIP STILL PRODUCES A TOOLTIP, made of dashes. A tooltip that
---  silently stops appearing looks exactly like a hit-rect bug, and one that
---  says "--" does not.
 function petports_sweepTips()
 	local tips = {}
 	local gui = config.getParameter("gui")
@@ -192,7 +130,6 @@ function petports_sweepTips()
 	return tips
 end
 
---  Did the table load at all? For a pane that wants to say so once.
 function petports_stringsFailed()
 	stringsLoaded()
 	return loadFailed

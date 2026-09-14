@@ -1,121 +1,28 @@
---  PETPORTS -- FILTER EVALUATION
---
---  Shared by the petport (object script), the beacon item, and the config pane.
---  Required from a monster's script list among others, so it must define
---  PREFIXED FUNCTIONS ONLY -- a monster's scripts share one Lua environment and
---  a bare init/update/uninit here would silently replace groundPet.lua's.
---
---  WHAT A FILTER IS
---
---      {
---        base  = "accept" | "deny",        -- the verdict before any rule
---        rules =                           -- evaluated TOP TO BOTTOM
---        [
---          { action = "deny",   group = "weapons", except = { "melee" } },
---          { action = "accept", item  = "ironore" }
---        ]
---      }
---
---  LAST MATCH WINS. Start at `base`, walk the rules in order, and every rule
---  that matches overwrites the verdict. The bottom of the list is the most
---  specific thing the player said.
---
---  This inverts the firewall convention (first match wins, exceptions on top),
---  and it is the right way round here: a filter reads as "start from this, then
---  carve exceptions". The pane has to make the direction obvious or players
---  will write exceptions above the base and see nothing happen.
---
---  The upside is that CONFLICTS ARE NOT CONFLICTS. "accept iron" above "deny
---  iron" is well defined, so nothing has to validate, warn, or explain -- a
---  whole class of UI work that simply does not exist.
---
---  ABSENT MEANS ACCEPT EVERYTHING.
---
---  A beacon that has never been configured carries no parameters at all, and it
---  must behave exactly like the unconditional deposit beacon that shipped
---  before filters existed. A fresh beacon that silently accepts nothing is
---  indistinguishable from a broken mod.
---
---  COST
---
---  Matching needs an item's category and tags, which means root.itemConfig --
---  expensive, and per the handoff it re-runs an item's build script with a
---  fresh time-based seed when the descriptor lacks one. The port asks about the
---  same handful of item names over and over, so results are memoised by NAME.
---  Never memoise by descriptor: two stacks of the same item with different
---  parameters share a category and tags.
-
---  UNDER /scripts, NOT A FOLDER OF ITS OWN.
---
---  The vanilla client resolves asset paths against a fixed set of top-level
---  folder names, so a mod-invented directory like /filters is not reliably
---  reachable. Data files belong beside the code that reads them.
 local PETPORTS_FILTER_MANIFEST = "/scripts/lofty_petports/petports_filtergroups.config"
 
---  OFF. THIS WAS 89% OF THE LOG.
---
---  The header above predicted it -- "worth turning off first once filters are
---  trusted" -- and filters have been trusted for several features now. Measured
---  on one session of a unit ferrying dirt: 3,602 lines out of 4,061 were this
---  flag, two per call, restating the same verdict about the same item name
---  hundreds of times a second.
---
---  It fires per cargo stack per candidate container, and petports_filterMisfits
---  calls it per SLOT per scan, so a crate holding forty stacks of one block is
---  eighty lines every time anything looks at it. That is the shape the logging
---  discipline calls out: not less information, the SAME information once per
---  change -- except here there is no change to gate on, because the answer is a
---  pure function of a name and never varies.
---
---  Turn it on to diagnose a filter that is sorting to the wrong crate, and turn
---  it straight back off. Nothing else in the mod is readable while it is on.
 local PETPORTS_FILTER_DEBUG = false
 
---  FORMATTED HERE, NOT BY sb.logInfo.
---
---  Starbound's logger accepts %s and nothing else -- %d, %q and %.2f all
---  raise "Improper lua log format specifier" and take down whatever was
---  logging. Running string.format first means the log call only ever sees one
---  %s, so every specifier Lua supports is available at the call sites.
---
---  pcall'd because a debug line must never be the thing that breaks a script.
---  A malformed format string prints itself instead of throwing.
 local function fdbg(fmt, ...)
 	if not PETPORTS_FILTER_DEBUG then return end
 	local ok, text = pcall(string.format, fmt, ...)
 	sb.logInfo("petports filter: %s", ok and text or ("<badformat> " .. tostring(fmt)))
 end
 
---  name -> { category = <string>, tags = { [tag] = true } }
 local petportsItemFacts = {}
 
---  descriptor key -> per-unit price. See petports_itemValue for the key, and
---  for why nothing here ever needs dropping.
 local petportsItemPrices = {}
 
---  name -> does it rot. Negative results memoised too: the answer is a pure
---  function of the manifest and the item, so a miss costs the same walk
---  every time it is repeated.
 local petportsPerishableNames = {}
 
---  Parsed manifest, and an id -> group index built alongside it.
 local petportsManifest = nil
 local petportsGroupsById = nil
 local petportsGroupOrder = nil
 
---  Every group and subgroup, in display order.
---
---  Reads the manifest once per script context and keeps it. Patches are applied
---  at asset load, so re-reading would cost work and change nothing.
 function petports_filterManifest()
 	if petportsManifest ~= nil then return petportsManifest end
 
 	local ok, data = pcall(root.assetJson, PETPORTS_FILTER_MANIFEST)
 	if not ok or type(data) ~= "table" or type(data.groups) ~= "table" then
-		--  FAIL LOUD, FAIL EMPTY. An unreadable manifest means no group
-		--  matches anything, which combined with an accept base leaves deposit
-		--  working as it did before filters. Guessing at a fallback vocabulary
-		--  would sort items into the wrong crates instead.
 		sb.logError("petports: filter manifest unreadable at %s; no groups available",
 			PETPORTS_FILTER_MANIFEST)
 		petportsManifest = { groups = {} }
@@ -127,43 +34,6 @@ function petports_filterManifest()
 	petportsManifest = data
 	petportsGroupsById = data.groups
 
-	--  NORMALISED ONCE, AT LOAD.
-	--
-	--  groups and subgroups are OBJECTS KEYED BY ID, not arrays, so that a mod
-	--  patches "/groups/species/subgroups/mycoolrace" instead of counting its way
-	--  to "/groups/20/subgroups/-". An index is a promise about everyone else's
-	--  file that we cannot keep -- adding one group upstream would silently
-	--  redirect every positional patch in the ecosystem.
-	--
-	--  The cost is that key order is meaningless in Lua, so display order has to
-	--  be stated. Every entry carries "order"; ties break on id so the result is
-	--  stable rather than merely deterministic. Vanilla numbers in tens, leaving
-	--  room to slot between without renumbering.
-	--
-	--  The id is copied onto each entry here so nothing downstream has to carry
-	--  the key alongside the value.
-	--  IS THE MOD THAT OWNS THIS ENTRY EVEN INSTALLED?
-	--
-	--  A group or subgroup may name a `sentinelItem`: one item from the mod its
-	--  rules describe. If that item does not exist, neither does the mod, and
-	--  the entry is dropped from the picker entirely.
-	--
-	--  DISPLAY ONLY, AND THAT IS SUFFICIENT. Matching is left alone deliberately
-	--  -- if the mod is absent then none of its items exist either, so its rules
-	--  cannot match anything and there is nothing to suppress. Filtering here,
-	--  in the one funnel both the group list and the subgroup lists pass
-	--  through, means one place rather than two.
-	--
-	--  THE REVERSE CASE IS ALREADY SAFE. A player who uninstalls a mod after
-	--  configuring a beacon leaves rules naming subgroup ids that no longer
-	--  exist, and a missing id matches nothing and is silently ignored -- which
-	--  is the same property that makes renaming an id dangerous and makes
-	--  removing one harmless.
-	--
-	--  pcall TO MATCH THE SURROUNDING STYLE. root.itemConfig returns nil for an
-	--  unknown name, so the bare call would do -- but every other use of it in
-	--  this mod is wrapped, a nil return passes through pcall unchanged, and a
-	--  filter manifest that throws takes the whole beacon pane with it.
 	local function modInstalled(name)
 		if type(name) ~= "string" or name == "" then return true end
 
@@ -182,12 +52,6 @@ function petports_filterManifest()
 		end
 
 		table.sort(list, function(a, b)
-			--  100000 PUTS AN UNORDERED ENTRY DEAD LAST, BEHIND Unsorted.
-			--
-			--  This was 10000, which was safely past everything when the
-			--  highest real order was 3300. Third-party content now starts AT
-			--  10000, so an entry that forgot its order would have sorted into
-			--  the middle of the mod band rather than after it.
 			local ao, bo = a.order or 100000, b.order or 100000
 			if ao ~= bo then return ao < bo end
 			return tostring(a.id) < tostring(b.id)
@@ -210,33 +74,21 @@ function petports_filterGroup(groupId)
 	return petportsGroupsById[groupId]
 end
 
---  Every group, in display order. Each carries its own id.
 function petports_filterGroups()
 	petports_filterManifest()
 	return petportsGroupOrder or {}
 end
 
---  One group's subgroups, in display order. Each carries its own id.
---
---  Never iterate group.subgroups directly: it is keyed by id, so pairs() gives
---  a different order every run and the beacon UI would shuffle between openings.
 function petports_filterSubgroups(group)
 	if type(group) ~= "table" then return {} end
 
 	if group.orderedSubgroups == nil then
-		--  A group reached before the manifest was normalised, which should not
-		--  happen -- but returning nothing here would silently match nothing.
 		petports_filterManifest()
 	end
 
 	return group.orderedSubgroups or {}
 end
 
---  Category and tags for an item NAME.
---
---  Memoised, including negative results: an item that fails to resolve fails
---  every time, and retrying it once per cargo stack per scan is the expensive
---  version of the same nil.
 function petports_itemFacts(name)
 	if type(name) ~= "string" then return nil end
 
@@ -254,37 +106,6 @@ function petports_itemFacts(name)
 
 	local facts = { category = cfg.config.category, tags = {} }
 
-	--  TWO SOURCES, ONE SET. ITEMS USE itemTags, OBJECTS USE colonyTags.
-	--
-	--  Reading only itemTags is why the whole tenant-tag half of the manifest --
-	--  species, decor, biome, location, tier, holiday, object themes, 133
-	--  subgroups -- matched nothing at all. Measured on four object files:
-	--
-	--    floranchair     category "furniture"  colonyTags ["floran","floranvillage"]
-	--    tier1switch     category "wire"       colonyTags ["wired","tier1"]
-	--    frogfurnishing  category "other"      colonyTags ["outpost","commerce"]
-	--    retroscifibed   category "furniture"  colonyTags ["retroscifi"]
-	--
-	--  Not one of them carries itemTags. colonyTags is what the engine reads to
-	--  decide which tenant a Colony Deed spawns, and it is the only tag field
-	--  objects have.
-	--
-	--  MERGED RATHER THAN GIVEN ITS OWN SUBGROUP FIELD, deliberately. The
-	--  manifest header's rule is that narrowing is expressed by AUTHORING A
-	--  SUBGROUP, never by a field that behaves differently from its neighbours --
-	--  and a "colonyTags" field would behave identically to "tags" while giving a
-	--  mod author a fourth way to pick the wrong one and get a silent no-match.
-	--  An author writes the tag; which file it came from is our problem.
-	--
-	--  COLLISIONS ARE ACCEPTED. "storage", "light", "door" and "crafting" exist
-	--  as colonyTags and could plausibly exist as itemTags too. They mean the
-	--  same thing in both, so a merge cannot produce a wrong answer here -- and
-	--  if a mod ever makes them disagree, that is an argument for a subgroup, not
-	--  for a fourth field.
-	--
-	--  Vanilla also derives tags the engine knows about that appear in NEITHER
-	--  list; nothing in the manifest depends on those, and reaching for them
-	--  would need a callback that may not exist.
 	local function absorb(list)
 		if type(list) ~= "table" then return 0 end
 		local n = 0
@@ -300,14 +121,6 @@ function petports_itemFacts(name)
 	local itemTagCount = absorb(cfg.config.itemTags)
 	local colonyTagCount = absorb(cfg.config.colonyTags)
 
-	--  Logged ONCE per item name, on the miss, because it is memoised. If this
-	--  line repeats for the same name the cache is not working and the port is
-	--  paying for root.itemConfig on every scan.
-	--
-	--  The two counts are reported separately even though the set is merged: an
-	--  entry with 0 and 0 is an item with no tag vocabulary at all and can only
-	--  ever be sorted by category or by name, which is worth being able to see
-	--  without opening the asset.
 	local tagList = {}
 	for tag in pairs(facts.tags) do table.insert(tagList, tag) end
 	table.sort(tagList)
@@ -319,58 +132,6 @@ function petports_itemFacts(name)
 	return facts
 end
 
---  What ONE of this item is worth, in pixels. Zero when nothing can be read.
---
---  LIFTED VERBATIM FROM THE UPCYCLER'S valueOf, 2026-09-04, because a second
---  caller appeared -- tidyWork's eviction ordering. The reasoning is the
---  upcycler's and is repeated here because this is where it now lives:
---
---  PRICE IS THE ONLY UNIVERSAL VALUE AXIS the engine offers, it is on every
---  item, and it is the same number the sell-for-pixels path uses. Vanilla's
---  cropshipper values its cargo exactly this way.
---
---  THE FULL DESCRIPTOR, NOT THE NAME, AND THIS IS THE WHOLE TRAP.
---  root.itemConfig re-runs a generated item's build script with a fresh
---  time-based seed when the descriptor carries no seed, so pricing a specific
---  sword BY NAME returns a different number every call. A comparator built on
---  that would reorder itself between calls, and table.sort errors outright on
---  an inconsistent order function -- so the failure would be a crash in the
---  busiest generator in the mod, not a mildly wrong sort. Callers hold a
---  descriptor from world.containerItems; they must pass it whole.
---
---  MEMOISED BY NAME AND PARAMETERS, KEPT FOR THE LIFE OF THE SCRIPT CONTEXT.
---
---  A price is a PURE FUNCTION OF A DESCRIPTOR. An entry cannot go stale, so
---  there is no correctness reason to ever drop one, and dropping one only
---  guarantees paying to derive it again. The parameters have to be in the key
---  because two stacks sharing a name can be genuinely different items and a
---  name-only memo would misprice the second -- but with them in the key the
---  answer is exact, so it is simply kept.
---
---  NOT ON A TIMER, AND THIS WAS GOT WRONG ONCE. An earlier draft refused to
---  memoise parameterised descriptors at all, which made tidyWork re-run a
---  generated weapon's build script once a second, per weapon, for as long as it
---  sat in a crate. The proposed repair was to memoise and clear on the beacon
---  refresh, which is the same mistake five times slower: forty weapons cached
---  when the chunk loads is nothing, and forty weapons re-derived on any timer
---  is waste dressed as hygiene. The script context dies with the world, which
---  is the only lifetime this needs.
---
---  THE KEY IS THE PARAMETER BLOCK SERIALISED, the same identity compaction
---  buckets by. Building it costs a sb.printJson per lookup for parameterised
---  items, which is worth paying: it is a serialisation against an item build
---  script that generates abilities, damage curves and animation state.
---
---  IT ALSO CLOSES THE CONSISTENCY HAZARD ABOVE RATHER THAN MERELY AVOIDING IT.
---  A descriptor whose price would re-roll between two calls now returns the
---  first answer every time, so a comparator built on this cannot go
---  inconsistent even if a caller hands it something seedless.
---
---  RAW PRICE, NOT A FLOORED ONE. The upcycler floors this at
---  petports_valueFloor so a stack of worthless dirt is still worth one Pet
---  Treat; that floor is points arithmetic and belongs to the machine. Caching
---  a floored number here would hand a second caller with a different floor the
---  first caller's answer.
 function petports_itemValue(descriptor)
 	if type(descriptor) ~= "table" or type(descriptor.name) ~= "string" then
 		return 0
@@ -379,8 +140,6 @@ function petports_itemValue(descriptor)
 	local plain = descriptor.parameters == nil
 		or next(descriptor.parameters) == nil
 
-	--  A name never contains a NUL, so a plain item's key can never collide
-	--  with a parameterised one's.
 	local key = descriptor.name
 	if not plain then
 		key = key .. "\0" .. sb.printJson(descriptor.parameters)
@@ -410,11 +169,6 @@ local function anyOf(list, test)
 	return false
 end
 
---  Does one subgroup's leaf predicate match this item?
---
---  Plain OR across all three fields. Narrowing is done by authoring a
---  subgroup, never by a field that means something different from its
---  neighbours -- see the manifest header.
 local function subgroupMatches(subgroup, facts, name)
 	if type(subgroup) ~= "table" or facts == nil then return false end
 
@@ -431,33 +185,6 @@ local function subgroupMatches(subgroup, facts, name)
 		return true
 	end
 
-	--  SUFFIXES. The one thing an exact name cannot express.
-	--
-	--  Blueprints are the case this exists for. Every one is GENERATED --
-	--  "ironanvil-recipe", "avianfuelhatch-recipe" -- so there is no file to
-	--  scan, no fixed list to enumerate, and the item can be a recipe for
-	--  anything from food to a helmet. What they share is the suffix.
-	--
-	--  Deliberately suffix and not a Lua pattern. A pattern field would let a
-	--  mod author write something expensive or wrong into a manifest that is
-	--  evaluated per item per scan, and every case seen so far is a suffix.
-	--  NAME PARTS. Prefix and suffix TOGETHER, which is the one thing neither
-	--  field can do alone.
-	--
-	--  Codexes are why this exists. No codex file carries a category, a tag or a
-	--  race field -- all 123 were scanned and every one came back empty -- so the
-	--  only thing that identifies an Apex codex is that it is named apexhistory1
-	--  and generates an item ending in "-codex".
-	--
-	--  A bare prefix would be catastrophic: "apex" alone matches every Apex chair,
-	--  door and statue in the game. The suffix is what makes the prefix safe, and
-	--  that means BOTH have to hold at once -- unlike every other field here,
-	--  which are ORed.
-	--
-	--  Each entry is a table with optional "prefix" and "suffix". Whichever keys
-	--  are present must ALL match; an entry with neither matches nothing rather
-	--  than everything, because a typo should sort nothing rather than sort the
-	--  whole game into one crate.
 	if name ~= nil then
 		if anyOf(subgroup.nameParts, function(part)
 			if type(part) ~= "table" then return false end
@@ -490,11 +217,6 @@ local function subgroupMatches(subgroup, facts, name)
 	return false
 end
 
---  Does a rule apply to this item?
---
---  A rule targets a GROUP or a literal ITEM, never both. `except` names
---  subgroups switched OFF -- stored as exclusions so that a subgroup added by a
---  later update or another mod is inside every existing rule by default.
 local function ruleMatches(rule, facts, name)
 	if type(rule) ~= "table" then return false end
 
@@ -505,10 +227,6 @@ local function ruleMatches(rule, facts, name)
 	if rule.group == nil then return false end
 
 	local group = petports_filterGroup(rule.group)
-	--  A rule naming a group that no longer exists -- a mod removed, a manifest
-	--  edited -- matches nothing rather than matching everything. The verdict
-	--  falls through to whatever came before it, which is the conservative read
-	--  of a rule we cannot honour.
 	if group == nil or type(group.subgroups) ~= "table" then return false end
 
 	local subgroups = petports_filterSubgroups(group)
@@ -518,31 +236,6 @@ local function ruleMatches(rule, facts, name)
 		for _, id in ipairs(rule.except) do excluded[id] = true end
 	end
 
-	--  TWO PASSES, BECAUSE OF "unclassified".
-	--
-	--  An unclassified subgroup catches what the OTHER SUBGROUPS IN ITS GROUP
-	--  CANNOT DESCRIBE. "Other Codices" is the case: mods add codex entries by the
-	--  dozen, and one that does not name them conventionally matches no race rule
-	--  and would fall out of the group entirely.
-	--
-	--  IT IS NOT "WHATEVER IS LEFT AFTER TICKING". Two earlier versions were:
-	--
-	--    1. A normal subgroup matching every codex. Subgroups are ORed, so it won
-	--       over the race rules and unticking Glitch silently did nothing.
-	--    2. A fallback consulted when nothing ELSE MATCHED THIS TIME. Better, but
-	--       unticking Glitch pushed the Glitch codexes into it, so the bucket's
-	--       contents changed depending on which boxes were ticked.
-	--
-	--  Both made one switch depend on the others. This one asks the MANIFEST, not
-	--  the rule: does any sibling subgroup DESCRIBE this item, whether or not the
-	--  player has that sibling switched on? If yes, this is not unclassified, and
-	--  unticking a race removes those items from the crate instead of relocating
-	--  them. If no, nothing in the group can name the item and it lands here.
-	--
-	--  COMPUTED AT MATCH TIME FROM THE SUBGROUP DEFINITIONS. Nothing is precomputed
-	--  or written down, so a mod that patches a new race subgroup into a group
-	--  immediately narrows what counts as unclassified, with no cache to rebuild
-	--  and nothing in the config to keep in step.
 	local unclassified = nil
 
 	for _, subgroup in ipairs(subgroups) do
@@ -558,8 +251,6 @@ local function ruleMatches(rule, facts, name)
 
 	if unclassified == nil then return false end
 
-	--  Deliberately ignores `excluded`: a sibling the player has switched OFF
-	--  still DESCRIBES its items, and that is the question being asked.
 	for _, subgroup in ipairs(subgroups) do
 		if subgroup.unclassified ~= true
 		   and subgroupMatches(subgroup, facts, name) then
@@ -574,10 +265,6 @@ local function ruleMatches(rule, facts, name)
 	return false
 end
 
---  THE ONE ENTRY POINT. true if this item may be deposited under this filter.
---
---  `filter` is nil for a beacon that has never been configured, and nil means
---  accept everything. `name` is an item NAME, not a descriptor.
 function petports_filterAccepts(filter, name)
 	if type(filter) ~= "table" then return true end
 
@@ -588,11 +275,6 @@ function petports_filterAccepts(filter, name)
 
 		for index, rule in ipairs(filter.rules) do
 			if ruleMatches(rule, facts, name) then
-				--  No early exit: last match wins, so a later rule must be
-				--  able to overturn this one. Logging every MATCH rather than
-				--  only the final verdict is what makes an unexpected outcome
-				--  readable -- "rule 3 accepted it, then rule 5 denied it" is
-				--  a diagnosis; "denied" is not.
 				fdbg("  rule %d %s matches %s (verdict %s -> %s)",
 					index, tostring(rule.action), name,
 					tostring(verdict), tostring(rule.action ~= "deny"))
@@ -608,12 +290,6 @@ function petports_filterAccepts(filter, name)
 	return verdict
 end
 
---  Does this filter reject everything the manifest can describe?
---
---  Used to tell two failures apart that look identical to a loaded unit: every
---  target FULL (transient, clears itself) versus nothing ACCEPTS this item
---  (permanent, needs the player). Only the second is worth interrupting anyone
---  over.
 function petports_filterAcceptsNothing(filter)
 	if type(filter) ~= "table" then return false end
 	if filter.base ~= "deny" then return false end
@@ -626,26 +302,6 @@ function petports_filterAcceptsNothing(filter)
 	return true
 end
 
---  Which items in a container fail the container's OWN filter?
---
---  This is the whole of "eviction" and therefore the whole of disperse: a crate
---  with base "deny" and no rules accepts nothing, so everything in it is a
---  misfit, which is exactly what a dropbox means. One rule, no second beacon
---  type, no second code path.
---
---  Called from the container scan, which already holds the items table -- this
---  must never trigger its own world.containerItems call.
---
---  `items` is slot -> descriptor as world.containerItems returns it (keyed by
---  slot, holes where slots are empty). `exemptSlot` is the DECIDING beacon's
---  slot: a beacon rarely matches its own crate's filter, and without the
---  exemption the system hauls away its own configuration. Everything else --
---  spare beacons included -- is ordinary cargo, per the standing ruling.
---
---  Returns an ARRAY of { slot, name, count }, ordered by slot so two scans of
---  the same container produce the same list. Empty array when the filter is
---  nil, because an unconfigured beacon accepts everything and therefore
---  evicts nothing.
 function petports_filterMisfits(filter, items, exemptSlot)
 	local misfits = {}
 
@@ -653,8 +309,6 @@ function petports_filterMisfits(filter, items, exemptSlot)
 		return misfits
 	end
 
-	--  Deterministic order: pairs order is not, and an eviction list that
-	--  shuffles between scans makes claim behaviour unreproducible.
 	local slots = {}
 	for slot in pairs(items) do
 		if slot ~= exemptSlot then table.insert(slots, slot) end
@@ -677,46 +331,6 @@ function petports_filterMisfits(filter, items, exemptSlot)
 	return misfits
 end
 
---  Which items in a RESTOCK crate do not belong there?
---
---  The eviction half of the restock beacon, and the sibling of
---  petports_filterMisfits above. A restock crate has no filter -- it has a LIST
---  OF REQUESTS -- so the question it answers differs in one specific way:
---
---    Anything no request names is a misfit outright.
---    A requested item is a misfit only in EXCESS of that request's max.
---
---  That second clause is the whole reason this cannot be expressed as a filter.
---  petports_filterAccepts is a pure function of an item NAME, deliberately, so
---  that it can be memoised -- and "yes, up to a thousand of them" is not a fact
---  about a name.
---
---  `requests` is an ARRAY of { item = "name", min = n, max = n }, as the beacon
---  stores it. ONE CRATE HOLDS AS MANY AS THE PLAYER ADDS, which is what makes
---  "all my building materials in one box" something they can build. It was one
---  request per beacon first, and the obvious workaround -- several beacons in
---  one crate -- fails on exactly that use case: twenty materials would mean
---  twenty beacons AND twenty stacks competing for the same slots.
---
---  DUPLICATES RESOLVE FIRST-WINS, in array order. The pane will not create one,
---  but a hand-edited save can, and silently summing two maxes for one item
---  would make the quota depend on how the duplicate arose.
---
---  `min` is not consulted here: min decides when to START FETCHING and has
---  nothing to say about what is already in the box.
---
---  SLOT ORDER DECIDES WHAT SURVIVES. The earliest slots fill each quota and
---  later ones are evicted, so two scans of an unchanged crate produce the same
---  list -- the property petports_filterMisfits needs, for the same reason: an
---  eviction list that shuffles makes claim behaviour unreproducible.
---
---  A PARTIAL STACK CAN BE A MISFIT. A crate wanting 500 and holding a stack of
---  800 reports 300, not 800 and not nothing. withdrawMisfit consumes by name
---  and count rather than by slot, so a partial count is something it can
---  already act on.
---
---  Returns the same { slot, name, count } shape, so tidyWork does not care
---  which of the two produced its list.
 function petports_restockMisfits(requests, items, exemptSlot)
 	local misfits = {}
 
@@ -724,17 +338,11 @@ function petports_restockMisfits(requests, items, exemptSlot)
 		return misfits
 	end
 
-	--  Name -> allowance. Built once rather than searched per slot, and first
-	--  entry wins so a duplicate cannot quietly raise its own ceiling.
 	local allowed = {}
 
 	for _, request in ipairs(requests) do
 		if type(request) == "table" and type(request.item) == "string"
 		   and allowed[request.item] == nil then
-			--  A max of zero would make the whole request a misfit, which is not
-			--  a shape the pane can produce -- but a hand-edited save can, and
-			--  evicting everything on the strength of a missing number is a bad
-			--  way to find out.
 			allowed[request.item] = { max = tonumber(request.max) or 0, kept = 0 }
 		end
 	end
@@ -774,48 +382,7 @@ function petports_restockMisfits(requests, items, exemptSlot)
 	return misfits
 end
 
---  HOW MUCH OF THE MANIFEST DOES THIS FILTER ADMIT, IN SUBGROUPS?
---
---  A SPECIFICITY MEASURE, AND THE POINT IS TO RANK CRATES BY HOW MUCH THEY
---  DECLARED. A crate saying "fishing gear only" admits 1 subgroup of 220; a
---  crate with base accept and no rules admits all 220. That is a 220-to-1
---  statement of intent, and defragmentation gathers into the crate that said
---  the most about the item.
---
---  IT REPLACES "DOES A RULE NAME THIS ITEM". That test looked for `rule.item`,
---  which the DEPOSIT pane never writes -- it emits `{action = "accept", group =
---  <id>}` and nothing else, so the test could never fire and the whole
---  specificity tier was unreachable. It was also the wrong question: a subgroup
---  can be as fine as one item name -- `pets/pod`, `valuables/gem`, eight of
---  them in the manifest today -- so naming an item IS a group rule here. The
---  restock beacon needs literal item names because "restock Floran furniture"
---  and "restock furniture" overlap and a quota has to know which; a deposit
---  filter has no such problem.
---
---  COUNTED IN SUBGROUPS RATHER THAN IN ITEMS. Items are unbounded, unknowable
---  without walking every asset, and change when a mod is installed. Subgroups
---  are the unit the manifest is authored in and the unit the pane presents, so
---  they are what a player is actually choosing between.
---
---  A LIVE NUMBER, NOT A STORED ONE, and that is deliberate. `except` lists are
---  EXCLUSIONS, so a subgroup added by a later update or another mod falls
---  inside every existing rule automatically -- see the manifest header. A
---  breadth cached into a beacon's parameters would go stale the moment someone
---  installed a mod, and would then be wrong in the direction that makes a broad
---  crate look specialised.
---
---  NETWORK-INVARIANT, which the destination ladder requires. Every port derives
---  it from the same manifest with no reference to who is asking, so two ports
---  cannot disagree about which crate an item belongs in and ferry it back and
---  forth.
---
---  LAST MATCH WINS IS NOT CONSULTED HERE, and that is correct. This asks how
---  much the filter DESCRIBES, not what it concludes about one item --
---  petports_filterAccepts already answered that, and only accepting crates are
---  ever ranked. A filter that accepts a group and then denies one subgroup of
---  it has described that group either way.
 
---  Total subgroups the manifest defines. The score for "accepts everything".
 local petportsSubgroupTotal = nil
 
 local function subgroupTotal()
@@ -827,13 +394,6 @@ local function subgroupTotal()
 		total = total + #petports_filterSubgroups(group)
 	end
 
-	--  A MANIFEST THAT WOULD NOT LOAD SCORES 1, NOT 0.
-	--
-	--  petports_filterManifest fails loud and EMPTY -- no groups -- which would
-	--  make every filter score zero and read as maximally specific, so the
-	--  narrowest-first ranking would become arbitrary rather than merely
-	--  unavailable. One is the honest floor: nothing can be distinguished, so
-	--  nothing is preferred, and the keys below breadth decide.
 	if total < 1 then total = 1 end
 
 	petportsSubgroupTotal = total
@@ -841,23 +401,11 @@ local function subgroupTotal()
 end
 
 function petports_filterBreadth(filter)
-	--  ABSENT MEANS ACCEPT EVERYTHING, matching petports_filterAccepts. An
-	--  unconfigured beacon has declared nothing and must score the maximum, or
-	--  a fresh beacon would outrank every crate a player had actually set up.
 	if type(filter) ~= "table" then return subgroupTotal() end
 
-	--  A BASE OF ACCEPT IS A DECLARATION OF EVERYTHING. Deny rules below it
-	--  carve pieces out, and they are not counted: a crate that takes anything
-	--  except ores has still said nothing about fishing gear. Scoring the
-	--  carve-outs would let a player make a crate look specialised by denying
-	--  things it was never going to see.
 	if filter.base ~= "deny" then return subgroupTotal() end
 
 	if type(filter.rules) ~= "table" then
-		--  base deny, no rules: accepts nothing. It is not a candidate, so this
-		--  is unreachable from the ladder -- answered anyway, and answered as
-		--  narrow rather than as zero, for the same reason the floor above
-		--  exists.
 		return 1
 	end
 
@@ -866,9 +414,6 @@ function petports_filterBreadth(filter)
 	for _, rule in ipairs(filter.rules) do
 		if type(rule) == "table" and rule.action ~= "deny" then
 			if rule.item ~= nil then
-				--  A LITERAL ITEM RULE IS AS NARROW AS IT GETS. Nothing in the
-				--  deposit pane writes one today; the restock beacon's storage
-				--  shape does, and a hand-edited or modded filter may.
 				admitted = admitted + 1
 			elseif rule.group ~= nil then
 				local group = petports_filterGroup(rule.group)
@@ -877,11 +422,6 @@ function petports_filterBreadth(filter)
 					local excluded = 0
 
 					if type(rule.except) == "table" then
-						--  COUNTED AGAINST THE GROUP'S OWN SUBGROUPS, so an
-						--  `except` naming a subgroup that no longer exists --
-						--  a mod removed, a manifest edited -- cannot push the
-						--  count below zero and make a crate look narrower than
-						--  it is.
 						local subgroups = petports_filterSubgroups(group)
 						local known = {}
 
@@ -902,52 +442,12 @@ function petports_filterBreadth(filter)
 		end
 	end
 
-	--  TWO ACCEPT RULES NAMING THE SAME GROUP DOUBLE-COUNT, and that is
-	--  accepted rather than deduplicated. It is a filter a player would have to
-	--  build deliberately, it makes that crate score BROADER than it is, and
-	--  broader only ever loses -- so the failure is a crate that is not
-	--  preferred, never one that wrongly is.
 	if admitted < 1 then admitted = 1 end
 
 	return admitted
 end
 
---  DOES THIS ITEM ROT?
---
---  TWO TESTS, ORed, AND THEY COVER DIFFERENT WINDOWS.
---
---  THE INSTANCE FIELD IS EXACT. /scripts/items/rotting.lua does nothing at all
---  unless the item carries `timeToRot` -- it decrements that field and replaces
---  the stack with `rottedItem` at zero. So a descriptor carrying it rots
---  whatever it is filed as, and an item that has been ageing answers here with
---  no config read at all.
---
---  THE MANIFEST IS THE FAST PATH AND THE SAFETY NET FOR A FRESH ITEM. Whether
---  the engine seeds `timeToRot` at creation or on the first ageing tick has not
---  been measured, so a just-harvested tomato may not carry it yet.
---
---  itemAgingScripts WAS THE OBVIOUS CONFIG TEST AND IS WRONG. Ageing scripts
---  are not a food mechanism -- vanilla uses one to cool molten metal -- so an
---  item declaring one is not thereby perishable.
---
---  IT ASKS THE MANIFEST, NOT A LIST IN THIS FILE, AND THAT IS THE WHOLE POINT.
---  The first version tested three hardcoded category names. It covered vanilla
---  by luck, could not be patched -- a Lua local is not an asset -- and had
---  already MISSED `cookingIngredient`, which the manifest carries and which
---  ref.filter.produce records as where a lot of raw produce hides.
---
---  A subgroup declares `"perishable" : true` and everything else follows: a mod
---  patching in its own perishable subgroup gets refrigeration with no code and
---  no cooperation from us, and gets ALL FIVE MATCHERS rather than categories
---  alone -- so an item identified by a tag, a name list, a suffix or a name part
---  works exactly as well as one identified by its category.
---
---  BEING WRONG COSTS A SLOT, IN ONE DIRECTION ONLY. A false positive puts a
---  non-perishable in a fridge; a false negative leaves food on a shelf, which is
---  where it would have been anyway. Neither loses an item.
 
---  Every subgroup flagged perishable, across every group. Built with the
---  manifest and dropped with it.
 local petportsPerishableSubgroups = nil
 
 local function perishableSubgroups()
@@ -967,12 +467,6 @@ local function perishableSubgroups()
 	return out
 end
 
---  Takes a DESCRIPTOR, not a name, because half the answer is on the instance.
---  A bare name still works and simply skips the instance test.
---
---  MEMOISED BY NAME for the category half only. The instance half is a field
---  test on a table the caller already holds and cannot be cached against a name
---  -- two stacks of one item can differ on it.
 function petports_itemPerishable(descriptor)
 	local name = descriptor
 
@@ -1006,25 +500,14 @@ function petports_itemPerishable(descriptor)
 	return rots
 end
 
---  Drops memoised item facts. Only useful if item definitions can change under
---  a running session; kept because a stale category is invisible and would be
---  diagnosed as a filter bug.
 function petports_filterResetCache()
 	petportsItemFacts = {}
 	petportsItemPrices = {}
 	petportsManifest = nil
 	petportsGroupsById = nil
 
-	--  DERIVED FROM THE MANIFEST, SO IT DIES WITH IT. Left behind, a reload
-	--  would score every filter against the previous manifest's subgroup
-	--  count -- invisible, and wrong in whichever direction the manifest
-	--  changed.
 	petportsSubgroupTotal = nil
 
-	--  DERIVED FROM THE MANIFEST TOO, so both die with it. A subgroup gaining
-	--  or losing "perishable" under a running session would otherwise be
-	--  invisible -- and proc.tooling.gatereset is emphatic that where a cached
-	--  value is CLEARED is the half that goes wrong.
 	petportsPerishableSubgroups = nil
 	petportsPerishableNames = {}
 end

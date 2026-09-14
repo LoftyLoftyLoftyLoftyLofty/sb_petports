@@ -1,44 +1,10 @@
-//  M.A.U.S. PETPORT
-//
-//  One-slot container. Socket a petports_ship_pet item to wake the unit inside.
-//  See petports_petport.lua.
-
 {
   "objectName" : "petports_petport",
-  //  itemTags, NOT colonyTags, FOR SORTING. colonyTags are what a tenant asks
-  //  for when it wants furniture in its house; itemTags are what the deposit
-  //  filter reads. This object had only the former, so it did not appear in the
-  //  Petports group at all -- a crate set to "Petports" collected beacons, pets
-  //  and machines and not the ports themselves, which reads as a bug rather than
-  //  as a gap.
-  //
-  //  petports_petport IS THE TAG A RESKINNED PORT NEEDS. A Steampunk or Floran
-  //  petport carries it and sorts beside this one with no manifest edit.
   "itemTags" : [ "petports", "petports_petport" ],
 
   "colonyTags" : ["petports"],
   "rarity" : "Rare",
   "objectType" : "container",
-  //  NO `category`, MATCHING THE UPCYCLER. Two separate reasons, both real.
-  //
-  //  SORTING. "storage" put this in Furniture > Storage alongside every chest
-  //  in the game, so it double-sorted: a player filling a crate of storage got
-  //  petports, and a player filling a crate of petports got them too. It is a
-  //  container, so Storage was not WRONG -- it was just not what anyone wants
-  //  in a crate. The petports_petport tag above is what places it now.
-  //
-  //  THE PANE SUBTITLE. ContainerPane overwrites a pane's title and subtitle
-  //  from `shortdescription` and `category`, but ONLY when the object has a
-  //  category -- vanilla's FTL fuel hatch declares none and its pane keeps its
-  //  own strings. This pane currently read "Storage" underneath the name.
-  //
-  //  The borrowed pettether.config declares no title widget of its own, so
-  //  nothing replaces that yet; the subtitle simply goes away until the
-  //  ScriptPane lands. A ScriptPane does not have this problem at all, which is
-  //  why this is a tidy-up rather than a fix.
-  //
-  //  IF A CATEGORY EVER GOES BACK ON, it silently reverts the pane subtitle to
-  //  a category label. That coupling is invisible from either file alone.
 
   "price" : 550,
   "printable" : false,
@@ -48,51 +14,19 @@
   
   "health" : 5,
 
-  //  assistant type here so "hostile" ignores us and the player doesn't view the entity hp bar on mouseover
   "damageTeam" : { "type" : "assistant", "team" : 0 },
 
-  //  One pet, one slot.
   "slotCount" : 1,
 
-  //  THE BESPOKE PANE. Replaced the borrowed /interface/chests/pettether.config
-  //  on 2026-08-28. A ContainerPane WITH A SCRIPT, the same third thing the
-  //  upcycler is -- real container slots plus arbitrary widgets in one window.
   "uiConfig" : "/interface/lofty_petports/petportconfig/petportconfig.config",
 
-  //  ContainerPane DRAWS ITS OWN HEADER ICON from `inventoryIcon` unless this
-  //  is false. With it left unset the pane would show the port's inventory
-  //  sprite and the title widget's own `icon` child would be invisible
-  //  underneath it -- and since both pointed at the same file on the upcycler,
-  //  the two were indistinguishable for a while. The fuel hatch's pattern:
-  //  turn ContainerPane's off, supply a different image in the title widget.
   "hasWindowIcon" : false,
 
-  //  Container must not auto-close while the player is fiddling with options.
   "autoCloseCooldown" : 3600,
   "frameCooldown" : 5,
 
-  //  Where the unit wakes up, relative to the station.
   "petSpawnOffset" : [0, 0],
 
-  //  COVERAGE, IN TILES. THE AUTHORITATIVE HOME OF THIS NUMBER.
-  //
-  //  It used to live only as a Lua global in petports_petport.lua, which was
-  //  fine while the only reader was the port itself. It is not fine now: the
-  //  player-side coverage overlay has to draw a TENTATIVE rect for a port that
-  //  does not exist yet, and the only thing it can ask about a held item is its
-  //  config. A Lua global inside a script that has not run is invisible.
-  //
-  //  Read once at init into COVERAGE_SIZE and pushed onward from there -- to
-  //  the registry rect, the residency stagehand's resident region, the work
-  //  scan and the vent gather. Everything downstream already takes it as a
-  //  parameter, so this is the only place it is written.
-  //
-  //  AND IT MAKES A RESKIN A JSON EDIT. A Steampunk or Floran petport that
-  //  wants a different reach changes this line and nothing else -- same as the
-  //  petports_petport itemTag above, and for the same reason.
-  //
-  //  SEE THE COMMENT ON COVERAGE_SIZE BEFORE RAISING IT. Cost is AREA, so
-  //  doubling this is 4x on residency, the work scan and the vent query.
   "petports_coverageSize" : 64,
 
   "inventoryIcon" : "petports_petporticon.png",

@@ -1,26 +1,3 @@
-//  Shared thinking-spinner sheet. Seventeen 16x16 cells.
-//
-//  spin.1 .. spin.8       the ring, highlight travelling clockwise
-//  spinflip.1 .. .8       the same frames MIRRORED
-//  blank                  deliberately empty
-//
-//  WHY A MIRRORED SET EXISTS
-//
-//  The engine mirrors a monster's whole animation with facing direction, and
-//  mirroring a rotation reverses it -- a spinner that runs clockwise facing
-//  right runs anticlockwise facing left. Handing the engine pre-mirrored art
-//  when the unit faces left cancels that out exactly. This needs nothing of the
-//  artwork: it does NOT have to be symmetric about the vertical axis, which the
-//  ring is not (the dot positions round to the pixel grid unevenly).
-//
-//  The alternative is a transformation group scaled by -1 on x. That is one
-//  call and keeps the animation's phase through a turn, where switching states
-//  restarts the cycle. Use this set only if transformation groups turn out not
-//  to work on a monster animator.
-//
-//  <frame> is 1-indexed in .animation files, so a "frames" : 8 state expands to
-//  spin.1 .. spin.8. Do not renumber from zero.
-
 {
   "frameGrid" : {
     "size" : [16, 16],

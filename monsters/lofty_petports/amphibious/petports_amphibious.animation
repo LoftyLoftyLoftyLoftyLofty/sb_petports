@@ -1,14 +1,3 @@
-//  M.A.U.S. UTILITY UNIT -- AMPHIBIOUS PLACEHOLDER ANIMATION
-//
-//  A COPY of drone/petports_drone.animation. Read that file for the state
-//  inventory, the spinner, and why the state type is "movement".
-//
-//  UNLIKE THE FLYER AND AQUATIC COPIES, this chassis keeps gravity, so
-//  setMovementState reaches its walk and run branches normally on land. In
-//  water it goes to setJumpState like any airborne actor and shows
-//  jumping/falling -- invisible today because every state aliases the same
-//  run.<frame> strip, and the place to add a swim cycle when real art lands.
-
 {
   "animatedParts" : {
     "stateTypes" : {
@@ -16,7 +5,6 @@
         "priority" : 0,
         "default" : "idle",
         "states" : {
-          //  --- required by groundPet.lua ---
           "idle"      : { "frames" : 8, "cycle" : 0.75, "mode" : "loop" },
           "stand"     : { "frames" : 8, "cycle" : 0.75, "mode" : "loop" },
           "walk"      : { "frames" : 8, "cycle" : 0.55, "mode" : "loop" },
@@ -25,14 +13,8 @@
           "jumping"   : { "frames" : 8, "cycle" : 0.75, "mode" : "loop" },
           "falling"   : { "frames" : 8, "cycle" : 0.75, "mode" : "loop" },
 
-          //  BEACHED FLOP -- driven only by petportsFlopState.lua.
-          //  Aliased to the same run strip as everything else until real
-          //  art lands; it exists now so the state NAME is right from the
-          //  start, because animator.setAnimationState on a state that
-          //  does not exist is a hard error rather than a no-op.
           "flopping"  : { "frames" : 8, "cycle" : 0.45, "mode" : "loop" },
 
-          //  --- driven by the action states ---
           "eat"       : { "frames" : 8, "cycle" : 0.55, "mode" : "transition", "transition" : "eatloop" },
           "eatloop"   : { "frames" : 8, "cycle" : 0.55, "mode" : "loop" },
           "inspect"   : { "frames" : 8, "cycle" : 0.75 },
@@ -43,19 +25,6 @@
         }
       },
 
-      //  THINKING INDICATOR -- a SEPARATE state type on purpose.
-      //
-      //  It has to compose with whatever "movement" is doing: a unit can be
-      //  standing, falling or asleep while a route probe grinds away behind
-      //  it. Folding "thinking" into movement would mean a spinner state per
-      //  movement state, and groundPet.lua would clobber it on the next tick
-      //  anyway -- it writes "movement" directly out of setMovementState.
-      //
-      //  Driven only by petports_think.lua. Nothing else may set it.
-      //
-      //  cycle 0.8 over 8 frames is 10fps, which reads as a deliberate tick
-      //  rather than a smooth blur. Slower than this looks stalled, which is
-      //  the exact impression the spinner exists to dispel.
       "thinking" : {
         "priority" : 1,
         "default" : "none",
@@ -63,35 +32,10 @@
           "none"     : { "frames" : 1, "cycle" : 1.00, "mode" : "loop" },
           "spin"     : { "frames" : 8, "cycle" : 0.80, "mode" : "loop" },
 
-          //  Faced left. Pre-mirrored art, so the engine's own mirroring puts
-          //  the ring back upright and spinning the same way round. Selected by
-          //  petports_think.lua off mcontroller.facingDirection().
-          //
-          //  NOTE: switching between "spin" and "spinflip" RESTARTS the cycle,
-          //  so a unit that oscillates its facing will stutter. Units stand
-          //  still while thinking, so this has not been a problem -- but if it
-          //  becomes one, a transformation group scaled -1 on x is the fix that
-          //  preserves phase.
           "spinflip" : { "frames" : 8, "cycle" : 0.80, "mode" : "loop" }
         }
       },
 
-			//  CHAT BUBBLE -- a SEPARATE state type, for the same reason
-			//  "thinking" is one: it has to compose with whatever "movement"
-			//  is doing. A unit can be walking, falling or asleep while it is
-			//  saying it cannot reach its crate.
-			//
-			//  THE STATES ARE LAYOUTS, NOT CONTENT. Content arrives at runtime
-			//  through a part tag; these four states exist only to move the
-			//  icon slots so that one, two or three icons come out centred,
-			//  and to pick a backing wide enough to hold them.
-			//
-			//  Driven only by petports_bubble.lua. Nothing else may set it.
-			//
-			//  Every state is a single static frame -- there is no animation
-			//  here at all -- but "frames" and "cycle" are still declared
-			//  because a state missing them is not obviously a still image to
-			//  anyone reading this later.
 			"bubble" : {
 				"priority" : 2,
 				"default" : "none",
@@ -105,9 +49,6 @@
     },
 
     "parts" : {
-      //  Base layer -- responds to world lighting. <partImage> resolves to the
-      //  "body" entry of whichever .monsterpart the engine selected for this
-      //  instance. This is the anchor part; the glow layer hangs off it.
       "body" : {
         "properties" : {
           "zLevel" : 2,
@@ -135,15 +76,6 @@
         }
       },
 
-      //  Glow layer, drawn over the base. Anything that should stay lit
-      //  regardless of ambient light -- optics, status strips, thruster glow --
-      //  lives in this png and nothing else does. Resolves to the
-      //  "bodyfullbright" entry of the SAME monsterpart the base layer came
-      //  from, so a chassis variant always keeps its own glow.
-      //
-      //  NOTE: this inverts pteropod's layer order, which draws its non-glowing
-      //  layer on top. Irrelevant while both layers point at the same
-      //  placeholder png; revisit if real art has them overlapping.
       "bodyfullbright" : {
         "properties" : {
           "zLevel" : 1,
@@ -172,29 +104,6 @@
         }
       },
 
-      //  Thinking spinner. Drawn above both body layers, always lit.
-      //
-      //  NOT a <partImage> reference. <partImage> resolves against the
-      //  monsterpart the engine rolled for this instance, which would force
-      //  every chassis spritesheet to carry its own spin.1..spin.8 strip just
-      //  to show a spinner that is identical on all of them. A literal shared
-      //  path costs nothing and keeps the sheet in one place.
-      //
-      //  TO GIVE A UNIT TYPE ITS OWN SPINNER, override this image path from
-      //  the monstertype via baseParameters.animationCustom rather than
-      //  forking this file. VERIFY animationCustom merges on monsters before
-      //  relying on it; if it does not, a per-type .animation is the fallback.
-      //
-      //  fullbright because an unlit status indicator is not a status
-      //  indicator. A unit probing a route in a dark cave is the case it is
-      //  most needed in.
-      //
-      //  offset is in TILES and is TUNE-IN-GAME. [0, 1.5] puts a 16px sprite
-      //  centred two tiles up, whose visible ring clears the top of a body
-      //  whose metaBoundBox tops out at 0.9. A taller chassis needs more.
-      //
-      //  No anchorPart: the body sits at the entity origin with no per-state
-      //  offsets, so anchoring buys nothing and adds a dependency.
       "thinkingspinner" : {
         "properties" : {
           "zLevel" : 3,
@@ -211,22 +120,6 @@
         }
       },
 
-			//  CHAT BUBBLE BACKING. Drawn above both body layers and above the
-			//  thinking spinner, always lit.
-			//
-			//  NOT a <partImage> reference, for the reason the spinner is not
-			//  one either: the sheet is identical on every chassis and forcing
-			//  each chassis spritesheet to carry a copy buys nothing.
-			//
-			//  Every cell in bubble.png is 64x32 with the backing drawn
-			//  centred inside it, so this part needs ONE fixed offset and the
-			//  bubble grows symmetrically as slots are added. See
-			//  bubble.frames for where the widths come from.
-			//
-			//  offset is in TILES and is TUNE-IN-GAME. [0, 3.0] puts the
-			//  tail just above a body whose metaBoundBox tops out at 0.9. A
-			//  taller chassis needs more, and moving it means moving the four
-			//  icon offsets by the same amount.
 			"bubbleback" : {
 				"properties" : {
 					"zLevel" : 4,
@@ -245,22 +138,6 @@
 				}
 			},
 
-			//  THE THREE ICON SLOTS, in reading order.
-			//
-			//  The image is a TAG, not a path. petports_bubble.lua fills it in
-			//  per slot with animator.setPartTag, which scopes the tag to one
-			//  part -- so all three can share the name "icon" without
-			//  colliding.
-			//
-			//  The per-state offsets are the whole layout mechanism: n icons
-			//  live in slots 1..n and the offsets for that state centre them
-			//  on the unit. Slots above n are blanked by the script.
-			//
-			//  ALL FOUR BUBBLE PARTS BELONG TO THE "bubble" TRANSFORMATION
-			//  GROUP AND TO NOTHING ELSE. A part in two groups has them
-			//  applied in a fixed internal order rather than in the order the
-			//  Lua calls were made, so a second group here would silently
-			//  fight the un-flip. See petports_bubble.lua's header.
 			"bubbleicon1" : {
 				"properties" : {
 					"zLevel" : 5,
@@ -320,19 +197,11 @@
     }
   },
 
-	//  Holds the four chat-bubble parts and nothing else. Scaled -1 on x by
-	//  petports_bubble.lua whenever the unit faces left, which cancels the
-	//  engine's own mirror so the icons keep their reading order and their
-	//  own handedness.
-	//
-	//  DELIBERATELY NOT "interpolated". A mirror has to snap; interpolating
-	//  one animates the bubble squashing through zero width on every turn.
 	"transformationGroups" : {
 		"bubble" : { }
 	},
 
   "effects" : {
-    //  Referenced by knockoutEffect in the monstertype.
     "blink" : {
       "type" : "flash",
       "time" : 0.25,
@@ -346,7 +215,6 @@
       "particles" : [ ]
     },
 
-    //  Referenced by deathParticles in the monstertype.
     "deathPoof" : {
       "particles" : [
         {
@@ -368,7 +236,6 @@
       ]
     },
 
-    //  --- the four petbunny defines; groundPet.emote() bursts these by name ---
     "emotehappy" : {
       "emissionRate" : 1,
       "particles" : [
@@ -449,7 +316,6 @@
       ]
     },
 
-    //  Ambient Zs while asleep -- separate from the emotesleepy burst.
     "sleep" : {
       "emissionRate" : 2,
       "particles" : [

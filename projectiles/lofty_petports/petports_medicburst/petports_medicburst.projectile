@@ -1,71 +1,17 @@
-//  PETPORTS -- MEDICAL DELIVERY BURST
-//
-//  MODELLED ON VANILLA'S fasthealingstatusprojectile, which is what a healing
-//  STATUS POD emits -- so the visual language is one players have already
-//  learned somewhere else.
-//
-//  WHY A PROJECTILE APPLIES THE EFFECT AT ALL. Applying a status effect to
-//  another entity has no reliable direct route across the four patient classes
-//  we treat; a player, an NPC, a farm animal and a capture-pod pet are four
-//  different sorts of thing with four different script surfaces. A projectile
-//  goes through the DAMAGE system, which every one of them already implements.
-//  The mechanism is entity-agnostic, which is exactly the property we need.
-//
-//  "damageTeam" : "indiscriminate" IS REQUIRED, NOT SLOPPY. Damage teams decide
-//  who you can HARM. A healing projectile that respected them would apply its
-//  effect only to things the unit could hurt -- the exact inverse of what is
-//  wanted -- so it has to hit everything and the effect being beneficial is what
-//  makes that correct. Vanilla does the same for the same reason.
-//
-//  THE CONSEQUENCE IS ACCEPTED: a hostile standing next to the patient gets
-//  regeneration too. That splash is the price of a mechanism that works on
-//  every patient class, and it is bounded by the poly below.
-//
-//  THE POLY IS DELIBERATELY SMALLER THAN VANILLA'S. fasthealingstatusprojectile
-//  uses +/-80px -- twenty tiles across -- which for a status pod dropped on a
-//  fight is fine and for a medic in a base would dose everything in sight,
-//  friend and enemy, off one delivery. +/-40px is ten tiles across, which covers
-//  the patient generously at MEDIC_REACH 6 without turning one dose into an
-//  area denial weapon.
-//
-//  power 0 AND damageKind "hidden": no damage, and no floating number. The
-//  delivery should read as a medical event rather than as a hit.
-//
-//  timeToLive 0.25 -- IT IS A BURST, NOT A ZONE. The effect duration is carried
-//  by the statusEffects entry below, NOT by how long this lives. A two-minute
-//  zone would be a two-minute projectile per patient, following them around.
-
 {
 	"projectileName" : "petports_medicburst",
 
-	//  Stationary. It is delivered where the unit stands, not thrown.
 	"physics" : "statuspod",
 	"bounces" : -1,
 	"speed" : 0,
 
 	"timeToLive" : 0.25,
 
-	//  THE SPRITE IS INTENTIONALLY BLANK. DO NOT "FIX" IT BY DRAWING SOMETHING.
-	//
-	//  Vanilla's healingstatusprojectile.png is fully transparent too, and that
-	//  is the design rather than an unfinished asset: the projectile lives 0.25
-	//  seconds, so anything drawn here is a quarter-second flash of an 8x6
-	//  sprite, which reads as a rendering glitch. THE VISUAL IS THE PARTICLE
-	//  BURST in actionOnReap below -- twenty-five pinkgas puffs -- which is what
-	//  a player recognises from a healing status pod.
-	//
-	//  The fields stay because the config wants them, and the frames file
-	//  describes a real 4x(8x6) grid so the engine has something coherent to
-	//  read. OUR OWN BLANK, NOT A BORROWED ONE: todo.art.invisibleframe records
-	//  what happens when a hide depends on somebody else's empty frame.
 	"image" : "petports_medicburst.png",
 	"animationCycle" : 0.5,
 	"frameNumber" : 4,
 	"flippable" : true,
 
-	//  Shown beside the effect rather than as damage, since damageKind is
-	//  hidden. A red cross with a white border -- read instantly, in any
-	//  language, at 16 pixels.
 	"damageKindImage" : "icon.png",
 
 	"actionOnReap" : [
@@ -80,16 +26,6 @@
 			]
 		},
 
-		//  THE RED STIM NOISES, so a dose SOUNDS like the thing a player already
-		//  knows -- the same reasoning as borrowing the status pod's particles.
-		//
-		//  TWO SEPARATE ACTIONS, NOT ONE WITH TWO OPTIONS. A single sound action
-		//  picks ONE entry from its options at random; these are meant to layer,
-		//  the injection under the power-up.
-		//
-		//  ON REAP RATHER THAN ON SPAWN because a projectile has no spawn hook.
-		//  timeToLive is 0.25, so the gap is a quarter second and reads as
-		//  simultaneous with the burst.
 		{
 			"action" : "sound",
 			"options" : [ "/sfx/statuseffects/stimuse.ogg" ]
@@ -108,31 +44,6 @@
 
 	"damageTeam" : { "type" : "indiscriminate" },
 
-	//  THE DURATION IS OVERRIDDEN HERE AND THIS IS THE WHOLE REASON WE NEED NO
-	//  STATUS EFFECT FILE OF OUR OWN. A statusEffects entry carries its own
-	//  duration, which beats the effect's defaultDuration -- vanilla's own
-	//  fasthealingstatusprojectile stretches regenerationfast from its default
-	//  to 10 the same way.
-	//
-	//  120 IS TWO MINUTES AND IS LOAD-BEARING FOR MORE THAN GENEROSITY. It has
-	//  to outlast the network heal cooldown's usefulness: two medics treating
-	//  each other cannot loop, because the first dose is still running when the
-	//  cooldown expires.
-	//  A DOSE IS A MEDKIT, NOT A BANDAGE. One medical trade good is expensive --
-	//  far more so than the bandages a player makes by the stack -- and paying
-	//  that for regeneration alone was the same benefit for a much rarer item.
-	//  These four are what a player expects a proper medkit to do.
-	//
-	//  TWO SECONDS IS NOT A TYPO AND MUST NOT BE "FIXED" UPWARDS. A block effect
-	//  at duration 2 exists to CLEANSE, not to protect: it strips a burning,
-	//  frozen, shocked or poisoned status already running and then expires. A
-	//  long duration would turn a heal into blanket elemental immunity, which is
-	//  a combat buff nobody asked this module for -- the same line the poison and
-	//  lava modules draw when they refuse to grant damage-type resistances.
-	//
-	//  THE REGEN IS THE ONE THAT LASTS. 120 seconds, and it has to outlive the
-	//  network heal cooldown's usefulness so two medics treating each other
-	//  cannot loop -- see petports_healRecord.
 	"statusEffects" : [
 		{ "effect" : "redstim", "duration" : 120 },
 

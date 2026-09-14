@@ -1,703 +1,94 @@
---  PETPORTS UNIT -- TASK EXECUTION
---
---  Executes a task the petport dispatched. The unit does not discover work;
---  discovery belongs to the port, which owns the coverage rect and is resident
---  whenever the network is.
---
---  NAMING
---
---  groundPet.lua builds its action list with
---
---      stateMachine.scanScripts(config.getParameter("scripts"), "(%a+Action)%.lua")
---
---  and looks the captured name up in _ENV, so the global below must match the
---  filename's capture exactly. %a is letters only -- an underscore truncates.
---  "petportsTaskAction" is all letters, so it survives whole.
---
---  Unlike petportsSleepAction, this state does NOT need a description()
---  override. That one reports vanilla's name because petBehavior hardcodes
---  ["sleep"] = "sleepAction". Our forked petBehavior maps
---  ["petportsTask"] = "petportsTaskAction", which is what stateDesc() returns
---  by default, so the behaviour layer already sees the right label.
---
---  TASK SHAPE
---
---      { id = <workId>, type = <"diag" | "collect" | "harvest" | ...>,
---        port = <petport uniqueId>, position = {x, y},
---        target = <entity id, "collect" and "harvest" only>,
---        dwell = <seconds, "diag" only> }
---
---  TASK TYPES
---
---  "collect" -- walk to an item drop and take it. The drop's position is
---  re-read every tick rather than trusted from the task, because drops FALL,
---  slide, and get pushed around; a stale target sends the unit to where the
---  item used to be.
---
---  The item is DESTROYED on pickup for now. That is the testing sink, and it is
---  deliberate — clutter accumulating in an inventory or a box across repeated
---  runs makes every subsequent run harder to read. The real sinks are the
---  petport's own storage, then crate routing. A collection task is "claim,
---  path, pick up, dispose" and only the last step changes.
---
---  "harvest" -- walk to a ripe farmable and pick it. The act is a
---  world.damageTiles call on the crop's own tile: FarmableObject overrides
---  damageTiles and calls harvest() for Beamish, Blockish and Plantish damage,
---  consuming the damage when the harvest succeeds. The engine handles
---  resetToStage, so a crop that regrows and a crop that is destroyed take the
---  same call and need no distinction here.
---
---  The unit does NOT pick up what it harvested. The drops are ordinary drops,
---  and the ordinary collection task takes them on a later dispatch -- including
---  any seed, which walks back to storage like anything else. That is the whole
---  of the v1 scope.
---
---  "withdraw" -- walk to a crate and stand there. No act at all: the port does
---  the world.containerConsume when the arrival is reported, the same way it
---  does the containerAddItems for a deposit. The seed lands on petData, so it
---  never has to exist anywhere it could be dropped.
---
---  "fuelfetch" -- IDENTICAL TO withdraw, and deliberately so. Walk to a crate
---  marked as a pet feeder and stand there; the port consumes one treat and
---  feeds it. dd.fuel.autoeat decides WHETHER the trip happens; this end only
---  walks.
---
---  "replant" -- walk to a tile an intent names and put the seed back in the
---  ground with world.placeObject. The seed and the crop share one name, so
---  there is nothing to look up: what was harvested is what gets planted.
---
---  "water" -- sweep a run of dry tilled soil, one tile at a time, spending one
---  unit of carried liquid per tile.
---
---  THE FIRST TASK WITH MORE THAN ONE DESTINATION. Every other task walks to a
---  place and does a thing; this one walks a LIST, in order, and the order is
---  the feature -- watering a forty-tile row in discovery order looks like a
---  malfunction rather than gardening. The port builds the run ordered and picks
---  the end nearer the unit; the unit sweeps away from it and never reverses.
---
---  The act is a projectile, not a liquid. world.spawnLiquid needed up to
---  fourteen attempts to saturate one tile -- it is tuned for rain, not for
---  gardening -- while applySurfaceMod is exact and lands once. So the droplet
---  is spawned ABOVE the tile and falls onto it, which is also what tilled
---  soil's topOnly liquidInteractions expect.
---
---  "animal" -- walk to a farm animal and take its produce. The act is one
---  call, world.callScriptedEntity(target, "dropMonsterHarvest"), which spawns
---  the treasure AND resets the animal's own harvest timer in the same function.
---  We never touch that timer, so we cannot corrupt it -- faking the harvest with
---  spawnTreasure would leave the animal permanently ready, which is a
---  duplication exploit rather than a farm.
---
---  Drops land on the ground at the animal, so collection and deposit take it
---  from there unchanged, exactly as with crops.
---
---  "trap" -- walk to a harvestable trap and empty it. THE ACT IS AN
---  INTERACTION, NOT A SWING, and that is the whole distinction from "harvest".
---  A moth trap declares no objectType, so it is a plain Object running
---  /objects/scripts/harvestable.lua rather than a FarmableObject -- nothing
---  intercepts world.damageTiles, and that script's die() calls dropHarvest, so
---  a swing would break the trap into an item AND spill its produce while every
---  log line we wrote about it read as success.
---
---  So the act is world.callScriptedEntity(target, "dropHarvest"), which spawns
---  the treasure and resets the trap's own age in the same function -- the same
---  arrangement, and the same reason for trusting it, as dropMonsterHarvest
---  above.
---
---  RIPENESS IS activeAge() AGAINST A THRESHOLD THE PORT COMPUTED. Retail
---  exposes no way to read another entity's interactivity, which is the exact
---  bit setStage maintains, so the age is the only signal there is. Verification
---  is the same call again: dropHarvest resets the age to roughly zero and does
---  it synchronously, so unlike the crop swing this settles inside one tick.
---
---  Drops land at itemDropOffset -- two and a half tiles up, for a moth trap --
---  and ordinary collection takes them from there.
---
---  DIAGNOSTIC TASK
---
---  type "diag" is throwaway. Walk to a point inside the rect, stand there,
---  report done. It exists to isolate the infrastructure -- does the port
---  discover work inside its rect and refuse it outside, does a claim get taken
---  and released, does a claim expire when the unit dies mid-task, does any of
---  it survive a reload -- without also debugging an unproven item API. Delete
---  it once drop collection works.
-
 petportsTaskAction = {}
 
---  How long to keep trying to reach the target before giving up and handing the
---  task back. Not a cooldown: the port re-dispatches, and repeated failures on
---  the same point are the signal worth seeing in the log.
 local APPROACH_TIMEOUT = 20.0
 
---  How close counts as arrived. Passed to approachPoint, which owns the actual
---  test -- see update().
 local ARRIVAL_DISTANCE = 1.5
 
---  Per-second approach tracing. Noisy; off once reachability is understood.
 local TASK_DEBUG = true
 
---  PER-TICK MOVE SAMPLES (UNIT pre-move / post-move) ARE OPT-IN, 2026-09-07a.
---  One line each per tick of every held path: ~20 lines a second per moving
---  unit, which was most of a multi-hour log by volume. The per-second
---  tracing under TASK_DEBUG stays; these two are for reading one specific
---  stall and are off until someone needs them.
 local TASK_TRACE_MOVES = false
 
---  PER-TICK FLIGHT TRACE. See flightTrace. OFF FOR RELEASE -- it is one line per
---  tick of every flight, which is the densest logging in this mod and is meant
---  to be switched on for a specific question and switched off again.
---
---  BACK ON 2026-09-11 FOR THE SHORT DESCENDING HOP. Measured over a night's
---  soak: the same jump 37 times, [5884,1169] vx 6 for [5886,1168]. solveLaunch
---  solved it correctly -- dx 2, dy -2, vx 6 gives t 0.333 and vy 13, and the
---  logged apex 0.81 matches that vy -- and the unit then travelled ONE tile
---  across instead of two and landed back on its own floor. Three candidates
---  survive that log and want different fixes:
---
---    FLOOR RE-ENTRY   a descending parabola must pass back through takeoff
---                     height, and solveLaunch branch 1 never tests the terrain
---                     between here and the landing. Returns to launch height
---                     at t 0.217, reaching the drop-off needs t 0.333.
---    HORIZONTAL GATE  the arc mover turns horizontal on at the turnover, which
---                     plan.drawio already records as wrong for short hops.
---    AIR-CONTROL CAP  1.0 tile in 0.217 s is 4.6 tiles/s against a planned 6,
---                     and 4.6 is a speed other units in the same log fly at. If
---                     vx is capped there, solveLaunch's t = |dx| / |plannedVx|
---                     is computed from a speed the unit cannot hold and EVERY
---                     airtime it produces is short.
---
---  READ `moved` AND NOT `vel` TO TELL THEM APART -- see the velocitysample note
---  on flightTrace itself. moved/dt holding near 6 with an early landing is
---  floor re-entry; starting low and rising at the turnover is the gate; pinned
---  at 4.6 from tick 1 is the cap.
---
---  ANSWERED AND SWITCHED BACK OFF 2026-09-04. The question was the amphibious
---  water exit; the answer is arch.locomotion.exitdefer. What the trace supplied
---  that nothing else could was the pair of lines that separated the two prices
---  of a mid-arc rebuild -- `vel [0,7.95]` at a plan loss on a vertical launch
---  against `vel [-8,20.18]` on a dry one -- which is the whole distinction the
---  fix rests on. It also carried the ladder stall, though the pre-move and
---  post-move pair would have been enough for that one on its own.
---  OFF AGAIN 2026-09-11. The short descending hop is answered: solveLaunch was
---  substituting an unvalidated flat arc for the planner's validated tall one,
---  and it now refuses any arc of its own that flies through terrain. Confirmed
---  over a full round trip -- 51 jumps, no repeated takeoff-landing pair, three
---  refusals all distinct.
 local FLIGHT_TRACE = false
 
---  THE FUEL GATE'S TWO TRANSITION LINES.
---
---  OFF BY DEFAULT, 2026-09-13h. They cannot repeat per tick -- one fires when a
---  window closes short and the other when the anchor is next beaten -- and they
---  were 14 lines of 18,658 in the run that verified the gate. But a cold nav
---  store means a unit that fails task after task while the graph builds, and
---  every one of those failures is a hold/resume pair. The evidence they carry
---  is only wanted while the gate itself is in question, and it is not.
---
---  WRAPPED, NOT MUTED. Lua evaluates arguments before the call, so a helper
---  that checked the flag inside itself would still pay for every sb.printJson.
 local FUEL_TRACE = false
 
---  BUILD STAMP.
---
---  Printed once per state entry. Twice now a fix has been diagnosed as not
---  working when the running game was simply loading an older copy of the file
---  -- once because a whole tree was stale, once because one file of two did not
---  get copied. Both times the symptom was identical to a failed fix, and both
---  times it cost a launch.
---
---  Grep the stamp before believing anything else in the log. Bump it on every
---  handoff; a stamp that never changes is worse than none.
---
---  NOT LOGGED AT FILE SCOPE. THIS IS A CRASH, NOT A STYLE POINT.
---
---  Starbound loads and RUNS a script chunk when the context is created, and
---  binds the root callback tables -- sb, world, root, mcontroller -- afterward.
---  So at chunk-execution time `sb` is still nil, and any top-level `sb.logInfo`
---  raises "attempt to index global 'sb' (a nil value)" before a single function
---  in this file is defined. The unit never gets a task action at all.
---
---  Every other engine call in this mod lives inside a function for this reason.
---  If a stamp is wanted earlier than first entry, put it in a function the
---  monstertype's script list will call, never beside the local it names.
 local BUILD_STAMP = "2026-09-13h the fuel gate's hold and resume lines are behind FUEL_TRACE, off -- the gate is verified and a cold nav store would make a pair of them out of every failed task"
 local stampLogged = false
 
---  How long to let A* search without producing a path before calling the
---  target unreachable.
---
---  THE PATHFINDER NEVER REPORTS UNREACHABLE. PathFinder:explore() only returns
---  false when A* exhausts its open set, and on an open planet surface the
---  accessible region is effectively unbounded -- so an unreachable target keeps
---  returning "pathfinding" indefinitely. Observed: hasPath false with aStar
---  alive for the full twelve-second approach timeout, on a target up a ladder.
---
---  A reachable target is found almost immediately by comparison: flat-ground
---  tasks report hasPath true on the first telemetry line. So a search still
---  running after a few seconds is not slow, it is not going to succeed.
---
---  This is a real cost saving as well as a faster failure: a churning A* is
---  burning CPU every tick it runs.
---  How long to let A* search without producing a path before calling the
---  target unreachable.
---
---  MEASURED 2025-08-20 at the default explore rate: a chained route (deck ->
---  staircase -> four platform hops) took 22.25 SECONDS to solve; the same
---  target from atop the platforms took 0.08s. It was never unreachable, it was
---  starved. See EXPLORE_RATE below -- with the budget raised, the hard case
---  costs about two seconds, so six is a comfortable ceiling.
 local SEARCH_LIMIT = 6.0
 
---  Node expansions per update, overriding PathFinder:exploreRate().
---
---  Vanilla derives this from world.fidelity(), which is a SERVER-side load
---  setting with no player control -- 25 at "minimum", 150 at "high". At 25 a
---  jump-chained route needs tens of seconds to solve, which is why long routes
---  looked unreachable.
---
---  Fixing it here rather than accepting the fidelity value means pathing
---  quality no longer varies with server load, which is worth more than the
---  saved cycles: a unit that can reach a platform on a quiet server and not on
---  a busy one is indistinguishable from a bug.
---
---  This does NOT increase total work for a solvable path -- the same nodes are
---  expanded, just sooner. It DOES make an unsolvable search burn its 70000-node
---  allowance faster, which is a benefit: A* then returns false honestly instead
---  of searching indefinitely.
 local EXPLORE_RATE = 300
 
---  A COARSE LEG SEARCHES AT FOUR TIMES THAT. MEASURED 2026-09-05 03:50: the
---  walk's search is stable (one aStar for the whole leg) and is stepped 12
---  times a second -- this script's update cadence -- so SEARCH_LIMIT gives it
---  72 explores, 21,600 nodes. The probe that proved the same edge needed 88
---  explores. The walk lost by the margin between 72 and 88, on every
---  through-the-floor pair, and the re-probe said "true after 88" each time.
---  At 1200 per explore the same six seconds cover 86,400 nodes, past the
---  70,000 maxNodesToSearch the probe itself is bounded by, so any edge a
---  probe can prove, a leg can walk within its limit. The direct search keeps
---  300: it is not replaying a proof and has no such bound.
 local NAV_LEG_EXPLORE_RATE = 1200
 
---  How long to wait for a drop to stop falling before calling it unreachable.
 local SETTLE_GRACE = 2.0
 
---  HOW FAR THE UNIT MUST MOVE TO COUNT AS NOT STUCK.
---
---  Compared against an ANCHOR that only moves when the threshold is crossed, so
---  displacement accumulates: a unit crawling at half a tile per second still
---  clears this every fifth of a second, while a unit wedged against terrain
---  never clears it at all.
---
---  See the stuck-timer note below for what this feeds.
 local STUCK_MOVE = 0.1
 
---  HOW LONG A GROUNDED UNIT MAY SIT MOTIONLESS ON AN AIRBORNE EDGE.
---
---  Must be longer than 0.2, because moveJump deliberately parks the unit for
---  that long before takeoff: it sets the position onto the jump source, zeroes
---  the velocity, and counts jumpTimer down from 0.2. That is a legitimate
---  motionless grounded tick on a Jump edge and must not be read as a stall.
---  jumpTimer is also checked directly below; this is the second guard.
---
---  Below vanilla's own 0.5, so the classified line lands before the anonymous
---  reset does.
 local AIRBORNE_EDGE_STALL = 0.35
 
---  HOW FAR TO LOOK FOR A NODE THE SEARCH CAN ACTUALLY BEGIN FROM.
---
---  Two tiles, and small on purpose. This corrects a unit that is standing a
---  fraction off its own node, not one that is somewhere wrong -- the measured
---  case needed 0.61 tiles. A candidate further out than this is not a nudge,
---  it is a journey, and a journey is the pathfinder's job.
 local ORIGIN_NUDGE_RADIUS = 2
 
---  How close to the chosen node counts as arrived.
---
---  NOT "until the predicate flips", even though that is the condition we care
---  about. The node boundary sits at x.5, so the predicate flips the instant the
---  unit crosses it and leaves the body balanced ON the boundary, where a
---  fraction of drift breaks it again. Walking to the node CENTRE puts half a
---  tile of margin either side. Measured: the perch at x 2503.39 flips at
---  2503.5, which is 0.11 tiles of travel and no margin at all.
 local ORIGIN_NUDGE_ARRIVE = 0.25
 
---  Give up and let the ordinary failure ladder have it.
---
---  Generous relative to the distance involved -- 1.5s is roughly twelve tiles
---  at walk speed and the nudge is never more than two. Anything approaching
---  this limit means the unit is not travelling, and continuing to push it is
---  how a recovery turns into a livelock.
 local ORIGIN_NUDGE_TIMEOUT = 1.5
 
---  The same idea for a GROUNDED WALK edge, and deliberately much longer.
---
---  A walker can be legitimately motionless for a tick or two -- against a step,
---  or while the controller reverses direction -- and replanning on that would
---  thrash a path that was about to work. Over a second of a grounded walk going
---  nowhere is never legitimate.
---
---  ABOVE vanilla's 0.5, unlike AIRBORNE_EDGE_STALL, and that is the trade. If
---  vanilla's stuckTimer is working it resets the path first and this never
---  fires, which is fine -- this exists for the case where it demonstrably did
---  not: a leash walk that sat on one Walk edge for seven seconds with no
---  replan and no path LOST, on an open platform, until the unit was resocketed
---  by hand.
 local WALK_EDGE_STALL = 1.25
 
---  Cap on arc waypoints skipped in one tick. Only a bound on the loop below --
---  reaching it would mean the whole descending half of an arc was above the
---  unit, which cannot happen. It exists so a malformed path cannot spin here.
 local MAX_ARC_SKIP = 16
 
---  (superseded header, see PLAN_SURFACE_TOLERANCE above)
---  and the rest of its arc has been discarded.
---
---  The plan past an arc was computed for the position the arc was supposed to
---  end at. Land somewhere else and every edge after it is describing a walk the
---  unit is not standing at the start of. Vanilla cannot notice: moveLand's
---  acceptance test is
---
---      (onGround or ...) and math.abs(self.delta[1]) < 1
---
---  which is HORIZONTAL ONLY -- so a unit four tiles above its landing, with x
---  within a tile, advances straight off the end of the path. moveWalk is blind
---  the same way: it steers on edgeDelta[1] alone and will happily walk a plan
---  belonging to another surface.
---
---  HOW FAR OFF IN Y THE UNIT IS ALLOWED TO BE FROM THE SURFACE ITS PLAN WAS
---  COMPUTED FOR.
---
---  THIS WAS 1.0 AND 1.0 WAS WRONG. It was picked to match the tolerance
---  moveLand already applies to x, and that reasoning does not transfer: x is a
---  position along a surface and genuinely needs slack, y IS the surface. Feet
---  snap to tile tops, so a landing that went to plan reads EXACTLY 0 -- every
---  on-plan landing measured so far has.
---
---  So the number was never absorbing measurement error. It was absorbing whole
---  platforms, and on ONE-TILE platform spacing it absorbed exactly one:
---
---      ARC landed on-plan at [3758,1027.8]: next edge Land targets
---        [3758,1026.8], 1 tiles off in y (tolerance 1) -- keeping the plan
---
---  `1 > 1` is false, so a plan that was a full rung wrong was kept. The next
---  four lines are Walk edges targeting y 1026.8 executed by a unit standing at
---  1027.8, and it wedged at x 3756.7 with velocity [0,-1.537] for six tenths of
---  a second -- the top of a 1.6-tall box in the dirt, walking a corridor sized
---  for a body one tile lower.
---
---  0.5 is below the tightest platform spacing the game permits and far above
---  any float noise in a snapped landing, so it cannot swallow a surface and
---  cannot fire on a good one.
 local PLAN_SURFACE_TOLERANCE = 0.5
 
---  Vanilla's own takeoff radius, copied rather than changed. See the header on
---  petportsJumpMover for why this is not widened.
 local JUMP_TAKEOFF_REACH = 1.0
 
---  Below this horizontal offset there is nothing to walk toward -- the jump
---  point is effectively straight up or straight down.
 local JUMP_APPROACH_EPSILON = 0.05
 
---  How far the jump source may sit above or below the unit and still be worth
---  WALKING toward.
---
---  Walking changes x. It does not change what level the unit is standing on, so
---  a source four tiles down is not something to approach -- it is evidence the
---  unit is not where its path thinks it is, and the answer is a replan.
---
---  One tile: enough to cover a source on a slope or a half-step, not enough to
---  cover a different floor.
 local JUMP_LEVEL_TOLERANCE = 1.0
 
---  How close to a coming jump point the unit slows down, and to what.
---
---  moveJump only fires within 1.0 of its source. At walkSpeed 8 the script
---  advances the unit about 0.66 tiles per tick, so that window gets ONE sample,
---  maybe two, and the phase decides whether either lands inside it.
---
---  On flat ground a miss is recoverable -- walk back. AT A LEDGE IT IS NOT.
---  Measured: the unit walked off at full speed, the path advanced to the Jump
---  edge only after it was already airborne and 1.23 tiles from the takeoff
---  point, and it fell eight tiles.
---
---
---  THE NUMBERS ABOVE ARE THE CONDITIONS THE MEASUREMENT WAS TAKEN UNDER, NOT
---  CURRENT VALUES. The chassis was nerfed 2026-09-04 to walk 6 / run 9 / fly
---  9 or 11 so that Metabolism III lands back on roughly the old speed --
---  arch.module.metabolism. The measurement stands as taken; do not rewrite it
---  to the new numbers, and do not derive a fresh one from it without re-taking
---  it. Nothing here needed retuning: every constant in these files is an
---  absolute distance, time or threshold rather than a fraction of a speed.
---
---  3.0 gives about 0.25 tiles per tick, so the window gets three or four
---  samples instead of one. 2.5 tiles of run-in is enough to shed the speed
---  without making ordinary walking look sluggish -- it only applies with a jump
---  immediately ahead.
---
---  CONTEXT-GLOBAL, NOT local, AND THE SWIM MOVER IS WHY. petportsFreeMover
---  lives in petports_flyapproach.lua and needs the same two numbers for the
---  same reason -- see the brake in that file. A local here would read as a nil
---  global there and the comparison would silently never fire, which is the trap
---  petports_objectPointNear was moved into this file to avoid. Both files load
---  into one monster context and the read happens at CALL time, so load order
---  does not matter. Costs nothing and returns two slots against MAXVARS.
 JUMP_APPROACH_SLOWDOWN = 2.5
 JUMP_APPROACH_SPEED = 3.0
 
---  HOW FAR A SWIMMER WILL CHASE ITS OWN JUMP POINT.
---
---  The walk-back recovery below is gated on onGround, which is never true for a
---  unit swimming at a waterline, so a swimmer that overshoots its jump source
---  has no recovery at all -- and, because an amphibious chassis is held up
---  ENTIRELY by the swim mover's thrust, a mover that issues nothing is a mover
---  that drops it. Measured 2026-09-01: handover at srcDist 0.557, the radius
---  test one tick later at 1.194, and the unit fell 21 tiles to the lakebed.
---
---  4.0 IS SIZED BY THE SINK, NOT BY TASTE. The first look after handover sees
---  about 1.2 tiles of gap; at terminal -22 and a script delta of 5 the unit can
---  drop 1.8 tiles between looks. Four tiles leaves at least one whole look of
---  margin after the first, and is still short enough that a unit further out
---  than this is not "just past its jump point" -- it is somewhere else, and
---  chasing a point it was never near is guessing.
---
---  BEYOND IT, LETTING THE UNIT SINK IS THE CORRECT ANSWER, which is worth
---  stating because it looks like the bug. The grounded-stall check in update()
---  is the ONLY thing that can replan a unit parked on a Jump edge, and it
---  requires onGround -- so holding station in open water would wait forever on
---  a detector that cannot fire. Sinking terminates in a floor, a stall and a
---  replan. It is slow and it is ugly and it converges.
 local JUMP_SWIM_CHASE = 4.0
 
---  How far ahead to read the planned arc when working out how high the jump
---  actually has to go. Arcs run a few dozen sample edges; this only has to
---  outlast the longest of them.
 local MAX_JUMP_LOOKAHEAD = 64
 
---  Launch a little harder than the arithmetic demands. Covers the discrete
---  integration loss between the continuous solution and the engine's stepped
---  one, which costs a few hundredths of a tile of apex.
 local JUMP_VELOCITY_MARGIN = 1.02
 
---  Never launch harder than this multiple of the planned velocity. A path that
---  asks for something absurd is a broken path, and it should fail visibly
---  rather than fling the unit across the room.
 local JUMP_VELOCITY_CAP = 1.25
 
---  Horizontal speed at which a landing on a one-wide surface still settles
---  rather than skids. Measured 2026-09-12: 11.7 slid off, and the arc that
---  landed at ~8 held.
 local NARROW_LANDING_VX = 8.0
 
---  HOW FAR ABOVE THE LANDING THE ARC MUST TOP OUT.
---
---  An arc whose apex is exactly the landing height arrives with zero vertical
---  velocity, which is the marginal case: any rounding, any friction, and the
---  unit falls short of the ledge and hits its face instead. This buys enough
---  height that the unit is genuinely coming DOWN onto the surface.
---
---  0.5 MATCHES PLAN_SURFACE_TOLERANCE, deliberately. That is the distance at
---  which the rest of this file already decides a unit is on the wrong surface,
---  so aiming to arrive inside it means a landing this solver produces is one the
---  landing checks will accept.
 local JUMP_ARC_CLEARANCE = 0.5
 
---  THE ENGINE'S PHYSICS TICK, AND THE REASON THE SOLVER HAS TO KNOW IT.
---
---  The movement controller integrates with EXPLICIT EULER -- it advances
---  position using the velocity from BEFORE gravity is applied that tick -- so a
---  real trajectory sits above the ideal parabola by
---
---      y_discrete - y_continuous = g * dt * t / 2
---
---  which at g 120 and dt 1/60 is exactly t tiles. Half a tile at half a second
---  of airtime, and it grows with every jump that hangs longer.
---
---  MEASURED, NOT ASSUMED. Fitted over every ballistic in-flight sample in one
---  session's log, using each tick's own vertical velocity as the clock, per
---  flight:
---
---      8 of 9 flights, slope 1.0000, sd 0.0024
---
---  The ninth was a ceiling contact, where vy is no longer a clock. dt = 1/60 to
---  a quarter of one percent.
---
---  THIS IS WHAT MADE THE FIRST ENDPOINT SOLVER MISS. It solved the continuous
---  parabola exactly and correctly, and the unit still arrived half a tile high
---  at its landing, clipped the ledge lip and fell back -- five identical laps.
---  The solve was right about the physics it modelled and the engine was running
---  different physics.
---
---  NOT AVAILABLE FROM ANY API, hence a constant. script.updateDt() is the SCRIPT
---  delta and is unrelated -- the controller integrates on the engine tick no
---  matter how often this script runs.
 local PHYSICS_DT = 1 / 60
 
---  ARRIVAL IS A SIGN TEST, NOT A DISTANCE. -- REPLACES LAND_BRAKE_REACH 0.5
---
---  THE OLD TEST WAS `math.abs(here[1] - landing[1]) <= 0.5`, which asks "am I
---  near the landing's column" and NOT "have I got there". Those differ in
---  exactly the case that matters: a unit still travelling TOWARD the landing is
---  near it, and braking then removes the only velocity that could finish the
---  crossing.
---
---  MEASURED THREE TIMES, 2026-09-01, at two different sites:
---
---      here [2535.59,1150.56]  landing [2536,1149.8]   0.41 short, 0.76 high
---      here [2523.40,1160.80]  landing [2523,1160.8]   0.40 short, level
---      here [2523.40,1160.80]  landing [2523,1160.8]   0.40 short, level
---
---  All three braked, dropped vertically and landed on the lip of a step-up
---  instead of on it. The one firing in the same log that was CORRECT had the
---  unit at the landing exactly -- `here [2531,1152.8] landing [2531,1152.8]`.
---  Signed distance separates those four cases and absolute distance cannot.
---
---  WHY THE OLD SHAPE SURVIVED REVIEW. todo.pathing.brakefloor triaged this as a
---  note rather than a defect on the argument that a 1.6-wide body braked half a
---  tile short still overlaps the landing tile. True, and it named two things
---  that would break it -- a narrower chassis, a bigger reach. It missed a third:
---  OVERLAP ONLY SAVES A LANDING WHOSE NEIGHBOURING TILE IS AT THE SAME HEIGHT.
---  Onto a step up, short means falling down the side of it.
---
---  THE EPSILON EXISTS FOR THE EXACT-ARRIVAL CASE, which is a real reading and
---  not float noise -- the successful brake above had a signed distance of
---  precisely 0. Small enough that neither measured failure (0.40, 0.41) is
---  anywhere near it.
 local LAND_BRAKE_ARRIVED = 0.05
 
---  AND HOW FAR PAST THE LANDING THE BRAKE IS STILL WORTH APPLYING.
---
---  A far-side bound is needed because the near-side one is gone. Sized to ONE
---  LOOK plus margin: at script delta 5 and speeds up to 12, the unit covers
---  about 1.0 tiles between looks, so a brake that refused anything past 1.0
---  could be stepped clean over by a fast arc -- the same one-sample problem the
---  jump takeoff radius has. Past this the arc has failed at something other than
---  its last tenth of a tile and stopping the unit dead is not the repair.
---
---  KEPT, AND KNOWN UNEXERCISED. 2026-09-01: 24 brake firings across 35 takeoffs,
---  every one of them at an `ahead` between 0 and 0.0017 -- not a single negative
---  reading, so this bound has never actually decided anything. It stays because
---  it is the only thing standing between a fast arc and no brake at all, and
---  because removing a guard on the grounds that it has not yet been needed is
---  how the near-side reach came to be trusted. It should not be quoted as
---  tested.
 local LAND_BRAKE_OVERRUN = 1.5
 
---  BELOW THIS HORIZONTAL SPEED THE UNIT IS NOT GOING ANYWHERE, and the sign of
---  its velocity carries no information about which side of the landing it is
---  heading for. Reported velocity is a friction sampling artifact at rest -- the
---  logs are full of a resting unit reading [0,-1.5353] -- so this is a band
---  rather than a comparison against zero.
 local LAND_BRAKE_STATIONARY = 0.1
 
---  And how far ABOVE the landing still counts, so a pass-over five tiles up on
---  the way to something else is not mistaken for an arrival.
 local LAND_BRAKE_CEILING = 1.0
 
---  HOW CLOSE A MOTIONLESS UNIT MUST ACTUALLY BE, HORIZONTALLY, BEFORE ITS LACK
---  OF VELOCITY COUNTS AS HAVING ARRIVED.
---
---  ADDED 2026-09-01. The stationary branch below used to set `ahead` to 0 with
---  no distance test at all, so ANY unit whose horizontal velocity fell inside
---  LAND_BRAKE_STATIONARY passed both the arrived and the overrun bound
---  regardless of where it actually was. The ceiling test was the only spatial
---  constraint, and it only looks at height.
---
---  MEASURED FALSE ARRIVAL, four identical laps:
---
---      ARCMOVER arrived at landing [2533,1142.8] from [2532.2,1143.2]
---                        vel [0,-15.6714] (ahead 0)
---
---  0.8 tiles SHORT and 0.4 tiles ABOVE, in mid-air, with the latch then holding
---  x at zero for the whole descent. The unit had lost vx to a wall on the way
---  up; losing horizontal velocity near the right height was enough to be
---  declared landed.
---
---  0.5 IS BOUNDED BELOW BY THAT MEASUREMENT AND ABOVE BY THE CASE THE BRANCH
---  EXISTS FOR. The five-lap slide-off that earned the brake was a unit AT its
---  landing to the decimal -- gap 0 -- so anything above zero preserves it. The
---  false arrival was at 0.8, so anything below that removes it. Half a tile
---  sits between them with room on both sides rather than being tuned to either.
 local LAND_BRAKE_STATIONARY_GAP = 0.5
 
---  How high a launch of v0 actually gets, on the engine's integrator.
---
---  Apex is at t = v0/g, and substituting into the discrete trajectory gives
---  v0^2/(2g) + v0*dt/2 -- the continuous answer plus a term that is small but
---  is the whole difference between landing on a ledge and clipping its edge.
 local function discreteRise(v0, gravity)
   return ((v0 * v0) / (2 * gravity)) + ((v0 * PHYSICS_DT) / 2)
 end
 
---  The inverse: the launch that actually reaches a given height.
---
---  Solving v0^2/(2g) + v0*dt/2 = rise for v0, positive root.
 local function discreteLaunchForRise(rise, gravity)
   local half = PHYSICS_DT / 2
   return gravity * (math.sqrt((half * half) + ((2 * rise) / gravity)) - half)
 end
 
---  NET DISPLACEMENT WATCHDOG.
---
---  The pathfinder's jump model is more optimistic than the movement
---  controller, so it will happily plan an arc the unit cannot complete. The
---  unit jumps, falls short, PathFinder:update trips its stuckTimer, re-plans,
---  and produces the identical arc -- forever.
---
---  Distance TRAVELLED cannot detect this, because jumping in place accumulates
---  plenty of it. Net displacement over a window can: a unit making real
---  progress moves away from where it was, a unit bouncing off a ledge does not.
 local PROGRESS_WINDOW = 5.0
 local PROGRESS_DISTANCE = 2.5
 local PROGRESS_STRIKES = 2
 
---  How many vent hops one task may make.
---
---  Bounded because the routing is GREEDY: the unit picks the vent whose far
---  side lands nearest the target and tries it, with no knowledge of whether
---  that far side connects to anything useful. Without a bound it could hop
---  forever.
---  Raised from 2 for the same reason the loop breaker counts repeats rather
---  than hops: player-built space is assumed hostile to navigation, and vents
---  are the sanctioned way around that. A two-hop ceiling means a base whose
---  transport lane runs through four vents simply has no route.
---
---  THIS IS NOT A FREE CONSTANT. The BFS probes one edge per vent per expanded
---  node, and `visited` bounds nodes rather than depth -- so raising the ceiling
---  takes the cold-cache probe count from about 2*(V+1) to V^2. A reachable edge
---  resolves in well under a second; an unreachable one costs the full
---  PROBE_LIMIT. A measured 6-vent world cost 47s at depth 2, 32s of which was
---  four timeouts. The same world at depth 10 can approach TASK_DEADLINE, and a
---  twenty-vent base can exceed it by an order of magnitude.
---
---  Survivable ONLY because probe results are banked on the port and outlive the
---  task that paid for them. Still needs the port to tell a BUSY unit from a
---  STUCK one -- see the note on TASK_DEADLINE.
---  Tile damage dealt to harvest, matching the Harvester Beam mod's value.
---
---  DELIBERATELY TINY. The damage is not what harvests the crop -- reaching
---  FarmableObject::damageTiles at all is, since that override calls harvest()
---  for Beamish, Blockish and Plantish damage and consumes the damage when it
---  succeeds. The amount only matters in the FAILURE case, where the call falls
---  through to Object::damageTiles and becomes real damage to a crop that was
---  not ready.
 local HARVEST_DAMAGE = 0.2
 
---  Harvest level 1. REQUIRED: it is what makes destroyed materials and mods
---  drop as items, and a harvest that drops nothing is indistinguishable from
---  one that never happened.
 local HARVEST_LEVEL = 1
 
---  Is anything standing on this tile, or the one above it?
---
---  Exact rather than a bounding-box overlap. world.entityQuery returns anything
---  whose bounds INTERSECT the rect, and a rect drawn around a single tile
---  touches its neighbours -- which in a planted row means every tile reports
---  itself occupied by the crop next door. world.objectSpaces gives an object's
---  real occupied tiles, relative to its position, so the test can be honest.
---
---  Defined ABOVE its call sites deliberately: a local function called from a
---  line above its definition compiles as a nil global. That has already cost
---  one bricked update loop in this mod.
 local seedSpacesCache = {}
 
 local function seedSpaces(seedName)
@@ -727,12 +118,6 @@ local function seedSpaces(seedName)
 	return spaces
 end
 
---  Is anything standing where this crop would go?
---
---  Footprint comes from the SEED'S OWN CONFIG rather than an assumed 1x2 --
---  oculemon and pineapple are two tiles wide, and the old shape both missed
---  blockers in the column it never checked and failed to see a successfully
---  planted wide crop afterwards.
 local function tileOccupied(anchor, seedName)
 	local tiles = {}
 	local lox, loy = anchor[1], anchor[2]
@@ -769,99 +154,28 @@ local function tileOccupied(anchor, seedName)
 	return false
 end
 
---  How high above the target tile the droplet is spawned.
---
---  Far enough that it is unambiguously falling onto the tile from outside it,
---  close enough that a grenade-physics projectile cannot drift into the next
---  tile along on the way down.
 local WATER_DROP_HEIGHT = 1.0
 
---  How close the unit must be to a tile before watering it.
 local WATER_REACH = 4.0
 
---  HOW CLOSE COUNTS AS ARRIVED AT A PATIENT. Wider than WATER_REACH because a
---  tile does not move and a patient does. Since 2026-09-07f the patient is a
---  TRACKED target (see TRACKED_TARGETS): the approach re-resolves as they walk
---  and the unit chases on arrival, so this is the burst's radius and not a
---  tolerance for stale aim any more.
---
---  MUST NOT EXCEED THE BURST'S HALF-WIDTH. petports_medicburst uses a +/-40px
---  poly, five tiles from centre, so a unit that "arrived" further than that
---  spends a medical good on a burst that does not reach.
 local MEDIC_REACH = 5.0
 
---  HOW CLOSE COUNTS AS CATCHING A FISH.
---
---  WIDER THAN A CRATE'S AND FOR THE SAME REASON AS THE MEDIC'S: the target
---  MOVES. A fish is chasing a lure at swimSpeed 3 and darting at biteSpeed 30,
---  so a tight radius would have the unit arrive at a position the fish left two
---  ticks ago -- see todo.pathing.movingtarget, which this shares a cause with.
---
---  Tolerance here is doing the work a re-resolve would otherwise have to.
 local FISH_REACH = 5.0
 
---  HOW OFTEN A UNIT RE-AIMS AT A TRACKED TARGET THAT HAS MOVED OUT OF REACH.
---  Twice a second: fast enough to follow something swimming, slow enough that
---  the pather gets to run a path rather than being re-pointed mid-step. Was
---  FISH_RETARGET_INTERVAL until 2026-09-07f; the value is unchanged.
 local CHASE_RETARGET_INTERVAL = 0.5
 
---  HOW LONG A UNIT CHASES A TRACKED TARGET BEFORE HANDING THE TASK BACK.
---
---  Spent as the dwell: a tracked task's dwell is a chase budget rather than a
---  wait, and the port re-dispatches against the target's CURRENT position when
---  it runs out (retryable, no backoff). Fish carry their own dwell from the
---  port (FISH_DWELL, also 10); animal and medic tasks carry none and get this.
 local CHASE_BUDGET = 10.0
 
---  A TREASURE POOL NAME OUT OF WHATEVER SHAPE THE MONSTERTYPE DECLARED.
---
---  MEASURED 2026-09-01: `fishingchuckle` declares
---
---      "landedTreasurePool" : "fishinglegendary"
---
---  a bare string, and that is what the first build assumed. `fishingjerk`
---  declares a TABLE, and handing it to root.createTreasure threw
---  `LuaConversionException: Error converting LuaValue` -- a caught fish that
---  produced nothing and was despawned anyway.
---
---  FOUR SHAPES, AND THE THIRD IS THE ONE THAT ACTUALLY SHIPS.
---
---      "fishinglegendary"                        a bare name (fishingchuckle)
---      { "poolName" }                            a flat list
---      { default = "x", fire = "y", ... }        KEYED BY DAMAGE KIND
---      { { 1, "poolName" } }                     level-keyed pairs
---
---  MEASURED 2026-09-01, and the third one is what fishingjerk really declares:
---
---      {"default":"fishingcommon","fire":"lofty_crispy_fishingcommon",
---       "firehammer":"lofty_crispy_fishingcommon", ...}
---
---  A monster's treasure pool can vary by the damage kind that killed it, and
---  other mods patch entries into that map. The first version of this walked the
---  value with ipairs, which yields NOTHING on a string-keyed table, so it
---  concluded the fish had no pool and reported a catch with no loot.
---
---  `default` IS THE RIGHT KEY FOR US. A unit does not kill a fish -- it rolls
---  the pool and despawns it -- so there is no damage kind to key on, and any
---  other entry would be claiming a weapon was used.
---
---  RETURNS nil RATHER THAN GUESSING when no string is reachable. The caller
---  treats that as "this fish has no loot", which is a real state --
---  landedTreasurePool defaults to "empty" in vanilla's own landedState.
 local function treasurePoolName(value)
   if type(value) == "string" then return value end
   if type(value) ~= "table" then return nil end
 
-  --  BEFORE THE ipairs WALK, because a damage-kind map has no array part at all
-  --  and the walk would silently find nothing.
   if type(value.default) == "string" then return value.default end
 
   for _, entry in ipairs(value) do
     if type(entry) == "string" then return entry end
 
     if type(entry) == "table" then
-      --  A LIST OF MAPS is the other way vanilla writes this.
       if type(entry.default) == "string" then return entry.default end
 
       for _, inner in ipairs(entry) do
@@ -873,40 +187,8 @@ local function treasurePoolName(value)
   return nil
 end
 
---  How close the unit has to be to poke an animal.
---
---  More generous than the crop reach because ANIMALS MOVE and nothing chases
---  them: the standable ground target is resolved once, so an animal that
---  ambled a couple of tiles during the approach should still be reachable
---  rather than failing outright. Small roving livestock may outwalk even this,
---  which is the measurement worth having before any catch-up behaviour is
---  designed.
 local ANIMAL_REACH = 6.0
 
---  TRACKED TARGETS -- THE ONE PLACE THAT KNOWS WHICH TASKS AIM AT AN ENTITY.
---
---  A task whose target is a live entity aims at where it IS, not where the
---  port saw it. Everything that follows from that -- the live position in
---  currentTarget, the drift re-resolve in approachTargetFor, the coverage
---  check every tick, the chase on arrival -- reads this table and nothing
---  else, so a new tracked task (delivering to a player, say) is one row here
---  and no new branch anywhere. todo.pathing.movingtarget asked for exactly
---  this layering: the cow fix is the player fix.
---
---    field  the task field holding the entity id
---    noun   how log lines name it
---    reach  how close counts as arrived; nil means the type does its own
---           arrival test and is never chased (a crop does not move, a drop
---           only falls and its dwell is a pickup retry budget)
---    moves  whether it can leave network coverage under its own power, which
---           is the only thing the per-tick coverage check gives up on
---    goneIsDone  a target that vanished is a good outcome, not a failure,
---           and the type branch reports it (a patient who is gone cost
---           nothing)
---
---  MEDIC USED TO CARRY `patient` AND NOW CARRIES `target`, 2026-09-07f, so
---  the field column is uniform; the port writes it and reads it back off the
---  report under the same name.
 local TRACKED_TARGETS = {
   collect = { field = "target", noun = "drop", reach = nil, moves = false },
   harvest = { field = "target", noun = "crop", reach = nil, moves = false },
@@ -917,270 +199,76 @@ local TRACKED_TARGETS = {
             goneIsDone = true }
 }
 
---  The tracked entity id for a task, or nil when the task aims at a position.
 local function trackedEntity(task)
   local row = task ~= nil and TRACKED_TARGETS[task.type] or nil
   if row == nil then return nil, nil end
   return task[row.field], row
 end
 
---  How close the unit has to be before it fires the harvest.
---
---  world.damageTiles ENFORCES NO RANGE -- it is a world call, and a unit could
---  harvest a crop across the room the moment its arrival test passed for some
---  other reason. This is a sanity bound rather than a game rule: if the unit
---  believes it has arrived but is nowhere near the crop, something upstream is
---  wrong and firing anyway would hide it.
 local HARVEST_REACH = 4.0
 
---  How long to keep firing before giving up.
---
---  A harvest is not necessarily instant from the caller's side: the crop has to
---  still be there, still be ripe, and the engine has to accept the damage. The
---  budget is small because a harvest that is going to work works immediately.
 local HARVEST_TIMEOUT = 3.0
 
---  How close the unit has to be to work a trap.
---
---  THE CROP NUMBER, NOT THE ANIMAL ONE. A trap is a placed object: it does not
---  move, so none of the slack ANIMAL_REACH exists for is needed. Same sanity
---  bound and the same reason -- world.callScriptedEntity enforces no range at
---  all, so a unit that believes it has arrived while standing across the room
---  would harvest anyway and hide whatever upstream fault put it there.
 local TRAP_REACH = 4.0
 
 local MAX_VENT_HOPS = 10
 
---  How long a single reachability probe may run before its answer is taken as
---  "no". Same reasoning as SEARCH_LIMIT.
---  An UNREACHABLE edge has to exhaust A*'s 70000-node allowance before it
---  reports false -- roughly nineteen seconds at EXPLORE_RATE. A reachable one
---  resolves in well under a second. So this only needs to be long enough to let
---  genuine successes through, and everything past it is a "no".
 local PROBE_LIMIT = 8.0
 
---  How long a unit may make NO PROGRESS toward a chosen vent's mouth before
---  concluding the mouth is unreachable. Resets whenever the unit actually
---  moves, so distance costs nothing.
 local VENT_APPROACH_TIMEOUT = 8.0
 
---  How far from the expected exit still counts as having arrived there.
---
---  Generous, because a vent exit is a standing position and a unit lands with
---  some slop. Tight enough to separate "landed at the exit I planned for" from
---  "landed at a different vent entirely" -- the observed failure put the unit
---  20 tiles from where the plan said it would be, so there is no ambiguity to
---  resolve here, only a sanity check to pass.
 local VENT_ARRIVAL_TOLERANCE = 6.0
 
---  LOOP BREAKING IS ABOUT REPETITION, NOT VOLUME.
---
---  A hop budget is the wrong shape for this. These units run in spaces players
---  build, which must be assumed hostile to navigation -- automatic doors that
---  open and close, terrain that changes under them. Vents exist PRECISELY so a
---  player can route around pathfinding shortcomings, so a legitimately hard
---  journey may take many hops and several replans. Capping hops punishes the
---  intended use of the feature.
---
---  Distance to target is no better as a progress metric: a correct vent route
---  routinely moves a unit further away in a straight line before bringing it
---  closer, which is the whole point of a transport lane.
---
---  What a loop actually does, and a hard journey does not, is arrive at the
---  same place from the same vent over and over. Count that instead. This
---  follows the same doctrine as the vent approach timer above, which was
---  rewritten from a flat clock to a no-progress test for the same reason.
 local MAX_REPEAT_HOPS = 4
 
---  Absolute backstop, deliberately far above anything a real journey needs.
---  Exists only so that a fault in the repetition test above cannot produce an
---  endlessly looping unit -- not as a budget anyone should ever reach.
---
---  DERIVED from the plan ceiling rather than fixed, so it cannot silently
---  become a real constraint when that ceiling moves.
 local MAX_TASK_HOPS = MAX_VENT_HOPS * 12
 
---  Fallback radius, used only if the vent's occupied spaces cannot be read.
 local VENT_USE_DISTANCE = 2.0
 
---  Decide whether a vent can rescue this task, probing if the answer is not yet
---  known. Returns "routing" (a leg was started), "probing" (still finding out),
---  or "none" (no vent reaches the target).
---
---  Probing costs a full A* search per unknown exit, but only ONCE per
---  destination tile -- terrain decides reachability, not the drop, so every
---  later target in the same neighbourhood is a table lookup.
---  FORWARD DECLARED, because tryVentRoute below calls it ~940 lines before it
---  is defined.
---
---  A `local function` is only in scope AFTER its definition. Called from above
---  it, the name resolves as a GLOBAL, that global is nil, and the call throws:
---
---    Exception while invoking lua function 'update'
---    attempt to call a nil value (global 'freshPather')
---      in upvalue 'tryVentRoute'
---
---  That kills update() outright. The unit stops running its state machine, the
---  port sees it going nowhere, and it eventually gets re-homed -- which reads
---  as a pathfinding failure and is not one.
---
---  It survived because tryVentRoute reaches this line only on ONE branch, the
---  one where the target is walkable and no hops are needed. Every other caller
---  of freshPather is below 1543.
---
---  THE DEFINITION BELOW MUST STAY AN ASSIGNMENT. Writing `local function
---  freshPather` there would declare a SECOND local that shadows this one, and
---  line 601 would go straight back to calling nil.
 local freshPather
 
---  HOW LONG A SINGLE COARSE LEG MAY BE, IN TILES.
---
---  THE WHOLE POINT IS THAT A* SOLVES A SHORT ROUTE AND STARVES ON A LONG ONE.
---  Measured: a chained route across a base took 22.25 seconds at vanilla's
---  explore rate and the same target from nearby took 0.08s -- and with
---  SEARCH_LIMIT at 6.0 the long one is never solved, it is abandoned. So a leg
---  has to be short enough to sit in the easy regime and long enough that the
---  unit is not re-planning every stride.
---
---  24 IS UNDER THE 32-TILE BOUND THE SURVEY PROBES AT, so every leg the graph
---  offers has already been PROVEN walkable by a probe of greater reach. That is
---  the property worth having: a leg is not a guess, it is a replay of a search
---  that succeeded.
---  24 -> 8, 2026-09-05. Measured 03:00: a 24-tile leg from 981,1039 to
---  [1000.5,1048.8] took 18 s, and one from 1024,1048 to [1012.5,1031.8]
---  swallowed five proven hops into a single search that stalled out with "no
---  net progress" after 10 s. Legs are now chained (a reached leg asks for the
---  next at once), so a short leg costs one cheap A* rather than a re-plan
---  stall, and each one is a proven edge or two rather than a guess.
 local NAV_LEG_REACH = 8
 
---  A FREE MOVER'S LEG REACHES AS FAR AS ITS LEG PATHER CAN SEARCH: the leg
---  is the farthest path cell in sight (see petports_navWaypoint), and the
---  leg pather's maxDistance is the probe cap, so the two match.
 local NAV_FLYER_LEG_REACH = 32
 
---  FARTHER THAN THIS, OR WITH NO LINE OF SIGHT, A WALKER ASKS THE GRAPH
---  BEFORE THE DIRECT SEARCH rather than after SEARCH_LIMIT seconds of it.
---  Measured 03:01: every long route paid the full six seconds first, on the
---  outbound leg, at the crate, and on each recall.
 local COARSE_FIRST_DISTANCE = 24
 local COARSE_LOS_SET = { "Null", "Block", "Dynamic", "Slippery" }
 
---  A FREE MOVER THAT CAN SEE ITS TARGET DOES NOT WANT A COARSE LEG.
---
---  2026-09-07h. The coarse-first test ran once per route target and the
---  chain then took every remaining hop; nothing between those two points
---  asked "can I see it now". A fish that came into full view three hops
---  early was followed around the remaining three, and that is the detour
---  that was being watched. Two changes, one test:
---
---    the gate   for a free mover, sight OVERRIDES far. The direct search
---               is only starved on long routes it has to plan; a body-clear
---               straight line is not planned, it is flown (string-pull).
---    the latch  while a leg is held, the same test runs on a timer and a
---               clear line drops the leg and every hop behind it.
---
---  THE TEST IS petports_flyPathClear, NOT world.lineTileCollision. The ray
---  was tile-only, so it passed through liquid the chassis is forbidden to
---  enter; poison hanging in the ocean is exactly the case a swimmer must not
---  latch across. flyPathClear sweeps the body box and samples the medium.
---
---  RANGE-BOUNDED, because the sweep is one rectTileCollision and one
---  mediumAllows per 0.8 tile. Beyond SIGHT_LATCH_RANGE the coarse route is
---  taken without looking, and the latch looks again once inside it. The
---  interval is the chase interval so a unit re-aiming twice a second is not
---  also sweeping more often than that. NEITHER NUMBER IS MEASURED; the rate
---  limit is the real bound and the range only caps a single sweep.
---
---  WALKERS ARE UNCHANGED. A walker's straight line is not a route.
 local SIGHT_LATCH_RANGE = 64
 local SIGHT_LATCH_INTERVAL = 0.5
 
---  How long a coarse leg may sit with its plan refused before it is a leg
---  that would not walk. One second: several refusals, well under the
---  watchdog's five. See the refused-plan block in the moving state.
 local PLAN_REFUSED_LIMIT = 1.0
 
---  How long a unit backs off after brushing denied liquid before it may be
---  steered toward a target again. Half a second of flying straight away.
 local BRUSH_BACKOFF = 0.5
 
---  How long after "graph still building" the coarse-first gate waits before
---  asking again. Half a second; a chunked rebuild reads 40 shards a tick.
 local COARSE_RETRY_INTERVAL = 0.5
 
---  How close a free mover must be to a coarse-leg waypoint to have reached
---  it. Half a tile: tight enough that the turn happens on the centreline,
---  loose enough that a body moving at flySpeed can register it in a tick.
-local NAV_LEG_ARRIVAL_FREE = 0.25  --  0.5 -> 0.25, 2026-09-07s (Lofty)
+local NAV_LEG_ARRIVAL_FREE = 0.25
 
---  How close a step onto the route (07q/07r) must get to the edge's start.
---  Tight, because the whole point is to be ON the centreline.
 local NAV_LEG_STEP_ARRIVAL = 0.15
 
---  Arrival at a leg the route flies through (turn below NAV_LEG_SHARP_TURN):
---  a full tile, so the body never slows for it. Turn thresholds in degrees:
---  a sharp turn arrives tight; a tight turn (more than 45 off the heading)
---  brakes to land exactly on the point.
 local NAV_LEG_ARRIVAL_THROUGH = 1.0
 local NAV_LEG_SHARP_TURN = 75
 
---  HOW MANY ROUTE CELLS PAST THE WAYPOINT A GROUNDED WALKER IS CHECKED
---  AGAINST, 2026-09-13e. See the lookahead in petportsTaskUpdateInner.
 local NAV_ROUTE_LOOKAHEAD = 6
 local NAV_LEG_BRAKE_TURN = 45
 
---  WALK THE NEXT LEG OF A COARSE ROUTE, WHEN THERE IS ONE.
---
---  TRIED BEFORE VENTS, AND THAT ORDER MATTERS. A vent hop teleports a unit and
---  costs a route search of its own; a coarse leg is ordinary walking over
---  ground already proven walkable. Vents are for reaching places feet cannot,
---  which is a rarer problem than "the base is wide".
---
---  IT RETARGETS RATHER THAN ROUTING. The waypoint is written into stateData and
---  the ordinary approach picks it up -- no new movement mode, no second mover,
---  nothing to keep in step with the pather. A leg is just a nearer target.
---
---  RE-PLANNED EACH TIME IT IS ASKED, never held as a plan. The graph may have
---  learned edges since the last leg and the unit may have been moved by
---  something else; a stale plan is the failure arch.vent.routing already
---  records. Re-planning is one BFS over a memoised graph.
 local function tryCoarseLeg(stateData, target, reach, fromOverride)
   if petports_navWaypoint == nil then return false end
 
   reach = reach or NAV_LEG_REACH
 
-  --  THE MERGED GRAPH FOR A SWITCHABLE CHASSIS, 2026-09-09a. Its profile is
-  --  the bridge profile; coarsenav answers every routing call for it from
-  --  the graph that joins both sides (todo.pathing.amphibiousbridge).
   local switchable = petports_gravitySwitchable ~= nil and petports_gravitySwitchable()
   local profile = (switchable and petports_navBridgeProfile ~= nil
     and petports_navBridgeProfile()) or petports_navProfile()
   local freeMover = petports_freeMover()
 
-  --  NOT IN THE AIR. A plan from the cell a unit is falling through starts
-  --  from a cell that is not in the graph. Wait for the ground.
   if not freeMover and not mcontroller.onGround() then return false end
 
   local here = mcontroller.position()
 
-  --  FROM THE NEAREST CELL THE GRAPH KNOWS, not the cell the position
-  --  happens to be in. See petports_navNearestCell for the two measured
-  --  cases where those differ.
-  --  THE CELL THE CALLER SAYS WE ARE IN, when it says. A chained leg plans
-  --  from the cell it just reached, not the nearest cell to wherever the
-  --  body settled: measured 2026-09-05 05:52, a stack of platforms one tile
-  --  apart, the unit landing in cell N+1 after reaching cell N's anchor,
-  --  and the two cells' shortest routes pointing opposite ways. Up, down,
-  --  up, down, a strike every five seconds.
-  --  A free mover's cells are four tiles apart (PETPORTS_NAV_STRIDE_FREE),
-  --  so its nearest graph cell can be that far away.
   local nearRadius = freeMover and ((PETPORTS_NAV_STRIDE_FREE or 4) + 1.5) or 2.5
 
-  --  "MORE" FROM THE NEAREST-CELL SEARCH MEANS ASK AGAIN NEXT TICK, 2026-09-07d:
-  --  it is bounded per call now (coarsenav 07q) and resumes where it stopped.
-  --  Returning false here without a log is deliberate -- the "no leg" line
-  --  below would otherwise print once per tick for the whole search.
   local fromKey, fromMore = fromOverride, false
   if fromKey == nil then
     local key, _, _, more
@@ -1198,18 +286,12 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
     fromKey = petports_navCellKey(fx, fy)
   end
 
-  --  ONCE PER TARGET. The target does not move between chained legs, and
-  --  for a free mover this lookup is a sight sweep per candidate cell.
   local targetKey = sb.printJson(target)
   local toKey = nil
 
   if stateData.navToFor == targetKey then
     toKey = stateData.navToKey
   else
-    --  THE TARGET'S CELL IS ON THE TARGET'S SIDE, 2026-09-09a: a wet target
-    --  is a swim cell whatever the unit is now, and a dry one a walker cell.
-    --  MEASURED (soak, 2026-09-05): 4,807 `no leg` lines were a land otter
-    --  looking for a wet target's cell in the land graph.
     local key, _, _, more
     if switchable and petports_navNearestCellSide ~= nil then
       local targetSwim = petports_mediumAtPoint(target) == "swim"
@@ -1234,20 +316,13 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
 
   if freeMover and reach == NAV_LEG_REACH then reach = NAV_FLYER_LEG_REACH end
 
-  --  THE STEP BUDGET IS THE PICKER'S TOO, 2026-09-12e: navStepFor counts
-  --  steps onto the route per leg (07q) and resets when a real leg is
-  --  reached; past two, the picker hands out the hop instead.
   local waypoint, remaining, legCell, legHops, legFrom, legPrev, legKind =
     petports_navWaypoint(profile, fromKey, toKey, reach, freeMover,
       ARRIVAL_DISTANCE + 0.5, (stateData.navStepFor or 0) < 2)
 
-  --  NOT READY IS NOT NO LEG, 2026-09-10a (dd.pathing.yieldrule): the
-  --  route search and the waypoint sweeps are resumable now (coarsenav
-  --  10n) and say "more" mid-work. Ask again next update, log nothing.
   if waypoint == nil and remaining == "more" then return false, "more" end
 
   if waypoint == nil then
-    --  CHANGE-GATED ON THE PAIR: this resolves twice a second on a fish.
     local pairKey = fromKey .. ">" .. toKey
     if stateData.navNoLegFor ~= pairKey then
       stateData.navNoLegFor = pairKey
@@ -1259,14 +334,6 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
     return false
   end
 
-  --  ALREADY THERE. The graph offered a waypoint the unit is standing on,
-  --  which means the leg is not what is stopping it -- and retargeting would
-  --  spin. Hand back to whatever comes next.
-  --  A STEP LEG IS NEVER "ALREADY THERE", 2026-09-12e: it exists because
-  --  the body is a fraction off its own anchor and the next hop clips a
-  --  corner from there. Under NAV_LEG_ARRIVAL_FREE it is the 07r nudge and
-  --  the leg is asked for again from the anchor; otherwise it is flown to
-  --  NAV_LEG_STEP_ARRIVAL like the 07q step.
   if legKind == "step" then
     stateData.navStepFor = (stateData.navStepFor or 0) + 1
     local gap = world.magnitude(waypoint, mcontroller.position())
@@ -1280,13 +347,6 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
       return tryCoarseLeg(stateData, target, reach, legFrom)
     end
   elseif world.magnitude(waypoint, mcontroller.position()) < ARRIVAL_DISTANCE then
-    --  AHEAD OF SCHEDULE, 2026-09-13c. MEASURED 21:15:30.500: the hop over
-    --  the pool landed the body at 5826.4, the chained leg from 5830,1181
-    --  offered 5825.5, and declining it dropped the sixty-hop route for a
-    --  direct search -- east, back through the pool. A waypoint we stand
-    --  at is a cell we have reached: take the leg from THAT cell, so the
-    --  route continues from where the body is. Recursion advances one route
-    --  cell per call and stops when the graph offers the same cell twice.
     if legCell ~= nil and legCell ~= fromKey then
       sb.logInfo("UNIT coarse leg %s is where we already are -- taking the next leg from %s",
         sb.printJson(waypoint), tostring(legCell))
@@ -1313,11 +373,6 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
   stateData.navLegNext = self.petportsNavLastRoute and self.petportsNavLastRoute.nextAnchor or nil
   stateData.navLegReach = reach
 
-  --  A BRIDGE LEG, 2026-09-09a. The leg's side is what the mode machinery
-  --  reads (taskWantsSwimming, petports_currentTaskDestination): a leg that
-  --  ends in the water is a reason to swim, one that ends on land a reason
-  --  to get out. A dive installs its plan and the board-walk-and-launch
-  --  executor in petports_swimModeTick runs it exactly as it runs a fish's.
   local bridge = self.petportsNavLastRoute and self.petportsNavLastRoute.bridge or nil
   stateData.navBridge = bridge
   self.petportsLegBridge = bridge
@@ -1338,9 +393,6 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
     end
   end
 
-  --  EVERYTHING THE OLD TARGET LEFT BEHIND. The same reset tryVentRoute does
-  --  on a hop and for the same reason: a search timer, an approach timeout and
-  --  a resolved ground target all describe a target being abandoned.
   stateData.searchingTimer = 0
   stateData.approachTimer = APPROACH_TIMEOUT
   stateData.groundTarget = nil
@@ -1355,37 +407,9 @@ end
 local function tryVentRoute(stateData, target)
   if petports_planRoute == nil then return "none" end
 
-  --  RECALLS DO VENT-ROUTE. This used to refuse them outright, and the refusal
-  --  is now wrong twice over.
-  --
-  --  The original reasoning: a walk home is not worth a route search, routing a
-  --  recall cost 38 seconds of probing before failing, and worse, it filled the
-  --  cache with t: keys for recall points CHOSEN AT RANDOM inside the rect,
-  --  which would never be asked about again.
-  --
-  --  Both halves have since expired. returnWork now recalls to a FIXED point --
-  --  findStandingPoint over a small box around the port, same answer every
-  --  attempt -- so a recall produces ONE t: key per port rather than a new one
-  --  per try. And route cache entries carry a TTL, so even a bad key ages out
-  --  instead of accumulating.
-  --
-  --  What the refusal cost, meanwhile, was units that could not get home at
-  --  all. A unit that vent-hopped somewhere to work, finished, and got recalled
-  --  had no vent available for the return leg -- it went in one way and was
-  --  only permitted to come back another. Inside an enclosure with vent-only
-  --  access, that is permanent: the leash deliberately never fails, so the unit
-  --  retries a walk that cannot succeed, forever, without ever reporting.
-  --
-  --  MEASURED: a unit idle at [1195.07,715.8], directly between vent 15 at
-  --  [1195,721] and vent 17 at [1195,712], with no walking route home. It
-  --  needed exactly the pair it had just used and was refused them.
-  --
-  --  Only reproducible with more than one unit deployed, which is the tell:
-  --  a single unit takes every job and is never left idle deep in the network.
 
   if stateData.viaVent ~= nil then return "routing" end
 
-  --  Already have a plan? Take the next leg.
   if stateData.plan ~= nil and stateData.planIndex <= #stateData.plan then
     stateData.viaVent = stateData.plan[stateData.planIndex]
     stateData.ventApproachTimer = VENT_APPROACH_TIMEOUT
@@ -1401,36 +425,6 @@ local function tryVentRoute(stateData, target)
     return "routing"
   end
 
-  --  Allow a "just walk" answer once the unit has hopped at least once: it is
-  --  standing somewhere it has not tried walking from.
-  --  Freeze the origin for this planning session. Re-keying as the unit drifts
-  --  throws away every probe done so far.
-  --  PLAN FROM THE PORT, NOT FROM THE UNIT.
-  --
-  --  A port does not move, so its `u:` edges are computed ONCE and reused by
-  --  every unit and every future task. Planning from the unit re-keys them
-  --  whenever it drifts -- observed two consecutive tasks probing the identical
-  --  five edges from adjacent positions, roughly forty
-  --
-  --  Slightly less accurate, since the unit is not always at its port. That is
-  --  acceptable: the leash keeps it nearby, and a direct walk has already been
-  --  tried and failed before routing is ever consulted.
-  --
-  --  After a hop the unit really is somewhere else, so planOrigin is cleared
-  --  and the live position is used from there on.
-  --  ALWAYS THE UNIT'S OWN POSITION. NEVER THE PORT'S.
-  --
-  --  This substituted the port's position for the unit's to make cached edges
-  --  reusable across tasks, then substituted only when the two shared a cache
-  --  bucket, which sounded safe and was not: a bucket was 16 tiles, wider than
-  --  a room, so a caged unit and the port outside its wall keyed identically.
-  --  Every probe ran from the port, every edge came back reachable, and the
-  --  unit stood still for the whole approach timeout walking into stone.
-  --
-  --  Keys are tile-exact now, so the substitution would be visibly wrong rather
-  --  than subtly wrong -- but it was never worth anything. A* has to start
-  --  where the unit is. That is the entire requirement.
-  --
   if stateData.planOrigin == nil then
     stateData.planOrigin = mcontroller.position()
   end
@@ -1446,17 +440,12 @@ local function tryVentRoute(stateData, target)
     sb.logInfo("UNIT probe exceeded PROBE_LIMIT %s, forcing a timeout",
       sb.printJson(PROBE_LIMIT))
 
-    --  One probe has run too long. RECORD IT as unreachable so planning moves
-    --  on -- cancelling without recording restarts the same probe forever.
     petports_probeTimeout(stateData.task.port)
     stateData.probeTimer = 0
     return "probing"
   end
 
   if plan == "walk" then
-    --  Target is reachable on foot from here. Drop out of routing and let the
-    --  normal approach run, with a clean pather so the failed search that got
-    --  us into routing cannot linger.
     sb.logInfo("UNIT target walkable from here, no further hops needed")
     stateData.plan = nil
     stateData.planIndex = 1
@@ -1476,23 +465,13 @@ local function tryVentRoute(stateData, target)
   sb.logInfo("UNIT planned %s-hop route to %s",
     sb.printJson(#plan), sb.printJson(target))
 
-  --  Fall through on the next call, which takes leg 1.
   return "routing"
 end
 
---  Is the unit OVERLAPPING the vent's occupied tiles?
---
---  A radius is the wrong test: too small and a unit that cannot quite reach the
---  mouth never enters, too large and it triggers while merely walking PAST a
---  vent on the way somewhere else. The vent's own footprint is the honest
---  answer, and `objectBounds` in pathutil.lua already builds it from
---  world.objectSpaces translated to the object's position.
 function petportsTaskAction.touchingVent(ventId)
   local ok, ventRect = pcall(objectBounds, ventId)
 
   if not ok or type(ventRect) ~= "table" or type(ventRect[1]) ~= "number" then
-    --  Could not read the footprint. Fall back to a tight radius rather than
-    --  refusing to ever enter.
     return world.magnitude(mcontroller.position(), world.entityPosition(ventId))
       <= VENT_USE_DISTANCE
   end
@@ -1508,20 +487,6 @@ function petportsTaskAction.enterWith(args)
   if task == nil then return nil end
   if task.position == nil then return nil end
 
-  --  Nothing to walk to.
-  --
-  --  REFUSING IS NOT FREE. The unit is already holding this assignment, and
-  --  petBehavior re-queues a held task every tick -- so a refusal that leaves
-  --  the assignment in place loops forever against a pickState that keeps
-  --  failing, while the port waits in trackWork for a report that can never
-  --  come. Total silence on both sides, and the port never dispatches anything
-  --  again. Observed when a drop was picked up by the player between the port's
-  --  sweep and the unit entering the state.
-  --
-  --  So: report and clear before refusing.
-  --  NOT FOR A TARGET WHOSE ABSENCE IS GOOD NEWS (goneIsDone): the medic
-  --  branch reports a vanished patient as done with no dose spent, and a
-  --  failure here would feed the backoff ladder for an outcome nobody minds.
   local trackedId, trackedRow = trackedEntity(task)
   if trackedId ~= nil and not trackedRow.goneIsDone
      and not world.entityExists(trackedId) then
@@ -1553,8 +518,6 @@ function petportsTaskAction.enterWith(args)
   return {
     task = task,
     approachTimer = APPROACH_TIMEOUT,
-    --  For "diag" this is the dwell; for "collect" and "harvest" it doubles as
-    --  the retry budget once the unit has arrived.
     dwellTimer = task.dwell
       or ((task.type == "harvest") and HARVEST_TIMEOUT)
       or (TRACKED_TARGETS[task.type] ~= nil and TRACKED_TARGETS[task.type].reach ~= nil
@@ -1564,8 +527,6 @@ function petportsTaskAction.enterWith(args)
     searchingTimer = 0,
     settleTimer = 0,
 
-    --  Vent routing. viaVent is the vent currently being walked to, if any;
-    --  triedVents stops one vent being chosen twice for the same task.
     viaVent = nil,
     ventLegStarted = false,
     planOrigin = nil,
@@ -1581,8 +542,6 @@ function petportsTaskAction.enterWith(args)
     triedVents = {},
     hopSeen = {},
 
-    --  Approach telemetry. A frozen unit and an unreachable target both look
-    --  like a timeout from outside; movement delta separates them.
     startPosition = mcontroller.position(),
     lastPosition = mcontroller.position(),
     traceTimer = 1.0,
@@ -1590,103 +549,10 @@ function petportsTaskAction.enterWith(args)
   }
 end
 
---  VANILLA'S standingBoundBox INVERTS FOR NARROW BODIES.
---
---  PathMover:new defaults standingBoundBox to padBoundBox(-0.7, 0) -- the
---  normal bound box shrunk by 0.7 on EACH side, "thinner for standing and
---  landing". Our drone's collisionPoly is one tile wide:
---
---      boundBox         = [-0.5, -0.75, 0.5, 0.6]    width  1.0
---      standingBoundBox = [ 0.2, -0.75, -0.2, 0.6]   width -0.4
---
---  Left edge to the RIGHT of the right edge. Every landing and standing node is
---  validated against that rectangle, so no Jump, Arc or Drop edge can ever
---  terminate -- while Walk edges use the normal boundBox and are unaffected.
---  Hence: flat ground works perfectly, anything vertical never resolves, and
---  A* searches forever without reporting failure.
---
---  Vanilla pets are wider than a tile, so -0.7 leaves them a thin but VALID
---  box. Ours is exactly narrow enough to break it.
---
---  approachPoint does `self.pather = self.pather or PathMover:new(...)`, so
---  constructing the pather ourselves first makes vanilla use ours. Scale the
---  padding to the body instead of using a fixed 0.7 so it can never invert.
---  A SECOND, WORSE BUG: PathFinder:reset() DOES NOT CLEAR self.aStar.
---
---      function PathFinder:reset()
---        self.edges = {}
---        self.hasPath = false
---        self.currentEdgeIndex = 1
---      end
---
---  So once a search is abandoned before it resolves, the finder is permanently
---  poisoned. On the next task, update() sees the new target is more than 2 away
---  and calls reset() -- which clears the path but leaves aStar alive. find()
---  then checks `not self.hasPath and not self.aStar`, sees a live aStar, and
---  SKIPS the reset-and-start entirely. It returns explore(), which keeps
---  grinding the OLD search toward the OLD target forever.
---
---  Observed exactly: the first task after a world load succeeds, then one
---  unreachable target poisons the pather and every subsequent task fails --
---  including trivially reachable ones on flat ground.
---
---  The pather is cheap to build and there is one task at a time, so build a
---  FRESH one per task rather than trying to unpick vanilla's state.
---  REPLACEMENT FOR PathMover:moveWalk
---
---  Vanilla walks at full speed right up to the moment the next edge takes over.
---  That is fine when every mover can pick up from wherever the walk left the
---  unit, and moveJump cannot -- it has a hard 1.0 radius and no way to recover
---  from being outside it.
---
---  So this does one thing: SLOW DOWN WHEN A JUMP IS NEXT. Everything else is
---  vanilla's, called directly through the class table so there is no copy of it
---  to maintain.
---
---  Speed is set on pather.controlParameters, which PathMover:move rebuilds
---  BEFORE edgeMove and applies AFTER it -- so a change made here lands on the
---  same tick.
 function petportsWalkMover(pather)
   local finder = pather.finder
   local ahead = finder ~= nil and finder.lookAhead and finder:lookAhead(1) or nil
 
-  --  THE METABOLISM SCALE, APPLIED EVERY TICK AND BEFORE THE JUMP SLOWDOWN.
-  --
-  --  EVERY TICK because PathMover:move REBUILDS controlParameters from the
-  --  chassis before edgeMove, so anything written last tick is already gone.
-  --  That is the same property the slowdown below relies on.
-  --
-  --  BEFORE THE SLOWDOWN, NOT AFTER, AND THE ORDER IS THE WHOLE POINT.
-  --  JUMP_APPROACH_SPEED is an ABSOLUTE value chosen against moveJump's fixed
-  --  1.0 capture radius -- it is how many samples the takeoff window gets, not
-  --  a fraction of anything. Scaling it would hand the fastest units the
-  --  narrowest window, which is precisely backwards. Assigning it after this
-  --  means it still wins.
-  --
-  --  THE PLANNER SEES THE SAME MULTIPLIER via petportsPathStart, so the plan
-  --  and the body agree about how fast this unit travels -- arch.module.metabolism.
-  --  ASSIGNED ABSOLUTELY FROM baseParameters, NEVER MULTIPLIED IN PLACE.
-  --
-  --  THE FIRST BUILD READ pather.controlParameters.walkSpeed AND MULTIPLIED IT,
-  --  AND THAT FIELD IS NIL. PathMover:move rebuilds the table before edgeMove
-  --  and does NOT carry the chassis speeds into it -- they are absent until
-  --  something writes them, which is why the jump slowdown below has always
-  --  ASSIGNED a literal rather than adjusting one.
-  --
-  --  MEASURED 2026-09-04, and the two halves of the log say it outright. After
-  --  a Metabolism III push, plans carried arc vx 7.8 -- walkSpeed 6 x 1.3, so
-  --  petportsPathStart's scaling landed -- while every grounded sample of the
-  --  BODY stayed at 5.9, which is walkSpeed 6 post-friction, unscaled. The
-  --  planner believed 7.8 and the unit did 6.
-  --
-  --  THE CONTROL THAT NAMED IT: the jump slowdown, in the same log, put the
-  --  unit at a measured 2.95 against its 3.0 target. Writing to this table
-  --  plainly reaches the engine, so the failure had to be in the READ.
-  --
-  --  AND A DEFENSIVE nil GUARD IS WHAT MADE IT SILENT. petports_scaledSpeed
-  --  returned its argument unchanged for a non-number, so this assigned nil to
-  --  nil, changed nothing, and logged nothing -- fact.tooling.mergedrefusal, in
-  --  a helper written to be careful. The guard now says so out loud.
   pather.controlParameters.walkSpeed =
     petports_scaledSpeed(mcontroller.baseParameters().walkSpeed)
   pather.controlParameters.runSpeed =
@@ -1715,55 +581,6 @@ function petportsWalkMover(pather)
   return PathMover.moveWalk(pather)
 end
 
---  REPLACEMENT FOR PathMover:moveJump
---
---  WHAT VANILLA DOES, IN FULL:
---
---      if world.magnitude(mcontroller.position(),
---                         self.edge.source.position) < 1.0 then
---        ... snap to the source, pause 0.2s, launch, advance ...
---      end
---      return "running"
---
---  Outside that radius the function does NOTHING -- no movement, no advance, no
---  report -- and there is no code anywhere that walks the unit to its own jump
---  point. It relies entirely on the approach happening to end inside a one-tile
---  circle.
---
---  WHY THAT FAILS AT SPEED. The Jump edge only becomes current AFTER the unit
---  crosses the source, so the usable half of the window is one tile wide. At
---  walkSpeed 8 the script advances the unit about 0.66 tiles per step, so there
---  are one or two chances to land inside it and the phase decides whether any
---  do. Measured: the unit coasted to a dead stop 1.19 tiles past the jump point,
---  replanned, walked back, overshot by 1.21 the other way, and oscillated
---  between [1208.81] and [1211.21] indefinitely. It gets worse as speed rises,
---  which is exactly backwards for a unit that should move with purpose.
---
---  THE FIX IS THE MISSING ELSE. Outside the radius, walk toward the source.
---  Overshooting stops being terminal and becomes self-correcting, and the whole
---  thing stops depending on approach speed.
---
---  The takeoff path is vanilla's, deliberately unchanged: the snap to
---  source.position is what makes the flown arc match the planned one, the 0.2s
---  jumpTimer pause is what the arc is computed from, and the friction zeroing is
---  what keeps the ascent ballistic. This is an added branch, not a rewrite.
---
---  THE RADIUS IS STILL 1.0. Widening it would be the obvious way to catch a
---  fast approach, but the body of this function TELEPORTS the unit to the jump
---  point -- a larger radius means a longer snap, and a long enough snap puts the
---  unit through a wall. Walking is slower and cannot do that.
---
---  NOTE THE PARAMETER NAME. edgeMove calls this as self:moveJump(), so the
---  pather arrives as the first argument -- but inside THIS file `self` is the
---  monster's script table, which is a completely different thing. pathing.lua
---  flags the same collision in its own comment above setMoved(). Everything
---  below goes through `pather`; `self` is never the pather here.
---  THE HIGHEST POINT THE PLANNED ARC GOES TO.
---
---  Reads forward from the Jump edge through its Arc edges and includes the
---  first non-Arc edge, which is the Land the arc is aimed at. That last one
---  matters: the Land target IS the surface the unit has to get on top of, and
---  it usually sits slightly above the final Arc waypoint.
 local function plannedApex(pather)
   local finder = pather.finder
   local edges = finder and finder.edges
@@ -1787,13 +604,6 @@ local function plannedApex(pather)
   return highest
 end
 
---  WHERE THE PLANNED ARC IS MEANT TO PUT THE UNIT DOWN.
---
---  Walks forward from the Jump edge through its Arc edges and returns the first
---  NON-Arc edge's target -- the Land the whole arc exists to reach. Same walk
---  plannedApex does, kept separate because the apex and the landing are
---  different questions and the pathological case is precisely when they are the
---  same point.
 local function plannedLanding(pather)
   local finder = pather.finder
   local edges = finder and finder.edges
@@ -1812,148 +622,7 @@ local function plannedLanding(pather)
   return nil
 end
 
---  FLY THE PLAN'S ENDPOINT, NOT THE PLAN'S STATED VELOCITY.
---
---  SUPERSEDES a raise-only correction that could not fix the failure that
---  actually loops. That version compared the planned apex against what the
---  planned launch physically delivers, raised the launch when the plan wanted
---  MORE rise than the jump gives, and deliberately never lowered it -- on the
---  reasoning that launching weaker than planned is what caused ceiling
---  collisions.
---
---  MEASURED, ONE SESSION, PERFECT CORRELATION: every unexecutable takeoff in the
---  log -- 14 of them -- was the opposite case. A Jump edge carrying [12,45]
---  whose own arc waypoints top out at the landing height, 3 tiles up. A 45
---  launch crosses that height at t=0.074s STILL RISING AT vy 36, carries on to
---  8.44 tiles, and comes down 3.66 tiles past the target and 3 tiles below it.
---  The unit then walks back to the same tile and does it again: ten identical
---  replans, srcDist 4.72912 every time.
---
---  THE PLANNER PUT A LAND ON THE ASCENDING CROSSING. Its arc is not wrong about
---  physics -- it is a correct 45 trajectory -- it just stops where that
---  trajectory first passes the target height and calls that a landing. The
---  launch velocity is the part of the edge that cannot be honoured; the TARGET
---  is right, and is what this solves for.
---
---  TWO BRANCHES, AND THE FIRST IS PREFERRED.
---
---  KEEP THE PLANNER'S vx. It comes from {0, +-walkSpeed, +-runSpeed} and is the
---  horizontal reach the plan was counting on, so the arrival time is fixed and
---  only vy is free. Solving it is one line, and it is the branch that a normal
---  working jump takes -- a flat hop keeps its 12 and simply stops launching at
---  full height.
---
---  LOWER vx when no vy can arrive descending at that speed. For a target 1 tile
---  right and 3 up, vx 12 crosses the target's column in 0.083s, far too soon to
---  have risen and fallen; the geometry is impossible, not merely badly tuned.
---  Then the apex is pinned just above the landing and vx falls out of the
---  airtime.
---
---  ARRIVING DESCENDING IS THE WHOLE INVARIANT. Both branches guarantee it, and
---  it is what makes a Land edge mean what it says.
---
---  NEVER MORE HORIZONTAL REACH THAN PLANNED, and a raise in vy is still capped
---  at JUMP_VELOCITY_CAP, so this cannot turn a planned hop into a launch across
---  the room.
---
---  THE CEILING WORRY IS BOUNDED. This exceeds the plan's own apex by at most
---  JUMP_ARC_CLEARANCE, and only in the pathological case -- where the plan's
---  apex was the landing itself and the real trajectory was going five tiles
---  higher anyway. Every other case comes out at or below what the plan drew.
---------------------------------------------------------------------------------
---  FLIGHT TRACE (TEMPORARY -- DELETE WITH ARCPLAN)
---------------------------------------------------------------------------------
---
---  WHAT THIS EXISTS TO SEPARATE. Measured over a night's soak, 2026-09-11:
---  the same hop attempted 37 times, [5884,1169] vx 6 heading for [5886,1168].
---  solveLaunch solved it correctly -- dx 2, dy -2, vx 6 gives t 0.333 and
---  vy 13, and the logged apex 0.81 matches that vy exactly. The unit then
---  travelled ONE tile horizontally instead of two and landed back on its own
---  floor.
---
---  Three candidates survive that log, and they need different fixes:
---
---    FLOOR RE-ENTRY   a descending jump's parabola must pass back through
---                     takeoff height, and branch 1 of solveLaunch never tests
---                     the terrain between here and the landing. If the floor
---                     continues, the unit lands on it at t 0.217 rather than
---                     reaching the drop-off at t 0.333.
---
---    HORIZONTAL GATE  the arc mover turns the horizontal on at the turnover,
---                     which plan.drawio already records as wrong for short
---                     hops. 1.0 tile in 0.217 s is 4.6 tiles/s against a
---                     planned 6.
---
---    AIR-CONTROL CAP  4.6 is not an arbitrary number -- other units in the
---                     same log fly at exactly vx 4.6. If vx is capped there in
---                     the air, then solveLaunch's t = |dx| / |plannedVx| is
---                     computed from a speed the unit can never hold and EVERY
---                     airtime it has ever produced is short. That would make
---                     this a general error that only breaks visibly on short
---                     descending hops.
---
---  THE DISCRIMINATOR IS vx ON THE FIRST AIRBORNE TICK, and that is why the
---  trace is per-tick rather than per-edge. ARC tick only fires when the
---  current edge is already an Arc, which is exactly the part of the flight
---  where the answer is not.
---
---    vx holds 6, unit stops early at the predicted height   -> floor re-entry
---    vx starts low and rises at the turnover                -> horizontal gate
---    vx is pinned at 4.6 from the first tick                -> air-control cap
---
---  THE PER-TICK HALF OF THIS ALREADY EXISTS. flightTrace, near the top of this
---  file, logs position, `moved`, dt, velocity, onGround, liquid and the held
---  edge once per airborne tick, and it is better than the replacement that was
---  written here before anybody looked: its header records
---  proc.pathing.velocitysample -- a reported velocity is a FRICTION SAMPLING
---  ARTIFACT and the round numbers in every arc log are planner values rather
---  than measurements. A probe comparing mcontroller.velocity()[1] against the
---  solved vx would have been reading the artifact and calling it the answer.
---
---  SO ONLY TWO THINGS ARE ADDED: this terrain sweep, and the SOLVED LAUNCH on
---  self so flightTrace can print where the unit should be on each tick.
---  flightTrace already prints planX, but the plan is known fiction on every
---  jump -- that is the finding this whole probe exists to act on -- so the
---  solved arc is the only honest reference.
 
---  PROBE A -- WALK THE SOLVED PARABOLA INTO THE TERRAIN, AT LAUNCH.
---
---  Turns "did it hit the floor on the way" from an inference into a stated
---  fact, and it is the same sweep branch 1 would need if floor re-entry is the
---  answer -- so if it is, this code moves into solveLaunch rather than being
---  thrown away.
---
---  THE DISCRETE INTEGRATOR, NOT THE CONTINUOUS ONE. discreteRise already
---  exists in this file because the engine's half-step lift is worth half a
---  tile on a short hop; sampling a continuous parabola here would report a
---  collision the unit does not have, or miss one it does.
---
---  THE BODY AND NOT A POINT, because what hits the floor is the whole unit and
---  the unit is most of a tile across. That is what petports_bodyHitsAt is for.
---  DOES THIS ARC FLY THROUGH ANYTHING? Returns the first colliding position and
---  the step it happened on, or nil for a clear arc.
---
---  THE ASYMMETRY THIS EXISTS TO CLOSE. Vanilla's A* collision-checks its arcs
---  when it builds them, so a plan is validated by construction. solveLaunch
---  then throws that arc away and substitutes one of its own, and until now
---  validated nothing -- so it was free to turn a plan that would have landed
---  into one that cannot. Measured 2026-09-11, thirteen identical attempts:
---  the planner drew an arc rising 4.76 tiles over the lip, solveLaunch
---  replaced it with a flat skim apexing 0.81, and the flat one clips the floor
---  at t 0.217 having travelled 1.3 of the 2 tiles it needed.
---
---  THIS IS NOT A NEW IDEA HERE. ARCPROBE was a temporary version of exactly
---  this sweep, and what it found -- branch 2's invented horizontal cutting
---  through the ledge the plan climbed to avoid -- is written up below. It was
---  removed once that was fixed. It should not have been.
---
---  THE DISCRETE INTEGRATOR, matching discreteRise, because the engine's
---  half-step lift is worth half a tile on a short hop and a continuous
---  parabola would report collisions the unit does not have.
---
---  petports_bodyHitsAt IS THE BODY TEST. What hits the floor is the whole
---  unit, not a point, and that predicate already handles the poly and the
---  bound-box fallback.
 local ARC_DESCENT_SOLIDS = { "Null", "Block", "Slippery", "Dynamic", "Platform" }
 
 local function arcHitsTerrain(source, vx, vy, gravity, airtime, landing)
@@ -1962,13 +631,6 @@ local function arcHitsTerrain(source, vx, vy, gravity, airtime, landing)
 	local x, y = source[1], source[2]
 	local v = vy
 
-	--  A SMALL TOLERANCE AND NOT A MARGIN. The first version swept TWELVE
-	--  ticks past the intended airtime "so an arc that lands late is still
-	--  caught", which guaranteed a false positive on every arc that worked --
-	--  those twelve steps carry the trajectory THROUGH its landing and into
-	--  the ground. Measured 2026-09-11: twelve refusals in one session, one of
-	--  them a vertical launch (vx 0) reported hitting terrain 0.13 tiles BELOW
-	--  its own takeoff, which a vertical arc can only do by coming back down.
 	local steps = math.ceil((airtime or 1) / PHYSICS_DT) + 2
 
 	for i = 1, steps do
@@ -1976,27 +638,13 @@ local function arcHitsTerrain(source, vx, vy, gravity, airtime, landing)
 		x = x + vx * PHYSICS_DT
 		y = y + v * PHYSICS_DT
 
-		--  ARRIVED. Descending through the landing's height ends the sweep:
-		--  past that point the arc is inside whatever it is landing ON, and
-		--  anything it touches there is the destination rather than an
-		--  obstruction. `v < 0` is what keeps this from firing at takeoff on a
-		--  jump UP to a ledge, where y starts below the landing already.
 		if landing ~= nil and v < 0 and y <= landing[2] then
 			return nil
 		end
 
-		--  AND NOT THE GROUND WE ARE STANDING ON. The body is most of a tile
-		--  across and it is resting on something at takeoff, so the first few
-		--  samples of a LOW launch are still inside the floor's neighbourhood.
-		--  Half a tile of displacement is the cheapest way to say "this is a
-		--  sample of somewhere else". A real obstruction within half a tile is
-		--  still caught, because the arc keeps travelling into it.
 		local movedX = x - source[1]
 		local movedY = y - source[2]
 
-		--  PLATFORMS COUNT ON THE WAY DOWN. The default collision set excludes
-		--  them, and rising through one is correct; descending onto one is a
-		--  landing, and an arc that does so never reaches its target.
 		local set = (v < 0) and ARC_DESCENT_SOLIDS or nil
 
 		if (movedX * movedX) + (movedY * movedY) > 0.25
@@ -2028,11 +676,6 @@ local function traceLaunchTerrain(source, vx, vy, gravity, landing, airtime)
 		sb.printJson(landing and (landing[1] - source[1])))
 end
 
---  IS THERE ROOM TO BE WRONG AT THE LANDING? A landing with a standable tile on
---  each side absorbs the half-tile a fast arc overshoots by. A one-wide
---  platform absorbs nothing: measured 2026-09-12, an accurate arc arriving at
---  vx 11.7 caught the far edge on its leading chamfer and slid off inside one
---  update. Either neighbour missing means the arrival has to be slow.
 local function landingIsNarrow(landing)
 	for _, side in ipairs({ -1, 1 }) do
 		local ok, standable = pcall(validStandingPosition,
@@ -2061,49 +704,17 @@ local function solveLaunch(pather, edge, source)
 
   local vx, vy, time, branch
 
-  --  ---- branch 1: keep the planner's horizontal velocity -------------------
-  --
-  --  Guarded on the sign matching as well as on being non-zero: a plan whose vx
-  --  points away from its own landing is malformed, and dividing by it would
-  --  produce a negative time.
-  --  A NARROW LANDING SKIPS THE KEPT-vx BRANCH. That branch keeps the plan's
-  --  horizontal and is the fastest arrival the geometry allows; branch 2 is
-  --  told to use the tallest arc the cap permits instead, which is the slowest.
   local narrow = landingIsNarrow(landing)
 
   if not narrow and plannedVx ~= 0 and dx ~= 0 and ((dx > 0) == (plannedVx > 0)) then
     local t = math.abs(dx) / math.abs(plannedVx)
 
-    --  DESCENDING AT THE TARGET, on the DISCRETE trajectory: the continuous
-    --  form of this test is dy < g*t^2/2, and the integrator's extra lift makes
-    --  the real bound g*t*(t + dt)/2.
     if dy < 0.5 * gravity * t * (t + PHYSICS_DT) then
-      --  Solving  v0*t - g*t*(t - dt)/2 = dy  for v0. The continuous version of
-      --  this line read `+ 0.5 * gravity * t` and launched the unit t tiles too
-      --  high at the landing -- half a tile on a half-second hop, which is
-      --  exactly enough to clear a ledge instead of landing on it.
       local candidate = (dy / t) + (0.5 * gravity * (t - PHYSICS_DT))
 
-      --  And the apex it implies must still clear the landing, or the arrival
-      --  is descending by a hair and lands on the lip.
-      --  candidate > 0, MEASURED 2026-09-05 04:25. For a landing five tiles
-      --  BELOW, this solved vy = -39.3 -- a launch INTO the floor.
-      --  discreteRise squares v0, so a downward launch reports a positive
-      --  rise and passed the clearance test; the controller set it, the
-      --  floor won, the unit never left the ground, the arc mover saw every
-      --  edge "consumed" while grounded, refused the drop, replanned, and
-      --  did it again every tick for a minute. A jump goes up.
       if candidate > 0
          and discreteRise(candidate, gravity) >= dy + JUMP_ARC_CLEARANCE then
 
-        --  AND IT MUST NOT FLY THROUGH ANYTHING. This branch LOWERS the arc --
-        --  same vx, whatever vy reaches the landing -- and a lowered arc is
-        --  precisely the one that clips a lip the planner's taller arc went
-        --  over. Every other test above is about the arithmetic; this is the
-        --  only one about the world.
-        --
-        --  VETOED RATHER THAN CORRECTED, so branch 2 gets its turn and, if
-        --  that is blocked too, the plan is flown unchanged.
         local hit = arcHitsTerrain(source, plannedVx, candidate, gravity, t,
           landing)
 
@@ -2118,19 +729,9 @@ local function solveLaunch(pather, edge, source)
     end
   end
 
-  --  ---- branch 2: pin the apex, solve for vx -------------------------------
   if branch == nil then
-    --  FLOORED AT THE CLEARANCE, never zero or negative: a descent still
-    --  needs to clear its own takeoff lip before it falls.
     local rise = math.max(planRise, dy + JUMP_ARC_CLEARANCE, JUMP_ARC_CLEARANCE)
 
-    --  NARROW: RAISE THE ARC UNTIL THE LANDING IS SLOW ENOUGH, AND NO
-    --  FURTHER. More height is more airtime is less vx for the same dx. The
-    --  first version aimed at the cap outright and a vertical launch went up
-    --  13.65 for a 7-up target -- there is no vx to reduce on a vertical arc,
-    --  so it gets nothing here, and a horizontal one stops at the first rise
-    --  that lands under NARROW_LANDING_VX. Bounded by what the chassis can
-    --  actually jump, not by the multiplier cap below.
     if narrow and plannedVx ~= 0 and dx ~= 0 then
       local ceiling = nil
       local okJump, jumpSpeed = pcall(function()
@@ -2157,8 +758,6 @@ local function solveLaunch(pather, edge, source)
 
     vy = discreteLaunchForRise(rise, gravity) * JUMP_VELOCITY_MARGIN
 
-    --  Descending root of  v0*t - g*t*(t - dt)/2 = dy, which rearranges to
-    --  g/2 * t^2 - (v0 + g*dt/2) * t + dy = 0.
     local b = vy + ((gravity * PHYSICS_DT) / 2)
     local disc = (b * b) - (2 * gravity * dy)
     if disc < 0 then return plannedVx, plannedVy, nil end
@@ -2170,42 +769,6 @@ local function solveLaunch(pather, edge, source)
     if branch == nil then branch = "lowered vx" end
   end
 
-  --  Never out-reach the planner horizontally, and keep the old cap on a raise.
-  --
-  --  THE `plannedVx ~= 0` GUARD WAS REMOVED 2026-09-01 AND ITS REMOVAL IS THE
-  --  FIX. It made this clamp skip the one case where the plan asked for ZERO
-  --  horizontal reach at launch, so branch 2's `vx = dx / time` ran free and
-  --  turned a planned vertical climb into a diagonal parabola.
-  --
-  --  THAT IS NOT A ROUNDING DIFFERENCE, IT IS A DIFFERENT PATH THROUGH SPACE.
-  --  A* plans a climb-then-traverse precisely when something is in the way: it
-  --  rises in a clear column to above the obstruction, THEN moves sideways. The
-  --  parabola goes diagonally from the first tick, through the obstruction the
-  --  column existed to avoid. Measured, four identical laps:
-  --
-  --      launch lowered vx: plan [0,31.82] -> [2.29436,34.3286],
-  --                         landing [2533,1142.8] (dx 1 dy 4)
-  --      ARCPROBE solved BLOCKED at [2532.23,1141.53] (6 samples)
-  --                | plan clear (20 samples)
-  --
-  --  ARCPROBE WAS A TEMPORARY SWEPT-PATH DIAGNOSTIC AND IS GONE, REMOVED in the
-  --  same change that fixed this. It stepped the solved launch and the planner's
-  --  own waypoints and reported which of the two hit terrain. Do not go looking
-  --  for it in a current log -- these two lines are the whole of what it found
-  --  and the reason the guard came out.
-  --
-  --  The plan climbs to 1143.8, a full tile ABOVE the landing at 1142.8, before
-  --  it moves sideways at all. The solved arc hit the ledge face at 1141.53, a
-  --  tile and a quarter BELOW the lip, on sample 6 of 20 while still rising.
-  --
-  --  vy IS STILL SOLVED. Branch 2 pins the apex and that half was always right --
-  --  it launched at 34.33 for a plan apex of 1143.8 and reached 1143.996. Only
-  --  the invented horizontal is removed.
-  --
-  --  THE HORIZONTAL NOW COMES FROM THE PLAN'S OWN SCHEDULE instead, in the
-  --  airborne branch of petportsArcMover. A vertical launch that is never given
-  --  horizontal velocity rises and falls in its own column forever, so these two
-  --  changes are one change and neither is testable alone.
   if math.abs(vx) > math.abs(plannedVx) then
     vx = math.abs(plannedVx) * (vx > 0 and 1 or -1)
   end
@@ -2213,19 +776,6 @@ local function solveLaunch(pather, edge, source)
     vy = math.min(vy, plannedVy * JUMP_VELOCITY_CAP)
   end
 
-  --  LAST GATE: THE FINISHED SOLUTION, AFTER THE CLAMPS.
-  --
-  --  Here rather than inside branch 2 because the two clamps above CHANGE the
-  --  arc -- capping vx or vy moves where it goes -- so a sweep run before them
-  --  would have validated a trajectory that is not the one flown.
-  --
-  --  FALLING BACK TO THE PLAN AND NOT TO A THIRD GUESS. The planner's arc is
-  --  the only trajectory in this function that anything has already
-  --  collision-checked: vanilla's A* validates its arcs when it builds them.
-  --  When our substitute is blocked, the thing it was substituting for is the
-  --  best remaining option, and flying it is what this function's own contract
-  --  says -- it exists to fix plans that MISS, never to break plans that would
-  --  have landed.
   local finalHit = arcHitsTerrain(source, vx, vy, gravity, time, landing)
 
   if finalHit ~= nil then
@@ -2249,223 +799,28 @@ local function solveLaunch(pather, edge, source)
   }
 end
 
---  REPLACEMENT timedDrop AND keepDropping.
---
---  Vanilla's pair has two separate faults and they compound, so both are
---  replaced together. Neither is patched globally -- these are assigned to the
---  pather INSTANCE in freshPather, so PathMover.timedDrop stays reachable and
---  no other entity in the world is affected.
---
---  FAULT ONE, /scripts/pathing.lua PathMover:timedDrop:
---
---      function PathMover:timedDrop(time)
---        if holdTime == nil then holdTime = 0 end
---        holdTime = math.min(holdTime, 0.5)
---        mcontroller.controlDown()
---        self.downHoldTimer = holdTime
---      end
---
---  The parameter is `time`; the body uses `holdTime`, which is declared
---  nowhere and is therefore an undeclared GLOBAL. The argument is ignored
---  entirely, the global is nil on the first call so it becomes 0, and
---  math.min(0, 0.5) is 0 -- so downHoldTimer is 0 on every drop the entity
---  ever makes. moveDrop computes math.max(timeToFall(-delta[2]), 0.05) and
---  hands over a perfectly good fall time that nothing reads.
---
---  FAULT TWO, PathMover:keepDropping: it calls controlDown() and THEN tests
---  onGround(). On the tick the unit lands on the platform below, down has
---  already been pressed for that tick, so it falls through that one too and
---  the timer clears one platform late. Invisible when platforms are far apart
---  -- the unit is still airborne when the timer expires -- and very visible
---  when a player stacks them to fake a ladder, which is exactly where this was
---  observed: drop, land, hesitate, drop again, overshoot, jump back, repeat.
---
---  THE OBVIOUS FIX FOR FAULT TWO RE-BREAKS DROPPING. Testing onGround() before
---  pressing down cancels on the FIRST tick, because the unit is still standing
---  on the platform it is trying to fall through when moveDrop fires. So the
---  hold has to survive until the unit has actually left: dropOrigin records the
---  y at drop start, and onGround only counts once the unit is meaningfully
---  below it. That works whether the physics settles in one tick or three,
---  which matters because it is not known which.
---  MEASURED: vanilla's moveDrop asks for math.max(timeToFall(-delta[2]), 0.05),
---  which came out at 0.158s for a one-tile platform drop -- so this cap is not
---  a formality, it CLAMPS ordinary drops. 0.5 was vanilla's own intended
---  ceiling and is far longer than anything here needs.
---
---  THIS IS NOW A BACKSTOP, NOT THE RELEASE. See DROP FLOOR below.
---
---  A WALL CLOCK CANNOT EXPRESS "ONE PLATFORM", AND THE LOG PROVES IT.
---  Measured on a stack of platforms two tiles apart, dropping from 712.8 with
---  a target of 711.8:
---
---    52.161  y 712.8    hold 0.1 armed
---    52.254  y 712.303  v -11.97  descended 0.50  -- keepDropping presses down
---    52.352  y 710.972  v -21.97  descended 1.83  -- presses down AGAIN
---    52.412  y 708.808  v -31.97  two platforms past the target, path LOST
---
---  The tick rate in that session was 0.082s median across 120 samples -- 12.2
---  FPS, not 60. Every constant in this file that is expressed in SECONDS was
---  reasoned about at a tick five times shorter than the one the game actually
---  ran. 0.1s is "roughly six ticks" at 60Hz and exactly TWO here, and the
---  second of those two lands on the tick where the unit sits 0.17 above the
---  platform it was aiming for. Down is held, it passes through, and it is now
---  falling at 22 tiles per second with nothing left to catch it.
---
---  Lowering the number does not fix this and 0.034 would not have either: any
---  positive hold survives at least one keepDropping call, and one call at 12
---  FPS is worth 1.3 tiles of fall. Below one tick the hold stops working at
---  60Hz instead. There is no value that is correct at both frame rates.
---
---  DROP_DESCENT_EPSILON cannot rescue it either. That guard needs to SEE the
---  unit grounded, and between takeoff and the overshoot the unit is sampled at
---  712.303, 710.972 and 708.808 -- it is never observed touching a platform,
---  because it covers more than a tile per tick.
---
---  So 0.5 here is deliberately loose: vanilla's own intended ceiling, kept only
---  to bound a drop whose floor test never resolves. The floor test below is
---  what actually ends every ordinary drop.
 local DROP_HOLD_MAX = 0.5
 
---  RELEASE AT THE PLAN'S OWN TARGET, WHICH IS FRAME-RATE INDEPENDENT.
---
---  The Drop edge already states where the drop ends: origin minus the descent
---  in pather.delta IS the edge's target y. Recording it at arming turns the
---  release into a position test, which does not care how long a tick is.
---
---  Replaying the trace above against it: floor is 712.8 - 1 = 711.8.
---
---    y 712.303  above the floor  -> press, correct, still inside the platform
---    y 710.972  below the floor  -> RELEASE
---
---  and the step out of 710.972 then collides with the platform at 710.8 the
---  way it was always meant to.
---
---  IT HANDLES MULTI-TILE DROPS CORRECTLY, which a fixed clearance distance
---  would not. The 3-tile Drop edge in the same log runs 714.8 -> 711.8 and is
---  MEANT to pass through the platforms at 712.8 on the way; the floor says so,
---  a "release after 0.75 tiles" rule would have caught it on the first one.
---
---  The margin is slack for a unit that lands fractionally high. Small, because
---  overshooting the floor by a margin is exactly the failure being fixed.
 local DROP_FLOOR_MARGIN = 0.05
 
---  How far below the drop point the unit must be before a landing is believed.
---  A platform is one tile, so anything well under 1 works; this is deliberately
---  small so the guard releases as early as it safely can.
 local DROP_DESCENT_EPSILON = 0.35
 
---  A Drop edge that does not actually descend is not a drop, and pressing down
---  for one is how a unit falls through the floor it is standing on.
---
---  MEASURED, and this is the whole of the reproduced bug. A unit fell further
---  than its plan expected -- an Arc overshot and the Land put it at y 723.8 --
---  and the pather then executed the NEXT edge from the plan regardless:
---
---    post-move at [1207,723.8]: action Drop edge 4 of 26 src [1207,726.8] srcDist 3
---    drop hold 0.05 from y 723.8
---
---  The edge's SOURCE was three tiles above where the unit actually was. It had
---  already fallen past that node. Its target was level with the unit -- vanilla
---  asked for max(timeToFall(-delta[2]), 0.05) and got the 0.05 FLOOR, meaning
---  the descent was about a tenth of a tile. Pressing down there passed the unit
---  through the platform it had just landed on, and the loop that produced
---  repeated on a six-second cycle.
---
---  So: if the next node is not meaningfully below us, consume the edge and do
---  not touch the controls. advancePath still runs in moveDrop, so the plan
---  moves on -- which is correct, because the unit is already past that node.
 local MIN_DROP_DISTANCE = 0.5
 
---  WHY THERE IS NO PER-EDGE ARMING GUARD HERE.
---
---  An earlier pass added one, on the theory that moveDrop runs every tick the
---  Drop edge is current and re-arms downHoldTimer on each of them, so
---  keepDropping's landing release was being undone the same tick it fired.
---
---  THAT THEORY IS FALSE, and vanilla's own source says so. PathMover:moveDrop
---  calls timedDrop and then calls advancePath UNCONDITIONALLY, in the same
---  call. The Drop edge is consumed the tick it becomes current, so timedDrop
---  already runs exactly once per Drop edge. There is nothing to de-duplicate.
---
---  The guard was not merely inert. It keyed on currentEdgeIndex, which is
---  per-path and restarts at 1 on every replan -- so a fresh path whose Drop
---  edge happened to land on a previously-used index would have its drop
---  silently refused, and the unit would stand on the platform forever. That is
---  the inverse failure the handoff warns about, introduced by the fix for a
---  bug that was not there.
---
---  If over-dropping shows up again, the numbers to look at are DROP_HOLD_MAX
---  and MIN_DROP_DISTANCE, and the line to grep is "UNIT drop hold" -- one per
---  Drop edge. Two of those lines for the same edge index would be evidence for
---  the re-arming theory. There have never been two.
 
---  WHAT IS ACTUALLY UNDER THE UNIT. GROUND TRUTH, NOT INFERENCE.
---
---  Two drops in the same log, same x, same landing surface, opposite outcomes:
---  released at y 710.917 moving -31.53 and was caught, released at y 710.972
---  moving -21.97 and went through. Closer and faster survived; further and
---  slower did not. No model built on position and velocity separates those,
---  which means the assumption underneath -- that the surfaces are where the
---  grounded y-values in the log say they are -- is the thing to stop assuming.
---
---  So ask the world instead. Scans the column under the unit's own footprint
---  and reports each occupied row as P (platform) or B (solid), so the next log
---  says where the collision actually is rather than where a standing position
---  implies it was.
---
---  The x span is the collisionPoly's, via boundBox, because a platform that
---  only covers part of the footprint is one of the shapes that would explain
---  the pair above.
 local DROP_PROBE_DEPTH = 6
 
---  Tile rows and surfaces: a platform tile at row N collides at y = N + 1, and
---  a unit standing on it rests with its feet at N + 1. Confirmed by probe --
---  the stack in the test world reads P713 P711 P709 P707 P705 and the unit
---  stands at 714.8, 712.8, 710.8, 708.8, 706.8.
 local PROBE_EPSILON = 0.001
 
---  IS THERE STILL A PLATFORM TO GET THROUGH?
---
---  A drop presses down for exactly one reason: to pass a platform the plan
---  wants it below. The plan states how far in the Drop edge's descent, so any
---  platform whose surface sits ABOVE the floor is one to pass, and any platform
---  at or below the floor is one to land on. Pressing down near the second kind
---  is the whole bug.
---
---  MEASURED, four drops, same geometry, released above the same platform at
---  row 709 (surface 710.0):
---
---    feet 710.609  v -29.53   1.24 engine ticks to contact   caught
---    feet 706.862  v -17.53   2.95 engine ticks              caught
---    feet 710.244  v -21.53   0.68 engine ticks              through
---    feet 710.172  v -21.97   0.47 engine ticks              through
---
---  About one engine tick of down survives the script's decision to stop. Which
---  mechanism produces that is still not established -- a single stale tick and
---  a whole stale block each explain three of these four and not the fourth --
---  so this deliberately does NOT try to time the release. It removes the
---  reason to press instead: once no unpassed platform remains, down is not
---  wanted on any tick, stale or otherwise, and the window cannot open.
---
---  Returns the surface y of the highest platform still to be passed, or nil.
 local function platformToPass(position, floorFeet)
   local bounds = mcontroller.boundBox()
   local feet = position[2] + bounds[2]
 
-  --  Rows whose surface is at or below the FEET, working downward.
-  --
-  --  floor, not ceil. A dry run of this against the four logged drops caught
-  --  ceil admitting the row directly above the feet: at feet 711.503 it
-  --  returned surface 712, which the unit was already half a tile below and had
-  --  therefore already passed. That would have kept down pressed for exactly
-  --  the tick that has to be quiet, reproducing the bug through the fix.
   local first = math.floor(feet + PROBE_EPSILON) - 1
 
   for row = first, first - DROP_PROBE_DEPTH, -1 do
     local surface = row + 1
 
-    --  At or below the floor: this is a landing surface, not one to pass.
-    --  Everything further down is lower still, so stop.
     if surface <= floorFeet + PROBE_EPSILON then break end
 
     local region = { position[1] + bounds[1], row,
@@ -2501,36 +856,12 @@ local function probeBelow(position)
   return table.concat(rows, " ")
 end
 
---  HOW FAR BELOW A PLATFORM SURFACE TO PLACE THE FEET.
---
---  Two pixels. Starbound is 8 pixels to the tile, so 0.25 -- far enough that
---  the feet are unambiguously below the surface and no rounding puts them back
---  on top of it, small enough that the placement is not visible as a jump.
 local DROP_SCOOT = 0.25
 
---  HOW FAR THE UNIT'S FEET MAY BE FROM THE PLATFORM IT IS DROPPING THROUGH.
---
---  A drop placement is only safe while the unit is resting on the surface it
---  passes, because nothing sweeps the space between origin and destination.
---  Feet on a platform read EXACTLY its surface, so this only has to be big
---  enough for float noise and small enough that it cannot span a platform --
---  which on the tightest legal spacing means well under 1.0.
 local DROP_ORIGIN_TOLERANCE = 0.35
 
---  HOW FAR BELOW THE PASSED SURFACE A PLACEMENT MAY SETTLE.
---
---  DROP_SCOOT is the nudge; this is the floor of the search when the nudge pose
---  does not fit under a low ceiling. Exactly 1.0, and that number is doing real
---  work: platform surfaces are integers, so one tile reaches the next standing
---  height and cannot reach the one past it. Raise this and a placement starts
---  crossing platforms unchecked, which is the teleport all over again.
 local DROP_SETTLE_MAX = 1.0
 
---  THE LOWEST PLATFORM THIS DROP IS MEANT TO GET THROUGH.
---
---  platformToPass answers "is there one left"; this answers "where does the
---  passing end", which is what a placement needs. Same rule: a platform above
---  the floor is one to pass, at or below the floor is one to land on.
 local function lastPlatformToPass(position, floorFeet)
   local bounds = mcontroller.boundBox()
   local feet = position[2] + bounds[2]
@@ -2551,8 +882,6 @@ local function lastPlatformToPass(position, floorFeet)
   return lowest
 end
 
---  Would the unit be inside something solid if its feet were placed here?
---  Platforms are excluded deliberately -- being inside one is the entire point.
 local function bodyFitsWithFeetAt(position, feet)
   local bounds = mcontroller.boundBox()
   local centre = feet - bounds[2]
@@ -2562,32 +891,6 @@ local function bodyFitsWithFeetAt(position, feet)
   return not world.rectTileCollision(region, {"Null", "Block", "Dynamic"})
 end
 
---  PLACE THE UNIT THROUGH THE PLATFORM INSTEAD OF ASKING THE CONTROLLER TO.
---
---  MEASURED, build 24e, and this is why controlDown was abandoned entirely.
---  The release fired exactly where the dry run said it would, after a SINGLE
---  arming press and nothing after it:
---
---    27.732  arm      feet 712.000  toPass 712   press
---    27.802  release  feet 711.503  toPass nil
---
---  and the unit still passed surface 712 AND surface 710 before landing on
---  708. One press carries it through two platforms. controlDown is not a
---  per-tick gate on platform collision; it starts a fall-through state whose
---  duration is not observable from script. So no hold length can be correct --
---  not 0.5, not 0.1, not 0.034, not "until nothing is left to pass". Three
---  rewrites of the release condition were all solving a problem that was never
---  about the release.
---
---  A placement has none of that. The feet end up below the surface, the unit is
---  through, gravity does the rest, and no engine state is left running. Both
---  vanilla movers this file already replaces do the same thing: moveJump calls
---  setPosition(source), moveDrop calls setPosition on the x axis.
---
---  FAILS CLOSED. If the destination is inside something solid, or no platform
---  needs passing, nothing is placed and the drop is skipped rather than
---  guessed at -- a unit that does not drop stalls visibly and replans, which is
---  recoverable. A unit placed inside terrain is not.
 local function scootThroughPlatform(pather, floorFeet)
   local position = mcontroller.position()
   local surface = lastPlatformToPass(position, floorFeet)
@@ -2596,35 +899,6 @@ local function scootThroughPlatform(pather, floorFeet)
     return false, "no platform above the floor to pass"
   end
 
-  --  YOU MAY ONLY SCOOT THROUGH THE SURFACE YOU ARE STANDING ON.
-  --
-  --  This placement bypasses the collision sweep between origin and
-  --  destination -- bodyFitsWithFeetAt checks where the unit lands, never the
-  --  path it takes to get there. That is safe at DROP_SCOOT, 0.25 tiles, only
-  --  because of an invariant nothing was checking: the unit is resting on the
-  --  platform it is about to pass, so origin and destination are a quarter tile
-  --  apart and there is nothing in between.
-  --
-  --  DROP_SCOOT never changed. THE ORIGIN DRIFTED. A unit executing a plan
-  --  three tiles above the surface that plan was drawn on reaches the Drop edge
-  --  with a descent measured from where it actually is, and the lowest platform
-  --  above the edge's floor is then nowhere near its feet. MEASURED, on four
-  --  platforms stacked a tile apart:
-  --
-  --      pre-move at [3751.8,1029.8]: action Drop edge 24 of 68
-  --        src [3752,1026.8] dst [3752,1025.8] dstDist 4.00499
-  --      UNIT drop SCOOTED 1029.8 -> 1026.55 (through surface 1026)
-  --        for a 4 tile descent
-  --
-  --  A 3.25-tile placement straight through three solid-from-above platform
-  --  surfaces, into a tunnel the unit had no route into. It reads in game as
-  --  the unit falling through the floor, and it is the only line in the log
-  --  that says so.
-  --
-  --  The invariant is now asserted rather than assumed. Refusing here falls
-  --  back to controlDown, which is physics and cannot pass through anything it
-  --  should not -- and the refusal is logged, so a drop attempted from the
-  --  wrong storey names itself instead of teleporting.
   local feetNow = position[2] + mcontroller.boundBox()[2]
   local standingGap = math.abs(feetNow - surface)
 
@@ -2636,27 +910,6 @@ local function scootThroughPlatform(pather, floorFeet)
       sb.printJson(surface), sb.printJson(standingGap))
   end
 
-  --  SETTLE DOWNWARD WHEN THE NUDGE POSE DOES NOT FIT.
-  --
-  --  DROP_SCOOT is a nudge: put the feet a hair under the platform and let
-  --  gravity finish. That assumes headroom below, and a two-high tunnel does
-  --  not have any. MEASURED:
-  --
-  --      PLAN DROP refused at [3752.29,1024.8]: Walk edge 28 targets
-  --        [3753,1023.8], 1.00006 below us: solid tiles at feet 1023.75
-  --
-  --  Feet at 1023.75 puts a 1.6-tall body from 1023.75 to 1025.35, and the
-  --  top tile is the tunnel ceiling. Feet at 1023.0 -- where the unit actually
-  --  comes to rest, and where the plan's own edge sits -- spans 1023.0 to
-  --  1024.6 and fits the tunnel exactly. The pose being rejected was one the
-  --  unit passes through, not one it stops in.
-  --
-  --  So when the nudge does not fit, step the feet down and take the first
-  --  height that does. CAPPED AT ONE TILE BELOW THE SURFACE, which is the
-  --  whole safety argument: platform surfaces land on integers, so a full tile
-  --  reaches the next standing height and cannot reach the one after it. This
-  --  still passes exactly one platform, and the origin assertion above still
-  --  requires the unit to be standing on it.
   local feet = nil
   local offset = DROP_SCOOT
 
@@ -2690,8 +943,6 @@ function petportsTimedDrop(pather, time)
   local descent = (delta ~= nil and delta[2] ~= nil) and -delta[2] or 0
 
   if descent < MIN_DROP_DISTANCE then
-    --  Explicitly cleared rather than left alone: a stale timer from an earlier
-    --  drop would otherwise keep keepDropping pressing on this edge too.
     pather.downHoldTimer = nil
     pather.petportsDropOrigin = nil
     pather.petportsDropFloor = nil
@@ -2706,14 +957,9 @@ function petportsTimedDrop(pather, time)
 
   local floorFeet = mcontroller.position()[2] - descent + mcontroller.boundBox()[2]
 
-  --  PLACEMENT FIRST. controlDown is only reached if the placement refuses.
   local scooted, why = scootThroughPlatform(pather, floorFeet)
 
   if scooted then
-    --  downHoldTimer deliberately left nil. PathMover:move early-returns for
-    --  the whole of a hold -- no finder update, no edgeMove, no controlParameters
-    --  -- so leaving it set would blind the pather for a drop that is already
-    --  finished. Nothing to keep dropping.
     pather.downHoldTimer = nil
     pather.petportsDropOrigin = nil
     pather.petportsDropFloor = nil
@@ -2726,15 +972,11 @@ function petportsTimedDrop(pather, time)
 
   sb.logInfo("UNIT drop scoot refused (%s) -- falling back to controlDown", why)
 
-  --  The argument vanilla throws away.
   pather.downHoldTimer = math.min(time or 0, DROP_HOLD_MAX)
   pather.petportsDropOrigin = mcontroller.position()[2]
 
-  --  Where the edge says this drop ends. keepDropping releases here.
   pather.petportsDropFloor = pather.petportsDropOrigin - descent
 
-  --  The same line expressed at the feet, which is what tile surfaces are
-  --  measured against.
   pather.petportsDropFloorFeet =
     pather.petportsDropFloor + mcontroller.boundBox()[2]
 
@@ -2765,13 +1007,6 @@ function petportsKeepDropping(pather, dt)
   local origin = pather.petportsDropOrigin or y
   local floor = pather.petportsDropFloor
 
-  --  AT OR BELOW THE PLAN'S TARGET. The drop is over regardless of what the
-  --  clock says, and regardless of whether the unit has touched anything --
-  --  at a long tick it will not have. Checked FIRST because it is the only one
-  --  of the three tests that holds at any frame rate.
-  --  EVERY HELD TICK, not just the release. The interesting question is what
-  --  the unit passed while down was held, and that is only answerable if each
-  --  tick says where it was and what was under it.
   if TASK_DEBUG then
     sb.logInfo("UNIT drop tick y %s feet %s v %s timer %s floor %s | below: %s",
       sb.printJson(y),
@@ -2787,8 +1022,6 @@ function petportsKeepDropping(pather, dt)
       tostring(pather.petportsDropFloorFeet))
   end
 
-  --  NOTHING LEFT TO PASS. Checked before the floor, because it is the reason
-  --  the floor test existed and it is exact where the floor test was a proxy.
   local floorFeet = pather.petportsDropFloorFeet
   if floorFeet ~= nil then
     local pass = platformToPass(mcontroller.position(), floorFeet)
@@ -2804,8 +1037,6 @@ function petportsKeepDropping(pather, dt)
     end
   end
 
-  --  Retained as a backstop for a drop with no floorFeet recorded, and for a
-  --  plan whose descent runs past every platform the probe can see.
   if floor ~= nil and y <= floor + DROP_FLOOR_MARGIN then
     sb.logInfo("UNIT drop reached floor %s at y %s (fell %s) -- floor backstop, "
       .. "the platform test should have released first",
@@ -2815,9 +1046,6 @@ function petportsKeepDropping(pather, dt)
     return
   end
 
-  --  CHECKED BEFORE THE PRESS, NOT AFTER. This is fault two. Still worth
-  --  keeping: it catches a drop that lands EARLY, on something the plan did
-  --  not know about, before the floor is reached.
   if (origin - y) >= DROP_DESCENT_EPSILON and mcontroller.onGround() then
     if TASK_DEBUG then
       sb.logInfo("UNIT drop landed short at y %s (fell %s, floor was %s), releasing down",
@@ -2841,9 +1069,6 @@ function petportsKeepDropping(pather, dt)
 end
 
 function petportsJumpMover(pather)
-  --  Vanilla's first guard, unchanged. moveArc sets jumpCooldown to 0.3 on
-  --  every airborne tick, so without this a unit landing out of an arc would
-  --  immediately launch again.
   if mcontroller.onGround() and pather.jumpCooldown then
     return "running"
   end
@@ -2857,62 +1082,10 @@ function petportsJumpMover(pather)
   local gap = world.magnitude(mcontroller.position(), source)
 
   if gap >= JUMP_TAKEOFF_REACH then
-    --  THE BRANCH VANILLA IS MISSING.
-    --
-    --  Only on the ground: airborne on a Jump edge means something else has
-    --  gone wrong, and adding thrust to it would make the landing worse rather
-    --  than better.
-    --
-    --  THAT REASONING IS ABOUT AIR, AND LIQUID IS A THIRD STATE IT DOES NOT
-    --  COVER -- see the swim arm below. Kept as written for the air case, which
-    --  it is still right about.
     if mcontroller.onGround() then
       local toSource = source[1] - mcontroller.position()[1]
       local levelGap = math.abs(source[2] - mcontroller.position()[2])
 
-      --  ON A DIFFERENT LEVEL: DO NOT WALK.
-      --
-      --  Measured failure, and it was this branch that caused it. A unit stood
-      --  at [1214.88,711.875] with its jump source at [1215,707.875] -- four
-      --  tiles BELOW. The horizontal offset was 0.12, which cleared the epsilon
-      --  below, so this issued controlMove toward 1215, overshot to 1215.13,
-      --  reversed, overshot to 1214.88, and did that indefinitely.
-      --
-      --  THE OSCILLATION DEFEATED THE STALL DETECTOR, which is why it never
-      --  recovered on its own: the unit was displacing a quarter tile per
-      --  cycle, so stuckAnchor kept updating and airborneEdgeStall kept
-      --  resetting. A unit that paces looks livelier than one that is wedged
-      --  and is in fact worse off.
-      --
-      --  MEASURED AGAIN 2026-09-04 AT levelGap 1.0, and the numbers are worth
-      --  keeping: 156 ticks, min step 0.150, mean 0.345, and NOT ONE step at or
-      --  below STUCK_MOVE 0.1 -- so airborneEdgeStall was zeroed on every
-      --  single tick and `UNIT stalled on` never printed once. That makes this
-      --  guard the ONLY thing standing between a 0.35s replan and a hard stall:
-      --  once the walk branch below is entered, the detector that would rescue
-      --  it can no longer fire at all.
-      --
-      --  Standing still is the correct behaviour here. The grounded-stall check
-      --  in update() then fires within 0.35s and replans from where the unit
-      --  actually is, which is the only thing that can help.
-      --  INCLUSIVE, AND THE BOUNDARY IS THE WHOLE BUG. Measured 2026-09-04: a
-      --  unit at [2491.19,1166.8] with its jump source at [2491,1165.8] --
-      --  levelGap EXACTLY 1.0, so `>` let it through, and this walked toward a
-      --  point one floor below its feet for 12.6 seconds across 156 ticks,
-      --  cycling four x-positions until the task failed on no net progress.
-      --
-      --  A FULL TILE IS A DIFFERENT FLOOR, which is what the constant's own
-      --  header already says it means to exclude. The comparison admitted the
-      --  one case the value was chosen to refuse.
-      --
-      --  `>=` RATHER THAN RETUNING TO 0.9, because the constant is not wrong --
-      --  a slope or half-step is under a tile by definition, so nothing
-      --  legitimate lives AT 1.0 and there is no number to invent.
-      --
-      --  THE ASYMMETRY SETTLES IT. Too strict costs one 0.35s replan on an
-      --  exactly-1.0 half-step. Too loose costs 12.6 seconds and a failed task,
-      --  every time, because entering the walk branch below permanently disarms
-      --  the recovery -- see the stall note in the next paragraph.
       if levelGap >= JUMP_LEVEL_TOLERANCE then
         if not pather.petportsWrongLevel then
           pather.petportsWrongLevel = true
@@ -2926,10 +1099,6 @@ function petportsJumpMover(pather)
 
       pather.petportsWrongLevel = nil
 
-      --  Directly above or below, so no amount of walking closes the gap. Leave
-      --  it: the unit will stand still, and the grounded-stall check in
-      --  update() replans within 0.35s. Walking an arbitrary direction here
-      --  would just wander off the path.
       if math.abs(toSource) >= JUMP_APPROACH_EPSILON then
         mcontroller.controlMove(toSource > 0 and 1 or -1, false)
 
@@ -2941,38 +1110,6 @@ function petportsJumpMover(pather)
         end
       end
 
-    --  THE SAME RECOVERY, FOR A UNIT THAT IS IN WATER RATHER THAN ON A FLOOR.
-    --
-    --  A swimmer at a waterline is never onGround, so every line above is
-    --  unreachable for it and this function did nothing at all -- which for a
-    --  chassis with no buoyancy is not "nothing", it is a 21-tile fall. The
-    --  surface hold on an amphibious unit is produced ENTIRELY by
-    --  petportsFreeMover's controlApproachVelocity, once per tick, so the first
-    --  tick on a Jump edge is the first tick with no thrust and the unit starts
-    --  down. See JUMP_SWIM_CHASE for the measurement.
-    --
-    --  GRAVITY-ENABLED ONLY. A free mover does not sink when nothing pushes it
-    --  and does not get handed Jump edges in the first place; leaving it out
-    --  keeps this arm to the chassis that demonstrated the fault.
-    --
-    --  ANY WATER IN THE BODY, NOT FULL SUBMERSION. petports_mediumAt answers
-    --  "mixed" for a body straddling a waterline, and that is exactly where
-    --  this failed -- a 1.6-tall body centred at 1149.81 spans a wet row and a
-    --  dry one. Asking only for "swim" would miss the measured case entirely.
-    --
-    --  NO JUMP_LEVEL_TOLERANCE HERE, DELIBERATELY. That rule exists because
-    --  walking cannot change what floor you are on, so a source four tiles down
-    --  is evidence of a bad plan rather than something to approach. Swimming
-    --  changes both axes, so a source above or below is simply somewhere to
-    --  swim to, and the bound that matters is DISTANCE.
-    --
-    --  NO controlDown, unlike the free mover's descent case. That hold exists
-    --  because A* routes down through platforms; this is not following a plan
-    --  edge, it is a correction back to a point the unit was at a tick ago, and
-    --  no platform can have appeared underneath it in between.
-    --  petports_freeMover, NOT A RAW gravityEnabled READ -- see its header.
-    --  This correction is for a WALKER swimming; a free mover has its own
-    --  descent case above and must not take both.
     elseif not petports_freeMover()
            and gap <= JUMP_SWIM_CHASE then
       local medium = petports_mediumAt(mcontroller.position())
@@ -2982,10 +1119,6 @@ function petportsJumpMover(pather)
         local length = math.sqrt(delta[1] * delta[1] + delta[2] * delta[2])
 
         if length > 0.0001 then
-          --  THE SAME ACTUATION THE SWIM MOVER USES, INCLUDING THE FORCE. Two
-          --  functions pushing one body through water with different forces
-          --  would make the approach depend on which one happened to be
-          --  driving, and the handover between them is the whole bug.
           local force = mcontroller.baseParameters().liquidJumpProfile.jumpControlForce
 
           mcontroller.controlApproachVelocity(
@@ -3009,7 +1142,6 @@ function petportsJumpMover(pather)
   pather.petportsSwimmingToJump = nil
   pather.petportsWrongLevel = nil
 
-  --  Everything from here down is vanilla's takeoff, unmodified.
   if not pather.jumpTimer then
     pather.jumpTimer = 0.2
     mcontroller.setPosition(source)
@@ -3018,29 +1150,6 @@ function petportsJumpMover(pather)
     sb.logInfo("UNIT takeoff from %s, jumpVel %s (approached to %s)",
       sb.printJson(source), sb.printJson(edge.jumpVelocity), sb.printJson(gap))
 
-    --  WHAT THE PLANNER ACTUALLY DREW, dumped once per takeoff.
-    --
-    --  This exists to settle one open question: the planner emits a Jump edge
-    --  carrying a jumpVelocity, and then draws an arc that does not match it.
-    --  Measured on a four-tile rung climb -- jumpVelocity [8,45], which at
-    --  g 120 is 8.4375 tiles of rise, against an arc that turned over 5.85
-    --  tiles up. The unit flew the 8.4375 and sailed clean over the rung it was
-    --  aiming for. smallJumpMultiplier was 1.0 when this was measured, so the
-    --  catalogued explanation did not cover it. It is 0.70711 now -- see the
-    --  entry beside it in petports_contract.lua -- which means this measurement
-    --  should be RE-TAKEN before it is reasoned from: with only one jump height
-    --  available, every plan was a maximum-height launch, and that alone
-    --  accounts for part of what is described here.
-    --
-    --  The per-edge VELOCITIES are the discriminator and are the reason this
-    --  dump exists rather than a apex number. If the first arc edge's source
-    --  velocity reads [8,45], the planner is drawing a trajectory that
-    --  contradicts its own launch and the disagreement is in the arc sampling.
-    --  If it reads something smaller, the planner is deliberately planning a
-    --  partial jump the actor cannot perform, and the Jump edge's jumpVelocity
-    --  is a ceiling rather than an instruction.
-    --
-    --  Delete this block once that is answered.
     local planFinder = pather.finder
     local planEdges = (planFinder and planFinder.edges) or {}
     local planIndex = (planFinder and planFinder.currentEdgeIndex) or 0
@@ -3057,25 +1166,6 @@ function petportsJumpMover(pather)
       sb.printJson(nominalRise and (source[2] + nominalRise)),
       sb.printJson(plannedApex(pather)))
 
-    --  THE ONE NUMBER THAT MATTERS, stated rather than left to subtraction.
-    --
-    --  A planner apex BELOW the physics apex means the plan's Land sits on the
-    --  ASCENDING crossing: the trajectory it drew is a correct one for the
-    --  velocity it specifies, it just stops the first time that trajectory
-    --  passes the target height, while the unit is still going up hard.
-    --
-    --  THIS USED TO BE FATAL AND IS NOW DIAGNOSTIC. The note here said the case
-    --  was "not correctable at all: the actor cannot jump softer". The actor
-    --  cannot, but petportsJumpMover does not ask it to -- it sets velocity
-    --  outright, and solveLaunch now flies the plan's LANDING rather than the
-    --  plan's stated velocity, which lowers the launch until the arrival is on
-    --  the way down. So this line no longer predicts a failure; it names the
-    --  plans that are being corrected, and the `launch lowered vx` line that
-    --  follows says what they were corrected to.
-    --
-    --  KEPT, AND WORTH KEEPING, because the frequency is the signal. This firing
-    --  constantly means A* is routinely emitting ascending Lands, which is worth
-    --  knowing even when every one of them is handled.
     local plannedTop = plannedApex(pather)
     if plannedTop ~= nil and nominalRise ~= nil then
       local physicsTop = source[2] + nominalRise
@@ -3118,9 +1208,6 @@ function petportsJumpMover(pather)
     local vx, vy, solved = solveLaunch(pather, edge, source)
 
     if solved ~= nil then
-      --  ALWAYS LOGGED, one line per takeoff. This is the only place the
-      --  difference between what the plan SAID and what the unit is about to do
-      --  appears, and a jump that still misses cannot be diagnosed without it.
       sb.logInfo("UNIT launch %s: plan [%s,%s] -> [%s,%s], landing %s (dx %s dy %s), "
         .. "apex %s vs plan %s, airtime %s",
         tostring(solved.branch),
@@ -3136,11 +1223,6 @@ function petportsJumpMover(pather)
 
     mcontroller.setVelocity({vx, vy})
 
-    --  BOTH PROBES ARM HERE, AFTER THE VELOCITY IS SET AND FROM THE VELOCITY
-    --  THAT WAS SET. Not from edge.jumpVelocity: the whole point is to measure
-    --  the unit against what it was actually given, so that a divergence means
-    --  "it did not fly what we told it" rather than "the plan was wrong",
-    --  which is already known to be true on every jump.
     if FLIGHT_TRACE then
       local traceParams = mcontroller.baseParameters()
       local traceGravity = world.gravity(source)
@@ -3149,9 +1231,6 @@ function petportsJumpMover(pather)
       traceLaunchTerrain(source, vx, vy, traceGravity,
         solved and solved.landing, solved and solved.time)
 
-      --  WHAT WE ACTUALLY TOLD THE UNIT TO DO, for flightTrace to measure
-      --  against. Not edge.jumpVelocity: the plan disagrees with the launch on
-      --  every jump, so measuring against the plan only re-reports that.
       self.petportsLaunchSolve =
       {
         source = { source[1], source[2] },
@@ -3163,43 +1242,14 @@ function petportsJumpMover(pather)
       }
     end
 
-    --  THE LAUNCHED vx, NOT THE PLANNED ONE. deltaX is what the movers read for
-    --  direction and magnitude after takeoff, and leaving it at a value the unit
-    --  is not travelling at is the same class of disagreement this function
-    --  exists to remove.
     pather.deltaX = vx
 
-    --  AND THE ARC MOVER HAS TO BE TOLD, OR IT UNDOES THIS ON THE FIRST
-    --  AIRBORNE TICK.
-    --
-    --  petportsArcMover drives horizontal velocity toward the ARC EDGE'S OWN
-    --  source.velocity every tick it is in flight -- which is the planner's
-    --  velocity, the one this function just decided is unflyable. A launch of
-    --  2.86 would be pushed straight back to 12 and the unit would sail past
-    --  its landing exactly as before, with the launch line in the log claiming
-    --  it had been corrected.
-    --
-    --  plannedVx IS CARRIED FOR DIAGNOSIS ONLY, NOT AS A GATE. It used to be
-    --  the test for whether an arc edge belonged to this jump, and that was
-    --  wrong in the one case that matters -- see the airborne branch of
-    --  petportsArcMover, and fact.pathing.plannervxdrop. The arc's ownership is
-    --  now a state invariant maintained per tick: the record exists only while
-    --  the pather is on an Arc edge.
-    --
-    --  jumpIndex IS THE EDGE THE JUMP WAS TAKEN FROM. The arcs belonging to this
-    --  jump are the contiguous run after it, so an index at or below it in a
-    --  substitution is a record that should already have been cleared, and is
-    --  logged as such rather than silently applied.
     pather.petportsLaunch = {
       vx = vx,
       plannedVx = edge.jumpVelocity[1],
       jumpIndex = pather.finder and pather.finder.currentEdgeIndex
     }
 
-    --  A NEW JUMP IS NOT A LANDING. Cleared here as well as when an arc ends,
-    --  because an arc that terminates some other way -- the skip logic reaching
-    --  a Land, a replan mid-flight -- would otherwise leave this set and brake
-    --  the next takeoff to a standstill in the air.
     pather.petportsLanding = nil
 
     pather.jumpTimer = nil
@@ -3211,84 +1261,10 @@ function petportsJumpMover(pather)
   return "running"
 end
 
---  REPLACEMENT moveArc.
---
---  Vanilla's grounded branch is a RUN-UP, and it has three problems that only
---  show up together. From /scripts/pathing.lua:
---
---      if mcontroller.onGround() and not mcontroller.liquidMovement() then
---        local nextEdge = self.finder:lookAhead(1) or {}
---        if nextEdge.action and nextEdge.action ~= "Arc" then
---          self.arcDelta = nil
---          self:advancePath()
---        else
---          self.arcDelta = self.arcDelta or self.delta[1]
---          moveX(self.arcDelta, run)
---          self.deltaX = self.arcDelta
---        end
---        return "running"
---
---  ONE: `self.arcDelta = self.arcDelta or self.delta[1]` LATCHES. It is taken
---  once, on the first grounded tick, and never recomputed. So it is a direction
---  held forever rather than an approach.
---
---  TWO: `run` IS AN UNDECLARED GLOBAL. moveWalk declares `local run = self.run`
---  at the top; moveArc never does, so this is a nil global reaching
---  mcontroller.controlMove(direction, run), where the run flag DEFAULTS TO
---  TRUE. The run-up therefore happens at runSpeed, not walkSpeed. Same shape as
---  the `holdTime` typo in timedDrop -- an undeclared global standing in for a
---  parameter, silently.
---
---  THREE: there is no terminating condition. Nothing checks arrival, nothing
---  re-reads the delta, and passedTarget cannot advance a vertical arc edge --
---  edgeDistance[1] is 0, which its own `~= 0` guard rejects, and the unit is
---  ABOVE a target it is meant to fall to, so axis 2 never changes sign either.
---
---  MEASURED, on a four-tile platform stack, from the pre-move dx field:
---
---      [3768.2,1026.8]   dx -0.04   velocity   0      grounded, arcDelta latched
---      [3767.82,1026.8]  dx +0.34   velocity  -7.59
---      [3766.88,1026.8]  dx +1.28   velocity -11.8    runSpeed, wrong direction
---      [3765.88,1026.8]  dx +2.28   velocity -11.8
---      [3763.88,1026.78] dx +4.28   velocity -11.8
---      [3762.88,1026.21] dx +5.28   velocity -12      off the end of the rung
---
---  dx is the distance to the edge target. It crosses zero on the second tick
---  and the unit keeps accelerating away from it, because the latched value is
---  the only thing steering. Six tiles later it left the platform and fell
---  sixteen.
---
---  AND IT DEFEATED EVERY GUARD, because all of them read motion as health --
---  vanilla's stuckTimer, our airborneEdgeStall, and the stuckAnchor reset that
---  zeroes both. That is the failure petportsJumpMover's header already warned
---  about from the other direction: a recovery that produces motion is worse
---  than no recovery.
---
---  THE RUN-UP IS DELETED RATHER THAN REPAIRED, because the state it fires in is
---  never a state a run-up helps. canPathfind() requires onGround, so a path is
---  always planned from the ground and a jump sequence always opens with a Jump
---  edge -- moveJump owns the approach to the takeoff point and only advances
---  once the launch velocity is set. Grounded on an Arc therefore means one of
---  exactly two things:
---
---    the tick immediately after takeoff, still touching the floor while rising
---    -- one tick, velocity[2] well positive, and the launch is already applied
---    so there is nothing for a run-up to contribute
---
---    the arc is over and the unit landed somewhere the plan did not predict
---
---  Neither wants horizontal control. Issuing none leaves the unit standing
---  still, which is the honest signal: the skip in update() consumes the dead
---  arc on the same tick, and if it somehow does not, the grounded-stall check
---  replans within AIRBORNE_EDGE_STALL. Standing still is also exactly what
---  petportsJumpMover's wrong-level branch settled on, for the same reason.
---
---  Everything else here is vanilla's, unmodified.
 function petportsArcMover(pather)
   pather.jumped = false
   pather.jumpCooldown = 0.3
 
-  --  Vanilla's advance loop, unchanged.
   while pather.edge and pather.edge.action == "Arc" do
     if passedTarget(pather.edge) then
       pather:advancePath()
@@ -3307,48 +1283,12 @@ function petportsArcMover(pather)
   if mcontroller.onGround() and not mcontroller.liquidMovement() then
     local nextEdge = pather.finder:lookAhead(1) or {}
 
-    --  NOTHING BRAKES HERE, AND A TOUCHDOWN STOP WAS TRIED AND REMOVED.
-    --
-    --  2026-09-01: a hard `setVelocity({0, vel[2]})` was added at the top of
-    --  this branch as a backstop for the airborne brake, on the reasoning that
-    --  touchdown is the one arrival that cannot be predicted wrong. It fired
-    --  ZERO times in a session with 35 takeoffs and 40 landings, and so did
-    --  every other line in this branch:
-    --
-    --      ARCMOVER grounded on an arc     0
-    --      ARCMOVER grounded at            0
-    --      ARCMOVER airborne again         0
-    --      hit MAX_ARC_SKIP                0
-    --
-    --  THE ARC SKIP IN update() GETS HERE FIRST, EVERY TIME. It runs before the
-    --  mover, its GROUNDED mode is the same predicate a touchdown stop would
-    --  use -- `onGround() and vel[2] <= 0` -- and it consumes every remaining
-    --  Arc edge before stopping on the Land. By the time this mover runs, the
-    --  cursor is on a non-Arc and the guard above has already returned.
-    --
-    --  SO THIS BRANCH IS A FALLBACK, NOT THE LANDING PATH. It is still reachable
-    --  in principle -- MAX_ARC_SKIP, or a tick where the arc block in update()
-    --  does not run -- and is kept for that. What it must not do is carry a
-    --  guarantee, because a guarantee on a path that never executes reads as
-    --  cover and is not. If a slide-off is ever measured, the place to stop it
-    --  is the GROUNDED branch of that skip, at the moment it decides the arc is
-    --  over.
-    --
-    --  Vanilla's escape, kept as-is: on the LAST arc edge, hand over to
-    --  whatever follows. Worth knowing this is why the bug needs two or more
-    --  arc edges left at touchdown -- land holding the last one and vanilla
-    --  gets out of its own way.
     if nextEdge.action and nextEdge.action ~= "Arc" then
       sb.logInfo("UNIT ARCMOVER grounded at %s holding the last arc edge, next is %s -- advancing",
         sb.printJson(here), tostring(nextEdge.action))
 
       pather.arcDelta = nil
 
-      --  THE ARC IS OVER, so the launch record it belonged to must not survive
-      --  into the next one. The record is DIAGNOSTIC ONLY since nothing steers
-      --  x any more -- see the airborne branch -- but its lifetime is still what
-      --  makes the "launch record cleared" line report the right flight, and
-      --  petportsLanding beside it is load-bearing.
       pather.petportsLaunch = nil
       pather.petportsLanding = nil
 
@@ -3356,14 +1296,6 @@ function petportsArcMover(pather)
       return "running"
     end
 
-    --  Change-gated so a unit parked here does not fill the log, but it
-    --  fires again the moment the situation changes.
-    --
-    --  RISING IS THE ORDINARY CASE AND IS EXPECTED ONCE PER JUMP. There is
-    --  one tick after takeoff where the launch velocity is applied and
-    --  onGround has not gone false yet -- measured at [3768,1010.8] with
-    --  velocity [0,48.314]. It is called out separately so a normal jump
-    --  does not read as a fault in the log.
     if not pather.petportsArcGrounded then
       pather.petportsArcGrounded = true
 
@@ -3385,71 +1317,11 @@ function petportsArcMover(pather)
       sb.printJson(here), sb.printJson(vel))
   end
 
-  --  ARRIVED: STOP, DO NOT KEEP FLYING.
-  --
-  --  MEASURED, AND IT IS THE WHOLE OF THE REMAINING LOOP. With the launch solved
-  --  on the engine's own integrator the unit now reaches its landing exactly --
-  --
-  --      ARC tick: edge 40 of 43 at [2493,1155.8] vel [8,-25]
-  --
-  --  which is the Land target to the decimal, descending. And then it slides
-  --  straight off the ledge and falls three tiles back to where it started. Five
-  --  identical laps.
-  --
-  --  BECAUSE THIS MOVER IS STILL FLYING IT. The Land is edge 42 and the unit is
-  --  on edge 41, an Arc -- so moveLand, whose whole body is vanilla's
-  --  controlApproachXVelocity(0, groundForce), never gets a tick. What runs
-  --  instead is the code below, which drives x toward the FLIGHT velocity and
-  --  sets groundFriction to 0. The unit touches down at 8 tiles per second on a
-  --  frictionless surface with the throttle open and is gone in five ticks.
-  --  `ARCMOVER grounded` appears zero times in the entire log.
-  --
-  --  ZEROED OUTRIGHT RATHER THAN BRAKED, on the first tick that sees the
-  --  arrival. groundForce is not declared on any chassis, so its value is an
-  --  engine default this code cannot verify -- and at script delta 5 the brake
-  --  gets ONE look before the unit is two thirds of a tile past. A brake that
-  --  might be too weak is the failure being fixed, so it is not the mechanism to
-  --  fix it with. Approaching 0 afterwards keeps it there.
-  --
-  --  THE PLAN AGREES: the Land edge is a zero-length marker whose dst velocity
-  --  is null. Stopping is what a Land MEANS.
-  --  THE TRIGGER IS "HAVE I ARRIVED", NOT "AM I NEAR". See LAND_BRAKE_ARRIVED.
-  --
-  --  `ahead` is the distance to the landing MEASURED ALONG THE DIRECTION OF
-  --  TRAVEL: positive while the landing is still in front, zero at it, negative
-  --  once past.
-  --
-  --  A UNIT WITH NO HORIZONTAL VELOCITY IS TREATED AS ARRIVED ONLY IF IT IS
-  --  ACTUALLY THERE, and that is a branch rather than a consequence of the sign
-  --  expression. Signing by `vel[1] >= 0` would call a landing to the RIGHT of a
-  --  motionless unit "still ahead" and refuse to brake forever, on the strength
-  --  of a velocity that is not going to close anything.
-  --
-  --  QUALIFIED 2026-09-01 BY LAND_BRAKE_STATIONARY_GAP. This branch used to set
-  --  `ahead` to 0 unconditionally, which said "nothing is moving, so there is
-  --  nothing left to protect" -- true of a unit sitting ON its landing and false
-  --  of one that lost its horizontal velocity to a wall on the way up. The
-  --  second case measured four identical laps: arrival declared in mid-air 0.8
-  --  tiles short, latch set, x held at zero for the whole descent, unit falls
-  --  back to the tile it launched from. The gap test keeps the original case and
-  --  drops that one.
-  --
-  --  THIS IS WHERE THE BRAKE WAS ORIGINALLY EARNED, AND THAT CASE STILL FIRES.
-  --  The five-lap slide-off was a unit at `[2493,1155.8]` with the Land target
-  --  at exactly that point -- gap 0, `ahead` 0, inside the epsilon, braked. What
-  --  no longer fires is the brake on a unit that has not got there yet.
   local landing = plannedLanding(pather)
   local ahead = nil
 
   if landing ~= nil then
     if math.abs(vel[1]) < LAND_BRAKE_STATIONARY then
-      --  MOTIONLESS, SO THE SIGN EXPRESSION HAS NO DIRECTION TO MEASURE ALONG
-      --  AND THE HONEST QUESTION BECOMES "AM I THERE", NOT "AM I CLOSING".
-      --
-      --  Reporting the raw gap rather than 0 when it is short is what makes the
-      --  arrived test fail: LAND_BRAKE_ARRIVED is 0.05, so any gap above the
-      --  threshold below leaves `ahead` positive and out of the window. It also
-      --  puts the real distance into the log line instead of a hardcoded zero.
       local gap = math.abs(landing[1] - here[1])
       ahead = (gap <= LAND_BRAKE_STATIONARY_GAP) and 0 or gap
     else
@@ -3471,15 +1343,6 @@ function petportsArcMover(pather)
       sb.printJson(ahead))
   end
 
-  --  THE REFUSAL IS LOGGED, ONCE PER LANDING, BECAUSE THE ALTERNATIVE IS AN
-  --  ABSENCE. Before the gap test this situation produced an `ARCMOVER arrived`
-  --  line; after it, it produces nothing at all, and "the line I expected is
-  --  missing" is the hardest possible thing to read a log for. This says what
-  --  was decided and on what inputs, at the point of decision.
-  --
-  --  Change-gated on the landing rather than suppressed: a unit that goes short
-  --  of a DIFFERENT landing later is a new event and says so. The record dies
-  --  with the pather, which is rebuilt per task and per vent leg.
   if landing ~= nil and not pather.petportsLanding and vel[2] < 0
     and math.abs(vel[1]) < LAND_BRAKE_STATIONARY
     and ahead > LAND_BRAKE_ARRIVED
@@ -3494,10 +1357,6 @@ function petportsArcMover(pather)
   end
 
   if pather.petportsLanding then
-    --  AHEAD OF THE FRICTION ASSIGNMENTS BELOW, WHICH IS THE POINT. Those run
-    --  every airborne tick and are what make the surface slippery. Returning
-    --  from here leaves groundFriction at the chassis value, so the unit has
-    --  something to stop against as well as nothing pushing it.
     mcontroller.controlApproachXVelocity(0, mcontroller.baseParameters().groundForce)
     return "running"
   end
@@ -3505,7 +1364,6 @@ function petportsArcMover(pather)
   pather.petportsArcGrounded = nil
   pather.arcDelta = nil
 
-  --  Airborne: vanilla's branch, unmodified.
   pather.controlParameters.airFriction = 0
   pather.controlParameters.liquidFriction = 0
   pather.controlParameters.liquidImpedance = 0
@@ -3513,127 +1371,6 @@ function petportsArcMover(pather)
 
   local velocity = pather.edge.source.velocity or pather.edge.target.velocity or {0, 0}
 
-  --  WHY NOTHING STEERS X, AND THE ONE EXCEPTION.
-  --
-  --  The history below is the reasoning for arch.pathing.nosteer, which
-  --  deleted all horizontal command from this branch. It is unchanged and
-  --  still governs every ballistic arc. The exception that follows it is
-  --  scoped so that none of the failures recorded here can recur.
-  --
-  --  This branch used to end in
-  --
-  --      mcontroller.controlApproachXVelocity(wantVx, groundForce)
-  --
-  --  where wantVx was `launch.vx` on a real jump and `velocity[1]` -- THE
-  --  PLANNER'S PER-EDGE VELOCITY -- on anything else. Both halves are gone.
-  --
-  --  THE PLANNER'S VELOCITIES DESCRIBE A TRAJECTORY THE UNIT IS NOT FLYING, and
-  --  A* CHANGES ITS OWN vx PARTWAY THROUGH AN ARC. See fact.pathing.plannervxdrop.
-  --  Measured on the platform course:
-  --
-  --      edge 62 Arc  vel [12,7.06]  -> dst [2516.71,1180.75] vel [1,0]
-  --      edge 64 Arc  vel [1,0]      -> dst [2516.93,1180.25] vel [1,-26.5]
-  --
-  --      25.607  [2514.65,1180.89]  vel [7.95553, 6.256]   edge 62
-  --      25.690  [2514.92,1181.07]  vel [1, -3.744]        edge 64
-  --
-  --  One look, and the unit was braked from the launched 7.96 to the planner's 1
-  --  at the apex, with a quarter second of descent still to run. It crossed its
-  --  landing altitude 1.83 tiles short and fell twelve tiles.
-  --
-  --  A LAUNCH RECORD ONLY EVER PATCHED HALF OF THAT. It covered jumps, because a
-  --  jump has a takeoff to record. A WALK-OFF FALL HAS NO TAKEOFF, so it fell
-  --  through to the planner's numbers -- and A* models a walk-off as a short
-  --  forward hop followed by a VERTICAL DROP, whose stored vx is zero. Measured
-  --  2026-09-01 at the ledge above [2536,1149.8], six times, identical:
-  --
-  --      45.170  [2534.65,1152.16]   vx  8.05
-  --      45.252  [2534.91,1150.99]   vx  2.99
-  --      45.337  [2534.91,1149.10]   vx  0.00   -- braked to a standstill in air
-  --      45.414  [2534.91,1148.80]   grounded, one tile low and 1.09 short
-  --
-  --  The unit then sat on an unreachable Land edge until the stall watchdog
-  --  replanned. No wall was involved: an earlier flight occupied x 2535.59 at
-  --  that height. The mover was obeying an instruction sampled at a point the
-  --  unit never occupied -- the skip logic had already advanced the cursor to an
-  --  edge whose source is [2535.33,1151.12], 0.4 tiles further east.
-  --
-  --  THE CONTROL THAT SETTLED IT, AND IT PREDATES THIS CHANGE: on one attempt the
-  --  task failed mid-flight and the pather was discarded at the apex. With
-  --  NOTHING CALLING THIS MOVER, the unit kept its launched vx, flew pure
-  --  ballistics and touched down at [2517.22,1177.8] -- its planned landing, 0.22
-  --  over. Guided it missed by 1.83 tiles; unguided it hit. That is this change,
-  --  observed a session before it was written.
-  --
-  --  SO THE SUBSTITUTION WAS NEVER THE FIX -- IT WAS A NARROWER BUG. Holding
-  --  launch.vx and issuing nothing produce the same trajectory whenever the
-  --  command is correct, because airFriction is zero four lines above and an
-  --  unforced horizontal velocity simply persists. They differ only where the
-  --  command is WRONG, and there the command wins. Deleting it removes the only
-  --  case where the two disagree.
-  --
-  --  OVERSHOOT IS STILL HANDLED, AND NOT BY THIS. The arrival brake above zeroes
-  --  x with setVelocity once the unit reaches its landing, and the
-  --  petportsLanding hold keeps it there. Both are untouched: this branch only
-  --  ever ran while the unit was still in flight.
-  --
-  --  AN OPEN MEASUREMENT THIS SHOULD SETTLE. The same command, with the same
-  --  groundForce, behaved asymmetrically: commanding -12 against an actual -10.8
-  --  never closed the gap in five ticks, while commanding 0 against an actual 8
-  --  closed it in two. Whether groundForce simply has no airborne authority in
-  --  the ACCELERATING direction is unmeasured. If the pool-exit jumps stop
-  --  arriving 0.4 short after this, that deficit was this call interfering and
-  --  the question answers itself.
-  --
-  --  `velocity` SURVIVES because the liquid branch below reads velocity[2]. Only
-  --  the horizontal half is removed.
-  --
-  --  ==================== THE EXCEPTION, ADDED 2026-09-01 ====================
-  --
-  --  NOTHING STEERS X DURING A FLIGHT, WITH ONE NARROW EXCEPTION ADDED
-  --  2026-09-01. THE FRICTION ZEROING ABOVE IS STILL THE WHOLE MECHANISM FOR
-  --  EVERY BALLISTIC ARC.
-  --
-  --  THE EXCEPTION: AN ARC WHOSE PLANNED LAUNCH vx WAS ZERO.
-  --
-  --  A* plans those as climb-then-traverse -- a vertical rise in a clear column
-  --  to above an obstruction, then horizontal at the top. Its own edge list says
-  --  so, and says exactly where the turn happens:
-  --
-  --      edge 6  [2532,1142.3] -> [2532,1143.3]  vel [0,14.6963]
-  --      edge 7  [2532,1143.3] -> [2532,1143.8]  vel [0,4.96] -> [12,0]
-  --      edge 8  [2532,1143.8] -> [2532.5,1143.8] vel [12,-5]
-  --
-  --  A* CAN DO THAT BECAUSE ITS ACTOR MODEL HAS AIR CONTROL. Ours had none after
-  --  the deletion below, so the horizontal half of every such plan was simply
-  --  never flown, and solveLaunch's invented launch vx was the only thing that
-  --  moved the unit sideways at all -- into the wall the column avoided.
-  --
-  --  ACQUIRE ONLY, NEVER BRAKE. THIS IS THE PROPERTY THAT MAKES IT SAFE.
-  --
-  --  The deleted version drove x toward the planner's per-edge velocity on every
-  --  airborne tick, and the disaster it caused was a BRAKE: A* dropped its own vx
-  --  from 12 to 1 at an apex, the mover obeyed in one look, and the unit crossed
-  --  its landing altitude 1.83 tiles short and fell twelve tiles.
-  --
-  --      edge 62 Arc  vel [12,7.06] -> dst [2516.71,1180.75] vel [1,0]
-  --      25.690  [2514.92,1181.07]  vel [1,-3.744]  edge 64
-  --
-  --  Commanding only when the plan's magnitude EXCEEDS the current one cannot
-  --  reproduce that. A planner vx that drops is ignored; the launched velocity
-  --  still holds for the whole arc, exactly as fact.pathing.plannervxdrop
-  --  requires.
-  --
-  --  A WALK-OFF FALL CANNOT REACH THIS AT ALL. It has no takeoff and therefore no
-  --  launch record, and the record is the first thing tested. That was the half
-  --  the old launch-record substitution could never cover, and it is excluded
-  --  here by construction rather than by a comparison that could lapse.
-  --
-  --  airForce, NOT groundForce. The unit is in the air; groundForce is what the
-  --  landing brake uses and is a different quantity. At airForce 50 against mass
-  --  1 the window above the obstruction -- 0.264s on the measured jump -- buys
-  --  1.74 tiles against the 1.0 the plan needs, so this is not running to the
-  --  edge of what the chassis can do.
   local launch = pather.petportsLaunch
   if launch ~= nil and launch.plannedVx == 0 then
     local wantVx = velocity[1] or 0
@@ -3663,23 +1400,6 @@ function petportsArcMover(pather)
 end
 
 freshPather = function(why)
-  --  MODE FIRST, BEFORE ANYTHING READS baseParameters.
-  --
-  --  petports_pathOptions and PathMover:new both read the movement parameters
-  --  this can rewrite -- gravityEnabled decides which edge types
-  --  platformerPathStart emits and what mustEndOnGround defaults to -- so a flip
-  --  after either one builds a pather that disagrees with the physics it is
-  --  steering.
-  --
-  --  THIS IS THE ONLY CALL SITE, AND THAT IS THE SAFETY ARGUMENT RATHER THAN A
-  --  CONVENIENCE. dd.locomotion.otter refused runtime gravity switching because
-  --  a flip underneath a live plan corrupts it; here there is no live plan yet,
-  --  because building one is the next statement. Anything that wants a mode
-  --  change asks for a pather rebuild and gets both, in that order.
-  --
-  --  A NO-OP FOR EVERY OTHER CHASSIS. petports_desiredSwimMode returns `land`
-  --  immediately unless petports_gravitySwitchable, and setSwimMode writes
-  --  nothing when the mode is unchanged.
   if petports_gravitySwitchable() then
     petports_setSwimMode(
       petports_desiredSwimMode(petports_currentTaskDestination()), why)
@@ -3688,21 +1408,10 @@ freshPather = function(why)
   local options = petports_pathOptions()
   options.run = false
 
-  --  A COARSE LEG IS WALKED WITH THE PROBE'S DISTANCE CAP. Lofty, 2026-09-05:
-  --  the mesh was proved at maxDistance 32 and walked at 200, and the two
-  --  disagree -- see PETPORTS_NAV_MAX_DISTANCE. The leg is at most
-  --  NAV_LEG_REACH tiles of chord and was proved within the cap, so the cap
-  --  loses nothing here and makes the walk reproduce the verdict. Every
-  --  other pather keeps its 200: a direct route across the base still needs it.
   if why == "coarse leg" and PETPORTS_NAV_MAX_DISTANCE ~= nil then
     options.maxDistance = PETPORTS_NAV_MAX_DISTANCE
   end
 
-  --  ALWAYS LOGGED, not behind TASK_DEBUG. A pather rebuilt every tick and a
-  --  pather rebuilt once look identical from every other line in the log: the
-  --  search restarts, reports success, and restarts again. Naming the caller
-  --  is what separates "the search is slow" from "something is throwing the
-  --  answer away".
   self.petportsPatherBuilds = (self.petportsPatherBuilds or 0) + 1
   sb.logInfo("UNIT freshPather #%s at %s: %s",
     sb.printJson(self.petportsPatherBuilds),
@@ -3714,17 +1423,11 @@ freshPather = function(why)
       sb.printJson(options.boundBox), sb.printJson(options.standingBoundBox))
   end
 
-  --  SAME OPTIONS THE PROBE USES. A probe that searches with different options
-  --  than the real walk does not predict it, and its answers are cached.
   self.pather = PathMover:new({
     run = false,
     pathOptions = options
   })
 
-  --  COUNTED, 2026-09-05. exploreRate is consulted once per explore call, so
-  --  this is a free tally of how many times the search was actually stepped
-  --  -- the number that decides whether a walk can reproduce a probe's 85
-  --  ticks, and the number the log had no way of showing.
   self.petportsExploreCalls = 0
   self.petportsExploreRate = (why == "coarse leg") and NAV_LEG_EXPLORE_RATE
     or EXPLORE_RATE
@@ -3733,83 +1436,24 @@ freshPather = function(why)
     return self.petportsExploreRate or EXPLORE_RATE
   end
 
-  --  TWO MORE INSTANCE SHADOWS, SAME TECHNIQUE AS exploreRate ABOVE AND FOR THE
-  --  SAME REASON: vanilla's PathFinder gates on a flag that is unreadable for a
-  --  swim-mode unit. See petportsCanPathfind and petportsPathStart -- between
-  --  them they are the difference between a floating unit that plans and one
-  --  that sits still. Assigned to the INSTANCE, so PathFinder.canPathfind and
-  --  PathFinder.start stay reachable and no other entity is affected.
   self.pather.finder.canPathfind = petportsCanPathfind
   self.pather.finder.start = petportsPathStart
 
-  --  REPLACEMENT moveJump. See the header on petportsJumpMover below.
-  --
-  --  Assigned to the INSTANCE, so it shadows PathMover.moveJump through the
-  --  metatable for this pather only. Vanilla's version stays reachable as
-  --  PathMover.moveJump, no other entity is affected, and nothing is patched
-  --  globally. Same technique as the exploreRate override above.
   self.pather.moveJump = petportsJumpMover
   self.pather.moveWalk = petportsWalkMover
   self.pather.moveArc = petportsArcMover
 
-  --  SWIM IS BOUND FOR EVERY CHASSIS, INCLUDING GROUND ONES.
-  --
-  --  THE PATHFINDER PICKS EDGE TYPE BY MEDIUM, NOT BY CHASSIS. Measured: a
-  --  gravity-ENABLED ground unit dropped into deep water was planned a route of
-  --  Swim edges. canPathfind() is `onGround() or not gravityEnabled`, so it can
-  --  only start that search while touching the bottom -- which it was.
-  --
-  --  So any unit can end up on a Swim edge, and vanilla's moveSwim is four
-  --  lines with no look-ahead and NO `while` LOOP: it advances at most one edge
-  --  per tick, so any overshoot leaves the cursor behind the unit and the next
-  --  command points back at a waypoint already passed. That is the rubberbanding
-  --  seen first on the aquatic chassis and then, identically, on a ground unit
-  --  in water.
-  --
-  --  petportsFreeMover handles both Fly and Swim and is defined in
-  --  petports_flyapproach.lua, which EVERY chassis now loads for exactly this
-  --  reason. Called bare rather than nil-guarded: a missing script raises and is
-  --  loud, while a guarded call to a file nobody loaded is silent, and the
-  --  handoff records that costing a session.
   self.pather.moveSwim = petportsFreeMover
 
-  --  Vanilla's moveDrop itself is fine and is left alone -- the x snap to
-  --  nextPathPosition, setXVelocity(0) and advancePath all do the right thing.
-  --  Only the two functions it leans on are broken. See petportsTimedDrop.
   self.pather.timedDrop = petportsTimedDrop
   self.pather.keepDropping = petportsKeepDropping
 end
 
---  THE ONLY WAY OTHER FILES MAY BUILD A PATHER. Added 2026-09-01 after a crash.
---
---  freshPather is a FILE-LOCAL, forward-declared at the top of this file so that
---  tryVentRoute can call it above its own definition -- see the header on that
---  declaration for why it must stay an assignment rather than a
---  `local function`. Being a local means petports_flyapproach.lua CANNOT SEE IT:
---  a call to a bare `freshPather` there resolves to the global of that name,
---  which is nil, and the failure is a hard Lua error rather than a quiet
---  fallback.
---
---      attempt to call a nil value
---        [C]: in global 'freshPather'
---        petports_flyapproach...:1328: in global 'approachPoint'
---        /monsters/pets/actions/inspectAction.lua:33: in field 'update'
---
---  Measured 2026-09-01, one tick after a beaching, and it killed the unit --
---  vanilla's inspectAction calls approachPoint and has no idea any of this
---  exists. The comment that introduced it claimed freshPather was a
---  context-global; it never was.
---
---  A WRAPPER RATHER THAN MAKING freshPather ITSELF GLOBAL, because the local's
---  forward declaration is load-bearing for tryVentRoute and turning it into a
---  global would leave two names for one function with different visibility.
---  One arrow out, pointing in.
 function petports_freshPather(why)
   return freshPather(why)
 end
 
 function petportsTaskAction.enteringState(stateData)
-  --  First entry only. See BUILD_STAMP for why this is not at file scope.
   if not stampLogged then
     stampLogged = true
     sb.logInfo("PETPORTS taskAction build: %s", BUILD_STAMP)
@@ -3818,78 +1462,14 @@ function petportsTaskAction.enteringState(stateData)
   sb.logInfo("UNIT entering task state for %s at %s",
     tostring(stateData.task.id), sb.printJson(mcontroller.position()))
 
-  --  Before any approachPoint call, so vanilla picks up ours rather than
-  --  building its own with the inverted box -- and fresh, so no abandoned A*
-  --  search carries over from a previous task.
   freshPather("entering task state for")
 
-  --  No emote here. This called emote("happy") on every pickup, which at one
-  --  task per five seconds is a permanent affection loop -- precisely the
-  --  attention-seeking pet this design exists to be the opposite of. Any
-  --  acknowledgement of a new task belongs on a cooldown, or nowhere.
 end
 
---  Report the outcome to the petport and drop the assignment.
---
---  Reported by uniqueId, not entity id: the port's entity id is not stable
---  across a reload and the unit may well have respawned since the task was
---  issued.
---  `cargo` is an item descriptor the unit is handing over, or nil. Only a
---  successful pickup passes one.
---  How far a unit must get from where it started before it is reported as
---  under way.
---
---  NOT ZERO. A unit jostled by another, or settling onto the ground on the
---  first tick, moves a little without having gone anywhere -- and a marker that
---  turns green and then sits still for twenty seconds while A* grinds is worse
---  than one that stayed yellow, because it asserts progress that is not
---  happening.
---
---  Two tiles is far enough to be deliberate and close enough that the colour
---  changes while the player is still watching.
---
---  NET DISPLACEMENT FROM startPosition, NOT ACCUMULATED PATH LENGTH, and the
---  change matters for two separate reasons.
---
---  Accumulated length only exists at the trace timer's granularity, so it could
---  not be sampled faster than once a second without also multiplying the
---  TASK_DEBUG block that shares that timer. Net displacement is a single
---  magnitude against a fixed point and can be taken as often as we like.
---
---  It is also immune to the sample rate in a way a running total is not. A
---  total that adds every measured wobble creeps upward while a unit stands
---  still -- slowly at one sample a second, five times faster at five -- so
---  speeding the old test up would have traded a late green for a false one.
---  Distance from a fixed point does not creep.
---
---  A VENT HOP COUNTS, deliberately. It displaces the unit well past two tiles
---  in one tick, so a unit that routes through a vent goes green the moment it
---  comes out the far side -- which is exactly what the marker is FOR. Nothing
---  else moves a unit that far without walking: moveJump's snap to its source is
---  capped at one tile and the platform drop placement is a quarter of one.
 local TASK_MOVING_DISTANCE = 2.0
 
---  How often that test runs. Its own timer, NOT the trace timer.
---
---  THE TRACE TIMER WAS THE LAG. The old check rode inside the once-a-second
---  trace block, which itself sits below `if not stateData.arrived` and below
---  the vent branch's own `return false` -- so a unit walking to a vent mouth
---  never ran it at all, and every other unit waited out up to a full second of
---  trace phase on top of the port's half-second marker pass. See the pump in
---  update(), which is where this now runs from.
 local TASK_MOVING_INTERVAL = 0.2
 
---  `retry` MEANS "FAILED, BUT DO NOT REST ON IT".
---
---  A task can fail for two very different reasons and the port cannot tell them
---  apart from the reason string alone. Either the attempt was expensive and
---  fruitless -- no route, nowhere to stand, target gone -- or the unit got there
---  and the world simply moved. The backoff ladder is built for the first;
---  applying it to the second pins a unit next to a target it could reach on the
---  very next tick.
---
---  A FLAG RATHER THAN A REASON MATCH, because the port would otherwise be
---  string-matching prose this file is free to reword.
 local function report(stateData, outcome, reason, cargo, retry)
   local task = stateData.task
 
@@ -3905,16 +1485,8 @@ local function report(stateData, outcome, reason, cargo, retry)
       reason = reason,
       cargo = cargo,
       retry = retry == true,
-      --  How many tiles a watering sweep actually wetted. The port spends one
-      --  item per tile from this number rather than from the tile list it
-      --  handed out, so a sweep that ended early is not charged for tiles it
-      --  never reached.
       watered = task.watered,
 
-      --  Whether a dose was actually delivered. Same contract as `watered`: the
-      --  port spends one medicalgoods from THIS number, so every early return in
-      --  the medic branch -- patient gone, patient recovered, patient out of
-      --  reach -- costs the player nothing.
       dosed = task.dosed,
       target = task.target,
 
@@ -3922,105 +1494,20 @@ local function report(stateData, outcome, reason, cargo, retry)
     })
   end
 
-  --  CLEAR ONLY THE TASK THIS REPORT IS ABOUT.
-  --
-  --  This used to nil self.petportsTask unconditionally. That is correct while
-  --  the only tasks are dispatched ones, and destructive the moment a leash
-  --  task exists: finishing or abandoning a leash would silently throw away a
-  --  real task the port had assigned in the meantime, and the port would then
-  --  sit in trackWork waiting for a report on work the unit no longer knew it
-  --  had.
-  --
-  --  Otherwise unchanged: a unit holding a task the port has forgotten would
-  --  re-assert it every tick forever, so its own task still goes.
   if self.petportsTask ~= nil and task ~= nil
      and self.petportsTask.id == task.id then
     self.petportsTask = nil
   end
 end
 
---  Resolve a raw world position to somewhere a ground unit can actually stand.
---
---  THE GATE IS validStandingPosition, from /scripts/pathing.lua:
---
---      if self.options.mustEndOnGround
---         and not validStandingPosition(targetPosition, false) then return false end
---
---  and mustEndOnGround defaults to mcontroller.baseParameters().gravityEnabled,
---  which is true for a ground unit. So a target that is not a valid standing
---  position is never pathfound AT ALL -- find() returns false before any search
---  runs, every tick, and the unit neither moves nor arrives. That reads as a
---  frozen unit and burns the whole approach timeout.
---
---  The diagnostic task never hit this because its targets came from the port's
---  findStandingPoint and were valid by construction. An item drop's position is
---  where the ITEM rests, which is not where a unit can stand.
---
---  Vanilla's pathfinder DOES handle jumps, drops and arcs -- this is not a
---  missing traversal capability, it is an invalid destination.
 
---  findGroundPosition(position, minHeight, maxHeight, avoidLiquid,
---                     collisionSet, bounds)
---
---  minHeight and maxHeight have NO DEFAULTS. pathutil.lua line 35 does
---  math.max(math.abs(minHeight), math.abs(maxHeight)), so calling it with one
---  argument always errors -- "bad argument #1 to 'abs' (number expected, got
---  nil)". The error surfaces through pcall as a STRING in the result slot, not
---  as a thrown error, so a caller that only checks for nil will happily index a
---  string and crash somewhere else entirely.
---
---  It already does the search by hand-rolling would duplicate: it walks up and
---  down from the given position testing validStandingPosition at each step, and
---  aligns feet to the tile row below via
---  math.ceil(position[2]) - (bounds[2] % 1).
---  WHAT COUNTS AS SOMETHING A WALKER CAN REST ON.
---
---  EXISTS BECAUSE world.pointTileCollision's DEFAULT SET DOES NOT INCLUDE
---  PLATFORMS, and the descend guard below was asking it whether there was floor
---  under a submerged candidate. There is no direct proof of what the default IS
---  -- findStandingPoint in petports_petport.lua carries an "UNVERIFIED" note on
---  exactly that question -- but there is proof of what it is NOT: this file
---  calls world.rectTileCollision(region, {"Platform"}) in three places for the
---  drop-through logic, and every one of them would be redundant if platforms
---  came back by default.
---
---  MEASURED 2026-08-31, an AMPHIBIOUS unit leashing to a submerged port at
---  [2535,1152] with platforms about two tiles beneath it:
---
---      ground spot [2532.5,1149.8] is floating and no floor below it
---      ground spot [2533.5,1149.8] is floating and no floor below it
---      ... all seven columns, 27090 rejections in one log
---
---  findGroundPosition FOUND the platforms -- 1149.8 in every column is the
---  platform row -- because validStandingPosition accepts a platform as ground.
---  The guard then threw all seven away and the unit stalled with no home to go
---  to. THE TWO PREDICATES DISAGREED ABOUT WHAT FLOOR IS.
---
---  Dynamic is NOT in this set, and the reason is simpler than the one first
---  written here. DYNAMIC COLLISION IN STARBOUND IS DOORS. Not crates, not
---  containers, not objects generally -- see fact.pathing.collisionkinds, which
---  exists because this mod has now guessed "crates are Dynamic" three times.
---  A door is not somewhere to resolve a home to, so it has no business in a set
---  that answers "can a walker rest on this".
---
---  Null is NOT in it either. An unloaded chunk is not floor; it is an absence of
---  information, and treating it as somewhere to stand would resolve homes into
---  regions nothing has confirmed exist.
 local STANDABLE_TILE_SET = { "Block", "Slippery", "Platform" }
 
 local GROUND_SEARCH_DOWN = -6
 local GROUND_SEARCH_UP = 4
 
---  Column offsets to try, nearest first. THREE IS THE DEFAULT AND WAS THE ONLY
---  VALUE until this became the one resolver -- the port asks for wider searches
---  around machines and patients, so the range is a parameter now.
 local COLUMN_RADIUS = 3
 
---  MEMOISED PER RADIUS, and the reason is not the allocation. The ORDER is the
---  answer in a first-fit search -- `petports_flyPointNear`'s header records what
---  ring-ordering cost when it was arbitrary -- so building it in one place means
---  a caller cannot accidentally hand over a differently ordered set and get a
---  differently biased result from the same function.
 local columnCache = {}
 
 local function columnsFor(radius)
@@ -4039,39 +1526,8 @@ local function columnsFor(radius)
 	return offsets
 end
 
---  Somewhere a ground unit can stand, near a drop.
---
---  Per COLUMN rather than per point: x is snapped to a tile centre because a
---  unit's boundBox is about a tile wide and centred, so an integer x straddles
---  two columns and only passes where both are clear. findGroundPosition then
---  supplies the y.
---  `searchUp` overrides how far above `position` a standing spot may be taken
---  from. Pass 0 to forbid climbing -- see the homeward bias in
---  approachTargetFor for why that is sometimes required.
---
---  FLYER BRANCH FIRST, and it ignores searchUp entirely. searchUp exists for
---  the homeward bias -- "do not resolve the port to its own roof" -- which is a
---  statement about which SURFACE to stand on, and a flyer is not standing on
---  one. petports_flyPointNear returns nil for a ground unit, so the whole
---  existing path below is untouched.
---
---  THIS IS NOW THE ONLY RESOLVER FOR "WHERE DOES A UNIT STAND NEAR A POINT".
---  There were three -- see arch.pathing.oneanchor for what each one got wrong --
---  and the other two are gone: petports_standingPointNear delegates here, and
---  findStandingPoint on the port is demoted to the no-unit-exists fallback its
---  own header always said it was. `radius` exists because the port asks wider
---  than a task does.
 local standableNearInner
 
---  AS THE TARGET'S SIDE, 2026-09-09c. 09b chose the branch by the target's
---  medium and it was not enough: MEASURED 13:33:03, an aquatic otter resolving
---  a collect target on a dry ledge took the walker branch and the walker
---  search then rejected the spot -- petports_mediumAllows read the LIVE mode,
---  free mover, spot in air, "cannot leave the water". Every mode read inside
---  the search (avoidLiquid, mediumAllows, freeMover) follows the same
---  override coarsenav's survey uses (navWithSide, petports_freeMover), so the
---  whole resolve runs as a walker for a dry target and as a swimmer for a wet
---  one, whichever the body is now. Restored on every path out, error or not.
 local function standableNear(position, searchUp, radius, mediumVerified, searchDown)
   if not (petports_gravitySwitchable ~= nil and petports_gravitySwitchable()) then
     return standableNearInner(position, searchUp, radius, mediumVerified, searchDown)
@@ -4090,18 +1546,7 @@ local function standableNear(position, searchUp, radius, mediumVerified, searchD
 end
 
 standableNearInner = function(position, searchUp, radius, mediumVerified, searchDown)
-  --  A FREE-MOVING CHASSIS OWNS THIS ANSWER OUTRIGHT, INCLUDING THE nil.
-  --  Same correction as petports_standingPointNear -- read the note there for
-  --  the measurement. Short version: nil from petports_flyPointNear now means
-  --  REFUSED as well as "not a flyer", and falling through to the ground search
-  --  handed an aquatic unit a dry-land target one line after it declined one.
-  --
-  --  09b's per-branch medium test lived here; 09c moved the whole question
-  --  into the wrapper above, so this reads the (possibly overridden) mode.
   if petports_freeMover() then
-    --  `mediumVerified` is only meaningful to this branch: the ground search
-    --  below decides medium by physics, and will not stand a walker in a liquid
-    --  it avoids regardless of who vouches for what.
     local flyPoint = petports_flyPointNear(position, radius, mediumVerified)
 
     if TASK_DEBUG then
@@ -4114,61 +1559,8 @@ standableNearInner = function(position, searchUp, radius, mediumVerified, search
 
   if searchUp == nil then searchUp = GROUND_SEARCH_UP end
 
-  --  TRAILING, NOT MIDDLE, AND THAT IS THE WHOLE REASON IT IS LAST. Every other
-  --  caller passes four arguments and gets the constant; only the object-sized
-  --  search overrides it. An argument added in the middle would have meant a nil
-  --  in the middle of a callScriptedEntity list, which this mod has never
-  --  measured -- see the note on petports_homePointNear.
   if searchDown == nil then searchDown = GROUND_SEARCH_DOWN end
 
-  --  EVERY COLUMN IS ASKED, AND THE NEAREST ANSWER WINS. THIS USED TO RETURN
-  --  THE FIRST ONE.
-  --
-  --  COLUMN_SEARCH is ordered nearest-first, which made the old first-fit loop
-  --  look correct, and it is nearest BY COLUMN. Each column was exhausted --
-  --  the full GROUND_SEARCH_UP above and GROUND_SEARCH_DOWN below -- before the
-  --  next column was examined at all. So a spot six tiles DOWN in the target's
-  --  own column beat one a single tile SIDEWAYS at exactly the right height.
-  --
-  --  MEASURED, watering a row of coffee against a cliff with water at its foot:
-  --
-  --    UNIT water CAST tile [2499,1152]                        tile 1, from [2499.85,1153.8]
-  --    UNIT standable for [2498.5,1153.5] -> [2498.5,1147.8]   column offset 0
-  --    UNIT reporting failed: arrived but 5.80751 from tile [2498,1152]
-  --
-  --  The unit had just watered tile 1 while standing 1.36 tiles from tile 2's
-  --  standing point, and was then sent 5.7 tiles straight down into the sea.
-  --
-  --  TWO THINGS HAVE TO BE TRUE FOR IT TO LAND SOMEWHERE THAT SILLY, which is
-  --  why it reproduces in one place and nowhere else. A WALL kills the target's
-  --  own column at every sane height, because a 1.6-wide body centred on the
-  --  tile overlaps it. And WATER BELOW makes the deep spot acceptable to an
-  --  amphibious chassis: petports_avoidLiquid() is false, which skips
-  --  findGroundPosition's own liquid rejection AND makes validStandingPosition
-  --  count liquid as standable. A drone would have refused it and searched on.
-  --
-  --  THIRD INSTANCE OF ONE PATTERN. petports_flyPointNear had exactly this bug
-  --  and its header carries the lesson -- "in a first-fit search the order IS
-  --  the answer" -- but only free movers reach that function, and this one never
-  --  got the same treatment.
-  --
-  --  WHY THE PER-COLUMN BEST IS SAFE TO RANK. findGroundPosition walks outward
-  --  from position[2], so what it returns is the SMALLEST |dy| standable spot in
-  --  that column. Every other spot in the same column shares its dx and has a
-  --  larger |dy|, hence a larger true distance -- so the column's first answer
-  --  is also the column's nearest, and taking the minimum across columns gives
-  --  the genuine nearest overall rather than an approximation of it.
-  --
-  --  ITS UP-BEFORE-DOWN BIAS SURVIVES ONLY AS A TIE-BREAK. Up and down at equal
-  --  |dy| are equidistant, so ranking cannot separate them and the column search
-  --  still prefers up. That is unchanged behaviour, and `searchUp = 0` is still
-  --  how a homeward task refuses to climb -- see approachTargetFor.
-  --
-  --  COST: seven findGroundPosition calls instead of an early exit on the first.
-  --  This runs once per resolve, cached on stateData.groundTarget, not per tick.
-  --
-  --  STRICTLY LESS THAN, so ties keep COLUMN_SEARCH's order and the target's own
-  --  column still wins whenever it can.
   local best = nil
   local bestOffset = nil
   local bestDistance = nil
@@ -4176,28 +1568,14 @@ standableNearInner = function(position, searchUp, radius, mediumVerified, search
   for _, offset in ipairs(columnsFor(radius)) do
     local x = math.floor(position[1] + offset) + 0.5
 
-    --  petports_avoidLiquid(), NOT a hardcoded false. This resolver and the one
-    --  inside approachPoint must answer the same question the same way, or a
-    --  target resolves here and is refused there -- which is precisely how a
-    --  unit ends up standing still with approachPosition nil and nothing in the
-    --  log to explain it. See the flag's header in petports_contract.lua.
     local ok, resolved = pcall(findGroundPosition,
       {x, position[2]}, searchDown, searchUp, petports_avoidLiquid())
 
-    --  Guard the SHAPE, not just nil-ness: pcall returns the error message in
-    --  this slot on failure, and a string indexes without complaint.
     local usable = ok
       and type(resolved) == "table"
       and type(resolved[1]) == "number"
       and type(resolved[2]) == "number"
 
-    --  A GROUND SPOT IN A FORBIDDEN LIQUID IS NOT A SPOT.
-    --
-    --  findGroundPosition answers a geometry question and knows nothing about
-    --  which liquids this chassis refuses. For a walker petports_mediumAllows
-    --  returns true for everything EXCEPT a denied liquid, so this costs one
-    --  predicate on the path that has always worked and is the only thing
-    --  stopping an amphibious chassis from wading into lava.
     if usable and not petports_mediumAllows({ resolved[1], resolved[2] }) then
       if TASK_DEBUG then
         sb.logInfo("UNIT ground spot %s rejected: a liquid this chassis will not enter",
@@ -4206,48 +1584,6 @@ standableNearInner = function(position, searchUp, radius, mediumVerified, search
       usable = false
     end
 
-    --  IS THERE ACTUALLY FLOOR UNDER THIS? ASSERTION ONLY -- NOTHING ACTS ON IT.
-    --
-    --  Underwater, petports_avoidLiquid() false makes validStandingPosition
-    --  count liquid as standable, so EVERY point in the water passes. With the
-    --  up-before-down bias, findGroundPosition can return the first wet point
-    --  it meets rather than descending to the seabed -- a spot hanging in open
-    --  water, which a walking chassis can never end a path on.
-    --
-    --  SUSPECTED CAUSE of the submerged-animal failure. A cow's entity position
-    --  is its CENTRE, floating above the floor; a dropped item rests ON the
-    --  floor. Same resolver, same pond, two tiles apart: the drop resolved to
-    --  1142.8 and was reached, the cow to 1143.8 and was not. Exactly one tile.
-    --
-    --  MEASURED 2026-08-30, and it is the whole submerged-animal bug. A cow's
-    --  entity position is its CENTRE, floating above the seabed; a dropped item
-    --  rests ON it. Same pond, same resolver, targets two tiles apart:
-    --
-    --    drop  [2536.42,1142.62] -> [2536.5,1142.8]   reached, item collected
-    --    cow   [2534.33,1143.38] -> [2534.5,1143.8]   no route, ever
-    --
-    --  No bias to blame: from 1143.38 the floating spot at 1143.8 is 0.42 away
-    --  and the seabed at 1142.8 is 0.58, so findGroundPosition returned the
-    --  genuinely NEARER one. Nothing rejected it because underwater
-    --  validStandingPosition calls every point standable.
-    --
-    --  IT DESCENDS -- IT DOES NOT REJECT. Rejecting was tried first and broke
-    --  every submerged target: findGroundPosition returns ONE answer per
-    --  column, so refusing it discards the column instead of searching it
-    --  lower. All seven columns returned the same floating y, all seven were
-    --  refused, and the resolver reported no standable position at all --
-    --  1456 rejections and a unit that never moved.
-    --
-    --  STEPS DOWN ONE TILE AT A TIME, re-validating each with the same
-    --  predicate the column search uses, so what comes back is a position this
-    --  column actually passed rather than an unchecked guess. Bounded by the
-    --  search depth already in scope, so it cannot walk off into the dark.
-    --
-    --  FREE MOVERS ARE EXEMPT. A flyer or an aquatic unit is SUPPOSED to finish
-    --  in open water; this is the walking chassis's constraint alone.
-    --
-    --  DRY LAND IS UNTOUCHED: `wet` is false there, so every route that has
-    --  ever worked pays one predicate and exits.
     if usable and not petports_freeMover()
        and petports_mediumAtPoint({ resolved[1], resolved[2] }) == "swim"
        and not world.pointTileCollision({ resolved[1], resolved[2] - 1.0 },
@@ -4267,9 +1603,6 @@ standableNearInner = function(position, searchUp, radius, mediumVerified, search
             floor = lower
           end
 
-          --  STOP AT THE FIRST STANDABLE TILE either way. Past it we are inside
-          --  the seabed -- or under a platform -- and a deeper hit would be a
-          --  different cave.
           break
         end
       end
@@ -4313,11 +1646,6 @@ standableNearInner = function(position, searchUp, radius, mediumVerified, search
   end
 
   if best ~= nil then
-    --  ALWAYS LOGGED, not behind TASK_DEBUG. The old line was the one that
-    --  named the bug -- "-> [2498.5,1147.8] (column offset 0)" is the whole
-    --  diagnosis in one string -- and a resolve landing somewhere surprising is
-    --  worth seeing without a flag set. The distance is what makes a wrong one
-    --  obvious at a glance.
     sb.logInfo("UNIT standable for %s -> %s (column offset %s, dist %s)",
       sb.printJson(position), sb.printJson(best),
       sb.printJson(bestOffset), sb.printJson(bestDistance))
@@ -4331,73 +1659,10 @@ standableNearInner = function(position, searchUp, radius, mediumVerified, search
   return nil
 end
 
---  THE ONE RESOLVER, EXPORTED UNDER A PREFIXED NAME.
---
---  A monster's scripts share one Lua environment, so this is reachable from
---  petports_contract.lua even though that file loads FIRST -- the delegate there
---  runs at call time, by which point every chunk has executed.
---
---  EXPORTED RATHER THAN MOVED, because everything it depends on lives here:
---  COLUMN_RADIUS, GROUND_SEARCH_DOWN, STANDABLE_TILE_SET, TASK_DEBUG. Moving the
---  function to contract would mean moving four constants and leaving the task
---  side reaching across for them, which trades one split for another.
---
---  NOT nil-GUARDED AT ITS CALL SITES, deliberately. A unit whose monstertype
---  omits this file should RAISE, loudly, on the first resolve -- the same rule
---  the moveSwim binding follows in freshPather, and for the same reason the
---  handoff records: a guarded call to a file nobody loaded is silent and costs a
---  session.
 petports_standablePoint = standableNear
 
---  A STANDING POINT SIZED TO AN OBJECT RATHER THAN TO A POINT.
---
---  THE DEFAULT SEARCH IS ANCHORED ON AN ENTITY POSITION AND REACHES FOUR TILES
---  UP. That is right for a crop, a drop or a cow, and wrong for anything TALL:
---  an object's entity position sits near its base, so a container taller than
---  GROUND_SEARCH_UP has a perfectly good roof the search cannot see. A submerged
---  shipping container is where that became visible -- a ground unit could walk a
---  platform to it and had nowhere to be sent -- but the bug is general and every
---  tall object had it.
---
---  THE FOOTPRINT BOX PLUS TWO TILES ON EVERY SIDE. The buffer is what makes the
---  roof REACHABLE rather than merely included: the top row is inside the object,
---  and the tile a unit actually stands on is the one above it. Two rather than
---  one because the same margin has to serve the sides, where the unit stands
---  BESIDE the object on ground that may itself step down.
---
---  IT WIDENS THE SEARCH AND RELAXES NOTHING. Whether the chassis may work here
---  was already settled by targetSuits over this same footprint, and every
---  candidate still passes validStandingPosition, petports_mediumAllows and the
---  descend guard exactly as before. A wider net, the same fish.
---
---  NO COLLISION KIND IS CONSULTED, DELIBERATELY. Whether a container top is
---  Block or Platform does not matter here: STANDABLE_TILE_SET holds both and
---  validStandingPosition accepts either, so the roof is standable either way.
---  Gating this on "has platform collision" would have excluded the Block case,
---  which fact.pathing.collisionkinds says is what a crate top actually is.
---
---  IT LIVES HERE RATHER THAN IN petports_contract.lua, WHERE THE OTHER TWO
---  ENTRY POINTS ARE, because GROUND_SEARCH_UP, GROUND_SEARCH_DOWN and
---  COLUMN_RADIUS are locals of this file. A copy of them next to the contract's
---  delegates would be three constants needing to stay equal across two files,
---  which is the drift arch.pathing.oneanchor exists to have stopped.
---
---  FREE MOVERS FALL THROUGH UNCHANGED. standableNear hands a free-moving chassis
---  to petports_flyPointNear before any of this is read.
 OBJECT_SEARCH_BUFFER = 2
 
---  Somewhere to stand on TOP of an object, found from the object rather than
---  from the tile world.
---
---  THE ROW ABOVE THE TOP ROW. `bounds` holds tile CENTRES, so the top row is
---  bounds[4] - 0.5 and a unit standing on it has its feet at bounds[4] + 1.3 --
---  which is the same `row + 1.8` the column search produces, e.g. a floor row of
---  1152 giving 1153.8. The floor test then samples one full tile below, exactly
---  as the descend guard does.
---
---  NEAREST COLUMN WINS, ranked by true distance, for the same reason
---  standableNear ranks rather than first-fits: the order of a first-fit search
---  IS its answer, and this file has had that bug three times.
 local function objectRoofPoint(position, bounds)
   if position == nil or type(bounds) ~= "table" or #bounds < 4 then return nil end
 
@@ -4408,8 +1673,6 @@ local function objectRoofPoint(position, bounds)
     local candidate = { x, roofY }
     local why = nil
 
-    --  STANDABLE_TILE_SET, NOT THE DEFAULT. This is the whole reason the
-    --  fallback exists -- see the note at its call site.
     if not world.pointTileCollision({ x, roofY - 1.0 }, STANDABLE_TILE_SET) then
       why = "no floor below"
     elseif not petports_mediumAllows(candidate) then
@@ -4454,20 +1717,12 @@ function petports_objectPointNear(position, bounds, mediumVerified)
 
   local minX, minY, maxX, maxY = bounds[1], bounds[2], bounds[3], bounds[4]
 
-  --  THE RADIUS IS THE FURTHER SIDE, not half the width. `position` is the
-  --  entity position and is not guaranteed to sit at the box's centre, so
-  --  measuring to both edges and taking the larger is what actually covers it.
   local reach = math.max(math.abs(minX - position[1]), math.abs(maxX - position[1]))
   local radius = math.ceil(reach) + OBJECT_SEARCH_BUFFER
 
-  --  OFFSETS FROM position[2], because that is what findGroundPosition takes.
-  --  Up positive, down negative, matching GROUND_SEARCH_UP and _DOWN.
   local up = math.ceil(maxY - position[2]) + OBJECT_SEARCH_BUFFER
   local down = math.floor(minY - position[2]) - OBJECT_SEARCH_BUFFER
 
-  --  NEVER TIGHTER THAN THE DEFAULTS. A one-tile crate or a crop would otherwise
-  --  come out with a SMALLER search than it gets today, which would be a
-  --  regression wearing a fix's clothes.
   if up < GROUND_SEARCH_UP then up = GROUND_SEARCH_UP end
   if down > GROUND_SEARCH_DOWN then down = GROUND_SEARCH_DOWN end
   if radius < COLUMN_RADIUS then radius = COLUMN_RADIUS end
@@ -4481,74 +1736,17 @@ function petports_objectPointNear(position, bounds, mediumVerified)
   local found = standableNear(position, up, radius, mediumVerified, down)
   if found ~= nil then return found end
 
-  --  THE ROOF, ASKED FOR DIRECTLY, WHEN THE COLUMN SEARCH FOUND NOTHING.
-  --
-  --  MEASURED 2026-09-01 by /entityeval on the submerged shipping container:
-  --
-  --      pointTileCollision(top tile)                          false
-  --      pointTileCollision(top tile, STANDABLE_TILE_SET)      true
-  --
-  --  The container IS standable -- the author stood on it -- and the DEFAULT
-  --  collision set does not report it. That is fact.pathing.platformfloor
-  --  exactly, one layer further down: there, the descend guard asked with
-  --  defaults and threw away platforms findGroundPosition had found. Here the
-  --  column search returned NOTHING AT ALL for twenty-one columns -- not one
-  --  candidate logged, rejected or descended -- so whatever dropped it sits
-  --  inside findGroundPosition, below anything this file can pass kinds to.
-  --
-  --  SO THIS STOPS ASKING IT. The object's own footprint already says where the
-  --  roof is; the standing row is the one above the top row. Every candidate is
-  --  then put through the SAME three predicates the column search uses, with the
-  --  floor test given STANDABLE_TILE_SET explicitly -- so this is a different
-  --  route to the answer, not a weaker standard.
-  --
-  --  A FALLBACK, NOT A REPLACEMENT. It runs only where the existing search
-  --  produced nothing, so every target that resolves today resolves the same way
-  --  by the same code. There is no case this can make worse.
-  --
-  --  IT LOGS WHICH PREDICATE REFUSED, and that is half the point of building it
-  --  this way. If the roof is still refused, the next log says whether it was the
-  --  floor, the medium or validStandingPosition -- which is the measurement the
-  --  column search could not produce, because it reported one silence for
-  --  twenty-one columns.
   return objectRoofPoint(position, bounds)
 end
 
---  Where the unit should be heading right now.
---
---  For "collect" this is the drop's CURRENT position, not the one the task was
---  issued with. Returns nil if the drop is gone.
 local function currentTarget(task)
-  --  A watering task's destination MOVES as the sweep advances. The index
-  --  lives on the task rather than on stateData because currentTarget is only
-  --  handed the task -- and the task table is this unit's own copy, so
-  --  mutating it is local.
   if task.type == "water" then
     local tile = task.tiles ~= nil and task.tiles[task.waterIndex or 1] or nil
     if tile == nil then return nil end
 
-    --  Stand ON the soil tile, which is one below the crop's anchor.
     return { tile[1] + 0.5, tile[2] + 1.5 }
   end
 
-  --  "animal" resolves live for the same reason "collect" does, and more so:
-  --  a farm animal wanders while the unit walks to it, so the position it was
-  --  dispatched against is stale on arrival.
-  --  FISH BELONGS WITH THESE THREE, AND LEAVING IT OUT WAS THE WHOLE BUG.
-  --
-  --  These are the task types whose target is a live entity that can move, so
-  --  the unit re-aims at where it IS rather than where it was when the port
-  --  dispatched. Without fish here the unit walked to a snapshot, found nothing,
-  --  and stood on it -- measured 12.3 seconds between dispatch and the miss
-  --  report, nearly all of it stationary.
-  --
-  --  A FISH MOVES FURTHER AND FASTER THAN ANY OF THE OTHER THREE. A crop does
-  --  not move at all, a drop only falls, and an animal wanders inside a pen; a
-  --  fish is actively chasing a lure at swimSpeed 3 and darting at biteSpeed 30.
-  --
-  --  THE LIST IS TRACKED_TARGETS NOW, 2026-09-07f, and medic is on it. The
-  --  patient walked to a dispatch-time snapshot before that, which is the
-  --  worst case of the whole moving-target problem: a wounded player runs.
   local trackedId = trackedEntity(task)
   if trackedId == nil then
     return task.position
@@ -4558,77 +1756,15 @@ local function currentTarget(task)
   return world.entityPosition(trackedId)
 end
 
---  Cached so the resolve runs once per task rather than once per tick.
---  Cached once RESOLVED. Until then it is recomputed every tick, because a
---  falling drop's position changes and an early resolve would be wrong.
---  HOME IS BENEATH THE PORT, NOT ON TOP OF IT.
---
---  findGroundPosition tests UP BEFORE DOWN at every step of its search:
---
---      for y = 0, max(abs(minHeight), abs(maxHeight)) do
---        if y <= maxHeight and validStandingPosition({x, pos[2] + y}) then break end
---        if -y >= minHeight and validStandingPosition({x, pos[2] - y}) then break end
---      end
---
---  so with GROUND_SEARCH_UP at 4 a standable spot ABOVE the target beats one
---  below it at the same distance, and it will climb four tiles to find one. A
---  port under a shelter has a perfectly good roof, and the roof wins.
---
---  Measured: port at [1203,728] resolved to [1203.5,731.875] -- 3.875 tiles up,
---  on top of its own shelter -- while the floor immediately beneath it was
---  fine. The unit then leashes to the roof, and every recall sends it there.
---
---  So a homeward task forbids climbing outright. Down-only first; the normal
---  search is kept as a fallback so a port with genuinely no floor beneath it
---  still resolves to something rather than nothing.
---
---  Applies to "return" -- both the unit's own leash and the port's recall use
---  that type, and both mean "come back to your port".
---  HOW FAR A MOVING TARGET MAY DRIFT BEFORE ITS APPROACH POINT IS RE-RESOLVED.
---
---  1.5 tiles, which is about one body length. Tighter re-runs the flypoint or
---  standable search almost every tick for a fish; looser and the unit visibly
---  aims behind its target.
 local TARGET_DRIFT = 1.5
 
 local function approachTargetFor(stateData, rawPosition)
-  --  THE CACHE IS INVALIDATED WHEN THE TARGET HAS MOVED, AND THIS IS WHY
-  --  STRING-PULLING LOOKED LIKE IT LOCKED ON.
-  --
-  --  groundTarget is resolved once and returned forever after. That is right
-  --  for a crop or a crate, which is what it was written for. For a fish it
-  --  meant currentTarget correctly reported the LIVE position every tick, the
-  --  resolver turned the first one into a standing point, and every later call
-  --  handed back that first answer -- so the unit steered hard at the spot the
-  --  fish occupied when the lock was acquired and ignored where it actually
-  --  went. Measured as a unit swimming confidently to empty water.
-  --
-  --  THE RAW POSITION IS REMEMBERED, NOT THE RESOLVED ONE. Comparing against
-  --  the resolved point would measure how far the STANDING SPOT had drifted,
-  --  which is a different and much smaller number -- a fish can cross several
-  --  tiles while the nearest fittable point stays put.
-  --  A CHANGE OF MIND IS NOT A DRIFT, AND THE TEST BELOW ONLY CATCHES DRIFT.
-  --
-  --  The cache is invalidated when the TARGET moves. When the unit abandons its
-  --  diving board mid-walk -- see the abandon block in petports_swimModeTick --
-  --  the target has not moved at all; what changed is that the board stopped
-  --  being the right place to go. Nothing in a drift test can see that, so the
-  --  decision has to say so itself.
-  --
-  --  MEASURED 2026-09-02: without this the unit went aquatic and kept flying at
-  --  the board, which sits in AIR, and a canSwim-only chassis refuses to steer
-  --  there -- five seconds of "moved 0" until the progress watchdog struck.
   if self.petportsDiveRetarget then
     self.petportsDiveRetarget = nil
     stateData.groundTarget = nil
     stateData.groundTargetFrom = nil
   end
 
-  --  NOT WHILE AIRBORNE, 2026-09-07f. A re-resolve mid-jump discards the
-  --  launch record and nothing steers the descent (fact.pathing.
-  --  arcmoverthrottle); todo.pathing.movingtarget made this gate the one hard
-  --  requirement. A walker keeps its last answer until it lands. Free movers
-  --  are never on the ground and are exempt -- fish chasing was built on them.
   local grounded = petports_freeMover() or mcontroller.onGround()
 
   if grounded and stateData.groundTarget ~= nil and stateData.groundTargetFrom ~= nil
@@ -4639,72 +1775,15 @@ local function approachTargetFor(stateData, rawPosition)
 
   if stateData.groundTarget ~= nil then return stateData.groundTarget end
 
-  --  REMEMBERED BEFORE THE RESOLVE, so a resolver that returns nil still
-  --  records where it was asked about and the drift test stays meaningful.
   stateData.groundTargetFrom = rawPosition
 
   local task = stateData.task
   local homeward = task ~= nil and task.type == "return"
 
-  --  THE PORT'S VOUCH, ARRIVING WITH THE WORK.
-  --
-  --  Most task types dispatch a RAW target position and leave the unit to
-  --  resolve its own approach point -- see the note in restockFetchWork. That
-  --  re-resolution runs petports_flyPointNear's single-point veto, which cannot
-  --  see a footprint, so a half-submerged crate the port vetted and cleared was
-  --  refused here on arrival: 1122 outright declines against one container in
-  --  one session, and every fetchwater failure in it belonged to the flyer while
-  --  the swimmer serviced the same crate without trouble.
-  --
-  --  `mediumVerified` is set by the generator that ran the footprint ladder, so
-  --  it is absent on exactly the tasks that never ran one -- `animal`, `medic`,
-  --  `return` and `diag` -- and those keep the veto. See arch.dispatch.vouch.
-  --
-  --  NOT APPLIED TO THE HOMEWARD BRANCH, which is `return`, which never carries
-  --  it. Written as a lookup rather than a branch so the leash cannot acquire a
-  --  vouch by accident later.
   local verified = task ~= nil and task.mediumVerified or nil
 
-  --  A DRY UNIT CHASING A FISH AIMS AT A DIVING BOARD, NOT AT THE FISH.
-  --
-  --  Every branch below answers "where can a body stand near this", and near a
-  --  fish the honest answer is usually nowhere -- there is no seabed under open
-  --  water, so standableNear returns nil and the task fails at dispatch without
-  --  the unit moving. Before the training wheels came off there WAS ground under
-  --  the test pool, which is the only reason this path ever appeared to work:
-  --  measured 2026-09-02, a fish at y 1134.88 resolved to [2495.5,1128.8], the
-  --  seabed six tiles beneath it, and the unit walked a 35-edge route to the
-  --  bottom of the sea to reach a fish that was not there.
-  --
-  --  ONLY WHILE STILL A WALKER. Once the unit is in the water petports_swimMode
-  --  is aquatic, standableNear takes its free-mover branch, and the fish itself
-  --  is a legal target -- so this is the on-land half only, and it stops
-  --  applying the moment the dive works.
-  --
-  --  THE ENTRY POINT IS RESOLVED AND THROWN AWAY HERE. Increment one only walks
-  --  the unit to the launch point; the dive that uses the entry is separate, and
-  --  wiring the target first means the trace can be judged on its own log before
-  --  anything ballistic depends on it.
-  --  AN ABANDONED PLAN SUPPLIES NO TARGET, AND petportsDiveRetarget ALONE COULD
-  --  NOT ACHIEVE THAT. The flag clears the cache, but the mode is only re-chosen
-  --  at the TOP of the next tick -- so this branch ran again in the same tick,
-  --  still in `land`, and the sticky plan handed back the very board the unit had
-  --  just given up. Cache cleared, cache refilled, flag spent.
-  --
-  --  MEASURED 2026-09-02, after the retarget flag had supposedly fixed this:
-  --
-  --      UNIT DIVE abandoning its board at [2493.5,1152.8] ... swimming instead
-  --      UNIT FLY path ended with pathfinding: target [2493.5,1152.8]
-  --      UNIT STEERING REFUSED at [2493.5,1152.8]
-  --
-  --  ONE TICK WITH NO TARGET IS THE COST, and it is the right cost. The walker
-  --  resolve below will usually answer nil over open water, the task holds, and
-  --  the next tick resolves the fish itself as a free mover.
   local divePlan = self.petportsDivePlan
 
-  --  A ROUTE DIVE AIMS AT ITS BOARD THE SAME WAY, 2026-09-09a, for any task:
-  --  the plan came from the graph, not from a trace, so nothing is resolved
-  --  here -- the walker is pointed at the board and swimModeTick launches.
   if not homeward and divePlan ~= nil and divePlan.route
      and not divePlan.abandoned and not divePlan.reached
      and petports_gravitySwitchable()
@@ -4727,8 +1806,6 @@ local function approachTargetFor(stateData, rawPosition)
       return stateData.groundTarget
     end
 
-    --  Change-gated: this resolves twice a second while a fish task is held and
-    --  the reason does not change between ticks.
     if self.petportsDiveWhy ~= entryOrWhy then
       self.petportsDiveWhy = entryOrWhy
       sb.logInfo("UNIT DIVE unavailable for fish at %s: %s",
@@ -4747,27 +1824,6 @@ local function approachTargetFor(stateData, rawPosition)
       stateData.groundTarget = standableNear(rawPosition, nil, nil, verified)
     end
   else
-    --  AN OBJECT TARGET IS SIZED TO ITS FOOTPRINT HERE TOO, AND THE OMISSION
-    --  WAS THE WHOLE BUG.
-    --
-    --  MEASURED 2026-09-01. The PORT resolved a standing point on the roof of a
-    --  submerged shipping container -- `roof point for [2553,1147] ... ->
-    --  [2552.5,1153.8]` -- dispatched on it, and the unit then declined the same
-    --  target two seconds later with `no standable position near withdraw
-    --  target`. The port had run petports_objectPointNear; this line ran the bare
-    --  column search, which is exactly the search that had already returned
-    --  nothing for twenty-one columns.
-    --
-    --  arch.pathing.oneanchor, AGAIN, AND IN ITS PUREST FORM: two resolvers,
-    --  identical inputs, opposite answers. Routing both through
-    --  petports_objectPointNear with the same bounds and the same raw position
-    --  is what makes the port's dispatch and the unit's approach agree by
-    --  construction rather than by both happening to be right.
-    --
-    --  `task.target` IS AN ENTITY ID ONLY FOR SOME TASK TYPES -- replant and
-    --  water carry a tile key string instead. No branch is needed:
-    --  petports_habitatObjectBounds pcalls world.objectSpaces, so a string, a nil
-    --  or a dead id all come back nil and the old path runs untouched.
     local bounds = nil
     if task ~= nil then
       bounds = petports_habitatObjectBounds(task.target)
@@ -4777,10 +1833,6 @@ local function approachTargetFor(stateData, rawPosition)
       stateData.groundTarget = petports_objectPointNear(rawPosition, bounds, verified)
     end
 
-    --  STILL FALLS BACK. petports_objectPointNear never searches TIGHTER than
-    --  the default, so this can only matter if it returned nil outright -- but a
-    --  target that used to resolve must keep resolving, and that guarantee is
-    --  cheaper to keep than to reason about.
     if stateData.groundTarget == nil then
       stateData.groundTarget = standableNear(rawPosition, nil, nil, verified)
     end
@@ -4789,90 +1841,17 @@ local function approachTargetFor(stateData, rawPosition)
   return stateData.groundTarget
 end
 
---  CAN THE SEARCH BEGIN FROM WHERE THE UNIT IS STANDING?
---
---  THE UNIT'S POSITION AND THE UNIT'S NODE ARE DIFFERENT PLACES, AND THE SEARCH
---  ONLY KNOWS THE NODE. `PathFinder:find` hands mcontroller.position() to
---  world.platformerPathStart, which rounds it onto the lattice before anything
---  else happens. Vanilla checks the TARGET is standable and never checks the
---  origin at all -- there is no such line in pathing.lua.
---
---  So a unit can be genuinely on the ground, pass canPathfind(), and have the
---  search begin from a node hanging in mid air. The plan then opens with a
---  ballistic fall the unit cannot perform, the arc-landing guard correctly
---  refuses it, and A* re-runs from the same unchanged position and returns the
---  same plan. Nothing in the loop moves, so nothing breaks it.
---
---  MEASURED, twice, to the digit. A unit landed on the top-left corner of a
---  crate at [2503.39,1166.79], carried by a 0.19-tile sliver of it:
---
---    body        2502.59 .. 2504.19   overlaps the crate at column 2504
---    node        [2503,1166.8]
---    node body   2502.20 .. 2503.80   entirely over the void
---
---    UNIT approach at [2503.39,1166.79] (standable true) ... onGround true
---    UNIT path ACQUIRED ... action Arc ... edge 1 of 93
---
---  Standable where it is, airborne where the search thinks it is. Three
---  different targets that session -- [2520.5,1152.8], [2501.5,1163.8],
---  [2549.5,1159.8] -- all produced a first edge descending from [2503,1166.8].
---  THE CONSTANT IS THE ORIGIN, NOT THE GOAL, and that is the whole diagnosis.
---
---  297 refusals over 92 seconds, ending in a re-home. Every rung of the
---  recovery ladder below rehomeUnit re-plans through the same broken origin --
---  the recall's own plan opened with the identical fall -- so only the teleport
---  could break it.
---
---  THIS FAILS OPEN, DELIBERATELY, AND IT IS THE ONE PLACE IN THIS FILE THAT
---  DOES. Everything else here fails closed because guessing is worse than
---  declining. Not this: a false negative refuses to plan and bricks a unit that
---  was fine, while a false positive plans exactly as the code does today. The
---  worst outcome of being wrong is the behaviour we already have.
---
---  Returns the node alongside the verdict so the caller can log it. A free
---  mover is always plannable here: mustEndOnGround derives false for it, so
---  standing is not a property its start node needs. Its equivalent problem is
---  the medium, and petports_flyPointNear already owns that.
---
---  THIS IS A PURE QUESTION ABOUT THE NODE AND ASKS NOTHING ABOUT BEING
---  AIRBORNE. It used to, and that was a defect: an airborne unit came back
---  "plannable, node nil", the caller could not tell that from a nudge having
---  succeeded, and it logged `node null is standable` and rebuilt the pather --
---  discarding a live path IN FLIGHT, which canPathfind() then cannot replace
---  until the unit lands. Measured twice:
---
---    UNIT FLIGHT left the ground at [2503.03,1166.3] ...
---    UNIT origin nudge DONE at [2503.03,1166.3]: node null is standable
---    UNIT path LOST at [2503.03,1166.3]: ... onGround false
---
---  The ground gate belongs to the caller, which has somewhere sensible to put
---  the answer. Two return paths that a caller cannot distinguish is the bug,
---  not the check itself.
 local function originIsPlannable()
   if petports_freeMover() then return true, nil end
 
   local node = petports_nodePosition(mcontroller.position())
 
-  --  pcall because validStandingPosition indexes its arguments, and a shape it
-  --  does not like raises rather than returning false. See standableNear.
   local ok, standable = pcall(validStandingPosition, node, petports_avoidLiquid())
   if not ok then return true, node end
 
   return standable == true, node
 end
 
---  WHERE TO STAND SO THE SEARCH HAS SOMETHING TO BEGIN FROM.
---
---  SAME ROW ONLY, AND THAT IS NOT A SIMPLIFICATION. Walking changes x, not
---  which floor the unit is standing on -- the lesson petportsJumpMover's
---  wrong-level branch is built out of. A standable node one row up is not
---  somewhere a walk can deliver the unit, so offering it would produce motion
---  toward a place it cannot reach, and motion is what the stall detector reads
---  as health.
---
---  ORDERED BY TRUE DISTANCE, because in a first-fit search the order IS the
---  answer. petports_flyPointNear's header records what ring-ordering cost when
---  this was got wrong there.
 local function nudgeTargetNear(node)
   local here = mcontroller.position()
 
@@ -4892,8 +1871,6 @@ local function nudgeTargetNear(node)
     local ok, standable = pcall(validStandingPosition, candidate,
       petports_avoidLiquid())
 
-    --  The same forbidden-liquid gate every other resolver in this file
-    --  applies. A node in lava is standable geometry and not a destination.
     if ok and standable and petports_mediumAllows(candidate) then
       return candidate, entry[2]
     end
@@ -4902,30 +1879,7 @@ local function nudgeTargetNear(node)
   return nil
 end
 
---  Push the unit onto its own node before anything asks the pathfinder a
---  question. Returns true when the caller should stand down for this tick.
---
---  RUNS BEFORE THE PLAN, NOT AFTER IT. Catching this from a returned plan is
---  possible -- a descending airborne first edge while grounded is conclusive --
---  but it pays for a search first, and in the measured case no usable plan came
---  back at all. One predicate per tick is cheaper than one A* per tick.
---
---  IT DOES NOT DRIVE THE PATHER. While a nudge is running the unit is steered
---  directly with moveX, because the pathfinder is precisely the thing that
---  cannot help from here. On completion the pather is rebuilt, since whatever
---  plan it holds was drawn from the bad node.
 local function nudgeOrigin(stateData, dt)
-  --  AIRBORNE FIRST, BEFORE THE PREDICATE IS EVEN ASKED.
-  --
-  --  A falling unit's node is SUPPOSED to be in mid air, so the predicate has
-  --  no useful answer, and canPathfind() already refuses to search from one.
-  --  This branch used to live inside originIsPlannable, where its "true" was
-  --  indistinguishable from a nudge succeeding -- see the note there for the
-  --  path it destroyed in flight.
-  --
-  --  ABANDONING IS NOT COMPLETING. No freshPather here: the premise was
-  --  "standing in the wrong place", the unit is no longer standing, and gravity
-  --  is now solving it. Whatever plan the pather holds is the landing's problem.
   if not mcontroller.onGround() then
     if stateData.originNudge ~= nil then
       sb.logInfo("UNIT origin nudge ABANDONED at %s: left the ground on the way to %s",
@@ -4951,42 +1905,13 @@ local function nudgeOrigin(stateData, dt)
       freshPather("origin nudge complete")
     end
 
-    --  Cleared on success so a unit that gets stuck again later gets a fresh
-    --  attempt rather than inheriting an old refusal.
     stateData.originNudgeFailed = nil
     return false
   end
 
-  --  Already tried and could not find anywhere. Do not re-probe every tick;
-  --  the position has not meaningfully changed and the answer will not either.
   if stateData.originNudgeFailed then return false end
 
   if stateData.originNudge == nil then
-    --  ONLY WHEN THERE IS NO PLAN TO RUIN.
-    --
-    --  "Pre-flight before every plan" means before a SEARCH, not before every
-    --  tick, and scoping it to the tick was a defect. A plan may legitimately
-    --  walk the unit across a ledge edge, and while it is doing so the node
-    --  under the unit is genuinely not standable -- which is fine, because
-    --  nobody is about to plan from it. Measured: a correct six-edge Walk plan
-    --  deliberately walked the unit LEFT off the crate toward the crops, the
-    --  node flipped un-standable as it crossed x 2503.5, and the nudge fired
-    --  and pushed RIGHT against a plan that was working.
-    --
-    --    UNIT pre-move at [2503.41,1166.8]: action Walk edge 1 of 6
-    --    UNIT origin NOT PLANNABLE at [2503.41,1166.8] ... nudging to [2504,1166.8]
-    --
-    --  It only came out right because momentum carried the unit off the ledge
-    --  anyway. A recovery that overrides a working plan is not a recovery.
-    --
-    --  hasPath false covers both cases that matter: no plan yet, and a plan
-    --  just discarded by a guard or a stall. A search still running (aStar set,
-    --  hasPath false) is one that STARTED from the bad origin and is therefore
-    --  wasted, so interrupting it is right too.
-    --
-    --  A nudge already under way is exempt: it runs the branches above this one
-    --  and never reaches here, so completing it is never cancelled by the stale
-    --  plan the pather is still carrying.
     local finder = self.pather and self.pather.finder
 
     if finder ~= nil and finder.hasPath then return false end
@@ -5031,14 +1956,7 @@ local function nudgeOrigin(stateData, dt)
     return false
   end
 
-  --  Arrived by distance. The predicate flipping is checked at the top of the
-  --  next tick and is what actually ends the nudge; this only stops the walk
-  --  from running past the node it was aimed at.
   if math.abs(toTarget) <= ORIGIN_NUDGE_ARRIVE then
-    --  Vanilla's own braking line from moveLand, read the same way. NOT
-    --  `groundForce or 0` -- a missing field would then brake with no force at
-    --  all, silently, and a unit coasting past its node looks like the nudge
-    --  not working rather than like a bad read.
     mcontroller.controlApproachXVelocity(0, mcontroller.baseParameters().groundForce)
     return true
   end
@@ -5050,93 +1968,10 @@ local function nudgeOrigin(stateData, dt)
   return true
 end
 
---  CAN THE PLAN BE WALKED FROM WHERE THE UNIT IS ACTUALLY STANDING?
---
---  THIS REPLACES A HEIGHT COMPARISON, AND THE HEIGHT COMPARISON WAS THE WRONG
---  QUESTION. Asking "am I on the surface the plan used" assumes there is only
---  one surface worth being on, and in player builds there routinely is not: a
---  chute lined with platforms above a dirt floor offers two valid standing
---  heights a tile apart in the same column, and a route along either is a route.
---  Rejecting a plan because the unit ended up on the other one is churn, and if
---  A* keeps answering with the same surface it is a loop of exactly the shape
---  this file already spends two hundred lines fighting.
---
---  What actually matters is not height, it is CLEARANCE. The unit wedges when
---  its box cannot fit through the space the next Walk edge crosses -- which is
---  a fact about the body and the terrain, not about which tile the planner
---  happened to stand on. So test that directly.
---
---  Both observed cases fall out correctly:
---
---    unit at 1027.8, plan walking left to 3756 -- box spans y 1027.0..1028.6,
---    dirt at row 1028, the sweep collides, the plan is refused. That is the
---    wedge that produced the cage loop.
---
---    unit on a dirt floor, plan drawn along the platform a tile above it --
---    the sweep at the unit's own height is clear, the plan is kept, and it
---    walks the planner's x route on the surface it is standing on.
---
---  Platforms are excluded from the collision set on purpose. They do not
---  obstruct horizontal travel, and including them would refuse every walk
---  underneath one -- which in a platform-lined chute is all of them.
---
---  Returns nil when there is no Walk edge near enough to test, which is a
---  different answer from "clear" and the caller must treat it as such.
 local PLAN_WALK_LOOKAHEAD = 6
 
---  HOW CLOSE A LOWER GROUND EDGE HAS TO BE TO SAY ANYTHING ABOUT THE SURFACE WE
---  ARE STANDING ON.
---
---  1.25, AND 2.0 WAS WRONG BY ITS OWN LOG. Sized to separate two shapes the scan
---  cannot otherwise tell apart, from three measurements in one session:
---
---      ~1.0   the wedge this scan exists for -- a Land at our height with its
---             lower Walks immediately after it. MUST still fire.
---       2.0   a unit standing at [2547,1153.55] on the west end of the shipping
---             container, with the plan stepping off at [2545,1152.8]. MUST NOT
---             fire: this is the ledge two tiles ahead, and dropping here is what
---             put the unit back in the water it had just climbed out of.
---       6.35  the same ledge seen from the middle of the container roof. MUST
---             NOT fire; this is the drop that started the whole investigation.
---
---  THE FIRST DRAFT OF THIS CONSTANT WAS 2.0 AND WOULD HAVE FIRED ON THE SECOND
---  CASE, because the test is `<=` and the measurement is exactly 2.0. The number
---  was reasoned from the two extremes while the middle case was sitting in the
---  same log, four lines further down. Read the whole log before picking a
---  threshold from the ends of it.
---
---  ERR SMALL. Too small costs a drop that happens a tick later, once the unit has
---  walked closer to the ledge. Too large costs a unit dropping through the floor
---  it is standing on. Those are not comparable, so the gap above the wedge's ~1.0
---  is deliberately thin.
 local PLAN_DROP_REACH = 1.25
 
---  THE PLAN WANTS US A STOREY DOWN. DROP, DO NOT REPLAN.
---
---  When a plan's next ground edge sits below the unit, replanning is the wrong
---  answer even though it is the safe-looking one. A* re-runs from
---  mcontroller.position(), so it plans from the same tile, and in a platform
---  chute it hands back the same route it just handed back -- which is a loop
---  built out of nothing but caution.
---
---  The unit is standing on a platform. Going down one is a solved problem: it
---  is the same placement the Drop edge itself uses, and it is exact. So take
---  it, keep the plan, and let the next tick judge the result.
---
---  ONE PLATFORM PER CALL, and the floor passed in is what enforces it.
---  lastPlatformToPass returns the LOWEST platform surface above the floor it is
---  given, so handing it the plan's own floor would pick a surface several rungs
---  down and place the unit through everything between -- exactly the teleport
---  the origin assertion in scootThroughPlatform now refuses. Half a tile under
---  the unit's own feet leaves only the surface it is standing on in range.
---
---  A gap of several tiles therefore descends one rung per tick rather than in
---  one jump, each step asserting its own origin. Slower, and it cannot pass
---  through anything.
---
---  Fails closed. Standing on dirt rather than a platform returns no surface to
---  pass, the drop refuses, and the caller falls through to whatever it would
---  have done anyway.
 local function tryPlanDrop(pather, finder)
   if pather == nil or finder == nil then return false, "no pather", false end
   if not mcontroller.onGround() then return false, "airborne", false end
@@ -5147,29 +1982,6 @@ local function tryPlanDrop(pather, finder)
 
   local here = mcontroller.position()
 
-  --  SCAN THE WHOLE GROUND RUN, NOT JUST THE EDGE UNDER THE CURSOR.
-  --
-  --  Checking only the current edge misses the shape that actually occurs: a
-  --  Land at the unit's own height, reading a perfectly innocent gap of 0,
-  --  followed by Walk edges a storey down. The check passes, moveLand advances
-  --  on horizontal distance alone, and the unit walks the lower plan at the
-  --  upper height -- which is the wedge, one edge later than anything was
-  --  looking.
-  --
-  --  WALK AND LAND ONLY, AND THE EXCLUSIONS ARE THE WHOLE DESIGN:
-  --
-  --    Drop is excluded because a Drop edge targets below the unit BY
-  --    DEFINITION -- that is what the action is. Treating it as evidence of a
-  --    wrong storey would fire on every plan containing one and pre-empt a
-  --    descent the plan already performs correctly, one rung early, every time.
-  --
-  --    Jump and Arc end the scan outright. Past them the plan is deliberately
-  --    at a different height, and an edge below us on the far side of a jump
-  --    says nothing about where we are standing now.
-  --
-  --  So the scan covers exactly the run of ground work the unit is expected to
-  --  perform from the surface it is on, and a Walk or Land inside that run
-  --  sitting below us can only mean the surface is wrong.
   local worstEdge = nil
   local worstIndex = nil
   local worstBelow = nil
@@ -5184,43 +1996,6 @@ local function tryPlanDrop(pather, finder)
     if edge.target ~= nil and edge.target.position ~= nil then
       local below = here[2] - edge.target.position[2]
 
-      --  AND IT HAS TO BE AN EDGE WE HAVE ACTUALLY REACHED.
-      --
-      --  A LOWER EDGE FAR AHEAD IS THE PLAN DESCENDING, NOT US ON THE WRONG
-      --  STOREY, and without this the scan cannot tell those apart. MEASURED
-      --  2026-09-01, a ground unit leaving the roof of a submerged shipping
-      --  container westward:
-      --
-      --      PLAN DROP at [2551.35,1153.55]: Walk edge 7 targets [2545,1152.8],
-      --      1 below us -- dropped one platform (cursor is Walk edge 1)
-      --
-      --  Edges 1..6 were the roof at 1153.8 and the unit was correctly standing
-      --  on them. Edge 7 -- the LAST index PLAN_WALK_LOOKAHEAD admits -- was the
-      --  ground a tile lower, six tiles west, where the plan steps off the
-      --  container. The scan took the worst edge in the run, called the roof the
-      --  wrong storey, and dropped the unit through the platform it was walking
-      --  on. It swam out, climbed back on, and did it again.
-      --
-      --  IT ONLY BIT NOW BECAUSE THE DROP HAS TO SUCCEED TO HURT. On solid
-      --  ground scootThroughPlatform refuses and the mistake is a log line; the
-      --  container is the first PLATFORM-collision footing a walker has ever
-      --  been given, so this is the first time the bad verdict could act.
-      --
-      --  PROXIMITY IS THE DISCRIMINATOR, AND IT KEEPS THE SHAPE THE SCAN WAS
-      --  BUILT FOR. The wedge case in the header -- a Land at our height
-      --  followed by Walks a storey down -- has those Walks IMMEDIATELY after
-      --  the Land, within a tile. A legitimate step-down sits further along the
-      --  run. Gating on distance separates them without narrowing the lookahead,
-      --  which would reintroduce the wedge.
-      --
-      --  THE SAME LOG ALSO CAUGHT THE UNIT AT THE CONTAINER'S WEST END, two
-      --  tiles from the step-down, dropping straight back into the water it had
-      --  just climbed out of. That case is why PLAN_DROP_REACH is 1.25 and not
-      --  the 2.0 the two outer measurements suggested -- see the constant.
-      --
-      --  IT ALSO MAKES THE DROP HAPPEN IN THE RIGHT PLACE rather than merely not
-      --  happening in the wrong one. The unit now walks the roof to the step and
-      --  drops there, which is what the plan describes.
       local reach = math.abs(here[1] - edge.target.position[1])
 
       if below >= PLAN_SURFACE_TOLERANCE
@@ -5261,20 +2036,6 @@ local function planWalkBlocked(finder)
   local walkEdge = nil
   local walkIndex = nil
 
-  --  STOP AT THE FIRST EDGE THAT LEAVES THE GROUND.
-  --
-  --  The sweep is taken at the unit's CURRENT height, so it only means anything
-  --  for edges the unit could reach without changing surface. Land and Walk
-  --  qualify; a Jump, Arc or Drop in between means the plan moves to a
-  --  different height before that Walk happens, and testing it here answers a
-  --  question nobody asked.
-  --
-  --  MEASURED, and this is why the bound exists: a unit landed at
-  --  [3753.02,1026.8] holding a Land edge targeting [3752,1023.8] -- three
-  --  tiles below it -- and the scan ran past that Land to a Walk edge six
-  --  ahead, found it clear, and kept a plan whose very next step was
-  --  unreachable. moveLand then sat at srcDist 3.33 doing nothing until the
-  --  stall check replanned 0.65s later, every lap.
   for i = index, math.min(index + PLAN_WALK_LOOKAHEAD, #edges) do
     local candidate = edges[i]
     if candidate == nil then break end
@@ -5295,8 +2056,6 @@ local function planWalkBlocked(finder)
   local bounds = mcontroller.boundBox()
   local targetX = walkEdge.target.position[1]
 
-  --  The swept box from where the unit stands to where the edge ends, at the
-  --  unit's OWN height rather than the plan's.
   local sweep = {
     math.min(here[1], targetX) + bounds[1],
     here[2] + bounds[2],
@@ -5309,17 +2068,6 @@ local function planWalkBlocked(finder)
   return blocked, walkIndex, walkEdge, sweep
 end
 
---  WHERE THE PLAN SAYS THE UNIT SHOULD BE AT THIS ALTITUDE.
---
---  Walks forward from the cursor through the Arc run and finds the first
---  segment whose endpoints bracket `y`, then interpolates x across it. Returns
---  nil when nothing brackets -- above the first waypoint, below the last, or a
---  plan with no arc left.
---
---  FIRST BRACKET, NOT NEAREST. An arc's y is not monotonic across its apex, so
---  a rising arc can bracket one altitude twice. Taking the first match from the
---  cursor forward is right for a FALL, which is what this exists to measure,
---  and is knowingly approximate on the ascending half of a jump.
 local function flightPlanX(finder, y)
   if finder == nil or finder.edges == nil then return nil end
 
@@ -5339,8 +2087,6 @@ local function flightPlanX(finder, y)
       if y <= hi and y >= lo then
         local span = from[2] - to[2]
 
-        --  A LEVEL SEGMENT BRACKETS EVERY y INSIDE IT AND INTERPOLATES
-        --  NONE OF THEM. Report its start rather than dividing by zero.
         if math.abs(span) < 0.0001 then return from[1] end
 
         local t = (from[2] - y) / span
@@ -5354,37 +2100,6 @@ local function flightPlanX(finder, y)
   return nil
 end
 
---  ONE LINE PER TICK FOR THE WHOLE OF A FLIGHT.
---
---  BUILT 2026-09-01 BECAUSE 12 Hz RECONSTRUCTION RAN OUT. Three explanations
---  for a unit falling short of its planned arc -- a late Walk -> Arc handover, a
---  liquid drag leak, and the planner-velocity steering since deleted -- all
---  produce the same shape when sampled from `pre-move` lines alone. The author
---  watching at 60 fps could see the trajectory break BEFORE the waterline,
---  which no reading of the existing log could confirm or refute. This is the
---  instrument that separates them.
---
---  IT FIRES REGARDLESS OF EDGE ACTION, and that is the point. The first
---  airborne tick of a walk-off is still on the WALK edge -- the pather does not
---  advance to the Arc until the following tick -- so anything gated on `action
---  == "Arc"` misses the handover, which is the interval under suspicion.
---
---  liquidMovement() IS THE FIELD THAT SETTLES THE DRAG QUESTION. It is the
---  engine's own verdict on whether this body is being moved as a swimmer, so it
---  beats inferring a waterline from where a swimmer floats. If horizontal speed
---  decays across ticks that all report false, drag is not the mechanism and the
---  liquidFriction control test is unnecessary.
---
---  POSITIONS ARE THE TRUTH AND VELOCITY IS NOT. proc.pathing.velocitysample
---  records that a reported velocity is a friction sampling artifact; the
---  round-numbered [8,-10] readings in every arc log are planner values, not
---  measurements. `moved` is the real displacement since the previous trace line
---  and `dt` is the interval it happened over -- divide them and that is the only
---  honest velocity in the line. mcontroller.velocity() is kept BESIDE it so the
---  size of the artifact is on the record rather than in a comment.
---
---  ONE FLIGHT PER `#n`, so a log with six falls in it sorts into six flights
---  without matching timestamps by hand.
 local function flightTrace(dt, stateData)
   if not FLIGHT_TRACE then return end
 
@@ -5392,8 +2107,6 @@ local function flightTrace(dt, stateData)
   local grounded = mcontroller.onGround()
   local prev = stateData.petportsTrace
 
-  --  Grounded and was already grounded: nothing in flight, keep the anchor
-  --  fresh so the first airborne tick has something to measure against.
   if grounded and (prev == nil or prev.grounded) then
     stateData.petportsTrace = {
       pos = here, grounded = true, tick = 0,
@@ -5405,7 +2118,6 @@ local function flightTrace(dt, stateData)
   local flight = (prev and prev.flight) or 0
   local tick = (prev and prev.tick or 0) + 1
 
-  --  A NEW FLIGHT STARTS ON THE FIRST TICK OFF THE GROUND.
   if prev == nil or prev.grounded then
     flight = flight + 1
     tick = 1
@@ -5418,16 +2130,6 @@ local function flightTrace(dt, stateData)
   local moved = prev and prev.pos and world.distance(here, prev.pos) or nil
   local planX = flightPlanX(finder, here[2])
 
-  --  WHERE THE SOLVED LAUNCH SAYS WE SHOULD BE ON THIS TICK.
-  --
-  --  planX above answers against the PLAN, and the plan is fiction on every
-  --  jump -- measured 2026-09-11, solveLaunch overrode the planner's velocity
-  --  on 95 of 95 launches. This answers against what the unit was actually
-  --  given, so a gap here means the unit is not flying its own launch.
-  --
-  --  INTEGRATED THE SAME WAY THE ENGINE DOES, in PHYSICS_DT steps from tick 1,
-  --  because discreteRise exists in this file precisely because the half-step
-  --  lift is worth half a tile on a short hop.
   local solveX, solveY, solveDrift = nil, nil, nil
   local launch = self.petportsLaunchSolve
 
@@ -5465,9 +2167,6 @@ local function flightTrace(dt, stateData)
     sb.printJson(planX),
     sb.printJson(planX and (planX - here[1])))
 
-  --  SEPARATE LINE RATHER THAN MORE FIELDS ON THE ONE ABOVE, which is already
-  --  fourteen values wide. This one is only emitted while a launch is armed, so
-  --  a fall that nobody solved for stays as quiet as it was.
   if solveX ~= nil then
     sb.logInfo("UNIT TRACE #%s.%s solved: should be [%s,%s], is [%s,%s], "
       .. "drift x %s y %s | launch vx %s, actual vx (moved.x/dt) %s "
@@ -5478,23 +2177,10 @@ local function flightTrace(dt, stateData)
       sb.printJson(solveDrift), sb.printJson(here[2] - solveY),
       sb.printJson(launch.vx),
 
-      --  moved IS A VECTOR. world.distance returns a DELTA, not a scalar --
-      --  world.magnitude is the scalar one -- and dividing the table by dt
-      --  threw on the first traced jump. flightTrace's own header says
-      --  "divide them and that is the only honest velocity" without saying
-      --  component-wise, and the line above only ever printJson'd it, so
-      --  nothing had made the shape matter before.
-      --
-      --  x ALONE, AND NOT THE MAGNITUDE, which is the better number anyway:
-      --  the three candidates differ in HORIZONTAL speed, and a magnitude
-      --  would fold the fall into the one value meant to separate them.
       sb.printJson(moved and dt and dt > 0 and (moved[1] / dt) or nil),
       sb.printJson(launch.landing), sb.printJson(launch.airtime))
   end
 
-  --  THE CHASSIS NUMBERS, ONCE PER FLIGHT. These are what the arc mover's
-  --  controlParameters zeroing is trying to override, so a decay measured
-  --  against them says whether the override reached the engine.
   if tick == 1 then
     local base = mcontroller.baseParameters()
     sb.logInfo("UNIT TRACE #%s chassis: liquidFriction %s liquidImpedance %s "
@@ -5508,73 +2194,7 @@ local function flightTrace(dt, stateData)
   stateData.petportsTrace = { pos = here, grounded = grounded, tick = tick, flight = flight }
 end
 
---  FUEL BURNS WHILE THE UNIT IS GETTING SOMEWHERE, AND ONLY THEN.
---
---  arch.fuel.burn. vanilla drains hunger at a flat rate from groundPet.lua's
---  tickResources regardless of what the unit is doing, which contradicts the
---  load-bearing claim that upkeep is proportional to the work a fleet does. So
---  petResourceDeltas.hunger is pinned to 0 in every monstertype and the burn
---  is driven from here instead.
---
---  A PARKED FLEET IS FREE, DELIBERATELY. A player who over-builds is not
---  punished for it; idle units simply cost nothing.
---
---  STATION-KEEPING IS NOT WORK EITHER, and that is what the task.port test
---  buys. A leash task has no port, holds no claim and is owed no report -- it
---  is a tethered unit walking home, which is most of what it does when it is
---  not working. Charging fuel for it would make a fleet that has nothing to do
---  more expensive than one that is busy.
---
---  MIGRATION, AND IT IS NOT DECORATION. groundPet.lua seeds storage.petResources
---  ONCE, with `or config.getParameter`, so a unit that existed before this
---  shipped has a table with no petports_fuel key in it. The RESOURCE is fine --
---  defaultPercentage 100 fills it on load -- but petResources() enumerates that
---  table to build the sync the port mirrors, so without this the pane draws an
---  empty bar for every unit that predates the feature.
 
---  MOVING, NOT MERELY DISPATCHED, 2026-09-13g (Lofty: "pets being active and
---  trying to figure out a path while their nodes are building can take a long
---  time and having them burning through food while they figure out the
---  environment is bad").
---
---  THE GATE WAS task.port ALONE, which answers "is this unit dispatched" and
---  was read as "is this unit working". Those coincide only once a dispatch
---  becomes travel, and while the coarse graph is still being probed they do
---  not: the unit holds a real task and stands through a search, a refused leg,
---  two progress strikes, a failure report and a re-dispatch, paying the chassis
---  rate for every second of it. 900 at 1.0/sec is fifteen minutes, so a base
---  that is still being learned can empty a tank without the unit covering a
---  tile.
---
---  ARRIVAL IS NOT CARVED OUT, AND THAT IS A DECISION (Lofty, 2026-09-13).
---  Planting a seed, landing a fish and reorganising a crate are one-tick
---  interactions; the only act with any duration is mining, and a unit standing
---  over its hole eating free is cheaper than a second clause in the rule. The
---  rule is one sentence: a unit pays for ground covered.
---
---  THE SAME QUESTION THE PROGRESS WATCHDOG ASKS, ON THE SAME TWO NUMBERS.
---  "Moved less than PROGRESS_DISTANCE in PROGRESS_WINDOW" is already this
---  file's definition of going nowhere -- it is what raises a strike -- and a
---  window that earns a strike is exactly the window that must not be charged.
---  Constants of its own would let the two drift into disagreeing about the same
---  unit. NET DISPLACEMENT, NOT VELOCITY, so the oscillation that defeated the
---  stall detector is not charged either: a body vibrating in place has speed
---  and goes nowhere.
---
---  ITS OWN ANCHOR, ON self, AND ASKED ABOVE THE PORT TEST. burnFuel runs above
---  every early return in the update and the watchdog does not, so progressAnchor
---  is not available to it. On self rather than stateData because the verdict
---  must survive a re-dispatch -- a unit that cannot path is failed and handed
---  the task again, and a per-task anchor would charge the first window of every
---  attempt forever. Asked above the port test so the anchor tracks the leash
---  too, which is what makes a unit parked on its port already held when work
---  arrives: it starts paying when it actually leaves, not when it is told to.
---
---  IT BURNS BY DEFAULT AND STOPS, RATHER THAN THE OTHER WAY ROUND. Deferring
---  the charge until a window had proved motion would discard the unbilled tail
---  of every task that ends mid-window, which is most of the short ones. So the
---  first window of a stall is charged -- the unit was trying -- and nothing
---  after it is, until the anchor is beaten again.
 local function fuelMoving(dt)
 	local here = mcontroller.position()
 
@@ -5585,8 +2205,6 @@ local function fuelMoving(dt)
 		return true
 	end
 
-	--  BEATEN EARLY ENDS THE HOLD EARLY, not at the next window edge, so a unit
-	--  that gets moving again is not handed the remainder as free travel.
 	if world.magnitude(here, self.petportsFuelAnchor) >= PROGRESS_DISTANCE then
 		if self.petportsFuelHeld and FUEL_TRACE then
 			sb.logInfo("UNIT fuel: moving again at %s -- resuming the burn",
@@ -5618,9 +2236,6 @@ local function fuelMoving(dt)
 end
 
 local function burnFuel(dt, task)
-	--  ABOVE THE PORT TEST, AND UNCONDITIONALLY. An anchor that only advanced
-	--  on dispatched ticks would be stale by the length of every leash, and the
-	--  first tick of the next task would read the walk home as motion.
 	local moving = fuelMoving(dt)
 
 	if task == nil or task.port == nil then return end
@@ -5629,24 +2244,10 @@ local function burnFuel(dt, task)
 		storage.petResources.petports_fuel = status.resource("petports_fuel")
 	end
 
-	--  THE MIGRATION WRITE STAYS ABOVE THE MOTION GATE. It repairs a table the
-	--  pane enumerates rather than charging anything, and a unit whose first
-	--  dispatched seconds are spent standing through a search would otherwise
-	--  draw an empty bar for exactly as long as the stall lasted.
 	if not moving then return end
 
-	--  THE MODULE HOOK GOES HERE, NOT IN THE MONSTERTYPE. petports_fuelDrain is
-	--  the chassis cost; an efficiency module divides it, and until those items
-	--  exist the divisor is 1 and this reads as the chassis rate alone.
 	local rate = tonumber(config.getParameter("petports_fuelDrain", 1.0)) or 1.0
 
-	--  THE EFFICIENCY MODULE, ARRIVING WITH THE MODULE PUSH RATHER THAN BEING
-	--  LOOKED UP HERE. petports_setModuleEffects sets it; the port derives it
-	--  from FUEL_EFFICIENCY_BONUS, so the minutes are written down once.
-	--
-	--  NIL UNTIL THE PORT HAS PUSHED ONCE, which is why the fallback is 1.0 and
-	--  not 0 -- a unit spawned and burning before its first module push should
-	--  burn at the chassis rate, not become immortal.
 	rate = rate * (tonumber(self.petportsFuelScale) or 1.0)
 
 	if rate <= 0 then return end
@@ -5654,62 +2255,12 @@ local function burnFuel(dt, task)
 	status.modifyResource("petports_fuel", -(rate * dt))
 end
 
---  RUN AND MUNCH -- THE EMERGENCY FOOD INGRESS.
---
---  dd.fuel.selffeed's third source has a port-side half already
---  (arch.fuel.groundfeed): a hungry unit is DISPATCHED at a treat on the
---  ground. That half cannot help a unit which is mid-errand, because taking on
---  a second task is exactly what a unit carrying out a task must not do -- and
---  it refuses outright while the unit holds cargo.
---
---  So this half interrupts NOTHING. It is a radius check on a timer, it never
---  touches the state machine, never queues an action, never yields, and never
---  changes where the unit is walking. A treat thrown in front of a working
---  unit is eaten on the way past.
---
---  IT LIVES HERE AND NOT IN petBehavior.run, AND THAT IS NOT A PREFERENCE.
---  petports_petBehavior.lua says of run() in as many words: CADENCE IS
---  UNVERIFIED -- DO NOT HANG TIMERS OFF THIS. It may be called on the
---  querySurroundings cooldown rather than per tick, and a timer built on it
---  would run at some unknown multiple of what it claims. update()'s dt is
---  verified, and it always runs: petports_leashTask never returns nil for a
---  tethered unit, so there is always a task holding this state.
---
---  ONE SECOND, NOT PER TICK. An entityQuery per frame per unit across a fleet
---  is the kind of cost that does not show up until somebody builds twenty
---  units, and a treat lands and then lies there -- nothing is lost by seeing it
---  a fraction of a second late.
 local MUNCH_INTERVAL = 1.0
 
---  ARM'S LENGTH, NOT A VACUUM.
---
---  Vanilla's inert eat action declared distance 2. Three tiles is enough that a
---  treat thrown at a moving unit lands inside it, and small enough that this
---  stays "food in front of me" rather than a collection mechanic that quietly
---  outcompetes the dispatched one.
 local MUNCH_RADIUS = 3.0
 
---  THE SAME MARK THE PORT USES, AND IT HAS TO BE. PETPORTS_FUEL_LOW is a port
---  global and this is the monster's environment, so the number is written twice
---  -- see the PANE_FUEL_MAX note for the same hazard. If one moves, move both.
 local MUNCH_LOW = 0.25
 
---  Only the unit that is IDLE may keep what it could not eat.
---
---  CONSERVATIVE ON PURPOSE, AND THE ALTERNATIVE WAS REJECTED. The obvious rule
---  is "spit it out if the current task will produce cargo", which needs a list
---  of the task types that acquire -- collect, withdraw, fuel, drain, tidy,
---  fish. That list would have to be updated by whoever writes the NEXT
---  generator, and forgetting is silent: the unit fills its one cargo slot and
---  the acquire it was walking to fails on arrival with nothing in the log
---  pointing here.
---
---  So the test is inverted. An idle unit -- no task, or the leash's hold task,
---  which carries no port -- may hold the remainder and will deposit it through
---  the ordinary ladder. Everything else puts it back on the ground, where it is
---  a normal drop that ordinary collection or fuelGroundWork picks up later.
---  Being wrong in that direction costs a walk; being wrong the other way blocks
---  an errand.
 local function munchMayHold(task)
   return task == nil or task.port == nil or task.hold == true
 end
@@ -5719,9 +2270,6 @@ local function runAndMunch(dt, task)
   if self.munchTimer > 0 then return end
   self.munchTimer = MUNCH_INTERVAL
 
-  --  THE UNIT'S OWN RESOURCE, NOT THE PORT'S MIRROR. This is the one place in
-  --  the fuel system with a live number and no staleness at all -- the port
-  --  mirrors on the anchor tick and is a bite behind after the first mouthful.
   local maximum = status.resourceMax("petports_fuel")
   local current = status.resource("petports_fuel")
 
@@ -5742,17 +2290,6 @@ local function runAndMunch(dt, task)
 
       local okTag, tagged = pcall(root.itemHasTag, descriptor.name, "petports_fuel")
 
-      --  A CLAIMED DROP IS LEFT ALONE.
-      --
-      --  petports_work.lua is in this monstertype's scripts list, so the claim
-      --  table is readable from here -- and a drop somebody has been dispatched
-      --  at is one that unit is already walking to. Snatching it works, and
-      --  leaves the other unit arriving at nothing and taking a backoff on a
-      --  drop that no longer exists. Cheap to check and rude not to.
-      --
-      --  OUR OWN CLAIM IS NOT AN OBSTACLE: if this unit's port dispatched it at
-      --  this very treat, eating it here finishes the job early and the task
-      --  fails harmlessly on "target was gone".
       local claim = petports_claimGet("drop:" .. tostring(dropId))
       local claimed = claim ~= nil and (claim.expires or 0) > world.time()
 
@@ -5763,9 +2300,6 @@ local function runAndMunch(dt, task)
           local held = tonumber(taken.count) or 1
           local eaten = 0
 
-          --  SPARING, exactly as everywhere else: a treat worth more than the
-          --  remaining headroom is declined whole rather than half-eaten, and
-          --  the refusal ends the meal.
           while eaten < held do
             local meal = petports_feedFuel({
               name = taken.name, count = 1, parameters = taken.parameters
@@ -5791,32 +2325,14 @@ local function runAndMunch(dt, task)
               name = taken.name, count = left, parameters = taken.parameters
             }
 
-            --  self.anchorId IS VANILLA'S OWN FIELD, not one of ours.
-            --  groundPet's setAnchor() stores the port's entity id there and
-            --  updateAnchor() re-verifies it every second, which is the same
-            --  field the headpat send in petports_contract.lua uses. Reading it
-            --  beats introducing a second copy of the same answer.
-            --
-            --  AN ORPHAN WITH NO LIVE PORT PUTS IT BACK instead, which the
-            --  `and` below arranges by falling through: there is nobody to hand
-            --  cargo to, and the floor is strictly better than destroying it.
             local port = self.anchorId
 
             if munchMayHold(task) and port ~= nil and world.entityExists(port) then
-              --  THE PORT OWNS CARGO, so the remainder is handed over rather
-              --  than held here. Same loss window the collect report carries
-              --  and documented there: takeItemDrop has already destroyed the
-              --  world drop, so a message that never lands is an item gone.
-              --  receiveCargo logs an error rather than swallowing it.
               world.sendEntityMessage(port, "petports_cargoHandoff", {
                 item = remainder,
                 unit = entity.uniqueId()
               })
             else
-              --  BACK ON THE FLOOR. Not a loss: it is an ordinary drop at the
-              --  unit's feet, and either collection or fuelGroundWork takes it
-              --  on a later tick. Spawned rather than kept so the one cargo
-              --  slot stays free for the errand in progress.
               local okBack = pcall(world.spawnItem, remainder, here)
 
               if not okBack then
@@ -5826,8 +2342,6 @@ local function runAndMunch(dt, task)
             end
           end
 
-          --  ONE DROP PER PASS. The unit is very likely full now, and the next
-          --  pass is a second away.
           return
         end
       end
@@ -5835,71 +2349,14 @@ local function runAndMunch(dt, task)
   end
 end
 
---------------------------------------------------------------------------------
---  ASTERITE MINING EFFECTS
---------------------------------------------------------------------------------
---
---  UP HERE BECAUSE THE ACT IS BELOW, AND THAT IS THE WHOLE REASON.
---
---  These were written beside the console probe at the end of the file, where
---  petports_asteriteReach lives -- and that one is FINE there, because it is a
---  global and a global resolves at call time. These are locals, and a local
---  used above its own declaration is a nil GLOBAL that only throws when the
---  path fires: in this case the first time a unit actually mined something.
---  petports_localorder.py flags exactly this and flagged exactly this.
---
---  NOTE WHAT IT DID NOT FLAG: the three constants below. The linter tracks
---  CALLS, so `asteriteEffects()` was caught and `ASTERITE_SWING_PERIOD` was
---  not, even though both were equally broken.
 
---  HOW LONG A SWING TAKES, AND HOW MANY SWINGS A DEPOSIT IS WORTH.
---
---  FOUR A SECOND. The count is not a constant at all -- it is the matmod's own
---  `health`, which for asterite is 4 -- so a deposit takes health/4 seconds to
---  mine and a tougher surface mod would take proportionally longer with no
---  number changed here. That is the same principle as reading itemDrop,
---  miningSounds and miningParticle off the matmod: the ore describes itself.
---
---  THE SWINGS ARE NOT DAMAGE. Nothing is being worn down -- the removal is a
---  single placeMod at the end, and the swings exist so that mining LOOKS like
---  mining rather than like a deposit blinking out of existence. If the mine is
---  interrupted at swing three, nothing has happened and nothing needs undoing,
---  which is a property worth keeping.
---
---  A FLOOR OF ONE, because a matmod with health 0 or no health at all would
---  otherwise complete before a single spark was cast.
 local ASTERITE_SWING_PERIOD = 0.25
 local ASTERITE_SWINGS_MIN = 1
 
---  Particles per swing. Enough to read as a burst, few enough that four of
---  them in a second is not a smoke screen.
 local ASTERITE_SPARKS = 6
 
---  HOW HARD TO HIT THE PLACEHOLDER TO MAKE IT GO.
---
---  ADDED TO ITS OWN health, which is 0, so the blow is normally 1 -- and any
---  positive number would do. The margin exists so that raising the
---  placeholder's health does not silently leave it standing, and so the
---  damage-table factor for "blockish" cannot land the blow exactly on the
---  threshold rather than past it.
---
---  OVERKILL IS FREE HERE, AND ONLY HERE. petports_cleared declares no
---  breaksWithTile, so tileDamageParameters returns ITS pool alone -- the host
---  block is not in the sum and cannot be hurt by this no matter how large the
---  number. That is not true of any other tile this mod touches.
 local ASTERITE_CLEAR_MARGIN = 1
 
---  WHAT THIS ORE SOUNDS AND LOOKS LIKE BEING MINED, READ OFF ITS OWN MATMOD.
---
---  Returns swings, particle, sounds. Nothing here names asterite, and that is
---  the whole point: a second surface-mod ore gets its own noises for free.
---
---  MINING SOUNDS MAY BE RELATIVE TO THE MATMOD FILE. MaterialDatabase resolves
---  them with AssetPath::relativeTo(file, _1) when it loads the mod, but
---  root.modConfig hands back the RAW config -- so a matmod that wrote
---  "ice_break1.ogg" beside itself gives us a path the sound action cannot
---  find. asterite happens to use absolute paths and would never have shown
---  this; the next mod along might not.
 local function asteriteEffects(modName)
 	local swings = ASTERITE_SWINGS_MIN
 	local particle = nil
@@ -5921,10 +2378,6 @@ local function asteriteEffects(modName)
 	if type(mod.config.miningSounds) == "table"
 	   and #mod.config.miningSounds > 0 then
 
-		--  THE DIRECTORY THE MATMOD LIVES IN, for resolving relative entries.
-		--  nil if the binding does not hand back a path, in which case a
-		--  relative sound is passed through unchanged and simply does not play
-		--  -- which is the right failure for a cosmetic.
 		local base = nil
 		if type(mod.path) == "string" then
 			base = mod.path:match("^(.*/)[^/]*$")
@@ -5948,25 +2401,6 @@ local function asteriteEffects(modName)
 	return swings, particle, sounds
 end
 
---  TELL EVERY CLIENT TO DRAW A BEAM AT THIS TILE.
---
---  ONE MESSAGE PER MINE. The endpoint is a FIXED TILE and the swing train is
---  deterministic, so the whole animation is described in one send and the
---  overlay runs it off its own clock. The relocator has to chase a moving
---  monster and that is why its beam is a coroutine; ours does not.
---
---  NOTHING IS SENT TO STOP IT. The entry carries its own end time and the
---  overlay drops it there, so a unit that dies or is retired mid-beam leaves
---  no orphan drawable behind. That property is why there is no uninit half to
---  this and no heartbeat.
---
---  world.players() AND NOT world.playerQuery, the same choice publishBubble
---  makes: there is no distance argument to get wrong, and the overlay culls by
---  range on the drawing side where the player's own position is known.
---
---  FAILURE IS LOGGED AND SWALLOWED. The beam is scenery. A mine that works
---  invisibly is worth far more than a mine that fails because a cosmetic
---  could not be published.
 local function publishBeam(centre, swings, period)
 	local ok, players = pcall(world.players)
 	if not ok or players == nil then return end
@@ -5977,14 +2411,6 @@ local function publishBeam(centre, swings, period)
 	end
 end
 
---  ONE SWING'S WORTH OF NOISE AND SPARKS, AT THE TILE.
---
---  AT THE TILE AND NOT AT THE UNIT, because the unit may be eight tiles away
---  and the tile is what the player is looking at.
---
---  FAILURE IS LOGGED AND SWALLOWED. This is scenery; a mine that works
---  silently is worth far more than a mine that reports failed because a
---  cosmetic did not spawn.
 local function asteriteSwingEffect(centre, particle, sounds)
 	local reap = {}
 
@@ -5998,11 +2424,6 @@ local function asteriteSwingEffect(centre, particle, sounds)
 	end
 
 	if sounds ~= nil then
-		--  ONE ACTION WITH ALL SIX OPTIONS, NOT SIX ACTIONS. A sound action
-		--  picks ONE of its options at random, which is exactly what six
-		--  interchangeable break noises are for -- petports_medicburst splits
-		--  them into two actions precisely because those two are meant to
-		--  LAYER, and these are not.
 		reap[#reap + 1] = { action = "sound", options = sounds }
 	end
 
@@ -6017,37 +2438,6 @@ local function asteriteSwingEffect(centre, particle, sounds)
 	end
 end
 
---  HAVE WE ALREADY GONE PAST THIS WAYPOINT?
---
---  A jump lands where the physics puts it, not where the plan drew it, and the
---  miss is usually a fraction of a tile in either direction. Measured over one
---  round trip, 2026-09-11:
---
---      at [5853.32,1185.8]  Land targets [5853,1185.8]   0.32 behind
---      at [5847.18,1181.8]  Land targets [5847,1181.8]   0.18 behind
---      at [5884.92,1167.8]  Land targets [5885,1167.8]   0.08 short
---
---  The arc skip loop consumes only Arc edges and breaks on the Land, and the
---  landing check that follows measures the gap IN Y ONLY. So an overshoot is
---  never noticed: the unit holds a waypoint that is now behind it, walks back
---  to it, then turns around and carries on. Consistently, on every jump that
---  went slightly long.
---
---  PAST IT IN THE DIRECTION THE PATH CONTINUES, which is the whole test. Not
---  "past it in the direction we were moving" -- a unit that lands moving
---  right on a path that turns left has not overshot anything. The following
---  edge is where the route goes next, so the sign of its offset from this
---  waypoint IS the forward direction, and it comes from the plan rather than
---  from the unit's momentary velocity.
---
---  ON THE SAME SURFACE ONLY. A Land edge a real step below is a drop the unit
---  still has to make, and consuming it would skip the descent rather than a
---  redundant walk. PLAN_SURFACE_TOLERANCE is the same number the landing check
---  uses to decide the plan is still reachable from here.
---
---  AND NEVER THE LAST EDGE. With no following edge there is no forward
---  direction to be past, and the final waypoint is the destination -- arriving
---  near it is exactly what the unit is for.
 local function arcPastWaypoint(edges, index, here)
 	local edge = edges[index]
 	local following = edges[index + 1]
@@ -6073,69 +2463,10 @@ local function arcPastWaypoint(edges, index, here)
 	return ((here[1] - target[1]) * forward) > 0
 end
 
---  BALANCED ON A CORNER, WHICH IS A POSITION NOTHING CAN PATH OUT OF.
---
---  SEEN 2026-09-11, and the screenshot is the whole explanation: the chassis
---  poly is a chamfered octagon, and a drone came to rest with ONE CHAMFER
---  CORNER touching the corner of a stepped ledge. Both of the things the unit
---  reports about itself were true and they contradict each other:
---
---      onGround  true    there IS a contact, so the engine is satisfied
---      standable false   there is no COLUMN under the body, so we are not
---
---  Everything downstream then behaves correctly and uselessly. A* snaps the
---  route's origin to the surface below -- 1.19 tiles down, measured -- so every
---  plan's first move is a descent the unit is already refusing; the drop path
---  declines it because a solid step is not a platform to pass through; and the
---  jump stalls because the Jump edge's source is not where the unit is. The
---  recovery ladder then ran a coarse leg over and over at a unit that could not
---  travel a single tile.
---
---  SO THE FIX IS PHYSICAL AND IT BELONGS FIRST. No route exists from a corner,
---  so nothing further up the ladder can work until the unit is off it. This
---  runs before the coarse leg for that reason.
---
---  setPosition AND NOT A CONTROL INPUT. dd.pathing.setposition: controlDown
---  starts an unobservable engine fall-through state, and steering is exactly
---  what does not work here -- a corner perch has no direction that is downhill.
---  Placing the body is the only thing that reliably ends it.
---
---  THE DESTINATION IS A REAL STANDING COLUMN, resolved by the same resolver
---  every other target uses, so the unit cannot be nudged from one bad perch
---  onto another.
---
---  AND IT IS CAPPED SHORT. Two tiles is enough to step off any corner and small
---  enough that nobody watching reads it as a teleport. A perch with nothing
---  standable within two tiles is a genuinely different problem and is left to
---  the rungs below.
---  LOOK AHEAD FOR LIQUID THIS CHASSIS MAY NOT ENTER.
---
---  Vanilla's platformer A* costs tile collision and nothing else, so a surface
---  route across a lava pool is a good path as far as the search is concerned.
---  This is the walking unit's own check: a few tiles in front, at foot level
---  and one below, for anything petports_liquidDenied refuses.
---
---  FOOT LEVEL AND ONE BELOW, because a pool the unit is about to step down
---  into does not register at the height it is currently standing at.
---
---  FROM THE LEADING EDGE OF THE BODY, not from its centre. The centre is most
---  of a tile back from the part that goes in first.
 local LIQUID_LOOK_AHEAD = 3
 
---  HOW FAR AHEAD THE SCAN LOOKS FOR THE FAR SIDE. A SEARCH BOUND, NOT A
---  CAPABILITY LIMIT -- what a unit can actually clear is decided by its own
---  jump ceiling below, and this only has to be wide enough not to give up
---  before that does.
 local LIQUID_SCAN_SPAN = 10
 
---  Fallback horizontal launch speed, used only when the chassis does not
---  report one.
---
---  SPEED HELPS. A faster launch crosses the same gap in LESS airtime, so it
---  needs LESS lift, so the jump ceiling stops it later rather than sooner.
---  Reading the chassis value instead of picking a number is worth roughly half
---  the range again: at 6 the ceiling allows about 4.5 tiles of travel, at 9 it
---  allows about 6.75.
 local LIQUID_HOP_VX = 6
 
 local function deniedLiquidAt(point)
@@ -6144,17 +2475,6 @@ local function deniedLiquidAt(point)
 	return petports_liquidDenied(liquid[1]) == true
 end
 
---  THE HOP TEST, ONE FUNCTION, 2026-09-12l (dd.locomotion.hoppable; Lofty:
---  "when we receive a path from the planner, if it has an obstacle we can
---  reasonably jump over, we detect that and jump over it"). This is the
---  decision avoidLiquidAhead used to make inline, taken out so the survey
---  probe can ask exactly the same question of a planner path that walks
---  through a denied liquid: from `here` (a standing position) heading
---  `dir`, is there a denied span within reach, a dry landing past it, and
---  an arc within this chassis's jump that clears it? Returns landing, vx,
---  vy, entry, exit; or nil, nil, nil, entry, exit, reason when there is a
---  span but no hop; or all nil when there is no span ahead at all. The
---  probe and the walk use the same numbers by construction.
 function petports_liquidHopFrom(here, dir)
 	local bounds = mcontroller.boundBox()
 	if type(bounds) ~= "table" or #bounds < 4 then return nil end
@@ -6221,13 +2541,6 @@ function petports_liquidHopFrom(here, dir)
 end
 
 local function avoidLiquidAhead(stateData)
-	--  A HOP LEAVES THE PLAN BEHIND. The route was drawn through the pool --
-	--  vanilla A* costs collision only -- so after clearing it the current edge
-	--  targets a point on the far side, behind the unit. Left alone it turns
-	--  around and hops back to reach it, then forward again. A fresh search
-	--  from the landing spot goes the right way. Deferred to the first grounded
-	--  tick after being airborne, because the pather cannot search mid-air and
-	--  the launch tick itself is still grounded.
 	if stateData.liquidHopPending then
 		if not mcontroller.onGround() then
 			stateData.liquidHopAirborne = true
@@ -6258,10 +2571,6 @@ local function avoidLiquidAhead(stateData)
 			sb.printJson(landing[1] - here[1]), sb.printJson(landing[2] - here[2]),
 			sb.printJson(vx), sb.printJson(vy))
 
-		--  VERTICAL BY setVelocity, HORIZONTAL BY CONTROL. The walk
-		--  mover only ever drives x, through controlApproachXVelocity,
-		--  so a vertical set survives it; x has to be issued the same
-		--  way or the mover's own control wins the axis.
 		local parameters = mcontroller.baseParameters()
 		mcontroller.setVelocity({ vel[1], vy })
 		mcontroller.controlApproachXVelocity(vx,
@@ -6271,17 +2580,6 @@ local function avoidLiquidAhead(stateData)
 		return true
 	end
 
-	--  NO HOP -- too wide, too high, nowhere dry to land, or the arc clips
-	--  something. STOP ANYWAY, which is the part that matters: the unit is one
-	--  step from walking into something that kills it, and standing still is a
-	--  strictly better outcome than any route this tick can offer.
-	--
-	--  The progress ladder is what gets it moving again -- no net displacement
-	--  strikes out into a coarse leg, then a vent -- and both of those route
-	--  around rather than through.
-	--  A CONTROL, NOT setVelocity. The engine applies control inputs at the
-	--  end of the tick and the LAST one on an axis wins; this function runs
-	--  after the mover precisely so that this is the last one.
 	mcontroller.controlApproachXVelocity(0, mcontroller.baseParameters().groundForce)
 
 	if stateData.liquidStopSaid ~= entry then
@@ -6296,9 +2594,6 @@ local function avoidLiquidAhead(stateData)
 	return true
 end
 
---  WHICH BOTTOM CORNER IS ON SOMETHING. A perched body is onGround with no
---  standable footing under its middle, so at most one corner is carrying
---  it. Sampled just below and just inside each bottom corner of the box.
 local function perchFooting()
 	local here = mcontroller.position()
 	local box = mcontroller.boundBox()
@@ -6308,18 +2603,9 @@ local function perchFooting()
 	return left, right
 end
 
---  WALK OFF THE CORNER, 2026-09-12i (Lofty: "figure out which corner of the
---  known hitbox is the one that's on a ledge and just prefer moving to that
---  direction"). MEASURED 14:40..14:48: 76 placements onto the body's own
---  column, every one "footing under the centre false", every one slid
---  straight back onto the corner. The body is perched, so one bottom
---  corner is on something: walk toward it for UNPERCH_WALK_TIME. Neither
---  corner on anything is a corner-of-the-poly perch on a tile edge: hop
---  the way the body faces. 12k: the column placement that used to be the
---  fallback is gone -- 44 episodes, 0 fallbacks.
-local UNPERCH_DEBOUNCE = 1.0  --  seconds dwelt on a corner before acting; cut by mistake in 12k, back in 12m
+local UNPERCH_DEBOUNCE = 1.0
 local UNPERCH_WALK_TIME = 0.6
-local UNPERCH_DWELL = 0.5   --  tiles the body may drift while still counting as perched (12j)
+local UNPERCH_DWELL = 0.5
 
 local function unperchWalk(stateData)
 	local left, right = perchFooting()
@@ -6344,7 +2630,6 @@ local function unperchWalk(stateData)
 end
 
 local function unperchWatch(dt, stateData)
-	--  A WALK IN PROGRESS IS APPLIED EVERY TICK until it lapses.
 	local walk = stateData.unperchWalk
 	if walk ~= nil then
 		if world.time() < walk.until_ then
@@ -6370,11 +2655,6 @@ local function unperchWatch(dt, stateData)
 		return
 	end
 
-	--  DWELLING, NOT PASSING, 2026-09-12j (Lofty: false positives on sloped
-	--  terrain). onGround-but-not-standable is also true mid-slope, where
-	--  the body is moving fine. The timer counts only while the body stays
-	--  within UNPERCH_DWELL of where it started counting; real movement
-	--  resets it.
 	local here = mcontroller.position()
 	local anchor = stateData.perchAnchor
 	if anchor == nil or world.magnitude(here, anchor) > UNPERCH_DWELL then
@@ -6397,90 +2677,23 @@ end
 local function petportsTaskUpdateInner(dt, stateData)
   local task = stateData.task
 
-  --  BEFORE ANY EARLY RETURN BELOW. Every one of them is a tick the unit spent
-  --  on this task, so a task that exits through one has still cost fuel.
   burnFuel(dt, task)
 
-  --  BESIDE burnFuel AND FOR THE SAME REASON: it must run on every tick this
-  --  state holds the unit, whichever branch below the tick leaves through.
-  --  Nothing it does can change what that branch decides.
   runAndMunch(dt, task)
 
-  --  BACKGROUND SURVEYING FOR COARSE NAV, AND ONLY WHILE IDLE.
-  --
-  --  THE SAME PREDICATE runAndMunch USES, and deliberately not a list of task
-  --  types: an idle unit is one with no task, or one carrying the leash's hold
-  --  task, and testing that directly is what stops this breaking silently the
-  --  next time a work generator is added.
-  --
-  --  PUMPED FROM HERE FOR THE REASON petports_think IS. This runs on every tick
-  --  the action state holds the unit, which includes station-keeping -- and an
-  --  idle unit standing on its port is precisely the one with cycles to spare.
-  --  petBehavior.run() would have been wrong for the same reason it was wrong
-  --  for the spinner: its cadence is the querySurroundings cooldown, not a tick.
-  --
-  --  THE CLAIM OWNER IS THE UNIT ITSELF, not its port. A survey is not port
-  --  work -- it is not dispatched, nothing reports it, and the unit may be
-  --  surveying ground outside its own network. entity.uniqueId() is stable for
-  --  the unit's life and releases naturally through the claim TTL if it dies
-  --  mid-sweep.
-  --
-  --  IT CANNOT DELAY A DISPATCH. A sweep step is one A* explore call and the
-  --  branch below is untouched by it; a unit handed real work simply stops
-  --  being idle, and the half-finished sweep is abandoned by the next
-  --  navSweepStart rather than held open.
-  --  AND ON TASK TOO, WHENEVER THE UNIT'S OWN PATHER IS NOT SEARCHING.
-  --  2026-09-05: a farming unit is never idle, so its base was never
-  --  surveyed and every route was the direct search. A sweep step is one
-  --  explore call per slot; the only thing it competes with is a live A*
-  --  on this same unit, so that is the one time it yields. Walking a found
-  --  path costs no search and the survey runs alongside it.
   local finder = self.pather and self.pather.finder
   local searching = finder ~= nil and finder.aStar ~= nil and not finder.hasPath
 
-  --  TOLD, NOT SKIPPED, 2026-09-12d (Lofty). Skipping the tick froze the
-  --  flush, the graph build and the overlay for the length of every search;
-  --  the tick now yields only its probes. See navTickInner.
   if petports_navTick ~= nil then
     petports_navTick(dt, entity.uniqueId(), searching and not munchMayHold(task))
   end
 
-  --  HAND THE STATE BACK WHEN REAL WORK ARRIVES.
-  --
-  --  A leash task is not dispatched work: it is not in self.petportsTask, it
-  --  holds no claim, and nothing is owed a report for it. So the unit can be
-  --  carrying one out at the exact moment the port assigns a real task -- which
-  --  is the ordinary case for a tethered unit, since it is walking home most of
-  --  the time it is not working.
-  --
-  --  petBehavior CANNOT preempt this from its side. Its pick loop skips any
-  --  action whose state is already the running one, and a real task and a leash
-  --  task are both "petportsTaskAction" -- so the higher score is computed,
-  --  compared, and then discarded. Leaving voluntarily is the only way the swap
-  --  can happen at all.
-  --
-  --  Returning true WITHOUT reporting: the leash was never dispatched, and
-  --  reporting it would be reporting work nobody asked for.
   if task.port == nil and self.petportsTask ~= nil then
     sb.logInfo("UNIT leaving station-keeping: task %s was dispatched",
       tostring(self.petportsTask.id))
     return true
   end
 
-  --  A TARGET THAT LEAVES THE NETWORK IS NOT WORTH FOLLOWING.
-  --
-  --  Fish, animals and patients can move out of coverage under their own
-  --  power (TRACKED_TARGETS.moves); a crop, a crate, a machine or a drop
-  --  cannot. Fish-only until 2026-09-07f, and a player being followed is the
-  --  case that made it general.
-  --
-  --  CHECKED EVERY TICK, NOT AT ARRIVAL. A fish chasing a lure covers ground
-  --  fast, and the point of this is to give up EARLY: a unit that follows one
-  --  out of coverage has left its own network to chase something it was never
-  --  going to reach, which is exactly the wandering the leash exists to stop.
-  --
-  --  petports_inNetwork RETURNS TRUE WHEN THE UNIT HAS NO NETWORK YET, so this
-  --  cannot strand a task on a unit that has not been told its rects.
   local movingId, movingRow = trackedEntity(task)
   if movingId ~= nil and movingRow.moves
      and world.entityExists(movingId) then
@@ -6494,45 +2707,10 @@ local function petportsTaskUpdateInner(dt, stateData)
     end
   end
 
-  --  HAND THE STATE BACK WHEN BEACHED, FOR THE SAME STRUCTURAL REASON AS THE
-  --  LEASH YIELD ABOVE.
-  --
-  --  petports_petBehavior runs plain `%a+State` scripts only when NO action
-  --  state holds the unit:
-  --
-  --      if self.actionState.stateDesc() == "" and not self.state.update(dt)
-  --
-  --  So petportsFlopState can never be reached while this action is running,
-  --  and an aquatic unit beached MID-TASK -- which is the only way it can
-  --  happen, since the port refuses to spawn one into a medium it cannot
-  --  occupy -- would stand still until the medium check collected it. Leaving
-  --  voluntarily is the only way the flop can happen at all.
-  --
-  --  REPORTED, UNLIKE THE LEASH YIELD ABOVE. A leash was never dispatched so
-  --  nobody is owed an answer; a real task WAS, and abandoning it silently
-  --  leaves the claim to be collected by TTL. The return path is the ordinary
-  --  one, so the port hears about it through the same channel as any other
-  --  abandonment.
-  --
-  --  CHEAP ENOUGH TO RUN PER TICK: petports_outOfMedium short-circuits on
-  --  petports_freeMover for every walking chassis, which is a single
-  --  baseParameters read, and only a free mover pays for the bounds test.
-  --  RE-ASSERT THE SWIM MODE'S PHYSICS BEFORE ANYTHING ELSE READS THEM.
-  --
-  --  controlParameters LAPSES EVERY TICK, which is why this is here rather than
-  --  a one-shot write beside the mode decision in freshPather. See
-  --  petports_assertSwimMode -- mcontroller.applyParameters does not exist on a
-  --  monster, so there is no persistent write available.
-  --
-  --  A NO-OP FOR EVERY OTHER CHASSIS and for a switchable one in `land`: it
-  --  returns on the gravitySwitchable flag, then on the mode.
   petports_swimModeTick()
 
   local beached = petports_outOfMedium()
 
-  --  A BRUSH, NOT A BEACHING, 2026-09-07m: back off along `away` for
-  --  BRUSH_BACKOFF seconds, release any string-pull and coarse leg so the
-  --  line that led here is not re-flown, and let the next tick re-route.
   if beached.checked and beached.brush then
     local away = beached.away or { 0, 0 }
     local length = math.sqrt(away[1] * away[1] + away[2] * away[2])
@@ -6572,59 +2750,8 @@ local function petportsTaskUpdateInner(dt, stateData)
     return true
   end
 
-  --  PUMP THE THINKING INDICATOR HERE, NOT FROM petBehavior.run().
-  --
-  --  run()'s cadence is NOT verified. Vanilla groundPet.lua may only call it on
-  --  the querySurroundings cooldown, which is 1s in the monstertype -- that
-  --  would feed a per-tick dt once a second and stretch every timer inside the
-  --  pump by roughly twelve. Observed as a forced spinner that would not expire.
-  --
-  --  This update IS verified per-tick with a real dt: traceTimer counts down by
-  --  it and produces exactly one line per second. Use the hook with evidence
-  --  behind it.
-  --
-  --  Scoping the pump to a task costs nothing, because thinking only ever
-  --  happens inside one. Pings raised later in this same call are consumed on
-  --  the NEXT tick; the grace window absorbs that.
   petports_thinkPump(dt)
 
-  --  TELL THE PORT WE ARE ACTUALLY UNDER WAY.
-  --
-  --  The port knows only two things about a task: that it dispatched one, and
-  --  how it ended. Both crosshair colours it could derive from that -- yellow on
-  --  dispatch, red on failure -- so a unit still searching for a route and a
-  --  unit halfway there looked identical from outside. This is what green keys
-  --  off.
-  --
-  --  MOVEMENT IS THE SIGNAL, NOT THE PATHER'S INTERNAL STATE. "Has a path" is
-  --  genuinely hard to answer here -- PathFinder does not latch, a plan can span
-  --  several vent legs, and routing flips true and false several times over one
-  --  journey. Distance covered has none of that ambiguity: a unit that has moved
-  --  is a unit that found a way.
-  --
-  --  UP HERE, ABOVE EVERY BRANCH, AND THAT IS THE WHOLE FIX. This used to live
-  --  inside the trace block near the bottom of this function, which is reached
-  --  only when the unit is on a direct approach and has not yet arrived. Three
-  --  paths return before it:
-  --
-  --    the routing branch      probing exits -- correct to skip, nothing moves
-  --    the vent-leg branch     WALKING TO A VENT MOUTH -- real, visible motion
-  --                            that never counted, so the marker stayed yellow
-  --                            through the approach, the hop, and every leg
-  --                            after it
-  --    the settle branch       a drop still falling -- correct to skip
-  --
-  --  The middle one is the bug Lofty saw. It is also the case the green marker
-  --  exists for, since a unit that vanishes into a vent is precisely when a
-  --  player wants to be told the network is still on it.
-  --
-  --  ONCE PER TASK. reportedMoving latches, so this costs one message per task
-  --  and stops testing afterwards. Fire-and-forget on this side: the port either
-  --  updates a cosmetic or it does not, and a lost message costs a colour rather
-  --  than a decision.
-  --
-  --  NOT FOR A LEASH. A station-keeping task has no port to tell -- and nothing
-  --  is owed a report for one either way.
   if not stateData.reportedMoving and task.port ~= nil then
     stateData.movingTimer = (stateData.movingTimer or 0) - dt
 
@@ -6651,85 +2778,12 @@ local function petportsTaskUpdateInner(dt, stateData)
     end
   end
 
-  --  VANILLA DISCARDS THE PATH ON EVERY JUMP. THIS IS THE FIX.
-  --
-  --  /scripts/pathing.lua, PathFinder:update:
-  --
-  --      if self.hasPath and self.stuckTimer > 0.5 then
-  --        self:reset()
-  --      end
-  --      self.stuckTimer = self.stuckTimer + script.updateDt()
-  --
-  --  and stuckTimer is zeroed in exactly ONE place, further down the same
-  --  function: when currentEdgeIndex changes. So the timer does not measure
-  --  being stuck, it measures TIME SPENT ON ONE EDGE -- and any edge lasting
-  --  more than half a second destroys the whole path.
-  --
-  --  Walk edges are a tile long and advance constantly, so flat ground never
-  --  trips it. Arc and Land do: moveArc's airborne branch applies velocity and
-  --  does not advancePath until passedTarget comes true, and moveLand waits for
-  --  onGround. Both are airborne waits, and any jump worth planning is longer
-  --  than 0.5s. moveArc's run-up branch has the same shape on the ground.
-  --
-  --  It then compounds, which is why the symptom is a multi-second freeze
-  --  rather than a stutter. PathFinder:canPathfind() is
-  --
-  --      return mcontroller.onGround() or not gravityEnabled
-  --
-  --  so find() refuses to start a search while airborne. The path is discarded
-  --  MID-FLIGHT, nothing can replace it until the unit lands, the arc finishes
-  --  ballistically with nothing steering it, and only then does a cold A* run.
-  --  Measured at 3.9s of a motionless unit, having landed short of the arc.
-  --
-  --  THE FIX IS TO CORRECT THE PREDICATE, NOT THE TIMEOUT. Raising 0.5 to some
-  --  larger number just moves the threshold; the timer would still be measuring
-  --  the wrong thing, and a genuinely wedged unit would take proportionally
-  --  longer to recover. Stuck means NOT MOVING, so measure that: zero the timer
-  --  whenever the unit has actually displaced, and let it run when it has not.
-  --
-  --  Vanilla's reset still fires for a unit that truly cannot move -- which is
-  --  the case the timer was put there for, and the only one it now catches.
-  --
-  --  Done here rather than by overriding PathFinder:update, which would mean
-  --  carrying a copy of vanilla's function and re-checking it against every
-  --  Starbound release.
-  --  A GROUNDED UNIT ON AN AIRBORNE EDGE THAT IS NOT MOVING. VANILLA CANNOT TELL.
-  --
-  --  PathFinder:update invalidates a path when the TARGET moves more than two
-  --  tiles, and never when the UNIT does. Nothing anywhere checks whether the
-  --  unit is still standing where the plan says it is.
-  --
-  --  PRE-MOVE SAMPLE. THE STATE THE MOVERS ACTUALLY SEE.
-  --
-  --  The `pathing at` line further down runs AFTER approachPoint, so everything
-  --  it reports is POST-move -- the state a mover saw on a given tick is the
-  --  PREVIOUS line's end state. That is not a detail: it made a srcDist of 0.52
-  --  look like a takeoff that should have happened, when moveJump never ran at
-  --  that position at all. The two lines together bracket the mover, so a value
-  --  can be attributed to the tick that actually used it.
   local preFinder = self.pather and self.pather.finder
   if TASK_TRACE_MOVES and preFinder ~= nil and preFinder.hasPath then
     local preEdge = preFinder.edges and preFinder.currentEdgeIndex
       and preFinder.edges[preFinder.currentEdgeIndex]
     local preSource = preEdge and preEdge.source and preEdge.source.position
 
-    --  THE DESTINATION, NOT JUST THE DISTANCE FROM THE SOURCE.
-    --
-    --  srcDist alone cannot tell a unit that is BLOCKED from one whose edge
-    --  destination is somewhere it will never satisfy -- both read as a frozen
-    --  number. Measured, on a leash walk home across an open platform:
-    --
-    --    pre-move at [1202.8,706.8]: action Walk edge 5 of 6
-    --      srcDist 1.79626 velocity [0,-1.53333] onGround true
-    --
-    --  sixty times, unchanged, x-velocity decayed to exactly zero. With no
-    --  destination in the line there is no way to see whether the unit had
-    --  already passed it, was short of it, or was aiming at a point off the
-    --  platform entirely.
-    --
-    --  dstDist and dx are both here on purpose: the magnitude says how far, the
-    --  signed x says which SIDE, and "already past it" is the case a walker can
-    --  stall on without anything looking wrong.
     local preDest = preEdge and preEdge.target and preEdge.target.position
     local here = mcontroller.position()
 
@@ -6747,84 +2801,8 @@ local function petportsTaskUpdateInner(dt, stateData)
       tostring(mcontroller.onGround()))
   end
 
-  --  AHEAD OF THE ARC BLOCK, AND UNGATED ON EDGE ACTION. The handover tick of a
-  --  walk-off is still on the Walk edge, so anything downstream of the arc
-  --  block's `action == "Arc"` test cannot see the interval being measured.
   flightTrace(dt, stateData)
 
-  --  AN ARC WAYPOINT THE UNIT CANNOT REACH. SKIP IT.
-  --
-  --  The planner over-estimates jump height. Measured on a straight-up hop:
-  --
-  --    takeoff                        711.375
-  --    planner's last arc waypoint    720.723   (9.348 tiles of rise)
-  --    physics, 45^2 / (2 * 120)                 8.438
-  --    observed apex                  720.125   (8.750)
-  --
-  --  So the final waypoint of an arc sits about 7% higher than the unit can
-  --  actually get. That is the "PathFinder's jump model is more optimistic than
-  --  the movement controller" problem, with a number on it.
-  --
-  --  It deadlocks because NEITHER AXIS CAN ADVANCE THE PATH:
-  --
-  --    passedTargetOnAxis(edge, 2)  the unit never reaches the target y, so
-  --                                 edgeDistance and targetDistance keep the
-  --                                 same sign and the product is never negative
-  --    passedTargetOnAxis(edge, 1)  a vertical arc has edgeDistance[1] == 0,
-  --                                 which the function's own `~= 0` guard
-  --                                 rejects outright
-  --
-  --  and moveArc calls controlApproachXVelocity(velocity[1], groundForce) with
-  --  velocity[1] = 0, actively braking x to zero -- so the unit cannot drift
-  --  sideways into passing it either. It rises, stops short, falls back to
-  --  exactly where it took off, lands still holding the same edge, and moveArc's
-  --  grounded branch then computes arcDelta = delta[1] = 0 and issues moveX(0)
-  --  forever.
-  --
-  --  Nudging the unit does not help: the `~= 0` guard is on the EDGE's own
-  --  geometry, not on where the unit is standing.
-  --
-  --  ONCE THE UNIT IS FALLING, ANY WAYPOINT STILL ABOVE IT IS UNREACHABLE.
-  --  Gravity is one-directional and there is no second jump mid-arc. So it is
-  --  safe to declare those edges passed and move on, which is what vanilla's
-  --  own advance does -- this only supplies the test it is missing. Descending
-  --  arcs put their waypoints BELOW the unit, so the loop breaks immediately
-  --  and normal flight is untouched.
-  --
-  --  Deliberately not a fix to the 7% over-estimate. That lives inside
-  --  world.platformerPathStart, and shrinking planned jumps to compensate is
-  --  how the smallJumpMultiplier mess started.
-  --  GROUNDED COUNTS TOO, AND THAT WAS THE HOLE.
-  --
-  --  The gate above was `not onGround() and falling`, which stops skipping at
-  --  the exact moment the leftover waypoints become permanently unreachable:
-  --  touchdown. Measured, on a stack of platforms:
-  --
-  --    [1210.11,712.8]  onGround TRUE   Arc edge 12   dst [1210.56,713.839]
-  --    [1210.54,712.8]  velocity 8.13   still Arc edge 12
-  --    [1211.49,712.8]  velocity 11.8   -> Land edge 14, already passed
-  --    [1212.48,712.303] onGround FALSE -- off the platform edge, falling
-  --
-  --  The unit landed a tile BELOW an arc waypoint it was still holding. Being
-  --  grounded, moveArc's grounded branch takes over, and that branch
-  --  repositions HORIZONTALLY ONLY -- so it set off toward the waypoint's x
-  --  across a 0.45 tile gap, accelerated to full run speed doing it, blew past
-  --  that node AND the Land node behind it, and ran off the platform. Eight
-  --  tiles down, grounded far from an airborne edge, stall detector fires,
-  --  replan, mirrored arc from the other side, forever.
-  --
-  --  A waypoint above a GROUNDED unit is exactly as unreachable as one above a
-  --  falling unit -- more so, since the unit is now standing on something. The
-  --  original reasoning applies unchanged; the predicate was just too narrow.
-  --
-  --  Still excluded: rising. A unit on its way up has not reached its apex and
-  --  its waypoints are legitimately ahead of it.
-  --  APEX AND TOUCHDOWN, logged every flight.
-  --
-  --  Pairs with the ARCPLAN dump at takeoff: that says where the planner
-  --  intended to go, this says where the unit actually went. One line each and
-  --  the plan-versus-physics gap is a subtraction rather than an inference.
-  --  Delete alongside ARCPLAN.
   local groundedNow = mcontroller.onGround()
 
   if not groundedNow then
@@ -6868,42 +2846,8 @@ local function petportsTaskUpdateInner(dt, stateData)
     stateData.wasGrounded = groundedNow
   end
 
-  --  THE ABOVE-ONLY TEST WAS THE HOLE, AND THE COMMENT ABOVE IT WAS ALREADY
-  --  RIGHT: "Landed. Whatever is left of the arc is over, whether the plan
-  --  agrees or not." The loop then did not do that -- it broke on the first
-  --  waypoint at or below the unit, which is EVERY waypoint when the unit
-  --  overshot and came down on top of something.
-  --
-  --  A waypoint below a grounded unit is not reachable by waiting. The unit is
-  --  standing on the thing that is in the way. Falling and grounded are
-  --  therefore different questions:
-  --
-  --    FALLING   only waypoints ABOVE are unreachable; the descending half is
-  --              still ahead and must be kept
-  --    GROUNDED  the flight is over; ALL of it is unreachable, in both
-  --              directions
-  --
-  --  RISING IS EXCLUDED IN BOTH, AND THAT NOW INCLUDES RISING WHILE GROUNDED.
-  --  There is one tick after takeoff where onGround is still true and the
-  --  launch velocity is already applied -- measured at [3768,1010.8] with
-  --  velocity [0,48.314] holding the first arc edge. Under the old predicate
-  --  that tick qualified as GROUNDED and every waypoint of the ascending arc
-  --  was above it, so the whole jump was one ordering accident away from being
-  --  skipped at the moment it began. It survived only because the skip runs
-  --  before moveJump advances onto the arc within the same tick. That is luck,
-  --  not a design, and it is now an explicit test.
   local arcFinder = self.pather and self.pather.finder
 
-  --  ONE PLACEMENT PER TICK, SHARED BY BOTH CALL SITES.
-  --
-  --  The arc-landing decision and the per-tick ground guard both call
-  --  tryPlanDrop, and after an arc landing they run in the SAME tick -- the arc
-  --  site drops, then the guard immediately re-reads a position that is already
-  --  mid-placement and considers dropping again. Observed as a paired
-  --  "dropped one platform" / "refused ... no platform above the floor to pass"
-  --  on one timestamp, which only stayed harmless because the second call found
-  --  nothing to pass. Two placements in one tick is exactly the multi-rung
-  --  descent the one-per-call rule exists to prevent.
   local droppedThisTick = false
   local arcEdge = nil
 
@@ -6958,8 +2902,6 @@ local function petportsTaskUpdateInner(dt, stateData)
         end
 
         if edge.action ~= "Arc" then
-          --  A NON-ARC EDGE NORMALLY ENDS THE SKIP -- unless the unit is
-          --  standing past it already. See arcPastWaypoint.
           if arcMode ~= "GROUNDED"
              or not arcPastWaypoint(edges, index, mcontroller.position()) then
             stopReason = "edge " .. tostring(index) .. " is a " .. tostring(edge.action)
@@ -6985,7 +2927,6 @@ local function petportsTaskUpdateInner(dt, stateData)
 
           local above = edge.target.position[2] > mcontroller.position()[2]
 
-          --  FALLING keeps the descending half. GROUNDED keeps nothing.
           if arcMode == "FALLING" and not above then
             stopReason = "descending half reached -- target is below us and still flyable"
             break
@@ -7008,16 +2949,6 @@ local function petportsTaskUpdateInner(dt, stateData)
         tostring(arcFinder.edges and #arcFinder.edges),
         sb.printJson(mcontroller.position()))
 
-      --  THE TOUCHDOWN STOP LIVES HERE, 2026-09-13f -- the place the arc
-      --  mover's grounded branch names for it. MEASURED 21:47:57.066..57.230:
-      --  the airborne brake's last look was 0.55 tiles short of the Land at
-      --  [5853,1185.8]; the next tick the body was down at 5852.94 with vx
-      --  -5.64, this skip consumed the Land as passed, moveWalk took over
-      --  still carrying that speed, and the body left the one-wide platform
-      --  at 5852.44 -- past the Walk edge's own end. A Land means stop:
-      --  when GROUNDED consumes or halts on one, x is zeroed outright, the
-      --  same mechanism and reason as the airborne latch, and the next edge
-      --  starts from rest.
       if arcMode == "GROUNDED" and landPassed then
         local landVel = mcontroller.velocity()
         if math.abs(landVel[1]) >= LAND_BRAKE_STATIONARY then
@@ -7027,23 +2958,6 @@ local function petportsTaskUpdateInner(dt, stateData)
         end
       end
 
-      --  WHAT IS LEFT OF THE PLAN WAS COMPUTED FOR A POSITION THE UNIT IS NOT
-      --  IN, and only the grounded case can tell.
-      --
-      --  Skipping the dead arc is not on its own enough. The next edge is
-      --  normally the Land that the arc was supposed to deliver the unit to,
-      --  and moveLand accepts on HORIZONTAL distance alone -- so a unit four
-      --  tiles above its landing, with x within a tile, advances straight past
-      --  it and off the end of the path. PathFinder:update then returns false
-      --  from currentEdgeIndex > #edges, which reads as a lost path rather than
-      --  as the plan having been wrong.
-      --
-      --  Note this cannot produce a false arrival: arrival is decided by
-      --  PathMover:move's own onGround/targetDistance test before edgeMove ever
-      --  runs, not by the path running out. But a replan is both cheaper and
-      --  truthful, and it is the only thing that can actually get the unit
-      --  somewhere -- A* from where it is standing knows about the platform
-      --  under its feet, which the dead plan does not.
       if arcMode == "GROUNDED" and skipped > 0 then
         local nextEdge = arcFinder.edges[arcFinder.currentEdgeIndex]
         local nextTarget = nextEdge and nextEdge.target and nextEdge.target.position
@@ -7078,16 +2992,6 @@ local function petportsTaskUpdateInner(dt, stateData)
           stateData.stuckAnchor = nil
           stateData.airborneEdgeStall = 0
         elseif yGap > PLAN_SURFACE_TOLERANCE then
-          --  THE IMMEDIATE NEXT EDGE COMES FIRST, AND CLEARANCE CANNOT OVERRULE
-          --  IT. A clear walk six edges away is worth nothing if the step in
-          --  front of the unit is three tiles down.
-          --
-          --  This is also the answer to the churn worry that produced the
-          --  clearance test: a replan is not a loop, because PathFinder:find
-          --  starts every search from mcontroller.position(). A* cannot keep
-          --  handing back a route for a surface the unit is not on -- the route
-          --  always begins where the unit is. So refusing a plan costs one
-          --  search and never repeats for the same reason.
           sb.logInfo("UNIT ARC landed off-plan at %s: next edge %s targets %s, %s tiles off in y "
             .. "(tolerance %s) -- the plan's next step is not reachable from here, replanning "
             .. "(first walk %s, blocked %s)",
@@ -7116,8 +3020,6 @@ local function petportsTaskUpdateInner(dt, stateData)
             sb.printJson(yGap), tostring(walkIndex),
             sb.printJson(walkEdge.target.position))
         else
-          --  NO WALK EDGE NEAR ENOUGH TO TEST, and the next edge is reachable.
-          --  Nothing to sweep and nothing to object to, so the plan stands.
           sb.logInfo("UNIT ARC landed on-plan at %s: next edge %s targets %s, %s tiles off in y, "
             .. "no Walk edge within %s ground-level edges to sweep -- keeping the plan",
             sb.printJson(mcontroller.position()),
@@ -7127,44 +3029,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       end
     end
   else
-    --  THE ARRIVAL BRAKE LATCH IS CLEARED SEPARATELY, AND THE NESTING IS THE
-    --  WHOLE POINT.
-    --
-    --  IT USED TO SIT INSIDE `petportsLaunch ~= nil` AND THAT WAS A BUG WITH A
-    --  BODY COUNT. The two flags have the same lifetime -- both live exactly as
-    --  long as the arc -- but only one of them is only ever SET on a jump. The
-    --  arrival brake fires on any arc, including a walk-off fall, which has no
-    --  takeoff and therefore no launch record. So a fall that ended in the brake
-    --  latched petportsLanding and then failed its own clear, because the guard
-    --  above it asked about a record that was never written.
-    --
-    --  WHAT THAT COSTS, MEASURED 2026-09-01:
-    --
-    --      45.516  arrived at landing [2494,1164.8] (ahead -0.713623)   walk-off,
-    --              no launch record, no "launch record cleared" line follows
-    --      47.63   next flight, first tick the arc mover runs
-    --              [2510.02,1161.97] vx 8.00 -> 3.07 -> 0.00, medium AIR
-    --      47.96   grounded at [2510.02,1152.8], nine tiles of vertical drop,
-    --              1.98 short of its Land, stalled and replanned
-    --
-    --  A LATCHED BRAKE IS INVISIBLE. It logs once when it fires and never again;
-    --  the hold below it issues controlApproachXVelocity(0) silently on every
-    --  airborne tick thereafter and RETURNS ABOVE THE FRICTION ZEROING. So the
-    --  symptom is a unit that stops dead in mid-air on a later, unrelated
-    --  flight, with nothing in the log connecting the two.
-    --
-    --  IT ALSO EXPLAINS TWO WRONG DIAGNOSES. The same collapse was attributed
-    --  first to the planner-velocity steering in the airborne branch and then to
-    --  liquid drag at a waterline; deleting the first changed nothing and the
-    --  second was coincidence -- the brake bites on the first arc-mover tick of
-    --  a flight, which on one route happened to be the tick the body touched
-    --  water. Both readings were of one sample; the per-tick trace separated
-    --  them in one run by showing an identical collapse in dry air.
-    --
-    --  UNCONDITIONAL, AND IDEMPOTENT. This branch runs on every tick the pather
-    --  is not on an Arc -- most of a unit's life -- so clearing a flag that is
-    --  already nil is the ordinary case and costs nothing. Gating it on anything
-    --  is how it broke.
     if self.pather ~= nil and self.pather.petportsLanding ~= nil then
       sb.logInfo("UNIT ARCMOVER landing latch cleared at %s: the pather is on %s, not an Arc",
         sb.printJson(mcontroller.position()),
@@ -7173,30 +3037,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       self.pather.petportsLanding = nil
     end
 
-    --  THE LAUNCH RECORD LIVES EXACTLY AS LONG AS THE ARC DOES.
-    --
-    --  IT IS DIAGNOSTIC NOW, NOT CONTROL. Nothing steers x during a flight any
-    --  more -- see the airborne branch of petportsArcMover -- so no trajectory
-    --  depends on this record. It is kept because the line below is the only
-    --  place the log states what a flight ACTUALLY launched with, and that is
-    --  precisely the quantity the new ballistic behaviour is trusted to preserve.
-    --  Deleting the instrument in the same change that starts relying on what it
-    --  measures is how a regression goes unnoticed.
-    --
-    --  Stating the lifetime as a per-tick state check rather than hooking each
-    --  exit is deliberate: there are at least four ways off an arc -- the
-    --  mover's grounded last-edge branch, its advance loop running past the last
-    --  Arc, the skip loop stopping on a Land, and a path lost mid-flight -- and
-    --  only the first ever cleared this.
-    --
-    --  ONE PLACE, ONE RULE: not on an Arc edge, no launch record. That covers
-    --  every exit including ones not written yet.
-    --
-    --  A TAKEOFF TICK IS NOT AN EXIT. This block runs before edgeMove, so on the
-    --  tick a jump launches the current edge is still the Jump and the record
-    --  has not been written yet -- moveJump sets it and advances onto the first
-    --  Arc later in the same tick. The clear below sees nothing to clear, which
-    --  is correct, and the following tick reads an Arc.
     if self.pather ~= nil and self.pather.petportsLaunch ~= nil then
       sb.logInfo("UNIT ARCMOVER launch record cleared at %s: the pather is on %s, not an Arc "
         .. "-- the flight launched at vx %s",
@@ -7208,46 +3048,12 @@ local function petportsTaskUpdateInner(dt, stateData)
     end
   end
 
-  --  A GROUNDED WALK BELONGING TO A DIFFERENT SURFACE.
-  --
-  --  The arc check above only looks at the moment of touchdown. This is the
-  --  same question asked every tick, and it exists because a wrong surface can
-  --  also be inherited -- a plan kept by a tolerance that was too loose, or one
-  --  whose descent stopped a platform early because the planner drew an Arc
-  --  through a platform that the unit simply lands on.
-  --
-  --  Starbound has no slopes, so a Walk edge's target y IS the surface it was
-  --  planned on, and for a unit standing on that surface it should read exactly
-  --  the unit's own y. Anything else means the plan is describing somewhere the
-  --  unit is not.
-  --
-  --  moveWalk cannot notice. It steers on `edgeDelta[1]` -- the edge's own x
-  --  extent -- and never looks at y at all, so it walks the plan out at full
-  --  speed on whatever surface the unit happens to be on. MEASURED, on one-tile
-  --  platform spacing:
-  --
-  --      pre-move at [3758,1027.8]:   Walk edge 4 of 74  dst [3757,1026.8]
-  --      pre-move at [3757.62,1027.8] Walk edge 4        dst [3757,1026.8]
-  --      pre-move at [3756.7,1027.8]  Walk edge 5        dst [3756,1026.8]
-  --      pre-move at [3756.7,1027.8]  Walk edge 5        velocity [0,-1.537]
-  --      ... frozen, eight ticks
-  --
-  --  One tile of y error, and the top of a 1.6-tall box went into dirt that the
-  --  corridor cleared for a body one tile lower. Nothing named it: vanilla's
-  --  stuckTimer reset the path after half a second of no edge change, silently,
-  --  and A* returned the identical plan.
   if arcFinder ~= nil and arcFinder.hasPath and mcontroller.onGround()
      and not stateData.routing then
     local edgeNow = arcFinder.edges and arcFinder.currentEdgeIndex
       and arcFinder.edges[arcFinder.currentEdgeIndex]
 
     if edgeNow ~= nil and (edgeNow.action == "Walk" or edgeNow.action == "Land") then
-      --  THE SAME RULE, ASKED EVERY TICK RATHER THAN ONLY AT TOUCHDOWN.
-      --
-      --  A plan whose current ground edge sits below the unit is a plan for a
-      --  storey the unit is not on, however it got that way -- landed off it,
-      --  inherited it, or walked onto it. One platform down is the answer in
-      --  all three cases, and it is cheaper and more certain than a search.
       local dropped, dropWhy, dropWanted = tryPlanDrop(self.pather, arcFinder)
 
       if dropped then
@@ -7263,93 +3069,13 @@ local function petportsTaskUpdateInner(dt, stateData)
           tostring(edgeNow.action), tostring(arcFinder.currentEdgeIndex))
       end
 
-      --  THE CLEARANCE TEST THAT USED TO SIT HERE WAS REMOVED 2026-09-04.
-      --
-      --  `planWalkBlocked` swept the body along the current Walk edge and reset
-      --  the pather when the sweep hit terrain. It fired 51 times in one
-      --  session with ZERO true positives, and 32 of those were one ramp: a
-      --  unit stepping down a single block was cut off mid-step, the origin
-      --  nudge -- correctly, on a plan that no longer existed -- walked it back
-      --  UP to where it started, and it replanned into the identical edge. 31
-      --  complete cycles at 0.323s until the task failed on no net progress.
-      --
-      --  ITS PREMISE WAS FALSE. The comment read "Starbound has no slopes, so a
-      --  Walk edge's target y IS the surface it was planned on". The engine has
-      --  a `slopeUp` branch in getWalkingNeighborsInDirection gated on a
-      --  diagonal polygon side -- fact.pathing.squarestep quotes it from source
-      --  in this same repo -- so a Walk edge can legitimately change y, and a
-      --  one-tile step down is expressed exactly that way. The check was not
-      --  mistimed; it was wrong about the geometry it was testing.
-      --
-      --  AND IT WAS A SECOND COPY OF A RECOVERY THAT ALREADY EXISTED. Its whole
-      --  action was `reset()`, `stuckAnchor = nil`, `airborneEdgeStall = 0` --
-      --  the same three lines, in the same order, as the grounded-stall check
-      --  below. WALK_EDGE_STALL landed 2026-08-25 in ccb1a16 with its Walk arm
-      --  already present; this landed 2026-08-27 in 0e8e990. So the only thing
-      --  it contributed was firing 1.25 seconds sooner, and firing sooner is
-      --  precisely what broke it -- a legal descent takes two or three ticks
-      --  and it could not wait that long.
-      --
-      --  WHAT COVERS THE CASE IT WAS BUILT FOR. A plan belonging to a storey
-      --  the unit is not on leaves the unit FROZEN -- the header's own
-      --  measurement was `velocity [0,-1.537]`, no x movement, eight ticks. That
-      --  is the grounded-stall predicate exactly, and stuckAnchor cannot reset
-      --  under it because nothing moves. The recovery is the same reset, 1.25s
-      --  later.
-      --
-      --  THE HELPER STAYS, AND ONLY THIS CALL SITE GOES. `planWalkBlocked` has
-      --  a second caller at the ARC touchdown path, which is a DISCRETE EVENT
-      --  rather than a per-tick poll -- it runs once when the unit lands, as a
-      --  tiebreaker after the y-gap test, and it earns its keep in the negative
-      --  direction: "y gap to next edge is 0, but the plan's Walk edge 8 is
-      --  CLEAR for this body at this height -- keeping the plan" is a plan
-      --  SAVED. Running once at a landing cannot fight a descent in progress,
-      --  which is the whole of what was wrong here.
     end
   end
 
-  --  THREE STALLS MEASURED, THREE DIFFERENT MOVERS, ONE SHAPE:
-  --
-  --    Jump  src [1215,713.75]   srcDist 4.03   moveJump does nothing outside
-  --                                             1.0 of its source, and contains
-  --                                             no code to walk there
-  --    Land  src [1214,711.75]   srcDist 4.58   moveLand is four lines with no
-  --                                             else -- if abs(delta[1]) >= 1
-  --                                             it neither advances nor moves
-  --    Arc   src [1215,716.25]   srcDist 0.50   moveArc grounded repositions
-  --                                             HORIZONTALLY only, and a
-  --                                             vertical arc has delta[1] = 0,
-  --                                             so it issues moveX(0) forever
-  --
-  --  DISTANCE DOES NOT DISCRIMINATE -- 4.58, 4.03 and 0.50 all stall dead. What
-  --  they share is that the unit is ON THE GROUND, the current edge is an
-  --  AIRBORNE one, and it is NOT MOVING. That is the predicate.
-  --
-  --  An earlier version of this checked Jump edges against a 1.0 distance gate,
-  --  which caught one of the three and read as a fix for all of them.
-  --
-  --  False positives are covered: a legitimate run-up along the ground toward an
-  --  arc IS moving, and moveJump's deliberate 0.2s pre-takeoff pause is excluded
-  --  both by jumpTimer below and by AIRBORNE_EDGE_STALL being longer than it.
-  --
-  --  This does not repair the movers -- it cannot, short of overriding them --
-  --  and vanilla's stuck timer would eventually reset anyway. What it buys is a
-  --  NAMED failure with the edge, the action and the gap in it, instead of an
-  --  anonymous path drop, so the spots that produce unexecutable edges can be
-  --  catalogued rather than rediscovered.
   local pathFinder = self.pather and self.pather.finder
   local stalledEdge = nil
   local stalledLimit = AIRBORNE_EDGE_STALL
 
-  --  NOT WHILE ROUTING. Once stateData.routing is set, update() returns from
-  --  the routing branch below and approachPoint is never called -- so the
-  --  pather is not being driven at all. The unit is then grounded and motionless
-  --  for a reason that has nothing to do with the edge it happens to be parked
-  --  on, and every check below would read that as a mover dead-end.
-  --
-  --  Observed: after APPROACH_TIMEOUT handed over to vent routing, this fired on
-  --  a Land edge at srcDist 0.5 -- a gap moveLand accepts perfectly well -- and
-  --  reset a path that was never the problem.
   if pathFinder ~= nil and pathFinder.hasPath and mcontroller.onGround()
      and not stateData.routing and self.pather.jumpTimer == nil then
     local edge = pathFinder.edges and pathFinder.currentEdgeIndex
@@ -7359,29 +3085,6 @@ local function petportsTaskUpdateInner(dt, stateData)
                         or edge.action == "Land") then
       stalledEdge = edge
 
-    --  A GROUNDED WALK THAT HAS STOPPED ADVANCING, WHICH NOTHING WATCHED.
-    --
-    --  Walk was excluded here on the reasoning that a grounded run-up toward an
-    --  arc must not read as a stall. True, and handled elsewhere: the
-    --  stuckAnchor check below zeroes this the moment the unit moves more than
-    --  STUCK_MOVE, so anything actually walking never accumulates.
-    --
-    --  What was left uncovered is a walk that is going nowhere. Measured on a
-    --  leash home across an OPEN PLATFORM -- so not blocked by anything:
-    --
-    --    pre-move at [1202.8,706.8]: action Walk edge 5 of 6
-    --      srcDist 1.79626 velocity [0,-1.53333] onGround true
-    --
-    --  for seven seconds and sixty frames, x-velocity decayed to exactly zero,
-    --  srcDist frozen, no replan and no path LOST. Vanilla's stuckTimer should
-    --  have reset the path after half a second on one edge and did not, for
-    --  reasons the log does not show. The unit had to be resocketed by hand.
-    --
-    --  LONGER THAN THE AIRBORNE LIMIT, and not by a little. 0.35s is tuned for
-    --  a unit hanging mid-arc; a walker can legitimately be motionless for a
-    --  moment against a step or while the controller reverses direction, and
-    --  replanning on that would thrash a path that was about to work. Over a
-    --  second of a grounded walk going nowhere is never legitimate.
     elseif edge ~= nil and edge.action == "Walk" then
       stalledEdge = edge
       stalledLimit = WALK_EDGE_STALL
@@ -7408,9 +3111,6 @@ local function petportsTaskUpdateInner(dt, stateData)
         sb.printJson(dest),
         sb.printJson(dest and world.magnitude(here, dest)))
 
-      --  reset() clears edges and hasPath but leaves aStar alone; find() starts
-      --  a fresh search next tick, and the unit is grounded so canPathfind()
-      --  will allow it.
       pathFinder:reset()
       stateData.stuckAnchor = nil
       stateData.airborneEdgeStall = 0
@@ -7425,31 +3125,16 @@ local function petportsTaskUpdateInner(dt, stateData)
       stateData.stuckAnchor = here
       pathFinder.stuckTimer = 0
 
-      --  Moving, so whatever edge it is on is being executed. This is what
-      --  keeps a grounded run-up toward an arc from reading as a stall.
       stateData.airborneEdgeStall = 0
     end
   else
-    --  No path: the anchor belongs to a path that no longer exists, and keeping
-    --  it would let the first tick of the NEXT path inherit a stale reference
-    --  point and skip its own reset.
     stateData.stuckAnchor = nil
   end
 
-  --  Every tick: world.debug* draws per-frame.
   if petports_drawRouteDebug ~= nil then petports_drawRouteDebug(stateData) end
 
-  --  Re-read every tick. A drop that fell off a ledge mid-walk moves.
   local target = currentTarget(task)
   if target == nil then
-    --  A CROP THAT VANISHES AFTER WE SWUNG AT IT IS A HARVEST, NOT A LOSS.
-    --
-    --  This is the ordinary success path for any crop without resetToStage,
-    --  and it arrives here rather than in the act branch below because the
-    --  engine does not remove the entity within the tick that harvested it.
-    --  MEASURED: swing at 19:01:52.088 read the crop as present and unchanged;
-    --  81ms later it was gone and its two drops were on the ground. Checking
-    --  in the same tick reports every successful harvest as a failure.
     if task.type == "harvest" and stateData.swung then
       report(stateData, "done",
         "harvested " .. sb.printJson(task.target)
@@ -7457,9 +3142,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       return true
     end
 
-    --  Despawned, or someone got there first. Not a failure worth alarm --
-    --  drops expiring is the normal case this task was chosen to exercise, and
-    --  a player harvesting their own crop is the equivalent for farming.
     report(stateData, "failed",
       (task.type == "harvest") and "crop is gone before the swing"
         or "drop is gone")
@@ -7467,39 +3149,8 @@ local function petportsTaskUpdateInner(dt, stateData)
   end
   task.position = target
 
-  --  THE ROUTER AND THE WALKER MUST AIM AT THE SAME POINT.
-  --
-  --  approachPoint resolves a raw target to standable ground internally, so the
-  --  direct walk was aiming at the resolved spot while tryVentRoute was handed
-  --  the RAW one. That is invisible on flat floor, where the two coincide.
-  --
-  --  On a slope they do not. Measured with a drop resting at
-  --  [1224.71,718.789]:
-  --
-  --    standableNear      resolved it to [1224.5,718.875]
-  --    the direct A*      searched toward [1224.5,718.875] -- fine, just slow
-  --    every vent probe   ran toward [1224.71,718.789] and was refused:
-  --                       "not a valid standing position"
-  --
-  --  So the direct walk timed out on a hard route, handed over to vents, and
-  --  vent routing then rejected the target outright at every single vent --
-  --  planRoute EXHAUSTED, task failed, unit never moved. The drop was reachable
-  --  the whole time; only the coordinate handed to the router was wrong.
-  --
-  --  Resolved HERE rather than at the two call sites, so a third caller cannot
-  --  reintroduce the split. approachTargetFor caches once the drop has settled,
-  --  and falls back to the raw target while it is still falling or when nothing
-  --  standable is near -- the settle grace below owns that case.
   local routeTarget = approachTargetFor(stateData, target) or target
 
-  --  COARSE FIRST WHEN FAR OR BLIND. Once per target: a walker whose target
-  --  is more than COARSE_FIRST_DISTANCE away, or has solid tiles on the
-  --  straight line to it, asks the graph for a leg now instead of after
-  --  SEARCH_LIMIT seconds of a direct search that has failed on every such
-  --  route measured. If the graph has nothing, the direct search runs as
-  --  before.
-  --  FREE MOVERS TOO, 2026-09-06. The "far" and "blind" tests are the
-  --  same; the leg they get is a sighted one.
   if stateData.navWaypoint == nil and not stateData.routing
      and not stateData.arrived and petports_navNearestCell ~= nil then
     local routeKey = sb.printJson(routeTarget)
@@ -7515,7 +3166,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       local wanted, why
 
       if petports_freeMover() then
-        --  SIGHT OVERRIDES FAR, see SIGHT_LATCH_RANGE.
         local seen = span <= SIGHT_LATCH_RANGE
           and petports_flyPathClear(here, routeTarget) == true
         wanted = not seen
@@ -7538,13 +3188,6 @@ local function petportsTaskUpdateInner(dt, stateData)
         return false
       end
 
-      --  "MORE" IS NOT "NO", 2026-09-09d. MEASURED 13:45:48: a wet target
-      --  97 tiles away, no `coarse first` line at all, the engine's direct
-      --  plan followed for twenty seconds round the bottom of the island.
-      --  Since 09v the wet target's cell is found on the swim side, which is
-      --  the bounded sweep search (petports_navNearestCell, NAV_NEAREST_SWEEPS
-      --  per call); its "ask again next tick" came back as a plain false and
-      --  this gate latched on it. Un-latch and ask again next tick.
       if notYet == "more" then
         stateData.coarseFirstFor = nil
         if stateData.coarseFirstWaitFor ~= routeKey then
@@ -7555,13 +3198,6 @@ local function petportsTaskUpdateInner(dt, stateData)
         end
       end
 
-      --  ASKED AGAIN ONCE THE GRAPH HAS BUILT, 2026-09-07k. The gate is keyed
-      --  on the target, so a static target that asked while this unit's
-      --  graph memo was still loading got "still building" once and never
-      --  asked again; the direct search ran instead. MEASURED 18:00 with the
-      --  overlay: "graph still building" beside a unit whose store had
-      --  hundreds of cells. Now a building answer un-keys the gate, and
-      --  the next test re-asks after COARSE_RETRY_INTERVAL.
       if wanted and self.petportsNavLastRoute ~= nil
          and self.petportsNavLastRoute.building == true then
         stateData.coarseFirstFor = nil
@@ -7570,30 +3206,12 @@ local function petportsTaskUpdateInner(dt, stateData)
     end
   end
 
-  --  PRE-FLIGHT: BEFORE ANYTHING ASKS THE PATHFINDER A QUESTION.
-  --
-  --  Placed above the routing branch rather than beside approachPoint, because
-  --  tryVentRoute probes with real A* searches and those begin from
-  --  mcontroller.position() exactly as the direct walk does. A bad origin
-  --  poisons both, and the probe results are CACHED -- a route refused from a
-  --  node in mid air would be remembered as terrain that does not work. Gating
-  --  here covers every consumer with one call.
-  --
-  --  NOT ONCE ARRIVED. An arrived unit is standing where its work happens and
-  --  is not going to ask for a plan, so a nudge there is pure interference --
-  --  it would walk a waterer off its own soil tile. The water sweep re-earns
-  --  arrival per tile, so the next leg is covered again.
   if not stateData.arrived and nudgeOrigin(stateData, dt) then
     petports_think("pathing")
     return false
   end
 
-  --  Routing mode: probing exits, or waiting for one to be chosen. Runs every
-  --  tick so a probe actually makes progress.
   if stateData.routing and stateData.viaVent == nil then
-    --  SAME ORDER AS THE PROGRESS PATH BELOW. This is the SEARCH_LIMIT
-    --  handover -- A* has given up on the direct route -- which is precisely
-    --  the case coarse legs exist for.
     if stateData.navWaypoint == nil and tryCoarseLeg(stateData, routeTarget) then
       stateData.routing = false
       return false
@@ -7607,17 +3225,6 @@ local function petportsTaskUpdateInner(dt, stateData)
     end
 
     if routing == "none" and task.hold then
-      --  STALE PREMISE, KEPT DELIBERATELY. This used to read "station-keeping
-      --  never vent-routes, so reaching here means only that the direct walk is
-      --  hard" -- true when recalls were refused a route outright. They are not
-      --  any more, so reaching here now means something stronger: vents were
-      --  offered, considered, and none of them helped.
-      --
-      --  The behaviour is unchanged and still correct -- there is nowhere else
-      --  for a tethered unit to be, so it keeps walking -- but a unit landing
-      --  here repeatedly is now genuinely unreachable rather than merely
-      --  unrouted, and that is worth noticing in a log rather than reading as
-      --  the ordinary case.
       sb.logInfo("UNIT station-keeping: no vent route home either, retrying the walk")
       stateData.routing = false
       stateData.searchingTimer = 0
@@ -7634,40 +3241,18 @@ local function petportsTaskUpdateInner(dt, stateData)
       return true
     end
 
-    --  "probing" or "routing" -- either way, stand still and continue next
-    --  tick. A unit walking while its route is undecided just wanders.
-    --
-    --  This is THE case the indicator exists for: a cold cache spends a full
-    --  PROBE_LIMIT per unknown edge, and a five-edge plan is the better part of
-    --  a minute of a unit standing perfectly still.
     if stateData.viaVent == nil then
       petports_think("routing")
       return false
     end
   end
 
-  --  A vent leg replaces the destination until the unit is through it.
   if stateData.viaVent ~= nil then
-    --  NEAR ENOUGH IS ENOUGH.
-    --
-    --  A vent is a hole in a wall. Its alcove often has no walkable entrance at
-    --  all, so demanding the unit PATH INTO it is asking for something that
-    --  cannot happen -- observed a unit standing directly beside a vent while
-    --  the pathfinder reported no route to it, because there is no route, only
-    --  adjacency.
-    --
-    --  Using the vent is a proximity test, not an arrival test.
     if petportsTaskAction.touchingVent(stateData.viaVent.id) then
       local ventId = stateData.viaVent.id
       local wantExit = stateData.viaVent.destinationId
       local wantPosition = stateData.viaVent.destinationPosition
 
-      --  CAPTURE THE VENT'S ANSWER, NOT JUST pcall's.
-      --
-      --  This read `local ok = pcall(...)`, which is true whenever the call did
-      --  not ERROR. petports_ventTravel signals refusal by returning nil, and
-      --  that was being discarded -- so a refused hop and a completed one were
-      --  indistinguishable, and the unit advanced its plan either way.
       local called, arrivedAt = pcall(world.callScriptedEntity,
         ventId, "petports_ventTravel", entity.id(), wantExit)
       local travelled = called and arrivedAt ~= nil
@@ -7685,8 +3270,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       stateData.approachTimer = APPROACH_TIMEOUT
       stateData.arrived = false
 
-      --  The vent declined -- its exits have changed under the plan. Blacklist
-      --  it for this task and route again from where we are still standing.
       if not travelled then
         sb.logInfo("UNIT vent %s refused the hop, blacklisting and replanning from %s",
           sb.printJson(ventId), sb.printJson(mcontroller.position()))
@@ -7702,21 +3285,8 @@ local function petportsTaskUpdateInner(dt, stateData)
       local here = mcontroller.position()
       stateData.ventHops = stateData.ventHops + 1
 
-      --  The unit is somewhere new, so every "could not reach that mouth"
-      --  judgement in the blacklist was made about a place it is no longer
-      --  standing in. Clearing keeps the blacklist meaning "unreachable FROM
-      --  HERE" rather than "unreachable for the rest of this task", which would
-      --  rule out vents that a later hop puts within easy walking distance.
-      --
-      --  Termination does not depend on this list. Each stall also writes a
-      --  per-tile cache entry through petports_learnRoute, which is permanent
-      --  and is what actually stops the planner reoffering a bad vent. The
-      --  blacklist only has to cover the window before that lands.
       stateData.triedVents = {}
 
-      --  Count the hop by WHERE IT LANDED, not by which leg it was. A loop
-      --  revisits the same tile through the same vent; a hard journey through
-      --  a player's base does not. See MAX_REPEAT_HOPS.
       local hopKey = tostring(ventId) .. ">" .. petports_unitKey(here)
       stateData.hopSeen = stateData.hopSeen or {}
       stateData.hopSeen[hopKey] = (stateData.hopSeen[hopKey] or 0) + 1
@@ -7733,18 +3303,6 @@ local function petportsTaskUpdateInner(dt, stateData)
         return true
       end
 
-      --  DID WE COME OUT WHERE THE PLAN SAID WE WOULD?
-      --
-      --  The rest of the plan is written in terms of the exit this leg was
-      --  supposed to reach -- leg 2's edges were probed FROM that exit. Landing
-      --  somewhere else and advancing anyway means executing the remainder of a
-      --  plan from a place it was never built for, which is how a stale vent
-      --  list turned into an endless hop-stall-replan cycle rather than a single
-      --  wasted hop.
-      --
-      --  The vent refusing above should make this unreachable in the case that
-      --  produced it. It stays as the check that does not depend on the vent
-      --  being honest.
       if wantPosition ~= nil
          and world.magnitude(here, wantPosition) > VENT_ARRIVAL_TOLERANCE then
         sb.logInfo("UNIT vent %s put us at %s, plan expected exit %s at %s -- discarding plan",
@@ -7771,23 +3329,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       return false
     end
 
-    --  THE ENTRY MUST BE REACHABLE TOO. The probe establishes that the EXIT can
-    --  reach the target; it says nothing about whether this unit can walk to
-    --  the mouth. A vent inside an enclosed room is exactly the case where the
-    --  answer is no -- and that is the case vents exist for, so it is the
-    --  common one, not an edge.
-    --
-    --  Without this the unit commits to a vent it cannot reach and stands
-    --  still until the port's deadline, having reported nothing.
-    --  TIME OUT ON LACK OF PROGRESS, NOT ON A CLOCK.
-    --
-    --  A flat budget punishes distance: a 35-tile walk to a vent mouth is about
-    --  nine seconds of walking plus a couple of seconds of search, which a
-    --  12-second clock cuts off mid-climb. The unit was not failing to reach the
-    --  mouth, it was being interrupted on the way.
-    --
-    --  What actually indicates "cannot get there" is standing still, which is
-    --  the same signal the main approach uses.
     local here = mcontroller.position()
     if stateData.ventLastPosition == nil
        or world.magnitude(here, stateData.ventLastPosition) > 0.5 then
@@ -7804,11 +3345,6 @@ local function petportsTaskUpdateInner(dt, stateData)
         sb.printJson(mcontroller.position()),
         sb.printJson(stateData.viaVent.entry))
 
-      --  Blacklist it for this task and go back to routing, which will offer
-      --  the next candidate or report that nothing works.
-      --  The plan assumed this mouth was reachable and it is not, so the
-      --  cached edge that produced it was wrong. Record the correction and
-      --  throw the plan away -- the next planning pass will route around it.
       petports_learnRoute(
         petports_unitKey(mcontroller.position()),
         petports_entryKey(stateData.viaVent.id),
@@ -7826,38 +3362,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       return false
     end
 
-    --  WALK TO STANDABLE GROUND NEAR THE MOUTH, NOT TO THE MOUTH.
-    --
-    --  A vent is mounted in a wall, so its own position can be several tiles
-    --  above the floor -- observed at [1219,712] with ground at 704.75.
-    --  approachPoint only reports arrival within ARRIVAL_DISTANCE of the RAW
-    --  target, so a unit standing directly beneath is permanently seven tiles
-    --  short, never arrives, and never moves again. Identical to the very first
-    --  collection bug: an object's position is not a place a unit can stand.
-    --  PASS THE RAW MOUTH POSITION. approachPoint resolves it itself with
-    --  findGroundPosition(target, -20, 1, ...) -- searching twenty tiles DOWN
-    --  -- so it finds the walkable ground beneath the alcove and the unit
-    --  climbs whatever is there until it is close enough.
-    --
-    --  This is what worked originally. Resolving the mouth ourselves with
-    --  standableNear BROKE it: standableNear tries the raw position first, a
-    --  vent alcove PASSES validStandingPosition because it is a carved hole,
-    --  and the pather then has a destination with no walkable route into it.
-    --  The unit stood still until the progress timeout. Do not re-add it.
-    --  WALK TO THE MOUTH ITSELF.
-    --
-    --  approachPoint resolves it with findGroundPosition(target, -20, 1, ...),
-    --  which finds the walkable ground beneath and lets the unit climb whatever
-    --  is there. Do NOT resolve it here first -- two attempts to be clever
-    --  about this both failed:
-    --
-    --    standableNear picks the alcove, which passes validStandingPosition but
-    --    usually has no walkable route in;
-    --    searching adjacent columns for a lower spot sends the unit to an
-    --    arbitrary patch of floor near the vent rather than to the vent.
-    --
-    --  Neither was ever the real problem. The stalls were a stale aStar on a
-    --  reused pather -- see freshPather below.
     if not stateData.ventLegStarted then
       stateData.ventLegStarted = true
       freshPather("line 1934")
@@ -7871,15 +3375,10 @@ local function petportsTaskUpdateInner(dt, stateData)
     local mouthTarget = stateData.viaVent.entry
 
     if approachPoint(dt, mouthTarget, ARRIVAL_DISTANCE, false) then
-      --  At the mouth. The vent moves us and calls petports_ventTeleport.
       local ok, arrivedAt = pcall(world.callScriptedEntity,
         stateData.viaVent.id, "petports_ventTravel",
         entity.id(), stateData.viaVent.destinationId)
 
-      --  NOTE: this site does NOT check arrivedAt, does not blacklist a refusal,
-      --  does not verify the landing against the plan, and does not count the
-      --  hop against MAX_REPEAT_HOPS. Site A above does all four. Logged with
-      --  both values so the divergence is visible while it still exists.
       sb.logInfo("UNIT [ENTRY SITE B: walked to mouth] vent %s to exit %s called=%s arrivedAt=%s (refusal NOT handled at this site)",
         sb.printJson(stateData.viaVent.id),
         sb.printJson(stateData.viaVent.destinationId),
@@ -7891,7 +3390,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       stateData.ventLegStarted = false
       stateData.ventHops = stateData.ventHops + 1
 
-      --  More legs to go? Stay in routing mode so the next one is taken.
       if stateData.plan ~= nil then
         stateData.planIndex = stateData.planIndex + 1
         stateData.routing = stateData.planIndex <= #stateData.plan
@@ -7899,7 +3397,6 @@ local function petportsTaskUpdateInner(dt, stateData)
         stateData.routing = false
       end
 
-      --  Everything about the approach is stale on the far side.
       stateData.groundTarget = nil
       stateData.searchingTimer = 0
       stateData.approachTimer = APPROACH_TIMEOUT
@@ -7911,92 +3408,19 @@ local function petportsTaskUpdateInner(dt, stateData)
     return false
   end
 
-  --  For collection and harvesting, walk to standable ground NEAR the target
-  --  rather than to the target's own position. A drop rests where it rests and
-  --  a crop is rooted where it is rooted; neither is a place to stand.
-  --
-  --  NOTE the upward bias documented in the handoff applies here too: a crop on
-  --  a floor with a ledge two tiles above it resolves to the LEDGE. Not fixed,
-  --  same one-line fix as collection, and it presents as a unit that walks
-  --  somewhere near the crop and then times out.
   local approachTo = target
 
-  --  A LEASH RESOLVES TOO, AND FOR THE STRONGEST REASON OF ANY TASK HERE.
-  --
-  --  This list was collect/harvest/replant/water/animal, and "return" was not on
-  --  it -- so a unit walking home ran its ARRIVAL test against the raw port
-  --  position. A port is a 4x4 object and its origin is inside itself; nothing
-  --  can ever stand within ARRIVAL_DISTANCE of it unless the floor happens to be
-  --  close underneath.
-  --
-  --  MEASURED: port origin [1203,708], floor [1203.5,704.8], unit parked at
-  --  [1202.9,704.8]. That is 0.6 from where it belongs and 3.2 from the port,
-  --  against an arrival radius of 1.5. approachPoint never returned true, the
-  --  unit never arrived, the progress watchdog struck it for moving 0 of a
-  --  required 2.5 tiles, and it replanned through the vents forever -- 129 times
-  --  in 11 seconds.
-  --
-  --  ROUTING WAS ALREADY CORRECT, WHICH IS WHY THIS LOOKED LIKE A PATHING BUG.
-  --  routeTarget above resolves through approachTargetFor, so planRoute names
-  --  the right tile and the unit walks to exactly the right place. Only the
-  --  question "are you there yet" was asked about somewhere else.
-  --
-  --  It hid while the port had platforms two tiles under it: the floor was then
-  --  1.2 from the origin, inside 1.5, and arrival fired by luck.
-  --
-  --  approachTargetFor has a homeward branch that exists ONLY for this task
-  --  type -- down-only, so a port under a shelter does not resolve to its roof.
-  --  That branch was unreachable from here.
-  --
-  --  Falls back to the raw target rather than the nil path below: that path is
-  --  for a drop still falling and ends in a failure report, and a leash must
-  --  never fail.
-  --  `withdraw` JOINED THIS LIST 2026-08-31, AND FOR THE SAME REASON `return`
-  --  DID. Every other type here dispatches a RAW target position; the ones NOT
-  --  here -- deposit, upcycle, tidy, drain, fuel, compact -- carry a standing
-  --  point the port already resolved, and re-resolving one of those would run
-  --  the search against an answer that is already correct.
-  --
-  --  The four withdraw generators dispatch `world.entityPosition(containerId)`,
-  --  the container's ORIGIN, and that origin sits in the flooded half of a
-  --  half-submerged crate. So the flyer was told to approach a position it
-  --  cannot occupy, approachPoint never arrived, and the progress watchdog
-  --  struck it: nine `fetchwater` failures reading `moved 0 in 10s heading for
-  --  [2553,1147]`, which is the RAW origin and not any resolved point. The
-  --  swimmer serviced the same crate seven times, because for it that tile is
-  --  a legal place to be.
-  --
-  --  THE VOUCH IS WHAT MAKES THIS WORK AND IS NOT SUFFICIENT ON ITS OWN. Without
-  --  `task.mediumVerified` the resolve here returns nil for a straddling crate;
-  --  without this list entry the resolve happens and its answer is discarded.
-  --  Both were needed.
   if task.type == "return" then
     approachTo = approachTargetFor(stateData, target) or target
   elseif task.type == "collect" or task.type == "harvest"
      or task.type == "replant" or task.type == "water"
      or task.type == "animal" or task.type == "medic"
      or task.type == "withdraw" or task.type == "fish"
-     --  A TRAP IS AN OBJECT AND RESOLVES LIKE A CROP: it has a footprint, it
-     --  does not move, and the port vouched for the medium at dispatch. Without
-     --  this entry the resolve happens and its answer is thrown away, which is
-     --  the exact half-fix the note above records.
      or task.type == "trap"
-     --  fuelfetch IS A WITHDRAW IN EVERY RESPECT THE UNIT CAN SEE: walk to a
-     --  crate, stand there, report. The port does the containerConsume and the
-     --  feeding, so the unit needs no container primitive and no new act.
      or task.type == "fuelfetch" then
     approachTo = approachTargetFor(stateData, target)
 
     if approachTo == nil then
-      --  A FALLING DROP HAS NO STANDABLE COLUMN YET. Item drops are discovered
-      --  the moment they exist, which is mid-air, so resolving from that
-      --  position finds nothing and looks identical to a genuinely unreachable
-      --  item. Observed: a drop seen at y 719 while falling to y 704 failed
-      --  instantly, took a ten-second backoff, and was then collected without
-      --  incident on the retry.
-      --
-      --  Give it time to land. Drops settle in well under a second, so a short
-      --  grace costs nothing and removes the false failure entirely.
       stateData.settleTimer = stateData.settleTimer + dt
 
       if stateData.settleTimer >= SETTLE_GRACE then
@@ -8010,36 +3434,9 @@ local function petportsTaskUpdateInner(dt, stateData)
       return false
     end
 
-    --  Landed somewhere resolvable. Clear the cached resolve too, since it was
-    --  computed while the drop was still moving.
     stateData.settleTimer = 0
   end
 
-  --  A COARSE LEG STANDS IN FOR THE REAL TARGET UNTIL IT IS REACHED.
-  --
-  --  LAST, AFTER EVERY OTHER RESOLVE, so it overrides whatever approachTo the
-  --  task type produced -- that answer is about the FINAL target and is exactly
-  --  what the unit cannot path to yet.
-  --
-  --  ARRIVING AT A LEG IS NOT ARRIVING AT THE TASK. The leg is cleared and the
-  --  next tick resolves approachTo normally again -- which either succeeds,
-  --  because the unit is now a leg closer, or asks for another leg. That loop
-  --  is the whole mechanism, and it terminates because petports_navWaypoint
-  --  always advances at least one cell.
-  --  A LEG IS REACHED ON THE GROUND, OR NOT YET. Measured 2026-09-05 04:33:
-  --  a jump passed within ARRIVAL_DISTANCE of its landing while still
-  --  rising, the leg was cleared at [972.34,1045.04] with onGround false,
-  --  the chain refused to plan from the air, and the unit fell back to a
-  --  six-second direct search it did not need. Free movers are exempt.
-  --  approachPoint's own verdict on the waypoint counts too (navLegArrived,
-  --  set below), so a ground-resolved arrival a hair outside the raw radius
-  --  cannot leave a unit standing at a leg it will never "reach".
-  --  A RELEASED STRING-PULL ON A LEG RE-PICKS THE WAYPOINT, 2026-09-07n
-  --  (Lofty): the waypoint was the farthest route cell with a clear line;
-  --  the line stopped being clear as the body moved, and the engine A* got
-  --  the same far waypoint and planned it through the poison. Now the leg
-  --  is dropped and asked for again from where the body is, so the
-  --  waypoint the string-pull test judges (09c: from the body) is nearer.
   if stateData.navWaypoint ~= nil and petports_freeMover()
      and self.petportsPullReleased == true then
     self.petportsPullReleased = nil
@@ -8054,10 +3451,6 @@ local function petportsTaskUpdateInner(dt, stateData)
   end
   self.petportsPullReleased = nil
 
-  --  THE LATCH. A free mover holding a leg looks at the real target on a
-  --  timer, and a clear line drops the leg and the hops behind it; the next
-  --  tick resolves approachTo normally and string-pull flies the line. See
-  --  SIGHT_LATCH_RANGE for why this exists and why it is this test.
   if stateData.navWaypoint ~= nil and petports_freeMover() then
     stateData.sightTimer = (stateData.sightTimer or 0) - dt
 
@@ -8085,23 +3478,6 @@ local function petportsTaskUpdateInner(dt, stateData)
     end
   end
 
-  --  PAST THE WAYPOINT IS AT THE WAYPOINT, 2026-09-13c (Lofty: "if the pet
-  --  scoots forward past its next waypoint it doesn't detect that it's
-  --  ahead of schedule"). MEASURED 21:15:29.7..30.4: the leg to 5830.5 was
-  --  taken at 5838.3; the pool hop landed at 5826.3, four tiles beyond it,
-  --  outside the arrival radius, and the fresh plan walked back to it. The
-  --  body's projection onto the leg's own line (taken from where the leg
-  --  was assigned) is past 1 when the waypoint is behind us; a two-tile
-  --  band around the line and the waypoint's height keep it to this leg.
-  --  A WALKER IS JUDGED ON THE GROUND AND ALONG X, 2026-09-13d. MEASURED
-  --  21:24:24.8..25.6: the leg to [5791.5,1173.8] ended in a drop; the
-  --  test fired in the air (which never counts for a walker), the body
-  --  landed at 1170.9, three tiles under the waypoint, the height band
-  --  refused it, and the pather walked back and jumped up to a waypoint
-  --  the route was about to leave downward. A walker's leg line bends at
-  --  every ledge, so the line test is a free mover's; a walker is past
-  --  its waypoint when its x is past it along the leg, and its height is
-  --  either the waypoint's or on the way to the next anchor's.
   local overshot = false
   if stateData.navWaypoint ~= nil and stateData.navLegStart ~= nil
      and stateData.navLegArrived ~= true and not stateData.navLegStep
@@ -8136,17 +3512,6 @@ local function petportsTaskUpdateInner(dt, stateData)
     end
   end
 
-  --  A LATER ROUTE CELL UNDERFOOT IS THE CELL REACHED, 2026-09-13e.
-  --  MEASURED 21:34:52.8..54.4: the route into the pocket ran 5850,1178 ->
-  --  5850,1172 -> 5853,1168 -> 5850,1163. The leg to [5850.5,1172.8] was
-  --  planned by the engine as a drop onto the 1168.8 ledge and a jump back
-  --  up; the body landed at [5854.55,1168.8], 1.05 from the anchor of
-  --  5853,1168 -- the cell AFTER the waypoint -- jumped up to the waypoint,
-  --  and the next leg brought it straight back down to that ledge. The
-  --  overshoot test above is about this leg's line; this is about the
-  --  route: a grounded walker within arrival distance of a route cell past
-  --  its waypoint has reached that cell, and the chain continues from it.
-  --  Walkers only -- a free mover does not fall through its route.
   if stateData.navWaypoint ~= nil and stateData.navLegArrived ~= true
      and not overshot and not stateData.navLegStep
      and not petports_freeMover() and mcontroller.onGround()
@@ -8198,26 +3563,8 @@ local function petportsTaskUpdateInner(dt, stateData)
       stateData.navLegArrived = nil
       stateData.groundTarget = nil
 
-      --  CHAIN, DO NOT RESUME. Measured 2026-09-05 02:41: a reached leg with
-      --  11 hops left went back to the direct search, which had ALREADY
-      --  failed for SEARCH_LIMIT seconds from the previous cell, and the
-      --  unit stood still for another six before asking for the next leg.
-      --  The graph said there were more hops; take the next one now. The
-      --  direct search is only tried again once the graph has run out.
       local reachedCell = stateData.navLegTo
 
-      --  "MORE" IS NOT "NO", HERE TOO. tryCoarseLeg answers false, "more"
-      --  while the resumable route search is mid-work (10n), and this branch
-      --  read the bare false as "the graph has nothing" -- then abandoned a
-      --  route it had been following seconds earlier and went for the target
-      --  directly. The one caller that honoured "more" is the coarse-first
-      --  gate; this one did not. A swimmer on a large graph lost that race at
-      --  its first corner every time; a drone on a small one finished in a
-      --  tick and never showed it.
-      --
-      --  Hold the leg state and ask again next tick. The unit is stationary
-      --  at a cell it has already reached, which is exactly where waiting
-      --  costs nothing.
       local chained, notYet = false, nil
       if remaining > 0 then
         chained, notYet = tryCoarseLeg(stateData, routeTarget, nil, reachedCell)
@@ -8228,16 +3575,6 @@ local function petportsTaskUpdateInner(dt, stateData)
         sb.logInfo("UNIT reached coarse leg %s with %s hop(s) left -- chaining "
           .. "into the next", tostring(reachedCell), sb.printJson(remaining))
       elseif notYet == "more" then
-        --  Keep what the arrival cleared so the next tick can retry from the
-        --  same cell with the same remaining count.
-        --  TOWARD THE NEXT ANCHOR, NOT THE BODY, 2026-09-12h (Lofty: "zeroes
-        --  its velocity once it hits a waypoint"). MEASURED 14:10:34..36:
-        --  0.16..0.4 s of "next leg not ready" at nearly every leg, and a
-        --  waypoint on the body's own position is an arrival, which
-        --  approachTo brakes to zero. The anchor after the reached one is
-        --  already in hand for the turn measurement; the body flies toward
-        --  it until the leg resolves and replaces it. Held only at a route's
-        --  end, where there is no next anchor.
         stateData.navLegTo = reachedCell
         stateData.navRemaining = remaining
         stateData.navLegArrived = true
@@ -8257,17 +3594,10 @@ local function petportsTaskUpdateInner(dt, stateData)
       end
     end
 
-    --  SHARED WITH THE FREE MOVER, 2026-09-07p, so it may string-pull to
-    --  the leg whatever the task type (flyapproach 07f). Cleared below when
-    --  no leg is held.
     self.petportsLegWaypoint = stateData.navWaypoint
 
     if stateData.navWaypoint ~= nil then
       approachTo = stateData.navWaypoint
-      --  STICKY UNTIL THE TASK ENDS, 2026-09-09a, with petportsLegSide: in
-      --  the tick between one leg being reached and the next being planned
-      --  a submerged unit with a dry task would otherwise read its task as
-      --  its destination and start exiting.
       self.petportsLegLast = stateData.navWaypoint
     end
   end
@@ -8279,29 +3609,6 @@ local function petportsTaskUpdateInner(dt, stateData)
   end
 
   if not stateData.arrived then
-    --  approachPoint OWNS the arrival test, and its return value is the answer.
-    --
-    --  Do not hand-roll this with world.magnitude against the raw target. A
-    --  target y from a tile scan is the coordinate of the empty tile above the
-    --  floor, while a unit's position is its CENTRE, roughly half a body
-    --  higher. The vertical offset alone can exceed a tight arrival radius, so
-    --  a unit standing exactly where it was sent never registers as arrived and
-    --  times out instead. approachPoint resolves the target through
-    --  findGroundPosition and does not have this problem.
-    --  A COARSE LEG IS REACHED AT ITS CENTRE, NOT A TILE OFF, 2026-09-07o:
-    --  free movers on a leg get NAV_LEG_ARRIVAL_FREE; everything else keeps
-    --  ARRIVAL_DISTANCE. The turn toward the next waypoint then happens on
-    --  the corridor's centreline, which is what a corner needs.
-    --  TIGHT ONLY FOR A SHARP TURN, 2026-09-07t (Lofty): a leg whose turn
-    --  at its end is NAV_LEG_SHARP_TURN or more arrives at the quarter tile;
-    --  a leg the route continues through more or less straight arrives at
-    --  NAV_LEG_ARRIVAL_THROUGH, so the body flies through the waypoint with
-    --  no visible stop. The free mover is told the same so it brakes only
-    --  where it must.
-    --  MEASURED IN FLIGHT, 2026-09-07u: the angle between the body's
-    --  velocity (its heading; the line to the waypoint if it is still) and
-    --  the route's direction out of the waypoint. Positive or negative
-    --  approach, overshoot, a turn still in progress -- all in the number.
     local turn = 0
     if stateData.navWaypoint ~= nil and stateData.navLegNext ~= nil then
       local heading = mcontroller.velocity()
@@ -8324,11 +3631,6 @@ local function petportsTaskUpdateInner(dt, stateData)
     end
     stateData.navLegTurn = turn
     local sharp = turn >= NAV_LEG_SHARP_TURN
-    --  A STEP LEG ALWAYS LANDS ON THE POINT, 2026-09-12g. MEASURED 13:58:45:
-    --  a 0.31-tile step to the anchor with a 0.15 arrival, flown at full
-    --  speed -- 0.45 a tick -- overshot the window every tick for six
-    --  seconds. The brake below is what steerDirectly needs to set the
-    --  exact velocity that lands.
     self.petportsLegTightTurn = stateData.navWaypoint ~= nil
       and (stateData.navLegStep == true or turn >= NAV_LEG_BRAKE_TURN)
 
@@ -8337,13 +3639,6 @@ local function petportsTaskUpdateInner(dt, stateData)
         or (sharp and NAV_LEG_ARRIVAL_FREE or NAV_LEG_ARRIVAL_THROUGH)) or nil
 
     if approachPoint(dt, approachTo, ARRIVAL_DISTANCE, false, legArrival) then
-      --  ARRIVING AT A LEG IS NOT ARRIVING. Measured 2026-09-05 04:33:
-      --  approachPoint registered arrival at the waypoint [974.5,1052.8] a
-      --  tick before the leg test did, `arrived` went true, and the pickup
-      --  ran against an item 35 tiles away -- "collected at [994,1024]"
-      --  from [973,1052]. With a leg active the only thing approachPoint
-      --  can confirm is the leg; the task's arrival is decided when the
-      --  approach is to the real target. Let the leg test see it next tick.
       if stateData.navWaypoint ~= nil then
         stateData.navLegArrived = true
         return false
@@ -8354,7 +3649,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       return false
     end
 
-    --  Net displacement check.
     stateData.progressTimer = (stateData.progressTimer or 0) + dt
     if stateData.progressTimer >= PROGRESS_WINDOW then
       stateData.progressTimer = 0
@@ -8374,41 +3668,11 @@ local function petportsTaskUpdateInner(dt, stateData)
           sb.printJson(stateData.progressStrikes), sb.printJson(PROGRESS_STRIKES))
 
         if stateData.progressStrikes >= PROGRESS_STRIKES then
-          --  A COARSE LEG BEFORE A VENT. See tryCoarseLeg: a leg is ordinary
-          --  walking over ground a probe already proved, a vent hop is a
-          --  teleport plus a route search of its own. Only fall through to
-          --  vents when the graph has nothing to offer.
-          --  THE STRIKES ARE NOT CLEARED HERE, AND THAT IS THE FIX.
-          --
-          --  This used to zero them on a coarse leg being STARTED, which is a
-          --  different claim from the unit having MOVED. Measured 2026-09-11,
-          --  a drone wedged 1.19 tiles above the surface every plan assumed it
-          --  was on: thirteen strikes in sixty seconds, cycling 1, 2, 1, 2
-          --  forever. Each strike 2 started a leg, the leg cleared the count,
-          --  the unit did not travel a single tile, and the ladder below --
-          --  the vent route, and the failure report under it -- was never
-          --  reached even once.
-          --
-          --  STRIKES ARE CLEARED BY MOVING. The else branch at the bottom of
-          --  this window does exactly that, on the only evidence that counts:
-          --  net displacement over PROGRESS_WINDOW. A remedy that works clears
-          --  its own strikes there on the next window, one tick's delay later
-          --  and for the right reason. A remedy that does nothing now
-          --  escalates instead of resetting, which is the entire point of
-          --  having more than one rung.
-          --
-          --  THE COUNTER IS HELD, NOT ADVANCED, so a leg gets its window to
-          --  work before the next rung is tried rather than being overtaken
-          --  mid-attempt.
           if tryCoarseLeg(stateData, routeTarget) then
             stateData.progressStrikes = PROGRESS_STRIKES
             return false
           end
 
-          --  Try a vent before giving up: a route the unit cannot jump may be
-          --  reachable another way.
-          --  SAME RULE FOR THE VENT. A route that is started and does not
-          --  move the unit must not buy itself an unlimited number of retries.
           local routing = tryVentRoute(stateData, routeTarget)
           if routing ~= "none" then
             stateData.routing = true
@@ -8436,7 +3700,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       end
     end
 
-    --  Once a second: how far has it actually got?
     stateData.traceTimer = stateData.traceTimer - dt
     if stateData.traceTimer <= 0 then
       stateData.traceTimer = 1.0
@@ -8445,35 +3708,11 @@ local function petportsTaskUpdateInner(dt, stateData)
       stateData.movedTotal = stateData.movedTotal + world.magnitude(here, stateData.lastPosition)
       stateData.lastPosition = here
 
-      --  The under-way report used to live here and does not any more -- it is
-      --  pumped from the top of update() instead, above every branch that
-      --  returns before this line. movedTotal stays: it is accumulated PATH
-      --  LENGTH and it still owns the "never moved" versus "could not reach"
-      --  split in the approach-timeout report below, which net displacement
-      --  cannot answer -- a unit that walked out and back has covered ground
-      --  and is a different failure from one that never started.
 
       if TASK_DEBUG then
-        --  self.approachPosition is groundPet.lua's cache. approachPoint only
-        --  UPDATES it when findGroundPosition succeeds and NEVER clears it, so
-        --  a target that fails to resolve leaves the unit pathing toward
-        --  wherever it was last going -- which right after a completed task is
-        --  where it already stands. That produces a motionless unit with
-        --  onGround true and stuck unset, which is indistinguishable from being
-        --  blocked unless this value is visible.
-        --  PathFinder does NOT latch -- find() resets and restarts whenever
-        --  there is no path and no in-progress A*. So a unit that never moves
-        --  means A* is reporting NO ROUTE every tick, which points at the
-        --  SOURCE rather than the destination: start() seeds from
-        --  mcontroller.position(), and a unit standing somewhere that is not a
-        --  valid standing position has no source node to expand from.
         local finder = self.pather and self.pather.finder
         local selfStandable = select(2, pcall(validStandingPosition, here, false))
 
-        --  SEARCH IDENTITY AND EXPLORE COUNT. If the aStar address changes
-        --  between samples the search is being restarted; if the explore
-        --  count barely moves the search is not being stepped. Either one
-        --  explains a walk that cannot do what the probe did.
         sb.logInfo("UNIT approach at %s (standable %s) target %s approachPosition %s moved %s onGround %s | hasPath %s aStar %s finderTarget %s | search %s explores %s",
           sb.printJson(here), tostring(selfStandable),
           sb.printJson(task.position),
@@ -8488,27 +3727,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       end
     end
 
-    --  PATH ACQUIRED / LOST, PER TICK.
-    --
-    --  The once-a-second approach line samples too coarsely to see this: a path
-    --  is lost and a fresh A* is already running by the time the next sample
-    --  lands, so both the loss and its cause fall between two lines.
-    --
-    --  What is needed to identify the mechanism is the state AT THE INSTANT
-    --  hasPath flips:
-    --
-    --    action     the edge being executed when it went. If this reads Jump or
-    --               Arc, the loss is tied to the jump rather than merely
-    --               coincident with it -- that is the whole question.
-    --    onGround   airborne at the moment of loss points at a guard that
-    --               refuses to path off the ground; grounded points elsewhere.
-    --    velocity   a jump that fell short lands with a downward velocity and
-    --               near-zero horizontal; a jump that never started has both
-    --               near zero.
-    --    stuck      whether vanilla's PathMover declared it, or something else
-    --               cleared the path without saying so.
-    --    edge i/n   how far along the path it got. Losing it on the same edge
-    --               index every time is a specific edge the unit cannot walk.
     local finder = self.pather and self.pather.finder
     local hasPath = finder ~= nil and finder.hasPath == true
 
@@ -8533,28 +3751,10 @@ local function petportsTaskUpdateInner(dt, stateData)
       stateData.lastHasPath = hasPath
     end
 
-    --  Every tick WHILE a path is held, so the tick before a loss is on record
-    --  rather than inferred. This is the noisiest line in the mod -- it is here
-    --  for the jump diagnosis and should come out once that is settled.
     if TASK_TRACE_MOVES and hasPath then
       local edge = finder.edges and finder.currentEdgeIndex
         and finder.edges[finder.currentEdgeIndex]
 
-      --  EDGE SOURCE AND THE DISTANCE TO IT.
-      --
-      --  moveJump does nothing at all unless the unit is within 1.0 of
-      --  edge.source.position -- and it contains no code to walk there:
-      --
-      --      if world.magnitude(mcontroller.position(),
-      --                         self.edge.source.position) < 1.0 then
-      --        ... take off ...
-      --      end
-      --      return "running"
-      --
-      --  So a unit parked further than a tile from its own jump point returns
-      --  "running" forever while standing perfectly still. srcDist is the field
-      --  that separates that from a cooldown stall, and both from a jump that
-      --  fired and fell short.
       local source = edge and edge.source and edge.source.position
       local target = edge and edge.target and edge.target.position
 
@@ -8573,38 +3773,11 @@ local function petportsTaskUpdateInner(dt, stateData)
         tostring(self.pather.jumpTimer))
     end
 
-    --  A LEG THE PATHER REFUSED WITHOUT SEARCHING. find() returns false
-    --  before any search when the target fails its own standing test (for
-    --  this unit, with its own avoidLiquid), so aStar stays nil, the
-    --  search timer never runs, and the handover below never fires --
-    --  measured 2026-09-05 05:23 as a progress-strike loop on one leg. A
-    --  refused leg is a wrong anchor for this profile: send it straight to
-    --  the handover, which contradicts and re-plans.
-    --  AND IT HAS TO STAY REFUSED. Measured 2026-09-05 05:41: the tick
-    --  after freshPather, before move() has called find() at all, looks
-    --  identical -- aStar nil, no path -- and a healthy leg was failed 120
-    --  ms after it was planned, its edge contradicted on a re-probe that
-    --  said true after one tick. A real refusal persists; a fresh pather
-    --  does not.
-    --  WALKERS ONLY, 2026-09-07b. SOAK 2026-09-05: 6,702 of 6,975 refusals
-    --  were free movers in water -- onGround false is their normal state,
-    --  and a sighted leg flown by string-pull may have no aStar at all, so
-    --  the shape this test looks for is what a healthy swimmer looks like
-    --  every tick. Every 0.5 s a good leg was failed, re-probed (true),
-    --  contradicted, and re-planned: 4,002 contradictions on |f1| profiles.
-    --  find()'s gate 1 is a walker's condition; a free mover's failed leg
-    --  is caught by the progress watchdog like any other stall.
     if finder ~= nil and finder.aStar == nil and not finder.hasPath
        and stateData.navWaypoint ~= nil and not petports_freeMover() then
       stateData.navRefusedTimer = (stateData.navRefusedTimer or 0) + dt
 
       if stateData.navRefusedTimer >= 0.5 then
-        --  WHICH GATE. Retail pathing.lua PathFinder:find has exactly two
-        --  ways to leave aStar nil: canPathfind() false (a walker not
-        --  onGround returns "pathfinding" and never starts) and
-        --  mustEndOnGround with validStandingPosition(target, false) false
-        --  (returns false). Both are cheap to re-ask here, so the line says
-        --  which it was instead of leaving it to the next session.
         local wp = stateData.navWaypoint
         local okStand, stand = pcall(validStandingPosition, wp, false)
         local okLiquid, liquid = pcall(world.liquidAt, wp)
@@ -8624,17 +3797,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       stateData.navRefusedTimer = 0
     end
 
-    --  A REFUSED PLAN ON A COARSE LEG IS A LEG THAT WOULD NOT WALK,
-    --  2026-09-07i. The free mover's medium check can find a path and
-    --  decline to fly it (`PLAN REFUSED ... issuing no control`); the finder
-    --  then HAS a path, so the searching clock below never runs, the
-    --  re-probe/contradict path never fires, and the only thing that does is
-    --  the progress watchdog, which re-takes the same leg. MEASURED on
-    --  every maze stall since 2026-09-06 15:45: sixty identical refusals,
-    --  moved 0 in 10s, same leg again. Now a refused plan counts as
-    --  searching, and after PLAN_REFUSED_LIMIT of it the leg fails like any
-    --  other, is re-probed with the executor's own test, contradicted, and
-    --  the route re-asked without it.
     local rejected = self.pather ~= nil and self.pather.petportsPlanRejected == true
     local refused = stateData.navWaypoint ~= nil and rejected
 
@@ -8644,14 +3806,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       stateData.planRefusedTimer = 0
     end
 
-    --  NO LEG HELD AND THE ONLY LOCAL PLAN CROSSES DENIED LIQUID, 2026-09-07l.
-    --  MEASURED 18:29:47: the coarse route ended at the graph cell nearest
-    --  the drop, fifteen tiles short, and handed the rest to the engine A*,
-    --  which planned through the poison and was refused for ten seconds
-    --  until the watchdog. Nothing above can help -- the engine does not
-    --  know the liquid, and coarse nav has nothing closer -- so the unit
-    --  says so and fails NOW, retryable, so the port re-dispatches once the
-    --  graph reaches the target rather than the unit standing at the wall.
     if rejected and not refused and petports_freeMover()
        and stateData.planRefusedTimer >= PLAN_REFUSED_LIMIT then
       local route = self.petportsNavLastRoute
@@ -8676,23 +3830,9 @@ local function petportsTaskUpdateInner(dt, stateData)
        and (finder.aStar ~= nil or stateData.searchingTimer >= SEARCH_LIMIT) then
       stateData.searchingTimer = stateData.searchingTimer + dt
 
-      --  A* alive with no path is the unit thinking, by definition. Most such
-      --  searches resolve well inside THINK_DELAY and correctly show nothing.
       petports_think("pathing")
 
       if stateData.searchingTimer >= SEARCH_LIMIT then
-        --  A LEG THAT WILL NOT WALK IS A CLAIM THE GRAPH GOT WRONG, OR A LEG
-        --  TOO LONG TO PROVE IN ONE SEARCH. Measured 2026-09-05 03:18: the
-        --  graph routed 994,1039 -> 999,1036 (the deck below, through the
-        --  floor), the direct search for that leg ran out the clock, and the
-        --  failure fell through to vent routing -- which failed the task and
-        --  left the wrong edge in the store for next time.
-        --
-        --  So: a multi-hop leg is retried as ONE hop. A one-hop leg that
-        --  fails is the edge itself being wrong; contradict it (the hook
-        --  petports_navContradict was written for exactly this) and re-plan,
-        --  which now routes around it. Only when the graph has nothing left
-        --  does the old handover run.
         if stateData.navWaypoint ~= nil and petports_navContradict ~= nil then
           local legFrom, legTo = stateData.navLegFrom, stateData.navLegTo
           local legPrev = stateData.navLegPrev or legFrom
@@ -8704,11 +3844,6 @@ local function petportsTaskUpdateInner(dt, stateData)
           stateData.groundTarget = nil
           stateData.searchingTimer = 0
 
-          --  A LEG ALREADY ASKED FOR AT REACH 0 CANNOT SHRINK FURTHER. It
-          --  may still be two hops, because the first hop is inside the
-          --  arrival radius and was walked past -- measured 03:30, the same
-          --  two-hop leg was "retried" ten times. The hop that will not walk
-          --  is the LAST one; the ones before it are within arm's reach.
           if hops > 1 and not shrunk then
             sb.logInfo("UNIT coarse leg %s > %s (%s hops) would not walk -- "
               .. "retrying one hop at a time", tostring(legFrom),
@@ -8716,12 +3851,6 @@ local function petportsTaskUpdateInner(dt, stateData)
 
             if tryCoarseLeg(stateData, routeTarget, 0) then return false end
           else
-            --  RE-PROBE FIRST, THEN DECIDE. The probe's own verdict for
-            --  this pair, now, with its own search: a false means the store
-            --  was stale and is corrected by the probe itself; a true means
-            --  the probe and the walk disagree, which is the finding this
-            --  line exists to surface, and the edge is contradicted anyway
-            --  so the unit moves.
             local verdict, spins = nil, 0
 
             if legPrev ~= nil and legTo ~= nil and petports_navVerify ~= nil then
@@ -8737,24 +3866,8 @@ local function petportsTaskUpdateInner(dt, stateData)
                 or (verdict == true and "PROBE AND WALK DISAGREE, contradicting anyway"
                   or "contradicted"))
 
-            --  A TRUE EDGE IS NOT CONTRADICTED FOR A FREE MOVER, 2026-09-07q.
-            --  MEASURED 19:58:41..47: four good edges out of one maze corner
-            --  contradicted in eight seconds, one per refused leg -- the body
-            --  was a fraction off the route at a corner, the pull line from
-            --  where it stood brushed a wall tile the edge itself clears, the
-            --  engine A* got it and was refused, 07i failed the leg, and the
-            --  policy here deleted an edge the re-probe had just confirmed.
-            --  The corner became a dead end and every task since said "both
-            --  known, no path". The walk did not fail; the body was off the
-            --  edge. So: fly to the edge's start (the previous route cell's
-            --  anchor) and take the hop from there. Walkers keep the old
-            --  policy: their edge is a path, and a path that will not walk is
-            --  a probe that lied.
             local stepped = false
 
-            --  TWICE AT MOST PER LEG, then the old policy: if the body is on
-            --  the edge's start and the hop still will not fly, the probe and
-            --  the executor disagree about the edge itself, and that IS a lie.
             if verdict == true and petports_freeMover() and legPrev ~= nil
                and (stateData.navStepFor or 0) < 2 then
               local px = tonumber(string.match(legPrev, "^(-?%d+),"))
@@ -8769,12 +3882,6 @@ local function petportsTaskUpdateInner(dt, stateData)
                 local gap = world.magnitude(mcontroller.position(), start)
 
                 if gap <= NAV_LEG_ARRIVAL_FREE then
-                  --  THE NUDGE, 2026-09-07r (Lofty). MEASURED 20:18: a two-tall
-                  --  corridor, the body 0.38 low of the centreline, its box in
-                  --  the poison row beneath; the edge true, its start 0.4 away,
-                  --  "reached" by the 0.5 radius without moving, six times a
-                  --  second. Half a tile onto the centreline is nothing to see
-                  --  and everything to the route.
                   sb.logInfo("UNIT NUDGE %s onto the route at %s (%s tiles) and "
                     .. "re-taking the leg", sb.printJson(mcontroller.position()),
                     sb.printJson(start), sb.printJson(math.floor(gap * 100 + 0.5) / 100))
@@ -8818,25 +3925,12 @@ local function petportsTaskUpdateInner(dt, stateData)
 
         sb.logInfo("UNIT direct path search hit SEARCH_LIMIT %s with no path -- handing over to vent routing",
           sb.printJson(SEARCH_LIMIT))
-        --  Direct route failed. Before giving up, see whether a vent lands us
-        --  nearer the target. This is the whole reason vents are
-        --  infrastructure rather than decoration.
-        --  Hand over to routing mode, which runs EVERY TICK from the top of
-        --  update. Deciding here on the search timer would step the probe once
-        --  per SEARCH_LIMIT -- a few hundred nodes every six seconds, which
-        --  never resolves and dies to the port's deadline in silence.
-        --  Routing mode reports the failure itself if no vent helps.
         stateData.routing = true
         stateData.searchingTimer = 0
         return false
       end
     else
-      --  A path exists now. Report how long the search took, so the limit can
-      --  be set from measurements instead of guesswork.
       if stateData.searchingTimer > 0 then
-        --  SIZE AND SHAPE, not just "found". A path that satisfies hasPath and
-        --  contains nothing moves nobody, and reads in the log exactly like a
-        --  healthy one.
         local finder = self.pather ~= nil and self.pather.finder or nil
         local edges = (finder ~= nil and type(finder.path) == "table")
           and #finder.path or nil
@@ -8855,9 +3949,6 @@ local function petportsTaskUpdateInner(dt, stateData)
 
     stateData.approachTimer = stateData.approachTimer - dt
     if stateData.approachTimer <= 0 and task.hold then
-      --  A tethered unit that cannot get home has nowhere else to be, and
-      --  failing the task just drops it back into wanderState -- the exact
-      --  outcome the tether exists to prevent. Keep trying instead.
       sb.logInfo("UNIT could not reach station within %s s, retrying from %s",
         sb.printJson(APPROACH_TIMEOUT), sb.printJson(mcontroller.position()))
       stateData.approachTimer = APPROACH_TIMEOUT
@@ -8867,13 +3958,6 @@ local function petportsTaskUpdateInner(dt, stateData)
     end
 
     if stateData.approachTimer <= 0 then
-      --  Ran out of walking time rather than failing to find a route. A vent
-      --  may still shorten what is left, so try one before giving up -- vent
-      --  routing used to fire only on SEARCH_LIMIT, which meant a unit that
-      --  could technically path but not in time never considered a hop.
-      --  Only hand over to routing ONCE. If routing already ran and found no
-      --  vent, it cleared the flag and this is a genuine walking failure worth
-      --  reporting properly.
       sb.logInfo("UNIT approach timer expired (APPROACH_TIMEOUT %s), routingTried %s",
         sb.printJson(APPROACH_TIMEOUT), tostring(stateData.routingTried))
 
@@ -8886,11 +3970,6 @@ local function petportsTaskUpdateInner(dt, stateData)
 
       local here = mcontroller.position()
 
-      --  Zero total movement means the unit never started, which is a DIFFERENT
-      --  failure from walking as far as it could and not getting there. The
-      --  first points at the unit's own position -- groundPet's move() gates on
-      --  validStandingPosition, so a unit wedged somewhere invalid may refuse
-      --  to move at all. The second points at reachability.
       local why = (stateData.movedTotal < 0.5)
         and "never moved" or "could not reach"
 
@@ -8917,16 +3996,9 @@ local function petportsTaskUpdateInner(dt, stateData)
     return false
   end
 
-  --  THE CHASE, FOR EVERY TRACKED TARGET WITH A REACH. Lifted out of the fish
-  --  branch 2026-09-07f, where it was written for one task type; the fish
-  --  branch below still runs its own act once this says the fish is in reach.
-  --  Anything that returns here is a chase step or a spent budget; the type
-  --  branches only see a target that is present and within reach.
   local chasedId, chasedRow = trackedEntity(task)
   if chasedId ~= nil and chasedRow.reach ~= nil then
     if not world.entityExists(chasedId) then
-      --  A PATIENT WHO IS GONE COSTS NOTHING AND IS NOT A FAILURE -- the medic
-      --  branch reports done, and does so below; leave that outcome to it.
       if not chasedRow.goneIsDone then
         report(stateData, "failed", string.format(
           "the %s was gone before the unit reached it", chasedRow.noun))
@@ -8937,34 +4009,9 @@ local function petportsTaskUpdateInner(dt, stateData)
       local gap = there and world.magnitude(mcontroller.position(), there) or nil
 
       if gap == nil or gap > chasedRow.reach then
-        --  GO AFTER IT AGAIN RATHER THAN WAIT FOR IT TO COME BACK.
-        --
-        --  `arrived` latches once the unit reaches its approach point, and every
-        --  other task can rely on that because their targets stay put. A tracked
-        --  one does not, so a latched `arrived` leaves the unit standing still
-        --  for the whole dwell while the target walks away -- which is what
-        --  "sits in place for a while" was. Measured on a fish: 12.3s from
-        --  dispatch to the miss report, nearly all of it stationary.
-        --
-        --  CLEARING groundTarget IS THE OTHER HALF. approachTargetFor caches its
-        --  answer and returns the cache on every later call, so the live position
-        --  from currentTarget would resolve straight back to the same stale
-        --  standing spot without this.
-        --
-        --  RATE LIMITED, because re-resolving a standing position and re-aiming
-        --  the pather every tick is expensive and gives a unit that twitches
-        --  rather than moves. Twice a second tracks a fish and still lets a path
-        --  run.
-        --
-        --  THE DWELL IS A CHASE BUDGET rather than a wait. It still bounds the
-        --  whole attempt; it simply is not spent standing still any more.
         stateData.chaseRetarget = (stateData.chaseRetarget or 0) - dt
 
         if stateData.chaseRetarget <= 0 then
-          --  ONE LINE PER RE-AIM, 2026-09-07g. The 07f log had 14 animal and
-          --  4 medic tasks all succeed and no way to tell whether the chase
-          --  had run once or never; the whole feature was invisible. Twice a
-          --  second at most, and only while out of reach, so it cannot flood.
           stateData.chaseCount = (stateData.chaseCount or 0) + 1
           sb.logInfo("UNIT CHASE %s of the %s: %s away (reach %s), re-aim %s, "
             .. "budget %s s left, unit at %s %s at %s",
@@ -8981,11 +4028,6 @@ local function petportsTaskUpdateInner(dt, stateData)
 
         stateData.dwellTimer = stateData.dwellTimer - dt
         if stateData.dwellTimer <= 0 then
-          --  RETRYABLE. The unit reached the target's last known position and
-          --  the target had left it -- which is what a fish chasing a lure, an
-          --  animal in a pen or a player does, and is not evidence that
-          --  anything is wrong. The port re-dispatches against the CURRENT
-          --  position rather than resting on a stale one.
           report(stateData, "failed", string.format(
             "arrived but the %s is %s away (reach %s) -- it kept moving",
             chasedRow.noun, sb.printJson(gap or "unknown"),
@@ -8998,18 +4040,10 @@ local function petportsTaskUpdateInner(dt, stateData)
   end
 
   if task.type == "animal" then
-    --  PRESENT AND IN REACH, or the chase above would have returned.
     local here = mcontroller.position()
     local there = world.entityPosition(task.target)
     local reach = world.magnitude(here, there)
 
-    --  THE TYPE IS CHECKED ON THIS SIDE TOO, and not as belt-and-braces: both
-    --  calls below run inside the ANIMAL's script, where a throw kills the
-    --  animal rather than failing the task. A task can outlive the dispatch
-    --  that created it, and being wrong here costs livestock.
-    --
-    --  root.monsterParameters reads the type's config, so this is free and
-    --  cannot itself trigger anything.
     local animalType = world.monsterType(task.target)
     local okParams, params = pcall(root.monsterParameters, animalType)
     local base = (okParams and type(params) == "table"
@@ -9025,8 +4059,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       return true
     end
 
-    --  STILL READY? It was at dispatch, but a player may have milked it in the
-    --  meantime, or another network's unit may have got there first.
     local okBefore, before = pcall(world.callScriptedEntity, task.target,
       "hasMonsterHarvest")
 
@@ -9040,12 +4072,6 @@ local function petportsTaskUpdateInner(dt, stateData)
     local okDrop, dropped = pcall(world.callScriptedEntity, task.target,
       "dropMonsterHarvest")
 
-    --  VERIFIED BY ASKING AGAIN, NOT BY THE RETURN VALUE. callScriptedEntity
-    --  returns nil SILENTLY when the target has no such function, so a nil here
-    --  is indistinguishable from a call that ran and returned nothing. The
-    --  animal itself is the authority: dropMonsterHarvest calls
-    --  resetMonsterHarvest, so a successful poke flips hasMonsterHarvest to
-    --  false immediately.
     local okAfter, after = pcall(world.callScriptedEntity, task.target,
       "hasMonsterHarvest")
 
@@ -9054,8 +4080,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       tostring(before), tostring(after))
 
     if okAfter and after == false then
-      --  NO CARGO. The produce is on the ground and ordinary collection takes
-      --  it, seed-style.
       report(stateData, "done",
         "harvested animal " .. sb.printJson(task.target)
         .. " at " .. sb.printJson(there))
@@ -9085,23 +4109,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       return true
     end
 
-    --  NO SWING. THIS IS THE WHOLE REASON A TRAP IS NOT A HARVEST.
-    --
-    --  world.damageTiles on a plain object is ordinary object damage -- there
-    --  is no FarmableObject::damageTiles to intercept it -- and
-    --  harvestable.lua's die() calls dropHarvest. So a swing would break the
-    --  trap into an item AND spill its produce, which reads as a clean success
-    --  in every log line we would write about it. The player's trap is simply
-    --  gone. Harvesting is an INTERACTION, and dropHarvest is what interaction
-    --  calls.
-    --
-    --  STILL RIPE? It was at dispatch, but a player may have emptied it in the
-    --  meantime, or another network's unit may have got there first.
-    --
-    --  ASKED HERE RATHER THAN TRUSTED FROM THE TASK because a task can outlive
-    --  the dispatch that created it -- the same rule the animal poke follows,
-    --  and for a sharper reason than usual: activeAge is the only ripeness
-    --  signal that exists, so if this is not asked on arrival it is not asked.
     local okBefore, before = pcall(world.callScriptedEntity, task.target,
       "activeAge")
 
@@ -9122,25 +4129,9 @@ local function petportsTaskUpdateInner(dt, stateData)
       return true
     end
 
-    --  SAFE TO CALL EVEN IF THE TEST ABOVE IS WRONG. dropHarvest guards on
-    --  self.stage.harvestPool and returns without doing anything when the trap
-    --  is not on its harvest stage, so a false positive here costs a wasted
-    --  visit rather than damage. That is the opposite of the crop swing, whose
-    --  false positive damages the crop, and it is why this act needs no
-    --  equivalent of HARVEST_DAMAGE being sized small.
     local okDrop, dropped = pcall(world.callScriptedEntity, task.target,
       "dropHarvest")
 
-    --  VERIFIED BY ASKING AGAIN, NOT BY THE RETURN VALUE -- callScriptedEntity
-    --  returns nil silently for a function that is not there, so nil proves
-    --  nothing. The trap is its own authority: dropHarvest sets
-    --  storage.created to now and calls setStage itself, so a successful
-    --  harvest drives activeAge back to roughly zero.
-    --
-    --  SETTLED IN THIS TICK, unlike the crop. setStage runs synchronously
-    --  inside dropHarvest before it returns, so there is no stateData.swung
-    --  flag and no verify timer here -- the answer is already true by the time
-    --  the next line runs.
     local okAfter, after = pcall(world.callScriptedEntity, task.target,
       "activeAge")
 
@@ -9150,9 +4141,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       sb.printJson(before), tostring(after), sb.printJson(ripeAt))
 
     if okAfter and type(after) == "number" and after < before then
-      --  NO CARGO. The produce is on the ground -- at itemDropOffset, which
-      --  for a moth trap is two and a half tiles up -- and ordinary collection
-      --  takes it from there, exactly as with crops and livestock.
       report(stateData, "done",
         "harvested trap " .. sb.printJson(task.target)
         .. " at " .. sb.printJson(there))
@@ -9167,24 +4155,12 @@ local function petportsTaskUpdateInner(dt, stateData)
   end
 
   if task.type == "medic" then
-    --  THE PATIENT IS RE-CHECKED ON ARRIVAL, AND THAT IS THE POINT OF CARRYING
-    --  AN ENTITY ID RATHER THAN A POSITION.
-    --
-    --  Every other task targets something that cannot heal itself. A patient
-    --  can: by a bandage, by another medic, by regeneration they already had,
-    --  or by simply having been at 99% when the port looked. Spending a medical
-    --  good on someone who recovered while the unit walked is the one waste this
-    --  task can actually prevent, so it checks twice.
     if task.target == nil or not world.entityExists(task.target) then
       report(stateData, "done", string.format(
         "patient %s is gone -- no dose spent", sb.printJson(task.target)))
       return true
     end
 
-    --  DONE, NOT FAILED, WHEN THE PATIENT RECOVERED. A failure feeds the backoff
-    --  ladder and would penalise this port for an outcome that is GOOD: someone
-    --  got better. The distinction matters because the ladder is what protects
-    --  the network from a target it genuinely cannot service.
     local health = world.entityHealth(task.target)
 
     if type(health) ~= "table" or health[2] == nil or health[2] <= 0 then
@@ -9200,17 +4176,10 @@ local function petportsTaskUpdateInner(dt, stateData)
       return true
     end
 
-    --  IN REACH, or the chase above would have returned. The out-of-reach
-    --  failure that lived here until 2026-09-07f ("likely moved while
-    --  walking") is the chase's spent-budget report now.
     local here = mcontroller.position()
     local there = world.entityPosition(task.target)
     local gap = world.magnitude(here, there)
 
-    --  CAST AT THE PATIENT, NOT AT THE UNIT. The burst is an area, but centring
-    --  it on the patient is what makes MEDIC_REACH and the poly half-width
-    --  independent -- otherwise the effective coverage is the difference between
-    --  them and shrinks every time either is tuned.
     local ok, err = pcall(world.spawnProjectile,
       task.projectile or "petports_medicburst", there, entity.id(), {0, 0}, false, {})
 
@@ -9226,12 +4195,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       tostring(health[1]), tostring(health[2]), sb.printJson(gap),
       tostring(task.effect), tostring(task.duration))
 
-    --  `dosed` IS WHAT THE PORT CHARGES ON, exactly as `watered` is. The port
-    --  spends one medicalgoods per dose ACTUALLY delivered, so every early
-    --  return above costs the player nothing.
-    --  ON THE TASK, NOT IN THE `cargo` ARGUMENT. report()'s fourth parameter is
-    --  cargo specifically; counters ride as task fields and are lifted into the
-    --  message, the way task.watered is.
     task.dosed = 1
 
     report(stateData, "done", string.format(
@@ -9262,8 +4225,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       return true
     end
 
-    --  ALREADY WET? Skip it and charge nothing. Another unit may have swept
-    --  past, or a player may have watered by hand while this unit walked.
     local modNow = world.mod({ tile[1], tile[2] }, "foreground")
 
     if tostring(modNow) ~= tostring(task.previousMod) then
@@ -9271,27 +4232,6 @@ local function petportsTaskUpdateInner(dt, stateData)
         .. "already wet or no longer farmland",
         sb.printJson(tile), tostring(modNow), tostring(task.previousMod))
     else
-      --  PARAMETERS CARRY THE TRANSITION. The projectile ships with an empty
-      --  actionOnReap on purpose -- previousMod and newMod are read off the
-      --  tile per cast, so one asset covers vanilla and modded soils alike.
-      --
-      --  IF PARAMETER OVERRIDE DOES NOT REACH actionOnReap, this is where it
-      --  shows: the droplet falls, nothing changes, and the mod check on the
-      --  next pass still reads dry. Hence logging exactly what was passed.
-      --  NOT THE TILE CENTRE. x + 0.5 sits exactly on a rounding boundary, and
-      --  MEASURED at radius 0 it landed one tile RIGHT of target every time:
-      --  sweeping right to left, the first cast spilled off the right edge and
-      --  the leftmost tile never got one.
-      --
-      --  Two candidate causes and this offset is immune to both. If the engine
-      --  FLOORS the reap position, x + 0.25 is inside tile x. If it ROUNDS --
-      --  floor(x + 0.5), which is what x + 0.5 landing in x+1 looks like -- then
-      --  floor(x + 0.75) is still tile x. Anything in [x, x + 0.5) works under
-      --  either rule; a quarter tile keeps clear of both edges.
-      --
-      --  The standing position keeps + 0.5 deliberately: that is where the unit
-      --  walks to, it is not converted to a tile by anything, and centring it
-      --  is correct.
       local spawn = { tile[1] + 0.25, standing[2] + WATER_DROP_HEIGHT }
 
       local ok, err = pcall(world.spawnProjectile,
@@ -9300,37 +4240,12 @@ local function petportsTaskUpdateInner(dt, stateData)
             action = "applySurfaceMod",
             previousMod = task.previousMod,
             newMod = task.newMod,
-            --  RADIUS 0, NOT VANILLA'S 1.
-            --
-            --  MEASURED at radius 1: six casts, five skips, ten tiles wetted
-            --  for five items. Each droplet caught its neighbour, so the unit
-            --  arrived at every second tile to find it already wet and skipped
-            --  it free. That is cheaper but not PREDICTABLE, and the whole
-            --  point of one-item-per-tile is that a player can look at a row
-            --  and know what it cost.
-            --
-            --  IF RADIUS 0 WETS NOTHING, the symptom is unmistakable: casts
-            --  fire, no tile changes mod, and the sweep re-reports the same
-            --  run next pass. Vanilla ships 1, so 0 may be below the floor --
-            --  in which case keep 1 and halve WATER_CARRY instead, which buys
-            --  the same predictability from the other direction.
             radius = 0
           } },
 
-          --  THE LIQUID PAINTS ITS OWN DROPLET. The sprite is transparent
-          --  white, so this multiply is what gives it a colour at all -- and
-          --  the colour comes off the liquid's own config on the port side, so
-          --  water arrives blue and lava would not.
-          --
-          --  nil when the liquid config had no colour, which leaves the
-          --  parameter absent and the droplet white. Visible, wrong-looking,
-          --  and logged -- which is the right failure for a cosmetic.
           processing = task.tint ~= nil and ("?multiply=" .. task.tint) or nil
         })
 
-      --  Spawn x is printed to full precision on purpose: the whole off-by-one
-      --  lives in how that float maps to a tile, so the number that produced a
-      --  hit or a miss has to be in the log next to the tile it aimed at.
       sb.logInfo("UNIT water CAST tile %s aim x %s spawn %s: %s -> %s, tint %s, ok %s %s",
         sb.printJson(tile), sb.printJson(spawn[1]), sb.printJson(spawn),
         tostring(task.previousMod), tostring(task.newMod),
@@ -9343,8 +4258,6 @@ local function petportsTaskUpdateInner(dt, stateData)
         return true
       end
 
-      --  COUNTED, NOT ASSUMED. The port charges one item per tile ACTUALLY
-      --  wetted, so a sweep cut short partway charges only for what it did.
       task.watered = (task.watered or 0) + 1
     end
 
@@ -9357,9 +4270,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       return true
     end
 
-    --  ON TO THE NEXT TILE. Everything about the previous approach is stale:
-    --  the ground target was resolved for a different tile, and arrival has to
-    --  be re-earned or the unit waters the whole row from where it stands.
     stateData.arrived = false
     stateData.groundTarget = nil
     stateData.approachTimer = APPROACH_TIMEOUT
@@ -9374,13 +4284,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       math.floor(task.position[1]), math.floor(task.position[2])
     }
 
-    --  LAST LOOK BEFORE PLANTING. The port checked the footprint at dispatch,
-    --  but the unit has been walking since then and a player can put a crate
-    --  anywhere in that time. Cheap, and the failure mode it avoids is a seed
-    --  spent on a placement that silently did nothing.
-    --  SAME EXACT-OCCUPANCY TEST AS THE PORT, and for the same reason: a rect
-    --  drawn tightly around one tile intersects the next tile's crop, so in a
-    --  planted row a naive query says every tile is occupied by its neighbour.
     if tileOccupied(tile, task.seed) then
       report(stateData, "failed", string.format(
         "footprint for %s at %s is occupied -- not planting",
@@ -9388,33 +4291,17 @@ local function petportsTaskUpdateInner(dt, stateData)
       return true
     end
 
-    --  world.placeObject wants a direction. Crops are symmetric and
-    --  single-orientation, so this is a formality rather than a choice -- but
-    --  it is a required argument, and omitting it is not the same as passing 1.
     local ok, placed = pcall(world.placeObject, task.seed, tile, 1)
 
     sb.logInfo("UNIT replant at %s: placeObject(%s) ok %s returned %s",
       sb.printJson(tile), tostring(task.seed), tostring(ok), tostring(placed))
 
-    --  VERIFIED BY LOOKING, NOT BY THE RETURN VALUE. Same discipline as the
-    --  harvest swing: world.placeObject's return is not documented clearly
-    --  enough to branch on, and the world can answer the question directly.
-    --  A farmable is an object, so the footprint query that just came back
-    --  empty should now come back with exactly the thing we planted.
-    --  Verified by looking, not by placeObject's return value. Now checks the
-    --  crop's REAL footprint, so a wide crop that planted fine is no longer
-    --  reported as a failure because only its anchor column was inspected.
     if tileOccupied(tile, task.seed) then
-      --  The port spends the seed and retires the intent on this report.
       report(stateData, "done",
         "planted " .. tostring(task.seed) .. " at " .. sb.printJson(tile))
       return true
     end
 
-    --  Placement refused. The likeliest causes are the ground no longer being
-    --  tilled and tile protection, and neither is worth retrying in place --
-    --  the port's sweep will clear the intent if the ground changed, and the
-    --  backoff ladder handles the rest.
     report(stateData, "failed", string.format(
       "placeObject(%s) at %s left nothing there -- untilled ground, "
       .. "or placement refused",
@@ -9423,26 +4310,11 @@ local function petportsTaskUpdateInner(dt, stateData)
   end
 
   if task.type == "harvest" then
-    --  ONE SWING PER DISPATCH, THEN WATCH.
-    --
-    --  The swing and the verification cannot share a tick: the engine does not
-    --  remove a harvested crop, or settle its new stage, before this script
-    --  regains control. So the act runs once, sets a flag, and every tick after
-    --  that is verification -- either the crop vanishes (caught at the top of
-    --  update, where the target resolves to nil) or its stage moves.
-    --
-    --  Swinging once rather than every tick also bounds the damage if the
-    --  ripeness test is ever wrong: FarmableObject::damageTiles falls through
-    --  to ordinary object damage when harvest() declines, and a unit hammering
-    --  an unripe crop once a frame would eventually break it.
     if not stateData.swung then
       local here = mcontroller.position()
       local cropPosition = world.entityPosition(task.target)
       local reach = world.magnitude(here, cropPosition)
 
-      --  See HARVEST_REACH. damageTiles does not care how far away the caller
-      --  is, so this is the only thing standing between an upstream arrival bug
-      --  and a unit harvesting a field it is not standing in.
       if reach > HARVEST_REACH then
         report(stateData, "failed", string.format(
           "arrived but %s tiles from the crop at %s (unit at %s)",
@@ -9453,30 +4325,14 @@ local function petportsTaskUpdateInner(dt, stateData)
       local okBefore, before = pcall(world.farmableStage, task.target)
       stateData.stageBefore = okBefore and before or nil
 
-      --  TILE COORDS ARE INTEGERS. world.damageTiles takes List<Vec2I>, and a
-      --  farmable's entityPosition is a float pair, so floor it rather than
-      --  relying on whatever the conversion happens to do.
-      --
-      --  ONE TILE, THE ANCHOR. A crop occupies two tiles -- spaces [0,0] and
-      --  [0,1], anchored bottom -- but it is ROOTED in the anchor, which is
-      --  what the Harvester Beam mod damages and what tile damage propagates
-      --  from. Confirmed working against a crop at [1203,715].
       local tile = { math.floor(cropPosition[1]), math.floor(cropPosition[2]) }
 
-      --  sourcePosition only sets the direction the damage PARTICLES fly.
-      --  Passing the unit's own position makes debris fly away from it, which
-      --  is both correct-looking and free.
       local okDamage, damaged = pcall(world.damageTiles, { tile }, "foreground",
         here, "plantish", HARVEST_DAMAGE, HARVEST_LEVEL)
 
       stateData.swung = true
       stateData.verifyTimer = HARVEST_TIMEOUT
 
-      --  THE RETURN VALUE IS NOISE. It is documented as "was tile damage done",
-      --  and FarmableObject::damageTiles returns FALSE on a successful harvest
-      --  because it consumed the damage instead. Measured, it came back TRUE on
-      --  a harvest that unambiguously worked -- so it is unreliable in BOTH
-      --  directions and is logged only, never branched on.
       sb.logInfo("UNIT harvest swing at %s tile %s: damageTiles ok %s returned %s "
         .. "(ignored), stage before %s -- watching for the result",
         sb.printJson(task.target), sb.printJson(tile), tostring(okDamage),
@@ -9485,16 +4341,11 @@ local function petportsTaskUpdateInner(dt, stateData)
       return false
     end
 
-    --  VERIFYING. The crop vanishing is handled at the top of update; what is
-    --  left to catch here is a crop that RESET, which stays alive with a lower
-    --  stage number.
     local okAfter, after = pcall(world.farmableStage, task.target)
     if not okAfter then after = nil end
 
     if type(after) == "number" and type(stateData.stageBefore) == "number"
        and after ~= stateData.stageBefore then
-      --  NO CARGO. The drops are on the ground and the collection task comes
-      --  back for them, seed included. See the header.
       sb.logInfo("UNIT harvest confirmed on %s: stage %s -> %s (crop survived)",
         sb.printJson(task.target), sb.printJson(stateData.stageBefore),
         sb.printJson(after))
@@ -9508,11 +4359,6 @@ local function petportsTaskUpdateInner(dt, stateData)
 
     stateData.verifyTimer = (stateData.verifyTimer or HARVEST_TIMEOUT) - dt
     if stateData.verifyTimer <= 0 then
-      --  THIS IS THE GUARD ON A WRONG FARMABLE_STAGE_BASE. If the port's notion
-      --  of "ripe" is off by one, harvest() declines, damageTiles falls through
-      --  to ordinary object damage, and nothing changes -- so this path fires,
-      --  the port records a failure, and the backoff ladder stops the unit
-      --  swinging at that crop once a second.
       report(stateData, "failed", string.format(
         "swung at %s and nothing changed in %ss (stage still %s) "
         .. "-- crop was not ready, or FARMABLE_STAGE_BASE is wrong",
@@ -9525,22 +4371,8 @@ local function petportsTaskUpdateInner(dt, stateData)
   end
 
   if task.type == "fish" then
-    --  THE FISH MOVES, SO ARRIVAL IS A RANGE CHECK RATHER THAN A POSITION --
-    --  and that check is the shared chase above since 2026-09-07f, which was
-    --  written here first for this one task type. Present and in reach here.
     local there = world.entityPosition(task.target)
 
-    --  THE LOOT IS ROLLED HERE, NOT DROPPED BY THE FISH.
-    --
-    --  A fishing monster's dropPools is EMPTY and its landedTreasurePool is
-    --  applied only by landedState -- which is an out-of-water state and
-    --  despawns instantly if `self.inLiquid`. So a fish killed or despawned in
-    --  open water drops nothing, by vanilla's own design.
-    --
-    --  THAT IS THE BEHAVIOUR WE WANT AND NOT A LIMITATION WE ARE WORKING
-    --  AROUND. Loot that fell on the seabed would sink out of coverage before a
-    --  unit could gather it. Rolling the pool straight into cargo is both
-    --  simpler and the only version that does not lose items.
     local declared, pool = nil, nil
     local okParams, params = pcall(root.monsterParameters, task.fishType)
     if okParams and type(params) == "table" then
@@ -9551,8 +4383,6 @@ local function petportsTaskUpdateInner(dt, stateData)
     end
 
     if pool == nil or pool == "empty" then
-      --  Still a catch, just an empty one. Despawn it anyway or the fish sits
-      --  there being re-dispatched forever.
       pcall(world.callScriptedEntity, task.target, "despawn")
       report(stateData, "done", string.format(
         "caught %s but it has no treasure pool (declared %s)",
@@ -9560,10 +4390,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       return true
     end
 
-    --  GUARD BEFORE ROLLING. root.isTreasurePool exists precisely so a caller
-    --  can avoid handing createTreasure a name that does not resolve, and a
-    --  fish whose pool was patched away by another mod is exactly that case.
-    --  Cheaper and far clearer than catching the exception afterwards.
     local okPool, poolExists = pcall(root.isTreasurePool, pool)
     if not okPool or poolExists ~= true then
       pcall(world.callScriptedEntity, task.target, "despawn")
@@ -9573,15 +4399,10 @@ local function petportsTaskUpdateInner(dt, stateData)
       return true
     end
 
-    --  LEVEL FROM THE WORLD, matching what the lure passed the fish at spawn.
     local level = math.max(1, world.threatLevel())
     local okTreasure, treasure = pcall(root.createTreasure, pool, level)
 
     if not okTreasure or type(treasure) ~= "table" or #treasure == 0 then
-      --  sb.printJson ON THE DECLARED VALUE, NOT tostring. The first version of
-      --  this printed `pool table: 000002378D7B8B20`, which named the fault
-      --  without describing it -- the whole question was what shape the
-      --  monstertype had used.
       report(stateData, "failed", string.format(
         "caught %s but pool %s (declared %s) produced nothing at level %s: %s",
         tostring(task.fishType), tostring(pool), sb.printJson(declared),
@@ -9590,13 +4411,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       return true
     end
 
-    --  DESPAWN RATHER THAN KILL, AND THE DIFFERENCE MATTERS.
-    --
-    --  `despawn` is a plain global in fishingMonster.lua, so it needs no message
-    --  handler and no dotted path. It routes the fish into disappearState, which
-    --  explicitly CLEARS the death sound and particle burst before killing --
-    --  so the fish fades out exactly as it does when a player's line snaps, and
-    --  cannot drop anything on the way out.
     pcall(world.callScriptedEntity, task.target, "despawn")
 
     sb.logInfo("UNIT CAUGHT %s (%s, %s) at %s -- %s stack(s) from pool %s at "
@@ -9605,9 +4419,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       tostring(task.fishRarity or "unknown rarity"), sb.printJson(there),
       sb.printJson(#treasure), tostring(pool), sb.printJson(level))
 
-    --  THE WHOLE LIST, WHICH IS THE ONE PLACE THIS MOD CARRIES MORE THAN ONE
-    --  STACK PER TRIP. The port's report handler tells a list from a single
-    --  descriptor by whether it has a `name`.
     report(stateData, "done", string.format(
       "caught %s (%s)", tostring(task.fishType),
       tostring(task.fishRarity or "unknown rarity")), treasure)
@@ -9615,10 +4426,6 @@ local function petportsTaskUpdateInner(dt, stateData)
   end
 
   if task.type == "collect" then
-    --  world.takeItemDrop returns the item descriptor on success, nil if the
-    --  drop is not yet takeable -- drops have a brief delay after spawning
-    --  during which they refuse pickup. Retry rather than failing: the unit is
-    --  standing right on top of it.
     local ok, taken = pcall(world.takeItemDrop, task.target, entity.id())
 
     sb.logInfo("UNIT pickup attempt on %s: ok %s taken %s (dwell left %s)",
@@ -9626,23 +4433,11 @@ local function petportsTaskUpdateInner(dt, stateData)
       sb.printJson(stateData.dwellTimer))
 
     if ok and taken then
-      --  THE DESCRIPTOR IS THE ITEM. Discarding it destroyed the pickup, which
-      --  is what the testing sink used to do. It now travels back to the port
-      --  on the report, and the port writes it into the unit ITEM -- so cargo
-      --  survives despawn, reload, and being carried to another world, the same
-      --  way the unit's own state does.
-      --
-      --  THERE IS A LOSS WINDOW and it is worth knowing about: takeItemDrop has
-      --  already destroyed the world drop by the time this line runs, so if the
-      --  report never reaches the port -- port mined during the second between
-      --  pickup and report -- the item is gone. Narrow, but real. The port logs
-      --  an error rather than swallowing it if cargo arrives with nowhere to go.
       report(stateData, "done",
         "collected at " .. sb.printJson(task.position), taken)
       return true
     end
 
-    --  Not takeable yet. The dwell timer doubles as the retry budget.
     stateData.dwellTimer = stateData.dwellTimer - dt
     if stateData.dwellTimer <= 0 then
       report(stateData, "failed",
@@ -9664,18 +4459,10 @@ local function petportsTaskUpdateInner(dt, stateData)
     local modName = task.mod or PETPORTS_ASTERITE_MOD
     local centre = { tile[1] + 0.5, tile[2] + 0.5 }
 
-    --  READ BEFORE ANYTHING ELSE, because everything below is conditional on
-    --  the deposit still being there and nothing about the dispatch proves it.
-    --  A task can outlive the beat that created it, the store cache is five
-    --  seconds stale by design, and a player with a matter manipulator is
-    --  faster than a walking pet.
     local okMod, before = pcall(world.mod, tile, "foreground")
     local okMat, material = pcall(world.material, tile, "foreground")
 
     if not okMod then
-      --  WE DO NOT KNOW, WHICH IS NOT THE SAME AS GONE. An unloaded region
-      --  reads as a failed call, and dropping a real deposit because we could
-      --  not see it is the worse error. Retryable, entry kept.
       report(stateData, "failed", string.format(
         "could not read the tile at %s on arrival", sb.printJson(tile)),
         nil, true)
@@ -9683,9 +4470,6 @@ local function petportsTaskUpdateInner(dt, stateData)
     end
 
     if before ~= modName then
-      --  SOMEBODY GOT THERE FIRST, which is not a failure of anything. The
-      --  store is now lying and the entry goes, exactly as it does in the
-      --  console probe -- otherwise the port re-dispatches to it forever.
       local cleared = petports_asteriteClear(task.target)
 
       report(stateData, "failed", string.format(
@@ -9700,11 +4484,6 @@ local function petportsTaskUpdateInner(dt, stateData)
     local reach = petports_asteriteReach()
 
     if range > reach then
-      --  RETRYABLE, AND THIS IS THE ONE THE PORT MOST WANTS TO SEE. The port
-      --  searched within ASTERITE_STAND_RADIUS and that number is supposed to
-      --  be inside every chassis's reach by construction -- so this firing at
-      --  all means the two have drifted, or the unit stopped short of the
-      --  standing point it was given.
       report(stateData, "failed", string.format(
         "arrived %s from the deposit at %s but reach is %s (unit at %s, "
         .. "standing point was %s)", sb.printJson(math.floor(range * 100) / 100),
@@ -9713,18 +4492,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       return true
     end
 
-    --  THE SWINGS. EVERYTHING ABOVE THIS RUNS EVERY TICK OF THEM, DELIBERATELY.
-    --
-    --  The tile read, the mod comparison and the reach test are all re-done on
-    --  every tick of the mine rather than once at the start, which costs four
-    --  cheap engine calls a second and buys the case that actually happens: a
-    --  player mining the deposit out from under a unit mid-swing, or a unit
-    --  shoved out of reach by a door. Either aborts cleanly, because NOTHING
-    --  HAS HAPPENED YET -- the removal is a single placeMod after the last
-    --  swing, so an interrupted mine leaves no partial state to unwind.
-    --
-    --  COUNT AND EFFECTS RESOLVED ONCE, on the task rather than on stateData,
-    --  so re-entering the action state does not restart the beam from zero.
     if task.asteriteSwings == nil then
       local swings, particle, sounds = asteriteEffects(modName)
 
@@ -9734,9 +4501,6 @@ local function petportsTaskUpdateInner(dt, stateData)
       task.asteriteSwung = 0
       task.asteriteTimer = 0
 
-      --  PUBLISHED HERE AND NOWHERE ELSE, in the same branch that decides how
-      --  many swings there are -- so the beam and the swings can never
-      --  disagree about how long the mine lasts.
       publishBeam(centre, swings, ASTERITE_SWING_PERIOD)
 
       sb.logInfo("UNIT asterite mining %s at %s: %s swing(s) at %ss, particle "
@@ -9755,16 +4519,9 @@ local function petportsTaskUpdateInner(dt, stateData)
       asteriteSwingEffect(centre, task.asteriteParticle, task.asteriteSounds)
       task.asteriteTimer = ASTERITE_SWING_PERIOD
 
-      --  THE LAST SWING STILL WAITS OUT ITS PERIOD before the deposit goes, or
-      --  the final spark and the removal land on the same frame and the ore
-      --  appears to vanish a beat early.
       return false
     end
 
-    --  WHAT IT DROPS COMES OFF THE MATMOD, not off a constant and not off the
-    --  task. This is the last place the ore's identity is decided and it is
-    --  decided by the thing being mined, which is what makes the whole module
-    --  work on any surface-mod ore.
     local okConfig, mod = pcall(root.modConfig, modName)
     local drop = nil
 
@@ -9773,18 +4530,12 @@ local function petportsTaskUpdateInner(dt, stateData)
     end
 
     if type(drop) ~= "string" or drop == "" then
-      --  NOT RETRYABLE AND THE DEPOSIT IS LEFT ALONE. Removing a mod that
-      --  yields nothing is pure destruction of the player's terrain feature.
       report(stateData, "failed", string.format(
         "matmod %s names no itemDrop -- refusing to remove it for nothing",
         tostring(modName)))
       return true
     end
 
-    --  REMOVAL IS REPLACEMENT. petports_cleared is a real mod that draws
-    --  nothing and adds no health to its host; "metamod:none" cannot be
-    --  placed, because canPlaceMod opens with an isRealMod guard. The matmod
-    --  file has the full reasoning.
     local okPlace, placed = pcall(world.placeMod, tile, "foreground",
       PETPORTS_ASTERITE_CLEARED, nil, true)
 
@@ -9792,37 +4543,12 @@ local function petportsTaskUpdateInner(dt, stateData)
     local _, materialAfter = pcall(world.material, tile, "foreground")
 
     if after == modName then
-      --  RETRYABLE. The call declined rather than the deposit being wrong, so
-      --  the entry stays and another unit may have better luck. If this ever
-      --  fires steadily it is the same class of refusal the placeMod harness
-      --  exists to diagnose.
       report(stateData, "failed", string.format(
         "placeMod at %s ok %s returned %s and the deposit is still there",
         sb.printJson(tile), tostring(okPlace), tostring(placed)), nil, true)
       return true
     end
 
-    --  STEP TWO: BREAK THE PLACEHOLDER, LEAVING A BARE TILE.
-    --
-    --  placeMod cannot write "no mod" -- canPlaceMod refuses NoModId -- so the
-    --  deposit was replaced rather than removed, and what sits there now is
-    --  ours. petports_cleared declares no breaksWithTile, which puts it on the
-    --  fourth branch of WorldImpl::tileDamageParameters: its own damage pool,
-    --  alone, with the host material not in the sum. So damaging it destroys
-    --  it and cannot touch the obsidian, whatever the number.
-    --
-    --  SIZED FROM THE PLACEHOLDER'S OWN health rather than from a constant, so
-    --  the matmod stays the single place that decides how tough it is.
-    --
-    --  "blockish" IS THE TYPE FOR A SOLID SURFACE. Not "beamish", which is the
-    --  matter manipulator's and is a penetrating type -- and a penetrating
-    --  type takes the SECOND branch of that function, which returns the
-    --  MATERIAL's parameters and aims the blow at the player's block.
-    --
-    --  FAILURE HERE IS NOT A FAILED MINE. The deposit is already gone and the
-    --  ore is already owed; a placeholder that survives is invisible, inert,
-    --  and will be overwritten by the next asterite that lands on it. So this
-    --  is logged and carried on from, never reported.
     local clearHealth = 0
     local okCleared, cleared = pcall(root.modConfig, PETPORTS_ASTERITE_CLEARED)
 
@@ -9834,46 +4560,12 @@ local function petportsTaskUpdateInner(dt, stateData)
       mcontroller.position(), "blockish", clearHealth + ASTERITE_CLEAR_MARGIN,
       0, entity.id())
 
-    --  THE ONE THING HERE THAT IS KNOWABLE SYNCHRONOUSLY. A pcall that FAILS
-    --  failed now -- bad arguments, a missing binding -- and that is worth a
-    --  line. The call's RETURN value is not kept, because "the damage was
-    --  accepted" and "the placeholder is gone" are different claims and only
-    --  the first is answerable in this tick.
     if not okClear then
       sb.logInfo("UNIT asterite clearing damage THREW at %s -- the placeholder "
         .. "stays until something overwrites it", sb.printJson(tile))
     end
 
-    --  AND THE TILE IS NOT READ BACK. THAT IS THE FIX, NOT AN OMISSION.
-    --
-    --  MEASURED 2026-09-11. This used to re-read world.mod immediately after
-    --  the damage and report "could not break the placeholder" when it still
-    --  saw petports_cleared -- which it did on every mine. Checking the same
-    --  tile by hand afterwards read `mod nil`: the placeholder HAD been
-    --  destroyed and the read was simply too early.
-    --
-    --  THE TWO CALLS ARE NOT THE SAME SHAPE, and that is the whole lesson:
-    --
-    --    world.placeMod    applies immediately. The console harness sets a mod
-    --                      and reads the new value back inside the same call,
-    --                      which is why the before/after check around the
-    --                      placeMod above is meaningful and is kept.
-    --
-    --    world.damageTiles is QUEUED. It returns true to mean the damage was
-    --                      accepted, and the tile changes on the engine's own
-    --                      update. Anything this script reads in the same tick
-    --                      is the state BEFORE the damage, always.
-    --
-    --  SO THERE IS NOTHING HONEST TO ASSERT HERE. A deferred check could be
-    --  built -- remember the tile, look next update -- but it would exist to
-    --  catch a failure that has never been observed, on a step whose only
-    --  failure mode is an invisible mod that the next asterite overwrites. The
-    --  false alarm cost more than the check was ever going to.
 
-    --  THE ASSERTION THE WHOLE MODULE EXISTS FOR. Logged rather than reported,
-    --  because at this point the deposit IS gone and the ore IS owed -- but a
-    --  changed material means we have started eating the player's base and
-    --  that has to be findable in a log without anyone looking for it.
     if okMat and materialAfter ~= material then
       sb.logInfo("UNIT asterite DESTROYED THE TILE at %s: %s became %s. This "
         .. "should be impossible via placeMod and the module must be pulled "
@@ -9881,24 +4573,9 @@ local function petportsTaskUpdateInner(dt, stateData)
         tostring(materialAfter))
     end
 
-    --  THE ENTRY GOES BEFORE THE REPORT, because the deposit is already gone
-    --  from the world and a report that never lands must not leave the store
-    --  claiming otherwise. The ore is the thing at risk in that window, not
-    --  the record.
     petports_asteriteClear(task.target)
 
-    --  ONE ORE, SYNTHESISED, AND NOTHING IS SPAWNED.
-    --
-    --  The engine drops a mod's itemDrop when the mod BREAKS; ours was
-    --  replaced rather than broken, so nothing was dropped and there is
-    --  nothing to collect. The descriptor travels on the report and the port
-    --  writes it into the unit item, which is the same path a collected stack
-    --  takes -- so it survives despawn, reload, and being carried to another
-    --  world.
     report(stateData, "done", string.format(
-      --  TWO ARROWS AND NOT THREE. The third was the same-tick read of the
-      --  tile after the clearing damage, which always showed the placeholder
-      --  still in place and never meant anything.
       "mined %s at %s in %s swing(s) (%s -> %s, cleared, %s intact)",
       tostring(drop), sb.printJson(tile), sb.printJson(task.asteriteSwung or 0),
       tostring(before), tostring(after),
@@ -9907,61 +4584,14 @@ local function petportsTaskUpdateInner(dt, stateData)
     return true
   end
 
-  --  ON STATION. Do NOT report done.
-  --
-  --  Completing the task returns the unit to the state machine's idle branch,
-  --  and vanilla wanderState takes it straight back out again -- which is the
-  --  behaviour strictPortTethering exists to stop. Staying in the state keeps
-  --  the action state occupied, and wanderState only runs when it is not.
-  --
-  --  The unit leaves this by exactly one route: the check at the top of this
-  --  function, when the port dispatches real work.
   if task.hold then
-    --  MEASURED AGAINST THE RESOLVED GROUND, NOT THE PORT ORIGIN.
-    --
-    --  task.position is the raw port position and petports_leashTask says so in
-    --  as many words: a port is an object and its position is not somewhere a
-    --  unit can stand, so the task carries the raw value and the unit resolves
-    --  it. Everything downstream honoured that. This test did not.
-    --
-    --  MEASURED: port origin [1203,708], floor beneath it [1203.5,704.8], unit
-    --  standing at [1203.13,704.8] -- 0.37 from where it belongs and 3.2 from
-    --  the port, against a slack of 3.0. So it never arrived, kept approaching,
-    --  and the progress watchdog saw it move 0 of the 2.5 tiles it wanted, took
-    --  two strikes and forced a vent replan. 137 replans in 64 seconds, and it
-    --  would have gone on forever.
-    --
-    --  IT ONLY SHOWS WHEN THE FLOOR IS FAR FROM THE PORT. With a row of
-    --  platforms two tiles under the port the floor was 1.2 away and inside
-    --  slack; mining them out put the next standable ground 3.2 down and over
-    --  the line. Raising TETHER_SLACK would have hidden this exact case and
-    --  left the bug for a port on a ledge.
     local station = approachTargetFor(stateData, task.position) or task.position
     local home = world.magnitude(mcontroller.position(), station)
 
-    --  Pushed off station -- shoved by a player, a door, an explosion. Walk
-    --  back rather than holding a position the unit is no longer standing in.
     if home > (task.slack or 3.0) then
       sb.logInfo("UNIT pushed off station (%s from port), returning",
         sb.printJson(home))
 
-      --  RE-RESOLVE THE FLOOR. THE TERRAIN MAY BE WHY IT LEFT.
-      --
-      --  groundTarget is resolved once and cached for the life of a task, which
-      --  is fine for work that finishes. A leash never finishes -- see the
-      --  arrival block below -- so its cached floor outlives any change to the
-      --  ground it names.
-      --
-      --  MEASURED: a port with a row of platforms beneath it. The platforms are
-      --  mined out; the unit falls, is now further than slack from its station,
-      --  walks back -- to the cached platform tile, which is no longer there.
-      --  The port is not involved and never issues a recall: returnWork reports
-      --  "inNetwork true stranded false" and returns nil, so nothing upstream
-      --  looks wrong while the unit walks to a spot in mid-air.
-      --
-      --  onStation is cleared as well so the arrival block runs again and clears
-      --  this a second time. Without that, only the FIRST arrival ever resets
-      --  it and the second walk home re-caches a target nothing will invalidate.
       stateData.groundTarget = nil
       stateData.onStation = false
 
@@ -9977,33 +4607,11 @@ local function petportsTaskUpdateInner(dt, stateData)
       task.arrivedHome = true
       animator.setAnimationState("movement", "idle")
 
-      --  THE TRIP HOME IS OVER, SO THE ROUTE THAT GOT HERE IS HISTORY.
-      --
-      --  A leash is a HOLD task: it never completes, so its stateData lives for
-      --  as long as the unit sits at its port. Anything left on it stays
-      --  forever. That did not show while recalls were refused a vent route --
-      --  plan was always nil and ventHops always zero on the way home -- and
-      --  became visible the moment recalls were allowed to route: a unit that
-      --  vent-hopped home then sat at its station indefinitely displaying
-      --  "hop 2", with "leg 1" hanging over the vents it had used.
-      --
-      --  Cosmetic in the overlay, but the same residue is real state: planIndex
-      --  and viaVent are read by the routing branches, and a stale plan on a
-      --  task that has arrived is a plan nothing intends to execute.
       stateData.plan = nil
       stateData.planIndex = 1
       stateData.ventHops = 0
       stateData.viaVent = nil
 
-      --  AND THE GROUND TARGET, which this list missed the first time.
-      --
-      --  It is the same residue as the four fields above and the same argument
-      --  applies -- but it is not cosmetic. Every other place that clears
-      --  groundTarget hangs off a MOVEMENT event: starting a vent leg, coming
-      --  out of a vent, stepping to the next watering tile. A unit parked at its
-      --  port triggers none of them, so a leash held the floor it resolved on
-      --  arrival for as long as the unit stood there, and kept walking to it
-      --  after that floor was mined out.
       stateData.groundTarget = nil
       stateData.routing = false
 
@@ -10014,12 +4622,8 @@ local function petportsTaskUpdateInner(dt, stateData)
     return false
   end
 
-  --  Arrived. Stand still for the dwell, which is the whole of the diagnostic.
   stateData.dwellTimer = stateData.dwellTimer - dt
   if stateData.dwellTimer <= 0 then
-    --  Success is reported with the target, so outcomes can be correlated
-    --  against position. Silent success made it impossible to tell which parts
-    --  of the rect were reachable.
     report(stateData, "done",
       "reached " .. sb.printJson(task.position)
       .. " from " .. sb.printJson(stateData.startPosition))
@@ -10030,9 +4634,6 @@ local function petportsTaskUpdateInner(dt, stateData)
 end
 
 function petportsTaskAction.leavingState(stateData)
-  --  A LEG BELONGS TO ONE TASK'S APPROACH. Carried into the next task it would
-  --  send the unit toward a waypoint chosen for a target it is no longer going
-  --  to.
   stateData.navWaypoint = nil
   stateData.navRemaining = nil
   stateData.navBridge = nil
@@ -10044,46 +4645,19 @@ function petportsTaskAction.leavingState(stateData)
     stateData.task and tostring(stateData.task.id) or "none",
     sb.printJson(mcontroller.position()), tostring(self.petportsTask ~= nil))
 
-  --  Nothing will pump the indicator down once this state is gone, so drop it
-  --  now rather than leaving a spinner over an idle unit forever.
-  --
-  --  Deliberately NOT done on vent travel: petports_ventTeleport is a straight
-  --  setPosition with no invisible state, the spinner is a PART and moves with
-  --  the entity, and the unit is usually still routing on the far side. A clear
-  --  there would only blink it off and on between legs.
   petports_thinkClear()
 
   petports_cancelProbe()
 
-  --  Do not leave an abandoned search behind for follow/inspect to inherit.
-  --  approachPoint rebuilds the pather from nil on its next call.
   self.pather = nil
   self.approachPosition = nil
 
-  --  Interrupted rather than completed -- the state was pre-empted, or the unit
-  --  is being recalled. Hand the task back so the claim is released rather than
-  --  left to age out.
-  --  Only if the held task is THE ONE THIS STATE WAS RUNNING. A leash task
-  --  yielding to a freshly dispatched task passes through here with the new
-  --  task already held, and reporting that as interrupted would fail the work
-  --  before it started.
   if self.petportsTask ~= nil and stateData.task ~= nil
      and self.petportsTask.id == stateData.task.id then
     report(stateData, "failed", "interrupted")
   end
 end
 
---  SECTIONS FOR THE STATE-ENTRY WORK, 2026-09-07c. MEASURED 02:05 on
---  coarsenav 07o: two ~0.4 s wallclock stalls, both in the FIRST update
---  after freshPather (one starting a fish task with a 400-tile dive trace,
---  one starting a leash), and no section above navTick to say which call.
---  The candidates are the local resolvers below and petports_diveApproach;
---  petports_navNearestCell and petports_navWaypoint are sectioned on the
---  coarsenav side. Installed once, at the first update, so every script
---  in the monstertype list has loaded by then whatever the order.
---
---  DEPTH-GUARDED: petports_profBegin keys on the name and tryCoarseLeg
---  re-enters itself, so only the outermost call of a name is timed.
 local taskSectionsInstalled = false
 local taskSectionDepth = {}
 
@@ -10112,14 +4686,11 @@ local function installTaskSections()
     petports_diveApproach = taskProfWrap("diveApproach", petports_diveApproach)
   end
 
-  --  2026-09-07e: the one call left on approachTarget's path that had no
-  --  section of its own, after a 1,273 ms approachTarget with 2 ms standable.
   if type(petports_habitatObjectBounds) == "function" then
     petports_habitatObjectBounds = taskProfWrap("objectBounds", petports_habitatObjectBounds)
   end
 end
 
---  PROFILED, 2026-09-06: the whole update is one section and one tick.
 function petportsTaskAction.update(dt, stateData)
   installTaskSections()
   if petports_profInstall ~= nil then petports_profInstall() end
@@ -10128,10 +4699,6 @@ function petportsTaskAction.update(dt, stateData)
 
   local result = petportsTaskUpdateInner(dt, stateData)
 
-  --  AFTER THE INNER UPDATE, DELIBERATELY. Everything that moves the unit --
-  --  approachPoint, the movers, the arc consumer -- has issued its controls by
-  --  now. This is the only position from which a stop cannot be overwritten in
-  --  the same tick.
   avoidLiquidAhead(stateData)
   unperchWatch(dt, stateData)
 
@@ -10142,91 +4709,7 @@ function petportsTaskAction.update(dt, stateData)
 end
 
 
---------------------------------------------------------------------------------
---  THE ASTERITE REMOVAL PROBE
---------------------------------------------------------------------------------
---
---  A CONSOLE ENTRY POINT AND NOTHING ELSE. No task type, no dispatch, no
---  claim, no beam.
---
---  IT NO LONGER REMOVES THE MOD, IT REPLACES IT, and that is not a compromise
---  -- it is the only thing retail permits. canPlaceMod refuses NoModId and the
---  damage path sums a breaksWithTile mod's health into its host, so there is
---  no route to a bare tile from a script. petports_cleared is a real mod that
---  is nothing, and writing it over the deposit is indistinguishable in play
---  from taking the deposit off.
---
---  The two questions below are answered now, and the answers are kept because
---  the next person will ask them again:
---
---      1  does world.placeMod with "metamod:none" remove a surface mod when a
---         MONSTER calls it? The binding is cited in this mod from
---         HarvesterBeam, which is a player-held activeitem and therefore the
---         permissive case. Nothing here has ever called it.
---
---      2  does it need allowOverlap true? We are writing over an existing mod
---         rather than onto a bare tile, which is the case that flag governs.
---         If it is needed and missing, the call refuses SILENTLY and the
---         symptom is a unit that mines nothing and reports success.
---
---  AND ONE ASSERTION THAT IS THE ENTIRE POINT OF THE FEATURE: THE TILE MUST
---  STILL BE THERE AFTERWARDS.
---
---  asterite declares breaksWithTile true, which is why damaging it is not an
---  option -- the block would go with the mod, and this whole module exists so
---  that a moonbase roof can be cleared WITHOUT being demolished. So this reads
---  world.material before and after and says which way it went, because "the
---  mod is gone" and "the mod is gone and so is the roof" are indistinguishable
---  in a log that only checks the first.
---
---  USAGE:
---
---      /entityeval petports_asteriteMine()              nearest known deposit
---      /entityeval petports_asteriteMine(5854, 1160)    a named tile
---      /entityeval petports_asteriteMine(nil, nil, false)   allowOverlap off
---      /entityeval petports_asteriteMine(nil, nil, true, 99) ignore reach
---
---  IT REFUSES ANY TILE THAT IS NOT CARRYING THE TARGET MOD. A console function
---  that strips whatever matmod it finds would cheerfully untill a farm or peel
---  a vanilla ore vein off its rock, and the tile it is pointed at is chosen by
---  hand from a log. The check costs one comparison.
 
---  HOW CLOSE IS CLOSE ENOUGH, AND WHY THERE IS NO LINE-OF-SIGHT TEST.
---
---  Mining in Starbound is a beam from the player to a point that cuts through
---  whatever lies between -- that is what the matter manipulator does, and it is
---  what every player already expects mining to look like. A unit that stops a
---  few tiles short and beams a deposit through a wall is not an oddity, it is
---  the convention.
---
---  WHICH IS JUST AS WELL, BECAUSE THE OBVIOUS SIGHT TEST CANNOT WORK. A
---  surface mod sits on a SOLID tile, so a line from the unit to that tile's
---  centre terminates inside rock by definition and world.lineTileCollision
---  would refuse every valid target this feature will ever have. Proximity is
---  not a weaker substitute for sight here; sight is the wrong question.
---
---  SCALED BY THE BODY, because a large chassis reaching four tiles from its
---  CENTRE is reaching much less than that from its edge, and the deposit is
---  approached by the edge. The larger axis of the bound box is the honest
---  measure of "how much of this unit is not its middle". Bound box rather than
---  collision poly deliberately: the poly is for collision and the box is for
---  size, and this is a size question.
---
---  THE CAP IS NOT DECORATION. Without it a future large chassis out-ranges the
---  thing the number was chosen for, and "the pet mined it from across the
---  room" stops reading as mining.
---  DOUBLED 2026-09-11, AND THE PORT'S SEARCH RADIUS MOVED WITH IT.
---
---  These two numbers are one decision. ASTERITE_STAND_RADIUS on the port is
---  what a deposit's standing point is searched within, and the invariant that
---  makes the port able to dispatch without asking the unit anything is that
---  the radius NEVER EXCEEDS THE SMALLEST POSSIBLE REACH -- which is this base,
---  before any body is added. Raising the port's radius to 8 while this stayed
---  4 would dispatch a drone (reach 5.6) to stand 8 tiles out and have it
---  refuse on arrival, every time.
---
---  THE CAP MOVES TOO, or it would clamp every chassis back to 8 and erase the
---  body scaling this exists for. 12 is 8 plus the largest body axis in play.
 local ASTERITE_REACH_BASE = 8
 local ASTERITE_REACH_MAX = 12
 
@@ -10242,11 +4725,6 @@ function petports_asteriteReach()
 	return math.min(ASTERITE_REACH_BASE + body, ASTERITE_REACH_MAX)
 end
 
---  THE NEAREST DEPOSIT THE STORE KNOWS ABOUT, so the probe can be called with
---  no arguments at all and nobody has to copy coordinates out of a log.
---
---  world.magnitude AND NOT vec2, because worlds wrap: two points either side of
---  the seam are adjacent in the world and very far apart in arithmetic.
 local function nearestDeposit()
 	local here = mcontroller.position()
 	local bestKey, bestEntry, bestRange
@@ -10269,48 +4747,6 @@ local function round2(n)
 	return math.floor((tonumber(n) or 0) * 100) / 100
 end
 
---  A RAW placeMod HARNESS. No store, no reach, no refusal, no drop.
---
---  MEASURED 2026-09-11, AND IT IS WHY THIS EXISTS:
---
---      placeMod ok true returned false -- mod asterite to asterite
---      (STILL THERE), material obsidian to obsidian (INTACT)
---
---  ...with allowOverlap both true and false. READ THAT CAREFULLY. The pcall
---  SUCCEEDED and the call RETURNED FALSE. A binding unavailable to a monster
---  fails the pcall; this one ran and declined. So world.placeMod reaches the
---  world from a monster perfectly well, and the thing it will not accept is an
---  argument -- almost certainly "metamod:none" not resolving to a mod it is
---  willing to place.
---
---  THAT IS A DIFFERENT QUESTION FROM "MINE THIS DEPOSIT", so it gets a
---  different function. petports_asteriteMine is the mining path and its
---  refusals are deliberate; this is an instrument and has none of them. It
---  will write any mod onto any tile, which is exactly what makes it useful and
---  exactly why it is not wired to anything.
---
---  WHAT TO TRY, AND WHAT EACH ANSWER MEANS:
---
---      ("goldore")       returns TRUE  -> the binding and the overlap are
---                                         fine, and "metamod:none" is simply
---                                         the wrong name to hand it
---                        returns FALSE -> placeMod will not overwrite an
---                                         existing mod at all, and removal has
---                                         to come from somewhere else
---
---      on a BARE tile    whatever world.mod returns there is the engine's own
---                        spelling for "no mod", and that spelling is the next
---                        thing to pass as newMod
---
---  IT PUTS THINGS BACK. Placing goldore leaves goldore on the tile, and
---  petports_asteriteMine would then refuse it for carrying the wrong mod.
---  Call this again with "asterite" to restore before testing anything else.
---
---  USAGE:
---
---      /entityeval petports_asteriteSetMod(5788, 1159, "goldore")
---      /entityeval petports_asteriteSetMod(5788, 1159, "asterite")
---      /entityeval petports_asteriteSetMod(5788, 1159, "metamod:none", false)
 function petports_asteriteSetMod(x, y, newMod, allowOverlap)
 	if allowOverlap == nil then allowOverlap = true end
 
@@ -10319,9 +4755,6 @@ function petports_asteriteSetMod(x, y, newMod, allowOverlap)
 	local okMod, before = pcall(world.mod, tile, "foreground")
 	local okMat, material = pcall(world.material, tile, "foreground")
 
-	--  DOES THE NAME EVEN RESOLVE. root.modConfig on a name the material
-	--  database does not know is the cheapest way to tell "placeMod refused
-	--  this mod" from "placeMod was handed something that is not a mod".
 	local okConfig = pcall(root.modConfig, tostring(newMod))
 
 	sb.logInfo("UNIT placeMod harness at %s: mod %s, material %s -- asking for "
@@ -10347,51 +4780,6 @@ function petports_asteriteSetMod(x, y, newMod, allowOverlap)
 	return placed
 end
 
---  A RAW damageTiles HARNESS, AND THE READING THAT PUT IT HERE.
---
---  This was written off early on the grounds that asterite declares
---  breaksWithTile true, so damaging it would take the obsidian with it. That
---  reasoning was a guess. StarMaterialDatabase.cpp says otherwise:
---
---      mod.damageParameters = TileDamageParameters(...,
---          modConfig.optFloat("health"), modConfig.optUInt("harvestLevel"));
---
---  A MOD CARRIES ITS OWN HEALTH AND ITS OWN HARVEST LEVEL, and
---  modDamageParameters returns them independently of the material's. A mod
---  that could only ever be destroyed alongside its tile would have no use for
---  either number. asterite declares health 4 and harvestLevel 0, and obsidian
---  is far tougher than 4 -- so if damage lands on the mod first, a small
---  amount takes the deposit and leaves the roof.
---
---  breaksWithTile most likely means "when the TILE goes, this mod goes too",
---  which is a statement about the tile dying, not about whether the mod can
---  die by itself.
---
---  THE SIGNATURE, from StarWorldLuaBindings.cpp:
---
---      bool damageTiles(List<Vec2I> positions, String layer,
---                       Vec2F sourcePosition, String damageType,
---                       float damageAmount, Maybe<unsigned> harvestLevel,
---                       Maybe<EntityId> sourceEntity)
---
---  "beamish" is the matter manipulator's damage type and therefore the honest
---  default for something calling itself mining.
---
---  TILE DAMAGE ACCUMULATES AND THEN DECAYS, so a single call under the mod's
---  health chips rather than breaks, and calling again shortly after continues
---  where it left off. That is worth knowing before reading a first result as
---  a refusal.
---
---  THE DEFAULT AMOUNT IS DELIBERATELY JUST OVER THE MOD AND FAR UNDER THE
---  BLOCK. If the tile takes the damage instead of the mod, 5 should not be
---  close to enough to break obsidian, so the failure mode of this probe is
---  "nothing happened" rather than "a hole in the roof".
---
---  USAGE:
---
---      /entityeval petports_asteriteDamage(5788, 1159)
---      /entityeval petports_asteriteDamage(5788, 1159, 5, "blockish")
---      /entityeval petports_asteriteDamage(5788, 1159, 50)
 function petports_asteriteDamage(x, y, amount, damageType, harvestLevel)
 	local tile = { math.floor(tonumber(x) or 0), math.floor(tonumber(y) or 0) }
 
@@ -10401,9 +4789,6 @@ function petports_asteriteDamage(x, y, amount, damageType, harvestLevel)
 	local okMod, before = pcall(world.mod, tile, "foreground")
 	local okMat, material = pcall(world.material, tile, "foreground")
 
-	--  WHAT WE ARE AIMING AT. The mod's health is the number the amount above
-	--  is chosen against, and harvestLevel defaults to the mod's own so the
-	--  probe is not refused for being under-tooled.
 	local modHealth, modHarvest
 	local okConfig, mod = pcall(root.modConfig, tostring(okMod and before))
 
@@ -10428,13 +4813,6 @@ function petports_asteriteDamage(x, y, amount, damageType, harvestLevel)
 	local _, after = pcall(world.mod, tile, "foreground")
 	local _, materialAfter = pcall(world.material, tile, "foreground")
 
-	--  THE TWO OUTCOMES THAT MATTER, AND THEY ARE NOT THE SAME RESULT.
-	--
-	--  mod gone + material intact  -> this is the primitive, and the feature
-	--                                 works as designed
-	--  mod gone + material gone    -> damage goes to the tile and takes the
-	--                                 mod with it, which is the thing this
-	--                                 whole module exists to avoid
 	sb.logInfo("UNIT damageTiles harness RESULT: ok %s returned %s -- mod %s "
 		.. "to %s (%s), material %s to %s (%s)",
 		tostring(okDamage), tostring(damaged),
@@ -10443,16 +4821,10 @@ function petports_asteriteDamage(x, y, amount, damageType, harvestLevel)
 		tostring(material), tostring(materialAfter),
 		(materialAfter == material) and "INTACT" or "GONE")
 
-	--  NOTHING IS SPAWNED AND NOTHING IS CLEARED FROM THE STORE. If the mod
-	--  broke, the engine dropped its itemDrop itself -- that is what an
-	--  itemDrop IS -- so look for the ore on the ground rather than in a log
-	--  line. An instrument that also tidied up would hide that.
 	return damaged
 end
 
 function petports_asteriteMine(x, y, allowOverlap, reachOverride)
-	--  DEFAULTS TRUE. false has to be passed explicitly, because that is the
-	--  variant being tested against rather than the one expected to work.
 	if allowOverlap == nil then allowOverlap = true end
 
 	local modName = PETPORTS_ASTERITE_MOD
@@ -10473,10 +4845,6 @@ function petports_asteriteMine(x, y, allowOverlap, reachOverride)
 
 		tile = { entry.position[1], entry.position[2] }
 
-		--  THE ENTRY'S OWN MOD NAME WINS. Nothing about the store is
-		--  asterite-specific and an entry records what was actually read, so
-		--  taking the name from the record rather than the constant is what
-		--  makes a second surface-mod ore work with no change here.
 		modName = entry.mod or modName
 	end
 
@@ -10484,23 +4852,8 @@ function petports_asteriteMine(x, y, allowOverlap, reachOverride)
 	local here = mcontroller.position()
 	local range = world.magnitude(here, centre)
 
-	--  THE OVERRIDE EXISTS BECAUSE REACH IS NOT WHAT THIS BUILD TESTS.
-	--
-	--  The unit stands where its port put it and nothing here moves it -- that
-	--  is the dispatched build's job. Measured 2026-09-11: nearest deposit
-	--  8.23 away against a reach of 5.6, so the gate refused before the call
-	--  under test ever ran. A probe that cannot reach its subject measures
-	--  nothing.
-	--
-	--  IT IS NOT A BACKDOOR FOR THE REAL TASK. Nothing dispatched will ever
-	--  pass this; petports_asteriteReach stays the only number the task uses,
-	--  and the refusal path below is still exercised by calling with no
-	--  override.
 	local reach = tonumber(reachOverride) or petports_asteriteReach()
 
-	--  READ BOTH LAYERS OF STATE BEFORE TOUCHING ANYTHING. The mod is what is
-	--  being removed; the material is what has to survive. Neither is knowable
-	--  after the fact.
 	local okMod, before = pcall(world.mod, tile, "foreground")
 	local okMat, material = pcall(world.material, tile, "foreground")
 
@@ -10514,25 +4867,6 @@ function petports_asteriteMine(x, y, allowOverlap, reachOverride)
 		sb.logInfo("UNIT asterite probe REFUSED: that tile carries %s, not %s",
 			tostring(okMod and before), tostring(modName))
 
-		--  AND THE ENTRY GOES, BECAUSE THE STORE IS NOW LYING.
-		--
-		--  The store records what is PHYSICALLY THERE. It said asterite; the
-		--  tile disagrees. Refusing without dropping the entry leaves a
-		--  deposit nobody can ever mine sitting in the store forever --
-		--  nearestDeposit keeps choosing it, every attempt refuses, and the
-		--  dispatched version would walk a unit across the base to it on a
-		--  loop. This is the second half of the invalidation the store's own
-		--  comment promises, and the first half (a unit mining it) was the
-		--  only half implemented.
-		--
-		--  THE ORDINARY CAUSE IS A PLAYER GETTING THERE FIRST, which is not a
-		--  failure of anything and should cost one log line and nothing else.
-		--
-		--  ONLY WHEN THE READ SUCCEEDED. `okMod` false means we do not know
-		--  what is on that tile -- an unloaded region reads as a failure, not
-		--  as an absence -- and throwing away a real deposit because we could
-		--  not see it is worse than keeping a stale one we will re-check on
-		--  the next attempt.
 		if okMod and petports_asteriteClear(key) then
 			sb.logInfo("UNIT asterite dropped the stale entry for %s (store "
 				.. "now %s)", tostring(key),
@@ -10551,7 +4885,6 @@ function petports_asteriteMine(x, y, allowOverlap, reachOverride)
 		return false
 	end
 
-	--  THE CALL UNDER TEST.
 	local okPlace, placed = pcall(world.placeMod, tile, "foreground",
 		PETPORTS_ASTERITE_CLEARED, nil, allowOverlap)
 
@@ -10578,22 +4911,12 @@ function petports_asteriteMine(x, y, allowOverlap, reachOverride)
 	end
 
 	if not intact then
-		--  THE ONE OUTCOME THAT INVALIDATES THE APPROACH RATHER THAN THE CALL.
 		sb.logInfo("UNIT asterite probe DESTROYED THE TILE: %s became %s. "
 			.. "placeMod is not a safe removal for a breaksWithTile mod and the "
 			.. "feature needs a different primitive",
 			tostring(material), tostring(materialAfter))
 	end
 
-	--  SPAWNED AS A WORLD DROP RATHER THAN PUT IN CARGO, AND ONLY IN THIS
-	--  BUILD.
-	--
-	--  Cargo reaches the port on a TASK REPORT and there is no task here, so
-	--  there is nowhere for it to go. Spawning proves the rest of the chain
-	--  anyway -- that the matmod's itemDrop names a real item, that it spawns,
-	--  that it is the thing we expected -- and it is visible in world, which a
-	--  log line is not. The dispatched version puts it in cargo and spawns
-	--  nothing.
 	local okConfig, mod = pcall(root.modConfig, modName)
 	local drop = nil
 
@@ -10610,12 +4933,6 @@ function petports_asteriteMine(x, y, allowOverlap, reachOverride)
 			.. "nothing was spawned", tostring(modName))
 	end
 
-	--  THE ENTRY GOES UNCONDITIONALLY ONCE THE MOD IS GONE.
-	--
-	--  The store records what is PHYSICALLY THERE, and it is not there any
-	--  more. A spawn that failed loses one ore; it does not bring the deposit
-	--  back, and leaving the entry would send the next unit to a bare tile and
-	--  have it report a refusal.
 	local cleared = petports_asteriteClear(key)
 
 	sb.logInfo("UNIT asterite probe cleared store entry %s: %s (store now %s)",

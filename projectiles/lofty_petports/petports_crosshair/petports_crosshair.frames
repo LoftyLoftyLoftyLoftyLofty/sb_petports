@@ -1,9 +1,3 @@
-//  PETPORTS -- CROSSHAIR FRAMES
-//
-//  One 24x24 frame. A projectile with several frames ANIMATES through them, so
-//  the three crosshair shapes are three separate assets rather than three frames
-//  of one -- the shape is state, not animation.
-
 {
 	"frameGrid" : {
 		"size" : [24, 24],
