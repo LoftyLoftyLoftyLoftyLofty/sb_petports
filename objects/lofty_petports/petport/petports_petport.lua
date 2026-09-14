@@ -2326,14 +2326,37 @@ function init()
     --  is correct here and is still the shape fact.tooling.andnil is about.
     --  The guard below is the one every other cargo reader in this file
     --  uses; a second spelling of the same test is how they drift apart.
-    if self.petData == nil or type(self.petData.cargo) ~= "table"
-       or #self.petData.cargo == 0 then
+    --  THE MEDKIT SPILLS WITH THE LOAD, AND THE ALTERNATIVE WAS CONSIDERED.
+    --
+    --  Keeping it would mean a replacement unit comes back already prepared,
+    --  which serves the feature's intent. It would also mean one item survived
+    --  a death that every other item did not, with nothing on screen saying
+    --  why -- and a player who watched their ore hit the floor while the
+    --  medicalgoods did not is looking at a bug, not a feature. Consistency
+    --  wins: a unit spills what it was carrying.
+    --
+    --  ASSEMBLED INTO ONE LIST rather than spilled by two loops, so the
+    --  carrying-nothing branch, the spilled/lost tally and the log line below
+    --  all count the same thing and cannot drift apart.
+    local cargo = {}
+
+    if self.petData ~= nil and type(self.petData.cargo) == "table" then
+      for _, stack in ipairs(self.petData.cargo) do
+        table.insert(cargo, stack)
+      end
+    end
+
+    if self.petData ~= nil and type(self.petData.medkit) == "table"
+       and self.petData.medkit.name ~= nil then
+      table.insert(cargo, self.petData.medkit)
+    end
+
+    if self.petData == nil or #cargo == 0 then
       sb.logInfo("PETPORT %s unit %s died at %s carrying nothing",
         stationUniqueId(), tostring(payload.unit), sb.printJson(position))
       return true
     end
 
-    local cargo = self.petData.cargo
     local spilled, lost = 0, 0
 
     for _, stack in ipairs(cargo) do
@@ -2363,6 +2386,13 @@ function init()
     --  loss, because every generator that tests for empty hands would then
     --  refuse forever and the port would go quietly idle.
     self.petData.cargo = {}
+
+    --  EMPTIED ON THE SAME TERMS AS CARGO DIRECTLY ABOVE. A charge that could
+    --  not be spawned is gone as far as the world is concerned, and keeping it
+    --  would hand the replacement a phantom dose that medicWork would spend on
+    --  a patient without ever healing them.
+    self.petData.medkit = nil
+
     self.paneSignature = nil
 
     --  WRITTEN THROUGH ON THE SPOT, for flushCargo's reason and one more.
@@ -3232,7 +3262,11 @@ function init()
       local dosed = tonumber(report.dosed) or 0
 
       if dosed > 0 then
-        spendSeed(self.task.item)
+        --  THE MEDKIT, NOT CARGO, 2026-09-14. The dose has not been in cargo
+        --  since it moved to its own slot, and spendSeed against an absent
+        --  stack logged an error and charged nothing -- a medic that healed
+        --  for free forever, with the shout buried among the successes.
+        spendMedkit()
         petports_healRecord(report.target or self.task.target, MEDIC_DURATION)
         metrics.add("dosed", dosed)
 
@@ -5279,6 +5313,68 @@ function receiveCargo(item)
 
   self.petData.cargo = self.petData.cargo or {}
 
+  --  ONE CHARGE OFF THE TOP, DECIDED HERE AND NOWHERE ELSE.
+  --
+  --  THIS IS THE ONLY PLACE THAT CAN BE, which is the argument for putting it
+  --  here rather than in medicWork's fetch leg. EVERY route an item takes onto
+  --  a unit ends in this function -- a ground pickup, withdrawSeed's fetch,
+  --  withdrawMisfit's tidy eviction, a fish's treasure pool -- so one test here
+  --  covers all four, where a test in the fetch leg would cover one and the
+  --  other three would quietly fill cargo with a dose the medic never notices
+  --  it is holding. arch.pathing.oneanchor's rule, applied to items: if two
+  --  code sites decide where an arriving medicalgoods goes, they will disagree.
+  --
+  --  A SIDE EFFECT THAT IS WANTED: a medic tidying a crate that happens to hold
+  --  medicalgoods comes home loaded. It costs that tidy dispatch its move --
+  --  the stack goes to the medkit instead of to cargo, so nothing reaches
+  --  another crate -- and it happens at most once, because the next arrival
+  --  finds the medkit full and routes normally.
+  --
+  --  GATED ON THE MODULE, and that gate is load-bearing rather than tidy. It is
+  --  the same predicate reconcileMedkit dumps on, so the two cannot fight: the
+  --  instant the module comes out, this stops skimming and that starts
+  --  returning the charge to cargo.
+  --
+  --  THE PARAMETERS ARE COPIED rather than shared with the remainder below.
+  --  Both halves would otherwise reference one table across a serialisation
+  --  boundary they cross separately, which is the shape that goes wrong quietly
+  --  the first time anything mutates one in place.
+  if item.name == MEDIC_ITEM and self.petData.medkit == nil
+     and petportMedic() then
+    local whole = item.count or 1
+
+    self.petData.medkit = {
+      name = item.name,
+      count = 1,
+      parameters = copy(item.parameters)
+    }
+
+    sb.logInfo("PETPORT %s medkit loaded: 1 %s held for the next patient, "
+      .. "%s of %s going to cargo",
+      stationUniqueId(), tostring(item.name), sb.printJson(whole - 1),
+      sb.printJson(whole))
+
+    self.paneSignature = nil
+
+    --  THE WHOLE STACK WAS THE CHARGE. Nothing left to file, and falling
+    --  through would insert a count of zero that every reader downstream
+    --  believes.
+    if whole <= 1 then
+      flushCargo()
+      return
+    end
+
+    --  THE REMAINDER IS AN ORDINARY ARRIVAL and is treated as one from here
+    --  down -- merged, counted and deposited by the existing path. 500 off the
+    --  ground is 1 held and 499 routed, with no second rule about medicalgoods
+    --  anywhere below this line.
+    item = {
+      name = item.name,
+      count = whole - 1,
+      parameters = item.parameters
+    }
+  end
+
   --  MERGE INTO AN EXISTING STACK where the descriptor matches. Fifty pickups
   --  of the same block should be one entry of fifty, not fifty entries -- this
   --  goes into item parameters, and parameters are serialised with the item
@@ -6232,6 +6328,37 @@ function petportMedic()
   return false
 end
 
+--  THE HELD DOSE, AND WHY IT IS NOT IN CARGO.
+--
+--  A medic that had to walk to a crate every time somebody got hurt arrived
+--  after the fight. The fix is to carry a charge before it is asked for -- but
+--  dd.cargo.portowns says cargo is ONE TRIP'S WORTH by construction, and three
+--  generators plus the guard in findWork enforce that by testing `#cargo > 0`.
+--  A dose parked in cargo would therefore take the unit off hauling, harvest,
+--  fishing and fetching for as long as it stayed prepared, which is the whole
+--  feature paying for itself twice over.
+--
+--  So it lives beside cargo rather than in it. Every one of those guards is
+--  unchanged and simply cannot see this.
+--
+--  A BARE DESCRIPTOR, NOT A ONE-ELEMENT LIST, AND THAT IS THE JSON ROUND TRIP
+--  TALKING. normaliseCargo exists because a Lua sequence with a hole comes back
+--  off disk as a json OBJECT and reads as EMPTY to ipairs and to #, which is how
+--  a full cargo list silently became an empty one on 2026-09-05. A descriptor is
+--  already an object and every reader takes it by field, so there is no sequence
+--  to corrupt and nothing to normalise.
+--
+--  ONE CHARGE, NEVER MORE. receiveCargo skims exactly one off an arriving stack
+--  and lets the rest fall through to ordinary deposit routing.
+function petportMedkit()
+  if self.petData == nil then return nil end
+
+  local held = self.petData.medkit
+  if type(held) ~= "table" or held.name == nil then return nil end
+
+  return held
+end
+
 --  IS THE NAME TAG SWITCHED ON FOR THIS UNIT?
 --
 --  ON petData.toggles, so it travels with the pet to another port -- the same
@@ -6961,6 +7088,13 @@ function mirrorPaneState(dt)
       toggles = (self.petData and self.petData.toggles) or nil,
       medic = (self.petData and self.petData.medic) or nil,
       farming = (self.petData and self.petData.farming) or nil,
+
+      --  IS A DOSE IN THE MEDKIT? A boolean, and the wording lives in
+      --  petports_strings.config -- same split as bodyKind above.
+      --
+      --  NOT FOLDED INTO paneSpecies, which pushPetName also calls to name the
+      --  unit in the world. The badge belongs on the pane, not over its head.
+      medicReady = petportMedkit() ~= nil,
 
       --  ALWAYS COMPLETE, UNLIKE THE THREE ABOVE. Those are absent until a
       --  player touches them and the pane knows what absent means for each. A
@@ -10345,6 +10479,98 @@ function withdrawMisfit(containerId, name, count, workId, slot)
   end
 
   receiveCargo(taken)
+end
+
+--  Remove the charge from the medkit after a dose has actually landed.
+--
+--  SEPARATE FROM spendSeed RATHER THAN A FLAG ON IT, because the two debit
+--  different stores and share no code beyond the arithmetic. Folding them
+--  together would mean one function that has to be told which store it is
+--  looking at, and the medic report is the only caller that ever knows.
+--
+--  Global, same reason spendSeed is: the petports_taskReport handler is
+--  registered in init(), earlier in this file than this definition.
+function spendMedkit()
+  if self.petData == nil then return end
+
+  local held = self.petData.medkit
+
+  --  LOUD. A dose landed that the unit was not carrying, which means the
+  --  medkit and the world disagree -- the same shout spendSeed makes, for the
+  --  same reason and with the same value.
+  if type(held) ~= "table" or held.name == nil then
+    sb.logError("PETPORT %s dosed a patient with an empty medkit",
+      stationUniqueId())
+    return
+  end
+
+  local count = (held.count or 1) - 1
+
+  if count <= 0 then
+    self.petData.medkit = nil
+  else
+    held.count = count
+  end
+
+  sb.logInfo("PETPORT %s spent 1 %s dosing; medkit now %s",
+    stationUniqueId(), tostring(held.name),
+    self.petData.medkit == nil and "empty" or sb.printJson(count))
+
+  self.dirty = true
+  self.paneSignature = nil
+  writeBackToItem()
+end
+
+--  THE MODULE CAME OUT. GIVE THE CHARGE BACK.
+--
+--  A unit with no medic module can never spend what is in its medkit, so the
+--  dose would sit there invisibly forever -- outside cargo, so no deposit
+--  generator can see it, and with no pane readout yet, so neither can the
+--  player. It goes back into cargo and deposits on the next trip.
+--
+--  POLLED RATHER THAN HOOKED ONTO petports_setModules, and that is deliberate.
+--  The pane's commit handler is the only route a player can take TODAY, so a
+--  hook would work today. It would not cover an item arriving from an older
+--  save, a module item removed from the game between sessions, or whatever the
+--  second route turns out to be. One resolver, asked every tick, cannot be
+--  forgotten by the third site that changes a module set.
+--
+--  CLEARED BEFORE THE HANDOVER, NOT AFTER. receiveCargo re-enters the very
+--  predicate this function just tested, and clearing first is what makes it
+--  impossible for both stores to hold the same item for even one call.
+--
+--  Global, for the reason above it.
+function reconcileMedkit()
+  if self.petData == nil then return end
+
+  local held = self.petData.medkit
+  if held == nil then return end
+
+  --  A MALFORMED MEDKIT IS DISCARDED AND SAID SO. It is not an item -- nothing
+  --  can be spilled, deposited or spent out of it -- and leaving it in place
+  --  would block the skim in receiveCargo forever, which reads from the outside
+  --  as a medic that silently stopped preparing.
+  if type(held) ~= "table" or held.name == nil then
+    sb.logError("PETPORT %s discarding a malformed medkit: %s",
+      stationUniqueId(), sb.printJson(held))
+
+    self.petData.medkit = nil
+    self.dirty = true
+    return
+  end
+
+  if petportMedic() then return end
+
+  self.petData.medkit = nil
+  self.paneSignature = nil
+
+  sb.logInfo("PETPORT %s medic module is gone -- returning %s x%s from the "
+    .. "medkit to cargo for deposit",
+    stationUniqueId(), tostring(held.name), sb.printJson(held.count or 1))
+
+  --  receiveCargo merges, flushes and writes back. It cannot skim this back
+  --  into the medkit: petportMedic() is false, which is how we got here.
+  receiveCargo(held)
 end
 
 --  Remove one seed from cargo after it has gone into the ground.
@@ -14786,7 +15012,7 @@ end
 --  the unit does not have to reach the patient's exact tile -- only close enough
 --  for the damage poly to cover it. That widens arrival tolerance for this task
 --  specifically.
-local function medicWork()
+local function medicWork(preloadOnly)
   --  OBLIVIOUS IS CHECKED HERE AND NOT IN findWork. The four participation
   --  groups are zeroed there, but medic is not one of them -- it has no group,
   --  because the module is its switch. So it needs its own check or an
@@ -14794,44 +15020,15 @@ local function medicWork()
   if petportOblivious() then return nil, "oblivious" end
   if not petportMedic() then return nil, "no medic module socketed" end
 
-  --  HELD BEFORE ASKED FOR. Unlike water, which is withdrawn per run, the unit
-  --  carries its dose -- so no patient is worth choosing until there is
-  --  something to give them.
-  local carried = nil
-  if self.petData ~= nil and type(self.petData.cargo) == "table" then
-    for _, stack in ipairs(self.petData.cargo) do
-      if stack.name == MEDIC_ITEM then
-        carried = stack
-        break
-      end
-    end
-  end
+  --  THE DOSE IS IN THE MEDKIT, NOT IN CARGO, AND HAS BEEN SINCE 2026-09-14.
+  --  It used to be found by walking cargo, which is why the unit could not do
+  --  anything else while it was prepared -- see petportMedkit.
+  local carried = petportMedkit()
 
-  --  NOTE: not carrying a dose is NOT a reason to stop. The fetch leg below is
-  --  what turns an empty-handed medic into one holding a medical good, and its
-  --  absence is why the first build of this never dispatched anything.
-
-  local patients = medicPatients()
-  if #patients == 0 then
-    return nil, string.format("no treatable patient in network coverage (%s rects)",
-      #(self.networkRects or {}))
-  end
-
-  --  NO DOSE IN HAND? GO AND GET ONE. This leg was missing from the first
-  --  build and the symptom was total silence: medicWork required the unit to
-  --  ALREADY be carrying medicalgoods, nothing ever fetched them, so the
-  --  generator returned nil forever and never logged a reason.
-  --
-  --  IT IS IN THIS GENERATOR RATHER THAN withdrawWork DELIBERATELY. That one is
-  --  driven entirely by replant intents -- it fetches a seed because a tile is
-  --  waiting for it -- and medic has no intent table. Keeping both legs here
-  --  means one place knows the whole task: fetch when empty, deliver when
-  --  loaded.
-  --
-  --  ONLY WHEN THERE IS A PATIENT. Fetching a dose speculatively would leave a
-  --  unit holding a medical good it has nobody to give to, blocking the cargo
-  --  slot that hauling and harvesting need.
-  if carried == nil then
+  --  BOTH LEGS STILL LIVE IN THIS ONE GENERATOR. The fetch and the delivery are
+  --  one task read from two ends, and splitting them across two functions is
+  --  how they end up disagreeing about what a dose is.
+  local function fetchDose()
     local containerId = containerWithSeed(MEDIC_ITEM,
       petportParticipates("medicdeposit"),
       petportParticipates("medicrestock"))
@@ -14843,8 +15040,7 @@ local function medicWork()
     --  above this, so the pair reads correctly.
     if containerId == nil then
       return nil, string.format(
-        "%s patient(s) waiting, but no %s in network storage this unit can reach",
-        #patients, MEDIC_ITEM)
+        "no %s in network storage this unit can reach", MEDIC_ITEM)
     end
 
     local fetchId = "medicfetch:" .. stationUniqueId()
@@ -14854,17 +15050,16 @@ local function medicWork()
       return nil, "medic fetch backed off"
     end
 
-    sb.logInfo("PETPORT %s MEDIC fetch: %s patient(s) waiting, collecting one %s from %s",
-      stationUniqueId(), sb.printJson(#patients), tostring(MEDIC_ITEM),
-      sb.printJson(containerId))
+    sb.logInfo("PETPORT %s MEDIC fetch: collecting one %s from %s",
+      stationUniqueId(), tostring(MEDIC_ITEM), sb.printJson(containerId))
 
     --  A `withdraw` TASK, REUSING THE SEED MACHINERY WHOLESALE. The unit-side
-    --  handler takes one of `seed` out of `target` and puts it in cargo; it has
-    --  no opinion about what the item is for. Naming the field `seed` is
-    --  inherited rather than chosen -- see todo below if it ever gets renamed.
+    --  handler takes one of `seed` out of `target` and hands it back on the
+    --  report; receiveCargo is what decides it becomes a medkit charge rather
+    --  than cargo, so nothing on this task says "medic" at all.
     return {
       id = fetchId,
-      --  The footprint ladder ran on this target above -- see arch.dispatch.vouch.
+      --  The footprint ladder ran on this target -- see arch.dispatch.vouch.
       mediumVerified = true,
       type = "withdraw",
       port = stationUniqueId(),
@@ -14872,6 +15067,52 @@ local function medicWork()
       seed = MEDIC_ITEM,
       position = world.entityPosition(containerId)
     }
+  end
+
+  --  THE PRELOAD RUNG, AND IT IS A SEPARATE RUNG RATHER THAN A WIDER FETCH.
+  --
+  --  BOTH RUNGS SIT BELOW THE FUEL GATE, so fuel is not what separates them --
+  --  the CARGO GUARD is. The urgent rung is above that guard, because a wounded
+  --  ally outranks a stack of ore. The preload is below it, because a unit
+  --  holding a load it has not placed should deal with that before running an
+  --  errand nothing is waiting on.
+  --
+  --  BELOW THE GUARD IS NOT THE SAME AS LAST. The preload outranks every other
+  --  acquire except collecting drops -- see its rung in findWork.
+  --
+  --  Two rungs calling one generator is collectionWork's shape, not a new one.
+  if preloadOnly then
+    if carried ~= nil then return nil, "a dose is already held" end
+    return fetchDose()
+  end
+
+  --  FROM HERE DOWN IS THE URGENT PATH, and it keeps the precedence that
+  --  matters: a wounded ally outranks a stack of ore. It does NOT outrank an
+  --  empty stomach any more -- see the rung in findWork.
+  local patients = medicPatients()
+  if #patients == 0 then
+    return nil, string.format("no treatable patient in network coverage (%s rects)",
+      #(self.networkRects or {}))
+  end
+
+  --  A PATIENT IS WAITING AND THE MEDKIT IS EMPTY. This is the leg that was
+  --  missing from the first build of this feature, and the symptom was total
+  --  silence: medicWork required the unit to ALREADY be carrying medicalgoods,
+  --  nothing ever fetched them, so the generator returned nil forever.
+  --
+  --  IT STILL RUNS, AND THE PRELOAD RUNG DOES NOT MAKE IT REDUNDANT. The preload
+  --  sits below the cargo guard and this does not, so a unit stalled holding a
+  --  load it cannot place never preloads -- and that is a state someone is quite
+  --  likely to get hurt in, with storage full and a base half-built.
+  if carried == nil then
+    local task, why = fetchDose()
+
+    if task == nil then
+      return nil, string.format("%s patient(s) waiting, but %s",
+        #patients, tostring(why))
+    end
+
+    return task
   end
 
   for _, patient in ipairs(patients) do
@@ -17127,33 +17368,6 @@ local function findWork()
     sb.logInfo("PETPORT %s fuel fetch idle: %s", stationUniqueId(), tostring(noGrub))
   end
 
-  --  MEDIC SITS DIRECTLY BELOW RECALL AND ABOVE EVERYTHING ELSE.
-  --
-  --  BELOW RECALL because a stranded unit cannot reach a patient either, and the
-  --  leash has to stay the first thing tested.
-  --
-  --  ABOVE CARGO, WHICH IS A DEPARTURE. Every other task defers to a unit
-  --  holding a load, on the reasoning that hoarding is worse than fetching. A
-  --  wounded ally outranks a stack of ore: the crop will still be dry in thirty
-  --  seconds and the patient may not be there. This is the only place in the
-  --  ladder where urgency beats tidiness.
-  --
-  --  IT GATES ITSELF. There is no participation group for medic -- the module is
-  --  the switch -- so unlike the four below, this is not wrapped in a flag. It
-  --  returns nil immediately when no medic module is socketed.
-  local dose, noDose = portProf("g.medic", medicWork)
-  if dispatchable(dose) ~= nil then return dose end
-
-  --  SAID OUT LOUD, CHANGE-GATED. The first build of this returned nil for
-  --  three different reasons and logged none of them, so a medic that could
-  --  never fetch a dose was indistinguishable from a medic with nothing to do.
-  --  Gated on the reason CHANGING so a port with no patients does not print a
-  --  line every scan forever.
-  if noDose ~= nil and noDose ~= self.medicReason then
-    self.medicReason = noDose
-    sb.logInfo("PETPORT %s medic idle: %s", stationUniqueId(), tostring(noDose))
-  end
-
   --  CARGO OUTRANKS COLLECTION. A unit holding a load has exactly one job, and
   --  letting it pick up more first is how a unit ends up hoarding instead of
   --  ferrying. Below the recall ladder, though -- a stranded unit cannot reach
@@ -17198,18 +17412,27 @@ local function findWork()
   --  then stops taking on new tasks; it never abandons a job halfway.
   --
   --  THE LINE IS HERE AND NOT PER-GENERATOR, because the chain above it is
-  --  already exactly the set that SPENDS what the unit is holding -- recall,
-  --  medic, replant, water, restockDeliver, deposit -- and everything below it
+  --  almost exactly the set that SPENDS what the unit is holding -- recall,
+  --  replant, water, restockDeliver, deposit -- and everything below it
   --  ACQUIRES. That ordering predates fuel and was chosen for precedence, but it
-  --  is the same split, so one boundary expresses it rather than a flag on each
-  --  rung that could be forgotten on the next generator somebody adds.
+  --  is nearly the same split, so one boundary expresses it rather than a flag
+  --  on each rung that could be forgotten on the next generator somebody adds.
+  --
+  --  MEDIC USED TO BE NAMED IN THAT LIST AND IS NOW THE FIRST RUNG BELOW THIS
+  --  GATE, 2026-09-14. It is the one deliberate exception to "spenders sit
+  --  above", and the rung directly below carries the argument. Short version: a
+  --  dose is a service rather than a job half-done, and a starving medic is a
+  --  medic the player neglected.
   --
   --  WHY THE SPLIT MATTERS AT ALL: a fetch-then-use flow is TWO dispatches, not
   --  one. withdrawWork then replantWork, restockFetchWork then
-  --  restockDeliverWork, and the medic fetching a dose before it heals. Gating
-  --  the whole chain would let a unit collect medical goods, run dry, and walk
-  --  home still holding them -- which is not "finishes what it is doing" by any
-  --  reading a player would accept.
+  --  restockDeliverWork. Gating the whole chain would let a unit collect a seed,
+  --  run dry, and walk home still holding it -- which is not "finishes what it is
+  --  doing" by any reading a player would accept.
+  --
+  --  THE MEDIC IS NOT A COUNTER-EXAMPLE TO THAT, because BOTH of its legs are
+  --  below this line. It is never stranded mid-flow by the gate; it is refused
+  --  the whole errand or granted the whole errand.
   --
   --  RECALL IS ABOVE THIS AND MUST STAY THERE. A dry unit still comes home.
   --
@@ -17218,6 +17441,54 @@ local function findWork()
   --  a healthy unit on the strength of a missing key is the worse failure.
   if not petportFuelled() then
     return nil, "out of fuel -- finishing what it holds, taking nothing new"
+  end
+
+  --  MEDIC SITS DIRECTLY BELOW THE FUEL GATE AND ABOVE THE CARGO GUARD.
+  --
+  --  BELOW FUEL, 2026-09-14, AND THAT IS A REVERSAL. It sat above the gate with
+  --  the other spenders, on the reading that delivering a dose the unit is
+  --  already holding is finishing a job rather than taking one on. The ruling is
+  --  the other way round: healing is a SERVICE the network offers, not an errand
+  --  half-done, and keeping a medic fed is the player's job. A starving unit
+  --  neither collects a charge nor delivers one. This is where the fuel system
+  --  gets teeth, on the one task a player is most likely to notice it on.
+  --
+  --  BOTH LEGS MOVED TOGETHER, AND THAT IS WHAT MAKES IT SAFE. Splitting them
+  --  across the gate would strand the flow: fetch a dose while fed, run dry on
+  --  the walk back, and the delivery leg is then refused with the charge in
+  --  hand. Below the line, a fed medic does both and a dry one does neither.
+  --
+  --  THE CHARGE IS NOT LOST WHEN IT RUNS DRY MID-ERRAND. It sits in the medkit,
+  --  outside cargo, where no deposit generator can route it away -- so the dose
+  --  is still there the moment somebody feeds the unit.
+  --
+  --  RECALL IS STILL ABOVE EVERYTHING. A dry unit comes home, and a stranded one
+  --  could not have reached a patient anyway.
+  --
+  --  ABOVE CARGO, WHICH IS STILL A DEPARTURE. Every other task defers to a unit
+  --  holding a load, on the reasoning that hoarding is worse than fetching. A
+  --  wounded ally outranks a stack of ore: the crop will still be dry in thirty
+  --  seconds and the patient may not be there. This is the only place in the
+  --  ladder where urgency beats tidiness.
+  --
+  --  IT GATES ITSELF. There is no participation group for medic -- the module is
+  --  the switch -- so unlike the four below, this is not wrapped in a flag. It
+  --  returns nil immediately when no medic module is socketed.
+  local dose, noDose = portProf("g.medic", medicWork)
+  if dispatchable(dose) ~= nil then return dose end
+
+  --  SAID OUT LOUD, CHANGE-GATED. The first build of this returned nil for
+  --  three different reasons and logged none of them, so a medic that could
+  --  never fetch a dose was indistinguishable from a medic with nothing to do.
+  --  Gated on the reason CHANGING so a port with no patients does not print a
+  --  line every scan forever.
+  --
+  --  A DRY MEDIC NEVER REACHES THIS and therefore never explains itself here.
+  --  The gate above prints its own line, which is the honest place for it: the
+  --  problem is an empty stomach, not a medic fault.
+  if noDose ~= nil and noDose ~= self.medicReason then
+    self.medicReason = noDose
+    sb.logInfo("PETPORT %s medic idle: %s", stationUniqueId(), tostring(noDose))
   end
 
 	--  ORDERING IS NOT A GUARD.
@@ -17282,6 +17553,39 @@ local function findWork()
   local work, why
   if doHauling then work, why = portProf("g.collect", collectionWork) end
   if dispatchable(work) ~= nil then return work end
+
+  --  THE MEDIC'S SPECULATIVE PRELOAD SITS DIRECTLY BELOW COLLECTION AND ABOVE
+  --  EVERY OTHER ACQUIRE.
+  --
+  --  ABOVE FISHING, HARVEST, LIVESTOCK, TRAPS AND MINING. It was filed at the
+  --  top of the fetch tier, under all five, on the reasoning that a fetch is a
+  --  fetch. That is the wrong comparison: a seed fetch serves an intent that
+  --  will be exactly as outstanding in a minute, and so will a ripe crop, a
+  --  ready cow and a marked rock. This one exists to be finished BEFORE the
+  --  thing it is for happens, and a medic that is still fishing when somebody
+  --  gets hurt has missed the entire point of holding a charge.
+  --
+  --  BELOW COLLECTION, AND ONLY COLLECTION. An item drop is already counting
+  --  down; nothing else in this block is. That is the same perishability rule
+  --  that orders collect above fish and fish above harvest, and a medicalgoods
+  --  sitting in a crate does not expire.
+  --
+  --  STILL BELOW THE FUEL GATE AND THE CARGO GUARD. A starving unit takes on
+  --  nothing new, and a unit holding a load it has not placed deals with that
+  --  first -- neither of those moved.
+  --
+  --  IT GATES ITSELF, like the urgent rung -- there is no participation group
+  --  for medic, so an unmodulated unit declines on the first line. It also
+  --  declines the moment a charge is held, so this costs a fetch once and then
+  --  reads as one extra nil per scan until the dose is spent.
+  local preload, noPreload = portProf("g.medicPreload", medicWork, true)
+  if dispatchable(preload) ~= nil then return preload end
+
+  if noPreload ~= nil and noPreload ~= self.medicPreloadReason then
+    self.medicPreloadReason = noPreload
+    sb.logInfo("PETPORT %s medic preload idle: %s", stationUniqueId(),
+      tostring(noPreload))
+  end
 
   --  FISH SIT BETWEEN COLLECT AND HARVEST, AND IT IS THE SAME ARGUMENT BOTH
   --  TIMES: PERISHABILITY DECIDES THE ORDER.
@@ -18642,6 +18946,23 @@ local function updateInner(dt)
     self.environmentTimer = 0
     self.spawnTimer = 0
   end
+
+  --  THE MEDKIT AGAINST THE MODULE SET, ONCE A TICK.
+  --
+  --  HERE RATHER THAN IN workUpdate, because it must not be gated on the port
+  --  being switched on or on a unit existing. A player can pull the medic
+  --  module out of a port that is off, or out of one whose unit is mid-fade,
+  --  and the charge has to come back either way. petData is known good on this
+  --  line and not before it.
+  --
+  --  ABOVE THE OFF-SWITCH RECONCILIATION, for the reason four other calls in
+  --  this function are: an early return below this point would silently disable
+  --  it and the failure would be a dose nobody can see or reach.
+  --
+  --  COSTS A NIL TEST on every tick that has nothing to do. Everything past the
+  --  first line runs only for a unit that is actually holding a charge without
+  --  the module to spend it.
+  reconcileMedkit()
 
   --  THE OFF SWITCH, RECONCILED HERE AND NOWHERE ELSE.
   --

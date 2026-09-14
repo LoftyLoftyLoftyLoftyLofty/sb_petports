@@ -2393,7 +2393,37 @@ local function refresh(force)
 		return
 	end
 
-	widget.setText("petName", state.petName or "Unnamed unit")
+	--  THE BADGE RIDES THE SPECIES, so it shows in the header on an unnamed unit
+	--  and in the subtitle on a renamed one -- wherever "Utility Unit" is.
+	--
+	--  THE DIFF BELOW IS TAKEN ON THE RAW STRINGS, and the badge is applied after
+	--  it. Badging first would make species differ from petName on an UNNAMED
+	--  unit, which is exactly the test that hides the subtitle -- so the name
+	--  would appear twice, once with the badge and once without.
+	local showSpecies = state.species ~= nil and state.petName ~= nil
+		and state.species ~= state.petName
+
+	local petName = state.petName or "Unnamed unit"
+	local petSpecies = showSpecies and state.species or ""
+
+	--  petports_string RATHER THAN petports_format, and only here. A missing key
+	--  makes petports_format return the dash, which would replace the species
+	--  name with "--" -- losing real data to decorate it. An absent badge is the
+	--  better failure.
+	if state.medicReady then
+		local pattern = petports_string("petport.medicready")
+
+		if type(pattern) == "string" then
+			local ok, text = pcall(string.format, pattern,
+				showSpecies and petSpecies or petName)
+
+			if ok then
+				if showSpecies then petSpecies = text else petName = text end
+			end
+		end
+	end
+
+	widget.setText("petName", petName)
 
 	--  THE FIELD FOLLOWS petNameRaw, THE HEADER FOLLOWS petName. An unnamed unit
 	--  shows its species above and an EMPTY box below, so the box always reads as
@@ -2406,12 +2436,8 @@ local function refresh(force)
 
 	--  THE SPECIES LINE IS A DIFF, NOT A FIELD. It appears only when the player
 	--  has renamed the unit, so the port sends both and the comparison happens
-	--  once, here.
-	if state.species and state.petName and state.species ~= state.petName then
-		widget.setText("petSpecies", state.species)
-	else
-		widget.setText("petSpecies", "")
-	end
+	--  once -- above, where the badge needs the same answer.
+	widget.setText("petSpecies", petSpecies)
 
 	--  RECORDED HERE, PAINTED FROM update. refresh is signature-gated and
 	--  returns early on an unchanged blob, which is the common case -- so a

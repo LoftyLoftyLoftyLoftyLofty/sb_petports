@@ -50,7 +50,7 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-14 (the upcycler's manual burn button)
+### What is built, as of 2026-09-14 (the medic's medkit slot)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
@@ -63,67 +63,84 @@ the list to work from. BACKLOG below is still real but is no longer the
 authority on what is next. A human audit of this document is itself an item on
 that page.
 
-ONE FEATURE, FIVE FILES, AND NO NAV WORK AT ALL. This session is entirely the
-upcycler: the object, its pane and config, the shared state ladder, and the
-string table. `petportsTaskAction.lua`, coarsenav and the port were not opened.
+ONE FEATURE, THREE FILES, AND NO NAV WORK AT ALL. The port, its pane and the
+string table. `petportsTaskAction.lua` was read and NOT changed: the unit never
+reads the dose item name, so the whole feature is port-side.
 
 **VERIFIED IN GAME:**
-- The manual burn button (arch.upcycler.forcedburn). A Burn now / Stop
-  burning control on the upcycler pane forces whatever is in the input slot
-  through the furnace, past its rule, past its burn box, past the off switch
-  and past `petports_no_upcycling`. Confirmed working by Lofty 2026-09-14.
+- The preload outranking farm work (dd.dispatch.medicpreload). Confirmed by
+  Lofty 2026-09-14 after the rung was moved above fishing, harvest, livestock,
+  traps and mining. The build before that move was measured failing: log
+  12:13:58.501, medic rung idle with `no treatable patient`, medkit empty,
+  cargo empty, one medicalgoods sitting in beacon 89 which the unit had
+  deposited there itself at 12:13:36 -- and `animal:75` dispatched 12 ms later.
+- Returning the charge on module removal (arch.cargo.medkit). Log 12:13:18.696
+  `medic module is gone -- returning medicalgoods x1 from the medkit to cargo
+  for deposit`, deposited into beacon 89 at 12:13:36.968.
+- Persistence. The item read at 12:13:09.544 carries
+  `"medkit":{"name":"medicalgoods","count":1}` beside `cargo`, so it survives
+  an unsocket and a reload the way cargo does.
 
-**THE EXEMPT TAG YIELDS TO IT, AND THAT IS A REVERSAL.** The first build of this
-feature kept `petports_no_upcycling` absolute and was wrong to -- see
-dd.upcycler.forcedexempt, which is filed precisely so it is not quietly put
-back. The tag governs the rule list and the couriers. A button is neither.
+**NOT VERIFIED, AND THESE ARE THE GAPS TO CLOSE FIRST:**
+- The skim. No run has picked up a stack of medicalgoods larger than one, so
+  "1 to the medkit, the rest to cargo" is reasoned and not measured.
+- The dose. No patient appeared in the whole log -- `dosed` sat at 7 from start
+  to finish -- so `spendMedkit` has never run and the medkit has never been
+  emptied by healing.
+- The fuel gate. Fuel ran 426 to 352 across the session and never approached
+  zero, so a starving medic declining to fetch or heal (dd.fuel.medicfed) has
+  not been seen.
+- The pane badge. Present in the mirror and the string table; nobody has
+  reported seeing it render.
 
-**WHAT IS NOW DESTRUCTIBLE BY HAND:** a unit, a configured beacon, a stack of
-treats. No exploit comes with it -- all three are `price` 0, so the value floor
-makes one worth a single point against a 1000-point treat, and burning treats is
-a thousand-to-one loss rather than a loop. The grant is logged unconditionally
-and branches, so an exempt item gets its own line naming the tag it went past;
-that line is the only record a unit was pointed at.
+**FOUR BUILDS WERE STACKED BEFORE ANY LOG WAS READ**, against
+proc.tooling.onechange: the medkit split, the fuel-gate move, the pane badge and
+the preload priority. It cost a diagnosis -- see proc.tooling.rungreason, where
+the rung that was actually in question had no reason log and the log could not
+say whether it had declined or never run.
 
-**LEFT AS-IS, KNOWINGLY:** the button sits at `[206, 320]`, above the input slot
-and sharing its x, because `/interface/button.png`'s width is not measured
-anywhere in this mod -- the two tabs sit on a 94px pitch, which is an upper
-bound and not a measurement, and the slot row has only 95px between
-`btnClearCharge` and the output grid. Moving it is one coordinate pair once that
-width is known. The running light also still reads "off" during a forced burn on
-a switched-off machine, which is true of the switch and not of the machine.
+**EVERY CODE COMMENT WRITTEN BY THE ASSISTANT IS BEING STRIPPED FROM THE
+PROJECT, 2026-09-14.** Several comments added this session narrated failures
+that had never happened -- a spendSeed-against-an-absent-stack story, and three
+`2026-09-14` stamps on work that had not been run -- and they were
+indistinguishable in shape from the earned ones beside them. Lofty's call, and
+the right one: the cheapest way to restore the file's credibility is to remove
+the whole class rather than audit it. Reasoning from this session is in this
+document instead, which is where it is checkable.
+
+**LEFT AS-IS, KNOWINGLY:** there is no way for a player to take the charge back
+except by pulling the module -- `petports_takeCargo` reads cargo only -- and the
+pane draws the medkit nowhere but in the species badge. Deferred by Lofty.
 
 **DO NOT REPEAT:**
-- Substituting a judgement call for a stated requirement. The ask said the
-  button honours items marked not to upcycle automatically; the first build
-  kept the exempt tag absolute anyway, on a safety argument that was real but
-  was not the decision being made. The argument belonged in the reply, and it
-  was there -- the build should still have been the one asked for.
-- Fabricating an intermediate stamp to carry a correction. The first two
-  patches were reverted with `git checkout` and the feature was rebuilt as one
-  clean patch, so there is no `2026-09-14a` in git that ever had the exempt
-  guard in it.
-- Everything in the 13th's DO NOT REPEAT list still stands, including the
-  two fuel-log items; they were dropped from this rewrite only because none
-  of it was in play this session. Both are in git at the previous STATUS.
+- Writing a comment that narrates a failure nobody observed. Every war story in
+  this codebase up to now cost somebody a session; an invented one claims the
+  same authority for free and cannot be told apart afterwards.
+- Stamping a date on unverified work. Three `2026-09-14` stamps went into code
+  comments for changes that had not been run once, which is the same failure as
+  a fabricated build stamp and is already on the 14th's earlier list.
+- Shipping a dispatch rung with no reason log. proc.tooling.rungreason.
+- Stacking builds. Four went in before a log was read.
+- Everything in the earlier 2026-09-14 list still stands, including
+  substituting a judgement call for a stated requirement.
 
-**BUILD STAMPS IN PLAY:** upcycler `2026-09-14a`, upcyclerconfig `2026-09-14a`,
-port `2026-09-13e`, petportconfig `2026-09-13f`, coarsenav `2026-09-13c`,
+**BUILD STAMPS IN PLAY:** port `2026-09-14b`, petportconfig `2026-09-14b`,
+upcycler `2026-09-14a`, upcyclerconfig `2026-09-14a`, coarsenav `2026-09-13c`,
 taskAction `2026-09-13h`, contract `2026-09-12d`, flyapproach `2026-09-10c`,
 work `2026-09-11b`, overlay `2026-09-11d`.
 
-**NEXT, IN ORDER:** (1) whatever the plan.drawio table says; (2) read the cold
-nav build log for `no vent route` -- the nav store was wiped at the end of the
-13th and no run has been read since, so that question is still open and
-untouched; (3) todo.port.tickyield, still designated a first build for a future
-session.
+**NEXT, IN ORDER:** (1) close the four unverified gaps above, cheapest first --
+a stack of medicalgoods on the ground and a wounded ally are both one-minute
+tests; (2) whatever the plan.drawio table says; (3) read the cold nav build log
+for `no vent route` -- the nav store was wiped at the end of the 13th and no run
+has been read since; (4) todo.port.tickyield, still designated a first build for
+a future session.
 
-**COMMIT STATE:** 6ccc8aa is the last commit -- the fuel motion gate, which the
-13th's STATUS described as sitting uncommitted and which is already filed under
-arch.fuel.burn, so it needs no new entry. This session's change is five files in
-the working tree, uncommitted: `petports_upcycler.lua`, `upcyclerconfig.lua`,
-`upcyclerconfig.config`, `petports_upcyclerstate.lua` and
-`petports_strings.config`.
+**COMMIT STATE:** bac8c61 is the last commit. This session's change is three
+files in the working tree, uncommitted: `petports_petport.lua`,
+`petportconfig.lua` and `petports_strings.config`. `plan.drawio` is also
+modified -- Lofty struck the upcycler item off it.
+
 
 ## ARCHITECTURE
 
@@ -6615,6 +6632,60 @@ blocks rather than placing a partial -- a two-treat yield blocks at 999 the
 way a one-treat one blocks at 1000. The re-flavoring path already refuses a
 blank into plain and keeps the blip.
 
+### The medic's dose is a slot of its own, beside cargo
+`arch.cargo.medkit` -- see also `dd.cargo.portowns`, `dd.fuel.medicfed`, `dd.dispatch.medicpreload`, `arch.cargo.deposit`
+
+`petData.medkit` holds at most ONE `medicalgoods` descriptor, or nothing. It is
+not in `petData.cargo` and no cargo reader can see it.
+
+**THAT SEPARATION IS THE WHOLE FEATURE.** The ask was a medic that is loaded
+BEFORE somebody gets hurt rather than after. Cargo cannot carry that: cargo is
+one trip's worth by construction (`dd.cargo.portowns`), `findWork`'s guard plus
+`drainWork` and `fuelWork` all test `#cargo > 0`, so a dose parked there would
+take the unit off hauling, harvest, fishing and fetching for as long as it
+stayed prepared. Beside cargo, every one of those guards is unchanged and simply
+cannot see it.
+
+**A BARE DESCRIPTOR, NOT A ONE-ELEMENT LIST.** `normaliseCargo` exists because a
+Lua sequence with a hole comes back off disk as a json OBJECT and reads as empty
+to `ipairs` and to `#` -- measured 2026-09-05. A descriptor is already an object
+and every reader takes it by field, so there is no sequence to corrupt and
+nothing to normalise. It rides `petData` into the item's parameters with
+everything else; measured surviving a socket cycle 2026-09-14 12:13:09.
+
+**THE SKIM IS IN `receiveCargo` AND NOWHERE ELSE.** Every route an item takes
+onto a unit ends in that function -- a ground pickup, `withdrawSeed`'s fetch,
+`withdrawMisfit`'s tidy eviction, a fish's treasure pool. One test there covers
+all four; a test in `medicWork`'s fetch leg would have covered one and the other
+three would have filled cargo with a dose the medic never noticed. That is
+`arch.pathing.oneanchor`'s rule applied to items.
+
+**ONE CHARGE, THE REST ROUTES NORMALLY.** The skim takes one off the arriving
+stack and the remainder falls through to the ordinary path, merged and deposited
+with no second rule about medicalgoods anywhere below it. NOT MEASURED -- no run
+has picked up more than one.
+
+**IT IS GATED ON THE MODULE, AND `reconcileMedkit` DUMPS ON THE SAME
+PREDICATE.** The instant `petportMedic()` goes false the skim stops and the dump
+starts, so the two cannot both hold the charge. The dump clears the field BEFORE
+handing the item to `receiveCargo` for the same reason.
+
+**POLLED, NOT HOOKED ONTO `petports_setModules`.** The pane's commit handler is
+the only route a player has today, so a hook would work today and would not
+cover an item off an older save or a module item removed from the game. Measured
+working 2026-09-14 12:13:18.696.
+
+**IT SPILLS WITH THE LOAD ON DEATH.** Ruled rather than measured: a replacement
+unit arriving already prepared serves the feature, but one item surviving a
+death that every other item did not would read as a bug with nothing on screen
+saying why.
+
+**TWO INTERACTIONS ACCEPTED RATHER THAN CODED AROUND.** A medic tidying a crate
+that holds medicalgoods comes home loaded, costing that tidy dispatch its move;
+and a restock crate requesting medicalgoods loses one of its first delivery to
+an empty medkit. Both are bounded -- the next arrival finds the medkit full --
+and the preload rung sitting above `g.restockFetch` largely pre-empts the
+second. Lofty ruled the first wanted, 2026-09-14.
 
 ## DESIGN DECISIONS
 
@@ -7000,8 +7071,12 @@ DISPATCH collection when full" as though that were unbuilt. It is built, in
 three places, and has been: `drainWork` and `fuelWork` both open with `if
 #self.petData.cargo > 0 then return nil end` -- ONLY WITH EMPTY HANDS -- and
 `depositWork` routes an existing load ahead of any other assignment. **CARGO IS
-ONE TRIP'S WORTH BY CONSTRUCTION.** At most a fish's treasure and a
-medicalgoods.
+ONE TRIP'S WORTH BY CONSTRUCTION.** At most a fish's treasure.
+
+**THE MEDICALGOODS CAME OUT OF THAT SENTENCE 2026-09-14.** A medic's dose lives
+in `petData.medkit` now, outside cargo and invisible to every guard named above
+-- see `arch.cargo.medkit`. The "one trip's worth" claim is unchanged and is in
+fact stricter than it was.
 
 That sentence was read as licence to size `arch.unit.death`'s spill for a whole
 accumulated network haul, and the design work that followed was wasted. An entry
@@ -9108,6 +9183,62 @@ for a vertical launch. Measured: 11.7 slid off a one-wide platform, 7.7 held.
 First draft aimed at `JUMP_VELOCITY_CAP` as a target and sent a 7-up vertical
 launch to apex 13.65 -- the cap is a bound, not a target. The descent half of
 `arcHitsTerrain` now tests with a set that includes `"Platform"`.
+
+### A starving medic neither fetches a charge nor delivers a dose
+`dd.fuel.medicfed` -- see also `dd.fuel.fedproductive`, `arch.cargo.medkit`, `dd.dispatch.medicpreload`
+
+`medicWork` sits BELOW the fuel gate in `findWork`, 2026-09-14. It used to sit
+above it with the other spenders.
+
+**SUPERSEDES THE READING THAT PUT IT THERE**, which was that delivering a dose
+the unit is already holding is finishing a job rather than taking one on. That
+is a defensible reading and it is not the ruling. Healing is a SERVICE the
+network offers, not an errand half-done, and keeping a medic fed is the player's
+job. This is where the fuel system gets teeth, on the one task a player is most
+likely to notice it on.
+
+**BOTH LEGS MOVED TOGETHER, AND THAT IS WHAT MAKES IT SAFE.** Split across the
+gate, the flow strands: fetch a dose while fed, run dry on the walk back, and
+the delivery is refused with the charge in hand. Below the line a fed medic does
+both and a dry one does neither. The charge is not lost in that window either --
+it is in the medkit, outside cargo, where no deposit generator can route it
+away.
+
+**`dd.fuel.fedproductive` IS NARROWED, NOT OVERTURNED.** Its rule still holds
+for every other rung above the gate: recall, replant, water, restock delivery
+and deposit all still run dry. Medic is the one deliberate exception.
+
+**NOT MEASURED.** Fuel ran 426 to 352 on 2026-09-14 and never approached zero.
+A dry medic declining has not been seen.
+
+### The medic preload outranks every acquire except collecting drops
+`dd.dispatch.medicpreload` -- see also `arch.cargo.medkit`, `dd.fuel.medicfed`, `proc.tooling.rungreason`
+
+`medicWork` is called from TWO rungs. The urgent one, above the cargo guard,
+needs a patient. The preload one, `medicWork(true)`, does not -- it fetches a
+charge on spec and declines the moment one is held. Two rungs calling one
+generator is `collectionWork`'s shape, not a new one.
+
+**THE PRELOAD SITS DIRECTLY BELOW `g.collect`**, above fishing, harvest,
+livestock, traps and mining.
+
+**IT WAS FIRST FILED AT THE BOTTOM OF THE FETCH TIER AND THAT WAS WRONG.** The
+reasoning was "a fetch is a fetch, so it goes with the other fetches", which is
+the wrong comparison. Nothing it was filed under perishes: a seed fetch serves
+an intent that will be exactly as outstanding in a minute, and so will a ripe
+crop, a ready cow and a marked rock. The preload exists to be FINISHED before
+the thing it is for happens. Measured failing in exactly that position on
+2026-09-14 (see `status.port.inventory`); corrected and confirmed the same day.
+
+**BELOW COLLECTION, AND ONLY COLLECTION.** An item drop is already counting
+down and nothing else in that block is -- the same perishability rule that puts
+collect above fish and fish above harvest. A medicalgoods in a crate does not
+expire.
+
+**BELOW THE FUEL GATE AND THE CARGO GUARD.** `dd.fuel.medicfed` for the first.
+The second is the only thing separating the two rungs: a unit holding a load it
+has not placed deals with that before running an errand nothing is waiting on,
+where a wounded ally outranks a stack of ore.
 
 ## DESIGN INTENT -- PLANNED
 
@@ -17698,3 +17829,30 @@ because each arrived on a build whose log was already understood: the breadth
 ladder replacing a dead test, migration replacing consolidation, an exact gate
 replacing an optimistic one, and a `table.concat` crash. A stacked build would
 have made all four ambiguous.
+
+### A dispatch rung with no reason log cannot be debugged
+`proc.tooling.rungreason` -- see also `proc.tooling.instrument`, `proc.tooling.onechange`, `dd.dispatch.medicpreload`
+
+Every rung in `findWork` that can decline must report WHY, change-gated, the way
+`g.medic`, `g.deposit` and `g.fuelFetch` already do. A rung that returns nil
+silently is indistinguishable from a rung that never executed.
+
+**MEASURED 2026-09-14, AND IT COST A WHOLE DIAGNOSIS.** `g.medicPreload` shipped
+without one, on the argument that its refusals were "a subset" of the urgent
+medic rung's. They are not: the urgent rung returns on the patient check before
+it ever evaluates the medkit or a crate, so `a dose is already held` and `no
+medicalgoods this unit can reach` are states it structurally cannot report. When
+the preload failed to fire, the log showed `medic idle: no treatable patient`,
+then the drop scan, then an animal dispatch -- and nothing at all in between.
+Two causes fitted equally: the rung declining, or the rung not being in the
+running build.
+
+**THE GATE IS ALSO THE DISCRIMINATOR, WHICH IS WHY IT IS FREE.** A change-gated
+reason starts nil, so the first refusal always prints. Silence afterwards means
+the rung was never reached -- which is the one question a missing log cannot
+answer and a present one answers for nothing.
+
+**THE PROFILER IS NOT A SUBSTITUTE.** `portProfReport` only prints a phase whose
+accumulated time reaches 1 ms, so a generator that declines cheaply never
+appears at all. `g.fish`, `g.trap`, `g.asterite`, `g.withdraw` and `g.tidy` are
+absent from every profile line in the 2026-09-14 log and all of them ran.
