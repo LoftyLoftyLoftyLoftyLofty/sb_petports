@@ -38,7 +38,7 @@ require "/scripts/lofty_petports/petports_strings.lua"
 local DEBUG = true
 
 --  Bump on every change to this file. See the log line in init().
-local PANE_BUILD_STAMP = "2026-09-11b the blip queue is read by string key as well as integer, since the message may deliver either"
+local PANE_BUILD_STAMP = "2026-09-14a a burn button forces the input slot by hand past every refusal, and the pane captions, reports and cancels it"
 
 --  sb.logInfo accepts %s and nothing else. Pre-format through string.format,
 --  which has no such limit, and hand the logger one string.
@@ -909,6 +909,45 @@ local function hideWarning()
 	widget.setVisible("warnIcon", false)
 end
 
+--  THE BURN BUTTON'S TWO STATES.
+--
+--  A CAPTION SWAP RATHER THAN A CHECKABLE BUTTON. The permission belongs to the
+--  machine and this pane only asks for it, so a self-toggling widget would
+--  disagree with the truth for a quarter of a second on every press -- one
+--  poll -- and permanently on a press the machine refused.
+--  fact.pane.checkedpostoggle is the same trap approached from the other side.
+--
+--  IT IS ALSO THE ONLY PLACE THE SECOND PRESS CAN BE EXPLAINED. This pane has
+--  no hover layer, so there is no tooltip to say that pressing again stops it,
+--  and with nothing refusing on the machine side that second press is the only
+--  way to call a burn back. The word on the button is the whole affordance.
+--
+--  DISABLED ON AN EMPTY SLOT, NOT HIDDEN. A button that vanishes reads as a
+--  rendering fault; a dead one reads as "nothing to do here", which is what it
+--  is. NEVER disabled while a force is running, whatever the slot says -- the
+--  stop has to stay reachable for as long as the burn does.
+--
+--  CHANGE-GATED ON BOTH, because this runs every tick the pane is open and
+--  neither call is free.
+local function refreshBurnButton(input)
+	local forced = type(self.forcedName) == "string"
+
+	local caption = petports_stringOr(forced and "upcycler.burn.stop"
+		or "upcycler.burn.now")
+
+	if caption ~= self.burnCaption then
+		self.burnCaption = caption
+		pcall(widget.setText, "btnBurnNow", caption)
+	end
+
+	local usable = forced or input ~= nil
+
+	if usable ~= self.burnUsable then
+		self.burnUsable = usable
+		pcall(widget.setButtonEnabled, "btnBurnNow", usable)
+	end
+end
+
 --  THE PANE COMPUTES ITS OWN REFUSALS rather than being told.
 --
 --  It already holds the rule list and can read its own grids, so every test
@@ -923,6 +962,35 @@ end
 --  happening.
 function refreshStatus()
 	if not self.loaded then return end
+
+	--  READ ONCE, ABOVE THE BEACON RUNG, AND THE `local` IS THE BUG FIX.
+	--
+	--  `input` was used twice below -- the idle test and the converting line --
+	--  and was never declared anywhere in this file. An undeclared name is a
+	--  GLOBAL, a global that was never assigned is nil, so `input == nil` was
+	--  unconditionally true: the pane reported "idle, nothing in the input
+	--  slot" whenever no warning fired, whatever was actually in there, and the
+	--  converting line below was unreachable code that would have thrown on
+	--  `input.name` if it had ever run. fact.tooling.nilglobal again.
+	--
+	--  IT SURVIVED BECAUSE EVERY LOADED INPUT USED TO PRODUCE A WARNING and the
+	--  ladder returned above this point. Blank treats flavoring against a live
+	--  charge are the first input state that is both loaded and blameless, so
+	--  they are what made a pre-existing lie visible -- with the output full,
+	--  which produces no verdict of its own because a slot full of TREATS is
+	--  fuel-tagged and outputBlocked only fires on something that is not.
+	--
+	--  Also one call rather than two: inputItem() was invoked twice on the same
+	--  line to test and then read.
+	--
+	--  HOISTED ABOVE THE BEACON RUNG so the burn button is repainted even on
+	--  the ticks a warning returns early -- and a beacon in the machine is
+	--  exactly such a tick, now that a beacon is something this button can
+	--  destroy. A caption frozen at "Burn now" while the machine is burning one
+	--  would be the worst possible time for it.
+	local input = inputItem()
+
+	refreshBurnButton(input)
 
 	for _, item in ipairs(allSlotItems()) do
 		if hasTag(item.name, TAG_BEACON) then
@@ -943,27 +1011,6 @@ function refreshStatus()
 	--  cause falls through to a generic sentence rather than showing nothing,
 	--  so a classifier that learns a new fault before the pane learns its
 	--  wording still tells the player something true.
-	--  READ ONCE, INTO A LOCAL, AND THE `local` IS THE BUG FIX.
-	--
-	--  `input` was used twice below -- the idle test and the converting line --
-	--  and was never declared anywhere in this file. An undeclared name is a
-	--  GLOBAL, a global that was never assigned is nil, so `input == nil` was
-	--  unconditionally true: the pane reported "idle, nothing in the input
-	--  slot" whenever no warning fired, whatever was actually in there, and the
-	--  converting line below was unreachable code that would have thrown on
-	--  `input.name` if it had ever run. fact.tooling.nilglobal again.
-	--
-	--  IT SURVIVED BECAUSE EVERY LOADED INPUT USED TO PRODUCE A WARNING and the
-	--  ladder returned above this point. Blank treats flavoring against a live
-	--  charge are the first input state that is both loaded and blameless, so
-	--  they are what made a pre-existing lie visible -- with the output full,
-	--  which produces no verdict of its own because a slot full of TREATS is
-	--  fuel-tagged and outputBlocked only fires on something that is not.
-	--
-	--  Also one call rather than two: inputItem() was invoked twice on the same
-	--  line to test and then read.
-	local input = inputItem()
-
 	local verdict = petports_upcyclerVerdict({
 		input = input ~= nil and input.name or nil,
 		reagent = type(self.reagentName) == "string" and self.reagentName or nil,
@@ -974,6 +1021,13 @@ function refreshStatus()
 		--  here: the wrong answer for one poll is a warning that appears or
 		--  clears a moment late, not a wrong action.
 		charges = tonumber(self.blipCount) or 0,
+
+		--  THE PLAYER'S EXPLICIT OVERRIDE. Without it the ladder reports "no
+		--  rule names this", or "this can never be upcycled", over a machine
+		--  the player can see burning it -- the pane arguing with an
+		--  instruction it delivered itself.
+		forced = self.forcedName,
+
 		ruleFor = ruleFor
 	})
 
@@ -991,6 +1045,15 @@ function refreshStatus()
 	end
 
 	hideWarning()
+
+	--  ABOVE THE OFF TEST, because a forced burn RUNS on a switched-off
+	--  machine. "Machine is off" in front of a machine visibly consuming a
+	--  stack is the pane contradicting the screen.
+	if type(self.forcedName) == "string" then
+		widget.setText("lblStatus",
+			petports_format("upcycler.status.forced", labelFor(self.forcedName)))
+		return
+	end
 
 	if not self.enabled then
 		widget.setText("lblStatus",
@@ -1149,6 +1212,13 @@ local function refreshProgress(dt)
 			--  explaining.
 			self.reagentName = result.reagent
 			self.outputName = result.output
+
+			--  THE HAND-SET BURN PERMISSION, on the same poll as its
+			--  neighbours. A quarter second of lag means the caption and the
+			--  warnings settle one poll after the press rather than a wrong
+			--  action -- and the press itself went straight to the machine.
+			self.forcedName = type(result.forced) == "string" and result.forced
+				or nil
 		end
 	end
 
@@ -1493,6 +1563,50 @@ function clearChargeClicked()
 	world.sendEntityMessage(id, "petports_upcyclerClearCharge")
 end
 
+--  FORCE THE INPUT SLOT, OR STOP FORCING IT.
+--
+--  BOTH PRESSES SEND ONE MESSAGE and the machine works out which it was, so the
+--  flag has exactly one author. Same arrangement as clearChargeClicked beside
+--  it, and for the same reason: a pane that decided this itself would be a
+--  second opinion about state it cannot see change.
+--
+--  THE ITEM IS NAMED, so the machine can refuse a stack that moved between the
+--  press and the message. On a cancel the name is the one the pane was last
+--  told about, which is what the player pressed stop ON.
+--
+--  NOTHING IS PAINTED HERE. The caption follows the machine's own answer on the
+--  next poll, so what the player sees is what the machine did rather than what
+--  the pane assumed it would do -- the blips have worked this way since they
+--  were built.
+function burnNowClicked()
+	local id = pane.containerEntityId()
+	if id == nil then return end
+
+	if type(self.forcedName) == "string" then
+		dbg("burnNowClicked: asking %s to STOP forcing %s", tostring(id),
+			self.forcedName)
+
+		world.sendEntityMessage(id, "petports_upcyclerBurnNow",
+			{ item = self.forcedName })
+
+		return
+	end
+
+	local held = inputItem()
+
+	if held == nil then
+		--  The button is disabled in this state, so reaching here means the
+		--  slot emptied between the paint and the press.
+		dbg("burnNowClicked: input slot is empty, nothing to force")
+		return
+	end
+
+	dbg("burnNowClicked: asking %s to force-burn %s", tostring(id), held.name)
+
+	world.sendEntityMessage(id, "petports_upcyclerBurnNow",
+		{ item = held.name })
+end
+
 function tabInstructionsClicked()
 	showTab("instructions")
 end
@@ -1689,6 +1803,13 @@ function init()
 	self.shownThreshold = ""
 	self.fieldUsable = true
 	self.tagCache = {}
+
+	--  nil MEANS NO FORCE, and the two paint caches start nil so the first
+	--  refreshBurnButton asserts both rather than trusting what the widget was
+	--  constructed with.
+	self.forcedName = nil
+	self.burnCaption = nil
+	self.burnUsable = nil
 
 	self.points = 0
 	self.pointsPerFuel = 1000

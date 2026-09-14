@@ -17,6 +17,13 @@
 --  explicit consent, but "I dropped it in to see what happened" is a mistake
 --  people make, and this is the one device in the mod that cannot be undone.
 --
+--  WITH EXACTLY ONE EXCEPTION, AND IT IS A BUTTON. Everything above is about
+--  what the machine does on its OWN -- to whatever the couriers deliver, to
+--  whatever a player left in the slot and walked away from. It was never meant
+--  to bind a player who puts a stack in by hand and then presses a second
+--  control that says Burn now. See THE FORCED BURN below for what that
+--  overrules, which is everything.
+--
 --  THE THRESHOLD IS NOT CONSULTED HERE. A rule is { item, max }, and `max` is a
 --  statement about how much the NETWORK should keep -- it governs what gets
 --  routed here, not what happens once it arrives. By the time a stack is in the
@@ -154,7 +161,18 @@ local SLOT_OUTPUT = 2
 
 local FUEL_ITEM = "petports_petfuel"
 
---  NEVER CONVERTED, WHATEVER THE RULES SAY.
+--  NEVER CONVERTED, WHATEVER THE RULES SAY -- AND A BUTTON IS NOT A RULE.
+--
+--  This tag governs the RULE LIST and everything that reads it: no rule can
+--  name a tagged item into the furnace, no courier will deliver one, and a
+--  tagged item left in the slot sits there forever. That is the whole of its
+--  job and it is unchanged.
+--
+--  IT DOES NOT GOVERN THE FORCED BURN. A rule is a standing instruction that
+--  fires on things the player is not watching; the button is a person pointing
+--  at one stack in one slot and pressing. Those are different enough that the
+--  same guard should not answer both -- see THE FORCED BURN below, which says
+--  what is destructible this way and what the log says when it happens.
 --
 --  ONE TAG, DECLARED BY THE ITEMS THEMSELVES. This used to be a list of tags
 --  the machine knew about -- petports_beacon, petports_unit, petports_fuel --
@@ -168,7 +186,7 @@ local FUEL_ITEM = "petports_petfuel"
 --  in this mod. Pet Treats carry the tag too, so output can never be laundered
 --  back into output -- the value floor means even a zero-price item is worth a
 --  point, so price alone would not have closed that loop.
-local OBJECT_BUILD_STAMP = "2026-09-11b a multi-treat yield blocks when it cannot fit whole, and never destroys the part that would not"
+local OBJECT_BUILD_STAMP = "2026-09-14a a hand-pressed burn forces the input slot past its rule, its burn box, the exempt tag and the off switch"
 
 local EXEMPT_TAG = "petports_no_upcycling"
 
@@ -353,6 +371,88 @@ local function exempt(descriptor)
 	self.exemptCache[descriptor.name] = verdict
 
 	return verdict
+end
+
+--  ---------------------------------------------------------------------------
+--  THE FORCED BURN
+--  ---------------------------------------------------------------------------
+
+--  THE ONE WAY PAST EVERY REFUSAL IN THIS FILE, AND IT COSTS A DELIBERATE
+--  PRESS.
+--
+--  The header says the rule list is the destroy list and is the only
+--  authority. That is still true of everything arriving here WITHOUT A HUMAN
+--  IN THE LOOP, which is what the rule list was written for. It was never
+--  meant to bind the player themselves: putting a stack in the slot by hand
+--  and then pressing a button is the consent the rule list exists to obtain,
+--  given twice, about one named stack. The hand-drop paragraph up top worries
+--  about "I dropped it in to see what would happen", and pressing a second
+--  control is exactly what that player does not do.
+--
+--  SO IT BYPASSES EVERYTHING: the missing rule, the unticked burn box, the off
+--  switch, the plain-treat detour AND petports_no_upcycling. Every one of
+--  those exists to stop the machine acting UNASKED. This is the ask, and a
+--  guard that fires against an explicit instruction is not a safeguard, it is
+--  the machine disbelieving its owner.
+--
+--  WHICH MEANS A UNIT IN THIS SLOT CAN BE DESTROYED. That is the real cost and
+--  it is stated here rather than buried: a unit, a configured beacon and a
+--  stack of treats are all reachable by this button. Pressing it twice is a
+--  cancel, and the grant is logged unconditionally naming what was pointed at,
+--  so a player who did this by accident has both a way out and a record.
+--
+--  IT DOES NOT BYPASS canEmit, WHICH IS NOT A REFUSAL. A machine that eats
+--  input it cannot pay for destroys the stack and shows NOTHING for it. That
+--  is not the machine declining to do what it was told, it is the machine
+--  doing it badly, and being asked for it does not make the outcome better.
+--
+--  NO EXPLOIT IS OPENED BY THE TREATS. Every Pet Treat is `price` 0, so the
+--  value floor makes one worth a single point against a 1000-point treat --
+--  burning treats is a thousand-to-one loss, not a loop. Units and beacons are
+--  price 0 for the same reason. Nothing here pays.
+--
+--  KEYED ON THE ITEM NAME, NOT A BARE BOOLEAN, AND THAT IS THE WHOLE SAFETY.
+--
+--  A force that outlives its stack is a machine that eats the NEXT thing
+--  dropped in, unasked -- the rule list defeated by the back door, and with
+--  the exempt tag now yielding too, the next thing could be a unit. Holding
+--  the NAME means the permission expires on its own the moment the slot holds
+--  something else, or nothing, with no timer and nothing to remember to clear.
+--
+--  IN `storage`, NOT MIRRORED TO A PARAMETER. It survives a reload, because a
+--  player who set a stack of a thousand burning and then logged out asked for
+--  the stack and not for the session. It deliberately does NOT follow a mined
+--  machine: a re-placed upcycler comes back inert, for the same reason die()
+--  forces `enabled` off.
+--
+--  CALLED FROM TWO PLACES AND CLEARS IN BOTH, which is safe because clearing
+--  is idempotent and the log line is gated by the flag it is clearing. The
+--  second caller in a tick sees nil and returns immediately.
+local function forcedBurn(input)
+	local wanted = storage.forceBurn
+
+	if type(wanted) ~= "string" then return nil end
+
+	local held = type(input) == "table" and type(input.name) == "string"
+		and input.name or nil
+
+	if held ~= wanted then
+		--  UNCONDITIONAL, because this is an event and not a state: a
+		--  permission ending is the counterpart of the line that granted it,
+		--  and it fires at most once per press.
+		sb.logInfo("PETPORTS upcycler: forced burn of %s ENDED -- slot %s now holds %s",
+			wanted, sb.printJson(SLOT_INPUT), held or "nothing")
+
+		storage.forceBurn = nil
+
+		--  So the next tick re-evaluates rather than sitting on a verdict it
+		--  reached while the permission was live.
+		self.state = nil
+
+		return nil
+	end
+
+	return wanted
 end
 
 --  ---------------------------------------------------------------------------
@@ -827,6 +927,24 @@ local function shuttleSlots()
 	local inputHeld = type(input) == "table" and type(input.name) == "string"
 	local reagentHeld = type(reagent) == "table" and type(reagent.name) == "string"
 
+	--  A HAND-FORCED STACK IS NOT AVAILABLE TO THE SHUTTLE.
+	--
+	--  THE PRIORITY RULE IS WHAT MAKES THIS NECESSARY. Feeding the charge
+	--  outranks burning, so without this a forced REAGENT is lifted straight
+	--  out of the burner and spent as flavor -- the machine quietly doing the
+	--  other thing with the one stack the player pointed at. The deadlock swap
+	--  reaches the same wrong place by a different route, which is why both are
+	--  gated and not just the burner side.
+	--
+	--  THE REAGENT SIDE IS LEFT RUNNING. Every move it makes is reagent slot ->
+	--  input, and its own guard already declines while the input is occupied --
+	--  which, while a force is live, it is.
+	--
+	--  THIS IS ALSO WHERE THE PERMISSION EXPIRES ON A STACK THAT WAS PULLED OUT
+	--  BY HAND, since shuttleSlots runs above update()'s own input read and
+	--  above the enabled gate. See forcedBurn.
+	local forced = forcedBurn(inputHeld and input or nil)
+
 	--  THE DEADLOCK IS CHECKED FIRST, BEFORE EITHER ONE-WAY RESCUE.
 	--
 	--  Both rescues would otherwise look at an occupied destination, correctly
@@ -836,7 +954,7 @@ local function shuttleSlots()
 	--  THE PREDICATE IS SHARED WITH THE PANE so the machine cannot act on a
 	--  definition of "stuck" that differs from the one the player is being
 	--  shown. See petports_upcyclerstate.lua.
-	if inputHeld and reagentHeld
+	if forced == nil and inputHeld and reagentHeld
 	   and petports_upcyclerDeadlocked(input.name, reagent.name, ruleFor) then
 		swapSlots(input, reagent)
 		return
@@ -848,7 +966,7 @@ local function shuttleSlots()
 	--
 	--  EXEMPT ITEMS ARE NEVER SHUTTLED ANYWHERE. Moving one only relocates
 	--  something every slot refuses; update() names it at the furnace door.
-	if inputHeld and not exempt(input) then
+	if forced == nil and inputHeld and not exempt(input) then
 		local rule = ruleFor(input.name)
 
 		--  NO RULE IS AN ERROR HERE, NOT A DEFAULT -- and deliberately the
@@ -1151,7 +1269,16 @@ function update(dt)
 	--  reasons in its own header.
 	shuttleSlots()
 
-	if not storedEnabled() then
+	--  A FORCED BURN RUNS ON A SWITCHED-OFF MACHINE. The switch guards against
+	--  the machine acting unasked; a hand-set permission is the ask. See
+	--  forcedBurn.
+	--
+	--  TESTED ON THE RAW FLAG, NOT ON A RESOLVED NAME, so the gate costs no
+	--  container read of its own. A flag left stale by a stack pulled out
+	--  between ticks survives at most until the input read below, and the tick
+	--  it buys does nothing but pay out points already banked -- which is what
+	--  a just-finished forced burn wants anyway.
+	if not storedEnabled() and storage.forceBurn == nil then
 		state("idle: machine is switched off")
 		return
 	end
@@ -1169,6 +1296,13 @@ function update(dt)
 
 	local input = world.containerItemAt(entity.id(), SLOT_INPUT)
 
+	--  READ BEFORE THE EMPTY TEST, BECAUSE IT IS ALSO THE EXPIRY. An empty slot
+	--  is how a forced burn finishes, and returning above this call would leave
+	--  the permission set over an empty machine until something else landed in
+	--  it -- which, with the exempt tag yielding, is the one state this flag
+	--  must never be found in.
+	local forced = forcedBurn(input)
+
 	if type(input) ~= "table" or type(input.name) ~= "string" then
 		state("idle: input slot empty")
 		self.carry = 0
@@ -1185,13 +1319,27 @@ function update(dt)
 	--  to decide what may be moved between the slots, and a blank treat must
 	--  never be shuttled into the reagent slot: it has no flavor to give, so it
 	--  would sit there blocking the one input that can refill the charge.
-	if plainTreat(input) then
+	--  THE FLAVORING DETOUR YIELDS TOO, AND THAT IS NOT AN OVERSIGHT.
+	--
+	--  A blank treat in the input is normally flavored rather than burned, and
+	--  that is the right default by a wide margin. But the button says Burn
+	--  now: a player who selects a stack of blanks and presses it has asked for
+	--  the furnace, not for the thing the machine would rather do. Forcing a
+	--  blank is a thousand-to-one loss and the player is allowed to take it.
+	--
+	--  UNFORCED BEHAVIOUR IS BYTE-FOR-BYTE UNCHANGED. `forced` is nil on every
+	--  tick nobody has pressed anything.
+	if forced == nil and plainTreat(input) then
 		flavorTreat(input)
 		self.carry = 0
 		return
 	end
 
-	if exempt(input) then
+	--  THE EXEMPT TAG YIELDS AS WELL. See THE FORCED BURN: the tag governs the
+	--  rule list and the couriers, and a button is neither. The grant was
+	--  logged by name when it was given, which is the record this refusal used
+	--  to be.
+	if forced == nil and exempt(input) then
 		state(string.format("REFUSING %s: exempt from conversion regardless of rules",
 			input.name))
 		self.carry = 0
@@ -1200,7 +1348,7 @@ function update(dt)
 
 	local inputRule = ruleFor(input.name)
 
-	if inputRule == nil then
+	if inputRule == nil and forced == nil then
 		--  THE HAND-DROP CASE. Named explicitly in the log because "nothing is
 		--  happening" and "nothing is happening because you have not told me I
 		--  may" are the same picture from outside.
@@ -1210,7 +1358,12 @@ function update(dt)
 		return
 	end
 
-	if inputRule.burn == false then
+	--  `inputRule ~= nil` IS NOT REDUNDANT NOW. The rung above used to guarantee
+	--  a rule by returning; a forced stack walks past it without one, and
+	--  indexing nil here would throw inside the machine's update rather than
+	--  anywhere obvious. The same shape the shared ladder pays for around
+	--  `plain`.
+	if inputRule ~= nil and inputRule.burn == false and forced == nil then
 		--  THE BURN BOX, ENFORCED AT THE FURNACE DOOR. The routing already
 		--  refuses to DELIVER here, but a player can hand-drop anything, and a
 		--  checkbox that only guards the couriers while the machine eats
@@ -1255,8 +1408,11 @@ function update(dt)
 	local gained = each * taken.count
 	storage.points = storage.points + gained
 
-	state(string.format("converting %s at %s point(s) each", taken.name,
-		tostring(each)))
+	--  THE FORCE IS NAMED IN THE SAME LINE RATHER THAN IN ONE OF ITS OWN.
+	--  state() is change-gated on the message, so a second line alternating
+	--  with this one would defeat the gate and log both every tick.
+	state(string.format("converting %s at %s point(s) each%s", taken.name,
+		tostring(each), forced ~= nil and " (FORCED by hand)" or ""))
 
 	--  DELIBERATELY NOT LOGGED PER ITEM. At five a second this was the noisiest
 	--  thing in the mod by a wide margin and buried everything around it -- the
@@ -1389,6 +1545,12 @@ function init()
 			blipCapacity = BLIP_CAPACITY,
 			blocked = storage.blocked == true,
 
+			--  THE HAND-SET BURN PERMISSION, so the pane can caption its button
+			--  "stop" instead of "burn" and stop warning about refusals the
+			--  player has deliberately stepped around. Absent when there is
+			--  none, which crosses the message as a missing key.
+			forced = storage.forceBurn,
+
 			--  WHAT IS IN THE REAGENT SLOT, so the pane does not have to work it
 			--  out. It tried reading the grid and could not: widget.itemGridItems
 			--  IGNORES slotOffset and hands back the whole container keyed from
@@ -1449,6 +1611,87 @@ function init()
 	--  the queue; a pane reaching in to rewrite it would be a second author of
 	--  the same state, and the two would disagree the moment a treat is emitted
 	--  between the read and the write.
+	--  GRANT OR REVOKE THE HAND-SET BURN PERMISSION. See forcedBurn for what it
+	--  overrules, which is every refusal in this file.
+	--
+	--  NO GUARD HERE AT ALL BEYOND THE SLOT MATCHING. This handler used to
+	--  refuse an exempt item and does not: the tag governs the rule list, and
+	--  this is not the rule list. What is left is the one question worth
+	--  asking, which is whether the machine is being pointed at the same thing
+	--  the player was looking at.
+	--
+	--  A TOGGLE, KEYED ON THE ITEM NAME, AND IT IS NOW THE ONLY SAFETY THERE
+	--  IS. At five items a second a full stack is over three minutes, and with
+	--  the exempt tag yielding the stack could be units. The alternative --
+	--  "pull it out of the slot" -- works, but asking someone to reach into a
+	--  running furnace to correct a misclick is an escape, not a control.
+	--
+	--  THE PANE NAMES WHAT THE PLAYER WAS LOOKING AT and this refuses on a
+	--  mismatch. The window is a few milliseconds wide and nothing but a unit
+	--  can move the slot inside it, but the cost of checking is one comparison
+	--  and the cost of not checking is destroying something nobody pointed at.
+	--
+	--  THE MACHINE DECIDES, THE PANE ONLY ASKS -- the same arrangement as the
+	--  charge. Both presses send the same message and this works out which one
+	--  it was, so there is no second author of the flag and no state for the
+	--  pane to get wrong.
+	message.setHandler("petports_upcyclerBurnNow", function(_, _, payload)
+		local named = type(payload) == "table" and payload.item or nil
+		local held = world.containerItemAt(entity.id(), SLOT_INPUT)
+		local holding = type(held) == "table" and type(held.name) == "string"
+			and held.name or nil
+
+		--  CANCEL FIRST, AND WITHOUT CONSULTING THE SLOT. A player pressing
+		--  stop must be able to stop it whatever is now in the machine;
+		--  requiring the slot to still agree would make the one press that
+		--  matters the one that can fail.
+		if type(storage.forceBurn) == "string"
+		   and (named == nil or named == storage.forceBurn) then
+			sb.logInfo("PETPORTS upcycler: forced burn of %s CANCELLED by the player",
+				storage.forceBurn)
+
+			storage.forceBurn = nil
+			self.state = nil
+
+			return true
+		end
+
+		if holding == nil then
+			sb.logInfo("PETPORTS upcycler: manual burn REFUSED -- slot %s is empty",
+				sb.printJson(SLOT_INPUT))
+			return false
+		end
+
+		if type(named) == "string" and named ~= holding then
+			sb.logInfo("PETPORTS upcycler: manual burn REFUSED -- the pane asked "
+				.. "for %s and slot %s holds %s",
+				named, sb.printJson(SLOT_INPUT), holding)
+			return false
+		end
+
+		storage.forceBurn = holding
+		self.state = nil
+
+		--  THE GRANT IS LOGGED UNCONDITIONALLY, AND LOUDER FOR A TAGGED ITEM.
+		--
+		--  This line is the whole of the record now that nothing refuses. An
+		--  exempt item reaching the furnace is the one outcome someone will
+		--  come back to a log asking about, and "did the player really point at
+		--  a unit" has to be answerable without reconstructing it.
+		if exempt(held) then
+			sb.logInfo("PETPORTS upcycler: manual burn ACCEPTED for an EXEMPT item "
+				.. "-- forcing %s x%s in slot %s, past its %s tag",
+				holding, sb.printJson(held.count or 1), sb.printJson(SLOT_INPUT),
+				EXEMPT_TAG)
+		else
+			sb.logInfo("PETPORTS upcycler: manual burn ACCEPTED -- forcing %s x%s "
+				.. "in slot %s, past its rule and the off switch",
+				holding, sb.printJson(held.count or 1), sb.printJson(SLOT_INPUT))
+		end
+
+		return true
+	end)
+
 	message.setHandler("petports_upcyclerClearCharge", function()
 		local queue = blipQueue()
 		local had = #queue

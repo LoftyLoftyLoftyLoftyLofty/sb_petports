@@ -132,7 +132,19 @@ PETPORTS_UPCYCLER_CAUSES = {
 --  the machine reads containers directly, the pane reads a mirror it was sent.
 --
 --    ctx.input, ctx.reagent, ctx.output   item NAME in each slot, or nil
+--    ctx.forced                           item NAME the player forced, or nil
 --    ctx.ruleFor(name)                    -> rule table or nil
+--
+--  ctx.forced IS A PERMISSION, AND IT SILENCES THE WHOLE INPUT SIDE.
+--
+--  It names the one item the player has pressed the burn button on. Every
+--  input rung below reports a reason the machine WOULD refuse that item, and a
+--  forced stack is one the machine has already accepted -- so a rung that
+--  still fires is the pane arguing with an instruction it delivered itself.
+--
+--  IT IS NOT A SEVERITY DOWNGRADE, IT IS A DELETION. There is nothing left to
+--  warn about: the stack is going in the furnace and the player is the one who
+--  put it there.
 --
 --  NO CHARGE-ROOM FIELD. Whether a reagent fits right now decides what the
 --  SHUTTLE does, not whether anything is wrong -- a full charge is the machine
@@ -198,6 +210,13 @@ function petports_upcyclerVerdict(ctx)
 	local ruleFor = type(ctx.ruleFor) == "function" and ctx.ruleFor
 		or function() return nil end
 
+	--  THE HAND-FORCED STACK, RESOLVED ONCE FOR EVERY RUNG THAT READS IT.
+	--
+	--  The deadlock rung and the whole input block both need it, and computing
+	--  it twice is the exact shape this file exists to prevent -- the one-anchor
+	--  rule read as a rule about ladders.
+	local forced = type(ctx.forced) == "string" and ctx.forced == ctx.input
+
 	--  OUTPUT FIRST. Every other fault is a machine declining to do something
 	--  it was told not to do; this one is a correctly configured machine doing
 	--  nothing at all, which is the more surprising failure and the one least
@@ -214,7 +233,13 @@ function petports_upcyclerVerdict(ctx)
 	--
 	--  Checked BEFORE the per-slot ladders so it cannot be masked by one of
 	--  them returning a waiting verdict first.
-	if petports_upcyclerDeadlocked(ctx.input, ctx.reagent, ruleFor) then
+	--  NOT WHILE THE INPUT IS BEING FORCED. The machine skips the swap for the
+	--  same reason -- a stack on its way into the furnace is not hostage to
+	--  anything -- and a pane reporting a deadlock the machine has already
+	--  declined to act on is the two disagreeing about what is stuck, which is
+	--  precisely what this file was built to stop.
+	if not forced
+	   and petports_upcyclerDeadlocked(ctx.input, ctx.reagent, ruleFor) then
 		return { cause = "slotsDeadlocked", item = ctx.input,
 			other = ctx.reagent, slot = PETPORTS_UPCYCLER_SLOT_INPUT,
 			severity = "error" }
@@ -223,7 +248,15 @@ function petports_upcyclerVerdict(ctx)
 	--  THE BURN SLOT OUTRANKS THE REAGENT SLOT. A jammed burn slot stops all
 	--  conversion; a jammed reagent slot only stops flavouring, and the
 	--  machine keeps producing plain treats meanwhile.
-	if type(ctx.input) == "string" then
+	--  THE WHOLE INPUT LADDER YIELDS TO A FORCED BURN, AS ONE GUARD.
+	--
+	--  Written around the block rather than as a `not forced` on each of the
+	--  four rungs inside it, because the rule is about the BLOCK: every one of
+	--  them answers "why will the machine not burn this", and the answer while
+	--  a force is live is "it will". Four separate conditions would be four
+	--  chances for a rung added later to be missed -- and the rung most likely
+	--  to be added here is another refusal.
+	if not forced and type(ctx.input) == "string" then
 		local name = ctx.input
 		local rule = ruleFor(name)
 
