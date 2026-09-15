@@ -50,117 +50,99 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-14 (the upcycler pane reshape)
+### What is built, as of 2026-09-14 (the upcycler rule filter and field text insets)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-**THE PLAN NOW LIVES IN `workbench/plan.drawio`, NOT HERE.** Lofty moved
-triage there because this document had accumulated drift faster than it could
-be read on the human side. The OUTSTANDING KNOWN ISSUES table on that page is
-the list to work from. BACKLOG below is still real but is no longer the
-authority on what is next. A human audit of this document is itself an item on
-that page.
+**THE PLAN LIVES IN `workbench/plan.drawio`, NOT HERE.** The OUTSTANDING KNOWN
+ISSUES table on that page is the list to work from. BACKLOG below is still real
+but is not the authority on what is next. The drawio was NOT edited this
+session: its cell asking for search/filter bars on "restock beacons and
+upcycler" is now half built, the upcycler half.
 
-SINCE THE LAST WRITE, TWO COMMITS LANDED: `b40dfae`, the comment purge the
-previous STATUS described, and `a7f39b8`, documentation. Neither is this
-session's work, which is still uncommitted.
+SINCE THE LAST WRITE, ONE COMMIT LANDED: `c4fde79`, the previous session's
+upcycler reshape and audit, committed together with its handoff.
 
-FOUR FILES AND THREE ART FAMILIES, ALL PANE-SIDE. `upcyclerconfig.config`,
-`upcyclerconfig.lua`, `petports_upcyclerstate.lua` and the shared string table.
-`petports_upcycler.lua` was read repeatedly and NEVER CHANGED -- no machine
-behaviour moved this session, only what the pane says about the machine and
-where the pane puts it.
+PANE-SIDE ONLY. No machine, unit or port script changed.
 
-TWO HALVES: an audit that deleted refusal paths, then the reshape.
+**BUILT THIS SESSION:**
+- The upcycler rule filter -- `arch.upcycler.rulefilter`.
+- The upcycler's left-edge widgets moved from x 10 to x 4, matching the lists.
+	That is step (2) of the previous NEXT list done for the LEFT edge only; see
+	LEFT AS-IS.
+- The upcycler progress label is `hAnchor` mid at x 64, the centre of the
+	120-wide bar frame placed at x 4.
+- Every `/interface/x.png` button in all four panes has `pressedOffset
+	[ 0, 1 ]` -- `fact.pane.xpressart`.
+- The x in every rule row -- deposit beacon, restock beacon, upcycler -- moved
+	down 1 px, to y 2.
+- Five text inputs moved down inside their backings, two of them also right --
+	`ref.pane.fieldinset`.
 
-THE AUDIT DELETED FIVE THINGS. `slotsDeadlocked`, because the shuttle resolves
-it before a player can see it (`arch.upcycler.shuttlepriority`); the
-`upcycler.warn.generic` fallback and the unreachable hardcoded string beside it;
-the whole `lblStatus` line with its five `upcycler.status.*` strings, its
-`upcycler.count.rule` forms and the `editor` and `rules` labels; both
-`PETPORTS_UPCYCLER_CAUSES` and `petports_upcyclerAlerting`, dead and never read,
-the causes table already missing `inputNoCharge`; and with the alerting helper
-gone, the `slot` and `severity` fields on every verdict. A verdict is now
-`{ cause, item }`.
+**VERIFIED IN GAME (Lofty, 2026-09-14):**
+- Every position above was set by Lofty looking at the panes, one round at a
+	time, and the session ended on his call of a feature boundary.
+- Text no longer sits against the top of its backing, and Lofty reports the UI
+	reads a lot more easily for it.
+- The x press art moves on its own, under any `pressedOffset`.
 
-`inputNoCharge` WAS PROPOSED FOR DELETION AND KEPT. Lofty read it as
-unreachable and it is not: `petports_petfuel` carries `petports_plain_treat`,
-the shuttle skips it as exempt so it is never moved out of the burner, and
-`flavorTreat` leaves it in the slot when the blip queue is empty. Kept on that
-reading. STILL UNMEASURED -- nobody has put a Pet Treat in the input slot with
-an empty charge.
-
-THE RESHAPE: 527 WIDE TO 337, TWO TABS TO THREE. `dd.upcycler.panewidth` is why
-the width is the whole point. Rules, flavors and reagents each own a tab instead
-of ranging side by side; the machine block -- light, input, reagent, blips,
-trash, output, progress, warning -- is persistent and top-left. Row art was
-generated at 96, then 107, and at 221, by the column trick in `dd.pane.rowwidth`.
-
-**VERIFIED IN GAME (Lofty, screenshots, 2026-09-14):**
-- The pane opens at 337 and all three tabs render and switch.
-- `"vAnchor" : "top"` IS honoured by `LabelWidget` -- `fact.pane.labelgrows`.
-  Measured off the build `2026-09-14g` screenshot: the warning glyphs sit at
-  config y 241.5..250 against a configured 250, which is the top-anchored
-  prediction and not the bottom-anchored one.
-- The rules list on 221-wide rows, the flavors list, and the reagent grid at
-  four and then seven columns all render on the generated art.
-- A refusal still reaches the player: "Relocator is not a reagent" was on
-  screen, on one line, in the right place.
-
-**NOT VERIFIED, AND THE FIRST ONE IS THE GAP THAT MATTERS:**
-- WHETHER ANY OF THIS ACHIEVED THE GOAL. The pane was narrowed so the engine
-  would place it to the RIGHT of the inventory instead of falling back to
-  centring it on top. No screenshot has shown the inventory open beside it.
-- Builds `2026-09-14h` (107-wide flavor rows) and `2026-09-14i` (the 4px list
-  shift) have not been seen at all.
-- `inputNoCharge`, above.
+**NOT VERIFIED:**
+- WHETHER THE 337 RESHAPE ACHIEVED ITS GOAL. The upcycler was narrowed so the
+	engine would place it to the RIGHT of the inventory instead of centring it on
+	top (`dd.upcycler.panewidth`). There is still no screenshot with the
+	inventory open beside it.
+- The filter's individual behaviours. Lofty called the boundary on it; which of
+	typing, clearing, switching tabs and editing a filtered list were exercised
+	was not itemised.
+- The dimensions of `/interface/x.png`. The filter clear x was first placed on
+	an assumed ~9 px glyph and then moved by eye; the size was never read.
+- `inputNoCharge`: nobody has put a Pet Treat in the input slot with an empty
+	charge.
 
 **LEFT AS-IS, KNOWINGLY:**
-- The lists sit on a 4/5 margin against the frame while every other widget is
-  still at x 10 and the machine block ends at 323. The pane is internally
-  inconsistent by 4 to 6 pixels until one number is picked and applied
-  everywhere. Raised with Lofty; deliberately not done piecemeal at the end of
-  a session.
-- `row_96*.png` is on disk and unreferenced, superseded by `row_107*.png`.
-  `panewider_*.png` likewise. Art was not deleted on the assistant's own
-  initiative.
-- Tab 3 has ~80px of dead band above its lists. That is the cost of the
-  flush-top rule Lofty asked for, and it is only visible on that tab.
+- Only LEFT-EDGE widgets moved to x 4. The Rules and Flavors tabs stayed at 108
+	and 206, so the gap after Instructions is 16 where it was 10; the input slot
+	column stayed at 32, so the running light to input gap is 12 where it was 6.
+	The machine block still ends at 323. Raised with Lofty, not changed.
+- A rule the filter hides can still be the selected rule, and the threshold box
+	still edits it. A rule added from the sample slot while a filter is active is
+	selected and not shown if it does not match.
+- `row_96*.png` and `panewider_*.png` are on disk and unreferenced. Art was not
+	deleted on the assistant's own initiative.
+- Tab 3 has ~80px of dead band above its lists, the cost of the flush-top rule
+	Lofty asked for.
 
 **DO NOT REPEAT:**
-- DESIGNING AROUND AN UNVERIFIED ENGINE KEY INSTEAD OF MEASURING IT. The
-  assistant declined to use `vAnchor` because no config in this mod used it and
-  the retail source was not in the container, and built a bottom-anchored
-  workaround instead. Lofty overruled it; the key works. The measurement cost
-  one build and one screenshot, both of which were already happening. ABSENCE
-  FROM THIS MOD IS NOT ABSENCE FROM THE ENGINE.
-- Splicing the beacon body art without stripping its shadow bands.
-  `fact.art.chestslotshadow` says exactly this and was not read first --
-  `todo.upcycler.shadowbands`.
-- Everything on the earlier 2026-09-14 lists still stands: no war story in a
-  comment that nobody observed, no date stamp on unrun work, no stacked builds,
-  and no substituting a judgement call for a stated requirement.
+- BUILDING ON WHEN A TEXTBOX CALLBACK FIRES. The filter rebuilds the rule list
+	from `filterChanged`, the textbox callback, and nothing polls it.
+	`fact.pane.textboxpoll` says in capitals not to do exactly this, and it was
+	not read before the build -- `todo.upcycler.filterpoll`.
+- Everything on the earlier 2026-09-14 lists still stands: read the fact before
+	splicing art (`fact.art.chestslotshadow`), measure an engine key instead of
+	designing around it, no war story in a comment nobody observed, no date stamp
+	on unrun work, no stacked builds, and no substituting a judgement call for a
+	stated requirement.
 
 **BUILD STAMPS IN PLAY:** port `2026-09-14b`, petportconfig `2026-09-14b`,
-upcycler `2026-09-14a`, upcyclerconfig `2026-09-14i`, coarsenav `2026-09-13c`,
+upcycler `2026-09-14a`, upcyclerconfig `2026-09-14k`, coarsenav `2026-09-13c`,
 taskAction `2026-09-13h`, contract `2026-09-12d`, flyapproach `2026-09-10c`,
-work `2026-09-11b`, overlay `2026-09-11d`.
+work `2026-09-11b`, overlay `2026-09-11d`. The petport, restock and beacon panes
+changed in config only this session.
 
-**NEXT, IN ORDER:** (1) open the inventory beside the upcycler and see whether
-337 actually places to the right -- one screenshot, and it either validates the
-session or says the target is lower; (2) pick one margin and apply it to the
-whole pane; (3) regenerate the body art without the shadow bands
-(`todo.upcycler.shadowbands`); (4) the filter box above the rules list, which
-the reshape reserved room for and then spent; (5) the four medic gaps from the
-earlier session on the 14th, all still open.
+**NEXT, IN ORDER:** (1) open the inventory beside the upcycler -- one
+screenshot, and it still validates or sinks the 337 width; (2)
+`todo.upcycler.filterpoll`, one call in `update`; (3) regenerate the body art
+without the shadow bands (`todo.upcycler.shadowbands`); (4) the restock beacon
+half of the drawio filter-bar cell; (5) the four medic gaps from the earlier
+session on the 14th, all still open.
 
-**COMMIT STATE:** `a7f39b8` is the last commit. This session's change is four
-modified files in the working tree -- `upcyclerconfig.config`,
-`upcyclerconfig.lua`, `petports_upcyclerstate.lua` and `petports_strings.config`
--- plus fifteen untracked PNGs under `interface/lofty_petports/shared/` and
-`interface/lofty_petports/upcyclerconfig/`. Nothing is committed.
+**COMMIT STATE:** `c4fde79` is the last commit. Modified in the working tree:
+`upcyclerconfig.config`, `upcyclerconfig.lua`, `petportconfig.config`,
+`restockconfig.config`, `beaconconfig.config`, `petports_strings.config` and
+this document. Untracked: `upcyclerconfig/filterfield_backing.png`. Nothing is
+committed.
 
 ## ARCHITECTURE
 
@@ -4043,6 +4025,46 @@ drains the slot (`todo.upcycler.rescuechurn` for the optional gate).
 
 **RUNS WHERE consumeReagent RUNS -- above the enabled gate** -- and for the
 same reason: moving items between a machine's own slots destroys nothing.
+
+### The upcycler rule filter hides rows by item id, in the pane only
+`arch.upcycler.rulefilter` -- see also `fact.pane.textboxpoll`, `todo.upcycler.filterpoll`, `ref.pane.fieldinset`, `fact.pane.xpressart`
+
+BUILT 2026-09-14, upcyclerconfig `2026-09-14k`. A "Filter:" label
+(`upcycler.filter`), a text box and a clear x sit above the rules list on the
+Rules tab.
+
+**IT MATCHES THE ITEM ID, NOT THE DISPLAY NAME.** A rule is shown when the box is
+empty, or when the lowercased box text is a plain substring of the lowercased
+`rule.item`. Plain is `string.find(haystack, needle, 1, true)`, so a typed `%` or
+`.` is literal. The row label shows the polymorphic name or short description,
+so a player can type a word they can see on a row and match nothing. Item id is
+the stated requirement.
+
+**NOTHING IS WRITTEN.** The filter text is pane state, `self.filterText`, set
+empty by `init` and never sent in `petports_upcyclerWrite`. It survives tab
+switches within one opening and nothing longer.
+
+**`refreshRules` SKIPS UNMATCHED RULES; IT DOES NOT HIDE ROWS.** An unmatched
+rule gets no list item. Every shown row still carries its REAL rule index in
+`setData`, so remove, both toggles and selection act on the right rule in a
+filtered list. Row stripes count shown rows (`self.rowStripes`) rather than rule
+indices, or two rows of one shade would sit together wherever a rule is skipped.
+
+**THE CLEAR X SHOWS ONLY ON THE RULES TAB WITH TEXT IN THE BOX**
+(`refreshFilterClear`, called from `showTab` and `filterChanged`). A click sets
+the text to "" and calls `filterChanged` directly, which returns on unchanged
+text, so it does not matter whether a script `setText` also fires the callback.
+
+**IT IS CALLBACK-DRIVEN, WHICH `fact.pane.textboxpoll` SAYS NOT TO BE** --
+`todo.upcycler.filterpoll`.
+
+	ruleFilterLabel    [ 96, 182 ]   size 7, the threshold label's grey
+	ruleFilterBacking  [ 146, 177 ]  171x13, petports_fieldbacking.backing(171, 13)
+	tbRuleFilter       [ 150, 180 ]  maxWidth 154
+	btnClearFilter     [ 306, 178 ]  zlevel 3, above the text box
+
+The backing's right edge is 317, the rows' right edge. The ~50 px between the
+label and the backing is room left for longer translations of "Filter:".
 
 ### The report handler cleans up before it delivers
 `arch.port.reporthandler`
@@ -10851,6 +10873,20 @@ destroys focus, so edit ONE row rather than rebuilding; and an empty field is
 not zero — clearing "500" to type "250" passes through `""`, and committing that
 as 0 on a running machine is destructive.
 
+### `/interface/xpress.png` carries its own press shift, and `pressedOffset` adds to it
+`fact.pane.xpressart` -- see also `ref.pane.fieldinset`, `arch.upcycler.rulefilter`
+
+SEEN IN GAME 2026-09-14, BY LOFTY. The vanilla x art moves inside its own pressed
+frame, and a button's `pressedOffset` is applied on top of that. It showed at
+`[ 1, -1 ]`; Lofty set the y to +1 to counter the art, then the x to 0. EVERY X
+BUTTON IN THE MOD IS NOW `[ 0, 1 ]`, CHOSEN BY EYE. The art's own shift was not
+measured in pixels, so `[ 0, 1 ]` is a look and not a derived cancellation.
+
+**A BUTTON WITHOUT THE KEY IS NOT A BUTTON AT ZERO.** Five of the eight x buttons
+had no `pressedOffset` and took the engine's default, which was not read. Give
+every x button the key explicitly. Other button art -- checkboxes, tabs, the
+trash button -- was not looked at for the same thing.
+
 ### A container pane binds THREE itemgrids -- itemGrid, itemGrid2, outputItemGrid
 `fact.pane.threegrids` -- see also `dead.pane.slotproxies`
 
@@ -14719,6 +14755,28 @@ reported agreement with itself.
 holes closed, nothing lost, every one in a single pass. `--old` reinstates the
 `record.key` lift so the test can be seen to CATCH the bug rather than merely
 pass without it.
+### Where text sits inside a field backing
+`ref.pane.fieldinset` -- see also `fact.pane.xpressart`, `arch.upcycler.rulefilter`
+
+SET BY EYE, 2026-09-14, LOFTY. At the old inset of +4 above the backing's bottom
+edge the glyphs sat against the top of a 12-tall backing, and the fields read
+worse for it. Inset is text position minus backing position, x then y, config
+units with y up:
+
+	field                   backing       size     text          inset
+	upcycler tbThreshold    [ 4, 94 ]     42x12    [ 6, 96 ]     +2 +2
+	restock tbMin           [ 108, 72 ]   42x12    [ 110, 74 ]   +2 +2
+	restock tbMax           [ 108, 54 ]   42x12    [ 110, 56 ]   +2 +2
+	petport settingField    [ 112, 2 ]    26x12    [ 114, 4 ]    +2 +2  (already there)
+	petport tbPetName       [ 126, 83 ]   114x12   [ 130, 86 ]   +4 +3
+	upcycler tbRuleFilter   [ 146, 177 ]  171x13   [ 150, 180 ]  +4 +3
+
+Centred numeric fields sit at +2 +2 and the two left-aligned text fields at
++4 +3. That is two cases and not a rule; the filter's is the only 13-tall
+backing.
+
+Rule-row x buttons sit at y 2 in 16-tall rows in all three lists.
+
 
 ## BACKLOG
 
@@ -16157,6 +16215,21 @@ and it was not read before the splice.
 THE FIX IS CHEAP AND KNOWN: `petportconfig/panetall_body.png` is the same 337
 wide with no shadow band, so regenerate from that instead. Left undone only
 because it surfaced at the end of a session.
+
+### The rule filter should poll its text box, not trust the callback
+`todo.upcycler.filterpoll` -- see also `arch.upcycler.rulefilter`, `fact.pane.textboxpoll`
+
+OPENED 2026-09-14. `tbRuleFilter` is read only inside `filterChanged`, its
+callback. `fact.pane.textboxpoll` records callback timing observed once as
+Enter-only and once as per keystroke, and says the only safe rule is to poll.
+The filter worked for Lofty in this one pane, which is the single-pane evidence
+that entry says not to generalise from.
+
+THE FIX IS ONE CALL: `filterChanged()` from `update`. It already reads the box,
+compares against `self.filterText` and returns on no change, so polling rebuilds
+nothing while the text is still, and the callback stays as the stub the parser
+needs. No `shownText` guard is needed: the only script write to the box is ""
+from `filterClearClicked`, which updates `self.filterText` in the same call.
 
 ### The rescue retry gate, if the churn ever matters
 `todo.upcycler.rescuechurn` -- see also `arch.upcycler.shuttle`

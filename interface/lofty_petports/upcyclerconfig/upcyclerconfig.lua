@@ -7,7 +7,7 @@ require "/scripts/lofty_petports/petports_strings.lua"
 
 local DEBUG = true
 
-local PANE_BUILD_STAMP = "2026-09-14i the lists sit even between the frame borders"
+local PANE_BUILD_STAMP = "2026-09-14k filter label, narrower filter box"
 
 -- Returns the singular or plural string for a count of a noun.
 local function counted(count, noun)
@@ -177,7 +177,7 @@ local function paintRuleRows()
 
 		if index == self.selectedIndex then
 			art = RULE_ROW_ART_SELECTED
-		elseif index % 2 == 1 then
+		elseif (self.rowStripes[index] or 0) % 2 == 1 then
 			art = RULE_ROW_ART
 		end
 
@@ -185,7 +185,7 @@ local function paintRuleRows()
 	end
 end
 
--- Rebuilds the rule list with each row's text, reagent button and burn button.
+-- Rebuilds the rule list with each row's text, reagent button and burn button, skipping items the filter does not match.
 local function refreshRules()
 	self.rebuilding = true
 	widget.clearListItems(RULES_LIST)
@@ -194,27 +194,36 @@ local function refreshRules()
 	self.rowNames = {}
 
 	self.rowPaths = {}
+	self.rowStripes = {}
+
+	local needle = string.lower(self.filterText or "")
+	local shown = 0
 
 	for index, rule in ipairs(self.rules) do
-		local row = widget.addListItem(RULES_LIST)
-		local path = RULES_LIST .. "." .. row
+		if needle == "" or string.find(string.lower(rule.item), needle, 1, true) ~= nil then
+			local row = widget.addListItem(RULES_LIST)
+			local path = RULES_LIST .. "." .. row
 
-		self.rowNames[index] = row
-		self.rowPaths[index] = path
+			shown = shown + 1
 
-		widget.setData(path, index)
-		widget.setData(path .. ".rowRemove", index)
-		widget.setData(path .. ".rowReagent", index)
-		widget.setData(path .. ".rowBurn", index)
+			self.rowNames[index] = row
+			self.rowPaths[index] = path
+			self.rowStripes[index] = shown
 
-		widget.setText(path .. ".ruleText",
-			string.format("%s  >  %s", labelFor(rule.item), tostring(rule.max)))
+			widget.setData(path, index)
+			widget.setData(path .. ".rowRemove", index)
+			widget.setData(path .. ".rowReagent", index)
+			widget.setData(path .. ".rowBurn", index)
 
-		local isReagent = petports_reagentFor(rule.item) ~= nil
-		widget.setButtonEnabled(path .. ".rowReagent", isReagent)
-		widget.setChecked(path .. ".rowReagent", isReagent and rule.reagent ~= false)
+			widget.setText(path .. ".ruleText",
+				string.format("%s  >  %s", labelFor(rule.item), tostring(rule.max)))
 
-		widget.setChecked(path .. ".rowBurn", rule.burn ~= false)
+			local isReagent = petports_reagentFor(rule.item) ~= nil
+			widget.setButtonEnabled(path .. ".rowReagent", isReagent)
+			widget.setChecked(path .. ".rowReagent", isReagent and rule.reagent ~= false)
+
+			widget.setChecked(path .. ".rowBurn", rule.burn ~= false)
+		end
 	end
 
 	if self.selectedIndex ~= nil and self.rowNames[self.selectedIndex] ~= nil then
@@ -223,8 +232,8 @@ local function refreshRules()
 
 	paintRuleRows()
 
-	dbg("refreshRules: %s row(s), selected %s",
-		tostring(#self.rules), tostring(self.selectedIndex))
+	dbg("refreshRules: %s of %s row(s) shown for filter '%s', selected %s",
+		tostring(shown), tostring(#self.rules), needle, tostring(self.selectedIndex))
 end
 
 -- Rewrites one rule row's text.
@@ -702,7 +711,8 @@ local rebuildingFlavors = false
 local FLAVOR_WIDGETS = { "flavorsScroll", "reagentsLabel", "reagentsScroll" }
 local INSTRUCTION_WIDGETS = { "instructionsText" }
 local RULES_WIDGETS = { "rulesScroll", "slotBacking", "itemSlot_sample",
-	"sampleHint", "thresholdLabel", "thresholdBacking", "tbThreshold" }
+	"sampleHint", "thresholdLabel", "thresholdBacking", "tbThreshold",
+	"ruleFilterLabel", "ruleFilterBacking", "tbRuleFilter" }
 
 -- Sets the visibility of a list of widgets.
 local function setWidgetsVisible(names, shown)
@@ -831,6 +841,12 @@ local function refreshFlavors()
 	dbg("refreshFlavors: %d flavor(s)", #shownFlavors)
 end
 
+-- Shows the filter clear button only on the rules tab with text in the filter.
+local function refreshFilterClear()
+	pcall(widget.setVisible, "btnClearFilter",
+		activeTab == "rules" and (self.filterText or "") ~= "")
+end
+
 -- Shows one tab's widgets and sets the tab checkboxes.
 local function showTab(which)
 	activeTab = which
@@ -838,6 +854,7 @@ local function showTab(which)
 	setWidgetsVisible(INSTRUCTION_WIDGETS, which == "instructions")
 	setWidgetsVisible(RULES_WIDGETS, which == "rules")
 	setWidgetsVisible(FLAVOR_WIDGETS, which == "flavors")
+	refreshFilterClear()
 
 	pcall(widget.setChecked, "tabInstructions", which == "instructions")
 	pcall(widget.setChecked, "tabRules", which == "rules")
@@ -898,6 +915,23 @@ function tabFlavorsClicked()
 	showTab("flavors")
 
 	if #shownFlavors == 0 then refreshFlavors() end
+end
+
+-- Stores the filter text and rebuilds the rule list when it changed.
+function filterChanged()
+	local ok, text = pcall(widget.getText, "tbRuleFilter")
+	if not ok or type(text) ~= "string" or text == self.filterText then return end
+
+	self.filterText = text
+
+	refreshFilterClear()
+	refreshRules()
+end
+
+-- Empties the filter box.
+function filterClearClicked()
+	pcall(widget.setText, "tbRuleFilter", "")
+	filterChanged()
 end
 
 -- Records the selected flavor row and shows its reagents.
@@ -993,6 +1027,8 @@ function init()
 
 	self.selectedIndex = nil
 	self.rowNames = {}
+	self.rowStripes = {}
+	self.filterText = ""
 
 	self.shownThreshold = ""
 	self.fieldUsable = true
