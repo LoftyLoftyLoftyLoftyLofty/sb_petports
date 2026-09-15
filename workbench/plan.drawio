@@ -1,4 +1,4 @@
-<mxfile host="Electron" modified="2026-09-15T19:59:32.362Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.2.5 Chrome/120.0.6099.109 Electron/28.1.0 Safari/537.36" etag="DbFJINnFHv2QcxtRH1ik" version="24.2.5" type="device">
+<mxfile host="Electron" modified="2026-09-15T20:43:11.129Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.2.5 Chrome/120.0.6099.109 Electron/28.1.0 Safari/537.36" etag="OwKWQ4FNKTnHy5V7RBk-" version="24.2.5" type="device">
   <diagram name="Page-1" id="NveRE99YrSAUUvzC1UxD">
     <mxGraphModel dx="1434" dy="844" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
       <root>
@@ -736,7 +736,7 @@
         <mxCell id="3ISfEoBmj6Lgr9TAVEry-73" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;fillColor=#a20025;fontColor=#ffffff;strokeColor=#6F0000;" parent="1" vertex="1">
           <mxGeometry x="880" y="5360" width="40" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="3ISfEoBmj6Lgr9TAVEry-74" value="Sinker bad at fishing - needs to learn how to jump toward fish if it can land the arc on dry land" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
+        <mxCell id="3ISfEoBmj6Lgr9TAVEry-74" value="Sinker bad at fishing - needs to learn how to jump toward fish if it can land the arc on dry land - check to make sure fish is in media that wont kill us before making the hop" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">
           <mxGeometry x="1400" y="1720" width="640" height="80" as="geometry" />
         </mxCell>
         <mxCell id="3ISfEoBmj6Lgr9TAVEry-77" value="Sinker sliding off platforms underwater -&lt;br&gt;able to repro this with an item dropped on the left side ledge up by the mooshi and fluffalo with amphi too&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;original case only blocked because we nerfed the movespeed&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=20;" parent="1" vertex="1">

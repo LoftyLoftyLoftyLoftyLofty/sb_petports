@@ -50,7 +50,7 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-15 (upcycler starved-input collection, restock request filter)
+### What is built, as of 2026-09-15 (add by item id in the upcycler and restock panes, restock summary retired)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
@@ -59,82 +59,103 @@ here disagrees with anything below, this is right and that is stale.
 **THE PLAN LIVES IN `workbench/plan.drawio`, NOT HERE.** The OUTSTANDING KNOWN
 ISSUES table on that page is the list to work from. BACKLOG below is still real
 but is not the authority on what is next. The drawio was NOT edited this
-session: its cell asking for search/filter bars on "restock beacons and
-upcycler" (`3ISfEoBmj6Lgr9TAVEry-68`) is now built for both.
+session. Its cell asking for manual adds by id in the upcycler and the restock
+beacon (`3ISfEoBmj6Lgr9TAVEry-67`) is now built for both; the currency half of
+that cell (money, essence) was not tested.
 
-SINCE THE LAST WRITE, ONE COMMIT LANDED: `eb15e9d`, the previous session's
-upcycler rule filter and field insets, committed together with its handoff.
+SINCE THE LAST WRITE, NO COMMIT LANDED. `4eaf30f` is the previous session's work,
+committed together with its handoff. The drawio's working-tree changes were not
+made this session.
 
 **BUILT THIS SESSION, TWO CHANGES, EACH TESTED BEFORE THE NEXT:**
-- The port collects flavored treats from an upcycler whose input holds blank
-	treats it has no charge or reagent to flavor -- `arch.upcycler.collectfloor`.
-	Port script only.
-- The restock beacon request filter, and the pane 16 px taller to hold it --
-	`arch.beacon.restockfilter`. Pane script, config, strings and art only.
+- Add by name in the upcycler pane: an item id box and an "Add by name" button
+	under the rule slot, the slot hint moved to the slot's right --
+	`arch.pane.addbyname`. Pane script, config, strings and art only.
+- The same in the restock beacon pane on the old Fetch below row, both quota
+	rows moved down 18, and the summary line retired -- `arch.pane.addbyname`,
+	`dd.beacon.summaryretired`. Pane script, config, strings and art only.
 
 **VERIFIED IN GAME (Lofty, 2026-09-15):**
-- A unit cleared the starved machine's output, once it had worked through a
-	farming backlog.
-- The restock filter "works as expected, first try". No position was changed
-	after the first build.
+- The upcycler build: "ok this works". No position was changed after the first
+	build.
+- The restock build: "ok that's working". No position was changed after the
+	first build.
+- A textbox naming `"callback" : "null"` constructs, in both panes --
+	`fact.pane.textboxcallback`, amended.
 
 **NOT VERIFIED:**
-- The restock filter's individual behaviours were not itemised, as with the
-	upcycler's last session.
+- Neither report itemised behaviours. Unreported: a bad id adding nothing, an id
+	that already has an entry selecting it, the box clearing on a good add, and
+	the upcycler switching itself off on an add by name.
+- Whether currency ids (`money`, `essence`) resolve through `root.itemConfig`,
+	and what a rule or request on one would do. The drawio cell names them.
+- Whether the upcycler hint wraps to the three lines it was placed for. Its last
+	line was placed ~1 px above the name backing.
+- What Enter does in a textbox whose callback is `"null"`.
 - WHETHER THE 337 RESHAPE ACHIEVED ITS GOAL (`dd.upcycler.panewidth`). Still no
 	screenshot with the inventory open beside the upcycler.
 - The dimensions of `/interface/x.png`. Both filter clear buttons were placed
 	without reading it.
-- `inputNoCharge` in the upcycler PANE. This session's case was a blank stack
-	with an empty charge, but only the port's behaviour was reported on.
+- `inputNoCharge` in the upcycler PANE.
 
 **LEFT AS-IS, KNOWINGLY:**
-- A machine whose reagent slot holds something it cannot spend (exempt, not a
-	reagent, reagent-denied) with blanks in the input is just as stuck and still
-	reads as converting. The stated case was an empty reagent slot.
+- A bad id gets no on-screen feedback in either pane. The upcycler logs it behind
+	a `DEBUG` that is on; the restock pane's `DEBUG` is off, so nothing records it.
+- Neither pane's text mentions the name box. The upcycler instructions still say
+	to drop an item on the slot, and both slot hints still say "Click here".
+- The restock pane no longer shows a change held for an unreachable beacon --
+	`dd.beacon.summaryretired`.
+- "Add by name" is two strings, `upcycler.addbyname` and `restock.addbyname`,
+	not one under `common`.
+- `SUMMARY_CHARS` in restockconfig kept its name. It is now only `truncate`'s
+	default, which the notice lines use.
+- In both filtered panes a hidden entry can stay selected and its fields still
+	edit it, and an entry added while a filter is active is not shown if it does
+	not match. That now covers adds by name.
+- A machine whose reagent slot holds something it cannot spend, with blanks in
+	the input, is just as stuck and still reads as converting.
 - The restock filter label has ~30 px before its backing where the upcycler's
-	has ~50 for translations. The 204 pane has no more to give.
-- In both filtered panes, a hidden entry can stay selected and its fields still
-	edit it, and an item added while a filter is active is not shown if it does
-	not match.
+	has ~50 for translations.
 - Only LEFT-EDGE upcycler widgets moved to x 4; the Rules and Flavors tabs stayed
-	at 108 and 206, and the input slot column at 32. Raised with Lofty, not changed.
+	at 108 and 206, and the input slot column at 32.
 - `row_96*.png` and `panewider_*.png` are on disk and unreferenced.
-- Upcycler tab 3 has ~80px of dead band above its lists, the cost of the
-	flush-top rule Lofty asked for.
+- Upcycler tab 3 has ~80px of dead band above its lists.
 
 **DO NOT REPEAT:**
-- COPYING A CONVENTION COPIES ITS OPEN TICKETS. The restock filter was built as
-	a faithful port of `arch.upcycler.rulefilter`, callback and all, one session
-	after this list said in capitals not to build on the callback. This document
-	was not opened before either build this session -- `todo.beacon.filterpoll`.
-	Read the ARCH entry, and its see-also, of anything being copied.
-- Everything on the 2026-09-14 lists still stands: read `fact.pane.textboxpoll`
-	before a textbox, read the fact before splicing art
+- THIS DOCUMENT WAS NOT OPENED BEFORE EITHER BUILD, AGAIN, one session after this
+	list said to read the ARCH entry of anything being copied. Both builds put a
+	textbox beside a filter without reading `fact.pane.textboxpoll`,
+	`fact.pane.textboxcallback` or `ref.pane.fieldinset`. They landed inside those
+	entries by the shape of the feature, not by reading: the id is read only on
+	the click, and the inset was copied off the neighbouring filter field.
+	`petports_paneheck.py` caught the one construction hazard, a textbox with no
+	callback, before delivery.
+- A MARKED SCREENSHOT IS READ BY SAMPLING ITS PIXELS. The yellow box Lofty drew
+	was described back as white by eye; the pixels were (255, 242, 0). The box
+	bounds used for placement came from sampling.
+- Everything on the earlier lists still stands: read the ARCH entry and its
+	see-also of anything being copied, read the fact before splicing art
 	(`fact.art.chestslotshadow`), measure an engine key instead of designing around
 	it, no war story in a comment nobody observed, no date stamp on unrun work, no
 	stacked builds, and no substituting a judgement call for a stated requirement.
 
 **BUILD STAMPS IN PLAY**, read from the tree: port `2026-09-15a`, restockconfig
-`2026-09-15a`, petportconfig `2026-09-13f`, upcycler `2026-09-14a`,
-upcyclerconfig `2026-09-14k`, beaconconfig `2026-08-30c`, coarsenav `2026-09-13c`,
+`2026-09-15b`, petportconfig `2026-09-13f`, upcycler `2026-09-14a`,
+upcyclerconfig `2026-09-15a`, beaconconfig `2026-08-30c`, coarsenav `2026-09-13c`,
 taskAction `2026-09-13h`, contract `2026-09-12d`, flyapproach `2026-09-10c`, work
-`2026-09-11b`, overlay `2026-09-11d`. The previous STATUS gave port and
-petportconfig as `2026-09-14b`; git has never held that stamp in either file, and
-they read `2026-09-13e` and `2026-09-13f` until this session.
+`2026-09-11b`, overlay `2026-09-11d`.
 
 **NEXT, IN ORDER:** (1) `todo.upcycler.filterpoll` and `todo.beacon.filterpoll`,
 one call in each pane's `update`; (2) open the inventory beside the upcycler --
 one screenshot, and it still validates or sinks the 337 width; (3) regenerate the
 upcycler body art without the shadow bands (`todo.upcycler.shadowbands`); (4) the
-four medic gaps from the earlier session on 2026-09-14, all still open.
+four medic gaps from 2026-09-14, all still open.
 
-**COMMIT STATE:** `eb15e9d` is the last commit. Modified in the working tree:
-`petports_petport.lua`, `restockconfig.lua`, `restockconfig.config`,
-`restockconfig/panesmall_body.png`, `petports_strings.config` and this document.
-Untracked: `restockconfig/filterfield_backing.png`. Nothing is committed. Git
-warns that the working copy of `petports_petport.lua` is CRLF; `.gitattributes`
-normalises it on commit and the diff is 34 lines, not a rewrite.
+**COMMIT STATE:** `4eaf30f` is the last commit. Modified in the working tree:
+`upcyclerconfig.lua`, `upcyclerconfig.config`, `restockconfig.lua`,
+`restockconfig.config`, `petports_strings.config`, `plan.drawio` and this
+document. Untracked: `upcyclerconfig/namefield_backing.png` and
+`restockconfig/namefield_backing.png`. Nothing from this session is committed.
 
 ## ARCHITECTURE
 
@@ -4132,6 +4153,68 @@ long translation overlaps the backing here first.
 
 **IT IS CALLBACK-DRIVEN** -- `todo.beacon.filterpoll`.
 
+### Add by name: an item id box and a button beside each rule slot
+`arch.pane.addbyname` -- see also `arch.upcycler.rulefilter`, `arch.beacon.restockfilter`, `fact.pane.textboxcallback`, `fact.pane.textboxpoll`, `ref.pane.fieldinset`, `dd.beacon.summaryretired`
+
+BUILT 2026-09-15, upcyclerconfig `2026-09-15a` and restockconfig `2026-09-15b`.
+Lofty: working in both, first build each. A player types an item id and presses
+"Add by name" to get the rule or request a held item would have given, without
+holding a copy.
+
+**IT TAKES THE ITEM ID, NOT THE DISPLAY NAME.** The stated requirement, and the
+same key both list filters match on. Leading and trailing whitespace is trimmed
+and nothing else is normalised.
+
+**AN ID IS REAL WHEN `root.itemConfig` RESOLVES IT**, in the shape both panes
+already used for labels: under `pcall`, a table, with a table `config`. The
+upcycler checks inline; the restock pane calls its existing `itemFacts`. An id
+that fails adds nothing and leaves the box as typed. A good one clears the box.
+
+**ONE ADD PATH PER PANE.** The upcycler's add lived inside `sampleSlotClicked`
+and was lifted out as `addRule(name, from)`. The slot and the button both call
+it, and `from` keeps the log lines saying which one fired. The restock pane
+already had `addRequest`, and `addByNameClicked` ends the way
+`requestSlotClicked` does: write if added, then `renderAll`. So an id that
+already has an entry selects it, and an upcycler add switches the machine off,
+exactly as a slot add does.
+
+**THE BOX IS READ ON THE CLICK, NEVER IN ITS CALLBACK.** A commit button, the
+same shape as `arch.pane.rename`, so neither box has anything to poll for. The
+textbox names `"callback" : "null"`, which is not in `scriptWidgetCallbacks` and
+has no Lua function.
+
+**UPCYCLER, RULES TAB.** The slot hint moved from under the slot to its right,
+into the band Lofty marked, and the name row took the space it left. Positions
+came from Lofty's marked screenshot at 2x, with the pane origin taken off the tab
+buttons. The hint's wrap was estimated from glyph widths sampled in that shot,
+not read from the font.
+
+	sampleHint     [ 25, 175 ]   vAnchor top, wrapWidth 65, placed for 3 lines
+	nameBacking    [ 4, 135 ]    87x13, petports_fieldbacking.backing(87, 13)
+	tbAddName      [ 8, 138 ]    maxWidth 78, inset +4 +3
+	btnAddByName   [ 4, 120 ]    /interface/button.png, 12 tall in the screenshot
+
+All four are in `RULES_WIDGETS`, so they show on the Rules tab only.
+
+**RESTOCK PANE.** The name row took the Fetch below row's height and both quota
+rows went down one 18 px step. Fill up to now sits where the summary did.
+
+	nameBacking      [ 10, 72 ]    120x13, petports_fieldbacking.backing(120, 13)
+	tbAddName        [ 14, 75 ]    maxWidth 112, inset +4 +3
+	btnAddByName     [ 136, 72 ]   right edge 188, the filter backing's and the rows'
+	minLabel         [ 10, 58 ]    was 76
+	minFieldBacking  [ 108, 54 ]   was 72
+	tbMin            [ 110, 56 ]   was 74
+	maxLabel         [ 10, 40 ]    was 58
+	maxFieldBacking  [ 108, 36 ]   was 54
+	tbMax            [ 110, 38 ]   was 56
+
+`lockWithNotice` hides the three new widgets.
+
+**A BAD ID GETS NO FEEDBACK ON SCREEN.** Both panes log
+`addByNameClicked: <id> is not an item id` through `dbg`. That is on in the
+upcycler pane and off in the restock pane.
+
 ### The report handler cleans up before it delivers
 `arch.port.reporthandler`
 
@@ -7138,6 +7221,26 @@ degrading, so a world holding one never reaches that line.
 Scanned every `BEACON_INTERVAL` (5s), which is slow on purpose -- a beacon goes
 into a chest once and sits there, and what churns is the chest's other contents,
 which this does not care about.
+
+### The restock summary line is retired
+`dd.beacon.summaryretired` -- see also `arch.pane.addbyname`
+
+DECIDED 2026-09-15, LOFTY: the label under the quota rows "was a debug feature and
+can be retired now." The `summary` widget, `renderSummary` and its five call
+sites, and the `restock.unsaved` and `restock.empty` strings are gone. Its row
+went to Fill up to when add by name took the Fetch below row.
+
+**WHAT IT SAID, SO IT IS NOT REBUILT BLIND.** "Keep <min> to <max> <item> here."
+for the selected request; "Above fill to - holds <max> <item>." when min exceeded
+max; a request count when nothing was selected; `restock.empty` with no requests;
+and `restock.unsaved` while a write was held for a beacon out of reach.
+
+**THE LAST ONE WAS NOT DEBUG.** It was the only on-screen sign of a held write.
+It was raised in the build reply, after the removal, and Lofty's next message was
+that the build works -- so it is retired, not reviewed. A write that never lands
+is still visible in the log: `update` flushes a held write when the beacon is
+reachable again, `dismissed` tries it once more, and closing with it still held
+logs an error. If a notice is wanted, it is a new widget, not this label back.
 
 ### Fragmentation is the player's problem, and that is the design
 `dd.cargo.fragmentation`
@@ -10788,6 +10891,13 @@ registered EMPTY function, not a missing one. `"callback" : "null"` may also wor
 -- `fact.pane.nullcallback` records it constructing and doing nothing on a row
 BUTTON -- but it is UNTESTED on a textbox and the empty named function is what
 shipped.
+
+**AMENDED 2026-09-15: `"null"` CONSTRUCTS ON A TEXTBOX.** `tbAddName` in the
+upcycler pane and the restock pane names `"callback" : "null"`, with nothing
+added to `scriptWidgetCallbacks`, and both panes opened and worked for Lofty
+(`arch.pane.addbyname`). What Enter does in such a box was not observed. The pane
+pre-flight now sees the textbox half of this entry: `petports_paneheck.py` flags
+a textbox with no callback, and caught `tbAddName` before delivery.
 
 ### A UNIT IS ALREADY NAMED; WHAT IT LACKS IS THE TAG
 `fact.unit.entityname` -- see also `arch.pane.rename`, `fact.unit.damageteams`
@@ -14831,15 +14941,19 @@ units with y up:
 
 	field                   backing       size     text          inset
 	upcycler tbThreshold    [ 4, 94 ]     42x12    [ 6, 96 ]     +2 +2
-	restock tbMin           [ 108, 72 ]   42x12    [ 110, 74 ]   +2 +2
-	restock tbMax           [ 108, 54 ]   42x12    [ 110, 56 ]   +2 +2
+	restock tbMin           [ 108, 54 ]   42x12    [ 110, 56 ]   +2 +2
+	restock tbMax           [ 108, 36 ]   42x12    [ 110, 38 ]   +2 +2
 	petport settingField    [ 112, 2 ]    26x12    [ 114, 4 ]    +2 +2  (already there)
 	petport tbPetName       [ 126, 83 ]   114x12   [ 130, 86 ]   +4 +3
 	upcycler tbRuleFilter   [ 146, 177 ]  171x13   [ 150, 180 ]  +4 +3
+	upcycler tbAddName      [ 4, 135 ]    87x13    [ 8, 138 ]    +4 +3
+	restock tbAddName       [ 10, 72 ]    120x13   [ 14, 75 ]    +4 +3
 
-Centred numeric fields sit at +2 +2 and the two left-aligned text fields at
-+4 +3. That is two cases and not a rule; the filter's is the only 13-tall
-backing.
+Centred numeric fields sit at +2 +2 and the left-aligned text fields at +4 +3.
+That is two cases and not a rule. The 13-tall backings are the filters' and
+the name boxes'; the name boxes, 2026-09-15, copied the upcycler filter's inset
+without this table being read. The restock quota rows moved down 18 the same
+day (`arch.pane.addbyname`) and kept their insets.
 
 Rule-row x buttons sit at y 2 in 16-tall rows in all three lists.
 
