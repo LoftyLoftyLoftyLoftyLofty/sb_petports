@@ -7,7 +7,7 @@ require "/scripts/lofty_petports/petports_strings.lua"
 
 local DEBUG = true
 
-local PANE_BUILD_STAMP = "2026-09-14k filter label, narrower filter box"
+local PANE_BUILD_STAMP = "2026-09-15a add rule by item id"
 
 -- Returns the singular or plural string for a count of a noun.
 local function counted(count, noun)
@@ -360,7 +360,40 @@ function ruleSelected()
 	refreshThreshold()
 end
 
--- Adds a rule for the item on the cursor and switches the machine off, or selects the rule it already has.
+-- Adds a rule for an item name and switches the machine off, or selects the rule it already has.
+local function addRule(name, from)
+	for index, rule in ipairs(self.rules) do
+		if rule.item == name then
+			self.selectedIndex = index
+			dbg("%s: %s already has a rule at %s",
+				from, name, tostring(index))
+
+			refreshRules()
+			refreshThreshold()
+			return
+		end
+	end
+
+	table.insert(self.rules, { item = name, max = 0 })
+
+	self.selectedIndex = #self.rules
+
+	if self.enabled then
+		dbg("%s: machine was running, switching it off", from)
+	end
+
+	self.enabled = false
+	pcall(widget.setChecked, "enabledCheckbox", false)
+
+	dbg("%s: added %s keeping %s",
+		from, name, tostring(self.rules[#self.rules].max))
+
+	refreshRules()
+	refreshThreshold()
+	writeState()
+end
+
+-- Adds a rule for the item on the cursor.
 function sampleSlotClicked()
 	local swap = player.swapSlotItem()
 
@@ -372,35 +405,27 @@ function sampleSlotClicked()
 
 	player.setSwapSlotItem(swap)
 
-	for index, rule in ipairs(self.rules) do
-		if rule.item == swap.name then
-			self.selectedIndex = index
-			dbg("sampleSlotClicked: %s already has a rule at %s",
-				swap.name, tostring(index))
+	addRule(swap.name, "sampleSlotClicked")
+end
 
-			refreshRules()
-			refreshThreshold()
-			return
-		end
+-- Adds a rule for the item id typed in the name box, if that id is a real item.
+function addByNameClicked()
+	local ok, text = pcall(widget.getText, "tbAddName")
+	if not ok or type(text) ~= "string" then return end
+
+	local name = text:match("^%s*(.-)%s*$")
+	if name == "" then return end
+
+	local okCfg, resolved = pcall(root.itemConfig, { name = name, count = 1 })
+
+	if not okCfg or type(resolved) ~= "table" or type(resolved.config) ~= "table" then
+		dbg("addByNameClicked: %s is not an item id", name)
+		return
 	end
 
-	table.insert(self.rules, { item = swap.name, max = 0 })
+	pcall(widget.setText, "tbAddName", "")
 
-	self.selectedIndex = #self.rules
-
-	if self.enabled then
-		dbg("sampleSlotClicked: machine was running, switching it off")
-	end
-
-	self.enabled = false
-	pcall(widget.setChecked, "enabledCheckbox", false)
-
-	dbg("sampleSlotClicked: added %s keeping %s",
-		swap.name, tostring(self.rules[#self.rules].max))
-
-	refreshRules()
-	refreshThreshold()
-	writeState()
+	addRule(name, "addByNameClicked")
 end
 
 -- Drops the selection.
@@ -711,7 +736,8 @@ local rebuildingFlavors = false
 local FLAVOR_WIDGETS = { "flavorsScroll", "reagentsLabel", "reagentsScroll" }
 local INSTRUCTION_WIDGETS = { "instructionsText" }
 local RULES_WIDGETS = { "rulesScroll", "slotBacking", "itemSlot_sample",
-	"sampleHint", "thresholdLabel", "thresholdBacking", "tbThreshold",
+	"sampleHint", "nameBacking", "tbAddName", "btnAddByName",
+	"thresholdLabel", "thresholdBacking", "tbThreshold",
 	"ruleFilterLabel", "ruleFilterBacking", "tbRuleFilter" }
 
 -- Sets the visibility of a list of widgets.
