@@ -15,7 +15,7 @@ local PANE_ICONS = {
 	off = "/interface/lofty_petports/restockconfig/paneicon_restock_off.png"
 }
 
-local BUILD_STAMP = "2026-09-15a request filter box, pane 16px taller"
+local BUILD_STAMP = "2026-09-15b add request by item id, summary retired"
 
 local QUOTA_CEILING = 99999
 
@@ -238,49 +238,6 @@ local function setField(field, value)
 	pcall(widget.setText, FIELD_WIDGET[field], text)
 end
 
--- Sets the summary line from the held write, the request count and the selected quotas.
-local function renderSummary()
-	if self.pendingWrite then
-		widget.setText("summary", petports_stringOr("restock.unsaved"))
-		return
-	end
-
-	local count = #self.state.requests
-
-	if count == 0 then
-		widget.setText("summary", petports_stringOr("restock.empty"))
-		return
-	end
-
-	local request = selected()
-
-	if request == nil then
-		widget.setText("summary", truncate(string.format(
-			"%s request(s). Select one to set its amounts.", tostring(count))))
-		return
-	end
-
-	local label = labelFor(request.item)
-
-
-	if (request.min or 0) > (request.max or 0) then
-		local shell = "Above fill to - holds %s %s."
-		local fixed = #string.format(shell, tostring(request.max), "")
-
-		widget.setText("summary", string.format(shell, tostring(request.max),
-			truncate(label, SUMMARY_CHARS - fixed)))
-		return
-	end
-
-	local shell = "Keep %s to %s %s here."
-	local fixed = #string.format(shell,
-		tostring(request.min), tostring(request.max), "")
-
-	widget.setText("summary", string.format(shell,
-		tostring(request.min), tostring(request.max),
-		truncate(label, SUMMARY_CHARS - fixed)))
-end
-
 -- Fills the min and max boxes from the selected request.
 local function renderFields()
 	local request = selected()
@@ -387,12 +344,11 @@ local function refreshRequests()
 		tostring(self.selectedIndex))
 end
 
--- Redraws the slot, the list, the fields and the summary.
+-- Redraws the slot, the list and the fields.
 local function renderAll()
 	renderSlot()
 	refreshRequests()
 	renderFields()
-	renderSummary()
 end
 
 
@@ -459,8 +415,6 @@ local function commitField(field, text)
 		tostring(request.item), tostring(request.min), tostring(request.max))
 
 	write()
-
-	renderSummary()
 end
 
 -- Reads a quota box and commits it when its text changed.
@@ -584,7 +538,8 @@ local function lockWithNotice()
 	for _, name in ipairs({
 		"slotBacking", "itemSlot_request", "requestHeading", "requestName",
 		"requestHint", "enabledCheckbox", "enabledLabel", "minLabel", "maxLabel",
-		"minFieldBacking", "maxFieldBacking", "tbMin", "tbMax", "summary",
+		"minFieldBacking", "maxFieldBacking", "tbMin", "tbMax",
+		"nameBacking", "tbAddName", "btnAddByName",
 		"requestsScroll", "requestFilterLabel", "requestFilterBacking",
 		"tbRequestFilter", "btnClearFilter"
 	}) do
@@ -721,8 +676,6 @@ function update(dt)
 		dbg("beacon %s (answer=%s, cursor=%s)",
 			reachable and "reachable" or "UNREACHABLE",
 			j(answer), tostring(cursorOccupied()))
-
-		renderSummary()
 	end
 
 	if reachable then
@@ -731,7 +684,6 @@ function update(dt)
 		if self.pendingWrite then
 			dbg("flushing held write")
 			write()
-			renderSummary()
 		end
 
 		return
@@ -805,8 +757,6 @@ function requestSelected()
 
 		paintRows()
 	end
-
-	renderSummary()
 end
 
 -- Adds a request for the item on the cursor and puts the item back.
@@ -823,6 +773,27 @@ function requestSlotClicked()
 	local added = addRequest(swap.name)
 
 	player.setSwapSlotItem(swap)
+
+	if added then write() end
+	renderAll()
+end
+
+-- Adds a request for the item id typed in the name box, if that id is a real item.
+function addByNameClicked()
+	local ok, text = pcall(widget.getText, "tbAddName")
+	if not ok or type(text) ~= "string" then return end
+
+	local name = text:match("^%s*(.-)%s*$")
+	if name == "" then return end
+
+	if itemFacts(name) == nil then
+		dbg("addByNameClicked: %s is not an item id", name)
+		return
+	end
+
+	pcall(widget.setText, "tbAddName", "")
+
+	local added = addRequest(name)
 
 	if added then write() end
 	renderAll()
