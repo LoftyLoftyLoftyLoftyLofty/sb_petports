@@ -10,6 +10,7 @@ require "/scripts/lofty_petports/petports_filters.lua"
 require "/scripts/lofty_petports/petports_habitat.lua"
 
 require "/scripts/lofty_petports/petports_flavors.lua"
+require "/scripts/lofty_petports/petports_upcyclerstate.lua"
 
 
 STATUS_INTERVAL = 2.0
@@ -613,7 +614,7 @@ local function abandonTask(reason)
   self.task = nil
 end
 
-local PETPORT_BUILD_STAMP = "2026-09-13e restock beacons are checked before deposit beacons"
+local PETPORT_BUILD_STAMP = "2026-09-15a an upcycler holding plain treats with no charge and no reagent counts as idle for output collection"
 
 PETPORT_PROFILE = true
 
@@ -8530,24 +8531,31 @@ local function fuelWork()
           MACHINE_SLOT_INPUT)
         local inputEmpty = not okInput or type(input) ~= "table" or input.name == nil
 
+        local okReagent, reagent = pcall(world.containerItemAt, machine.id,
+          MACHINE_SLOT_REAGENT)
+        local reagentEmpty = not okReagent or type(reagent) ~= "table" or reagent.name == nil
+
         local feeding = false
 
-        if inputEmpty then
-          local okReagent, reagent = pcall(world.containerItemAt, machine.id,
-            MACHINE_SLOT_REAGENT)
-
-          if okReagent and type(reagent) == "table" and reagent.name ~= nil then
-            for _, rule in ipairs(machine.rules) do
-              if rule.item == reagent.name and rule.burn ~= false
-                 and rule.reagent ~= false then
-                feeding = true
-                break
-              end
+        if inputEmpty and not reagentEmpty then
+          for _, rule in ipairs(machine.rules) do
+            if rule.item == reagent.name and rule.burn ~= false
+               and rule.reagent ~= false then
+              feeding = true
+              break
             end
           end
         end
 
-        local idle = inputEmpty and not feeding
+        -- A plain treat with no charge banked and no reagent to make one will never reach the output.
+        local okBlips, blips = pcall(world.getObjectParameter, machine.id,
+          "petports_upcyclerBlips")
+
+        local starved = not inputEmpty and reagentEmpty
+          and okBlips and (type(blips) ~= "table" or #blips == 0)
+          and petports_upcyclerPlainTreat(input.name)
+
+        local idle = (inputEmpty and not feeding) or starved
 
         local okBlocked, blocked = pcall(world.getObjectParameter, machine.id,
           "petports_upcyclerBlocked")
