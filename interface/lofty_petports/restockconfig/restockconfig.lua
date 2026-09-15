@@ -15,7 +15,7 @@ local PANE_ICONS = {
 	off = "/interface/lofty_petports/restockconfig/paneicon_restock_off.png"
 }
 
-local BUILD_STAMP = "2026-08-30c state-driven title icon"
+local BUILD_STAMP = "2026-09-15a request filter box, pane 16px taller"
 
 local QUOTA_CEILING = 99999
 
@@ -54,6 +54,7 @@ end
 local rowIds = {}
 
 local rowPaths = {}
+local rowStripes = {}
 
 
 -- Returns the beacon's answer to the held check.
@@ -326,7 +327,7 @@ local function paintRows()
 			if index == self.selectedIndex then
 				text = SELECTED_COLOR .. text
 				art = ROW_ART_SELECTED
-			elseif index % 2 == 1 then
+			elseif (rowStripes[index] or 0) % 2 == 1 then
 				art = ROW_ART
 			end
 
@@ -336,7 +337,7 @@ local function paintRows()
 	end
 end
 
--- Rebuilds the request list, keeping the selection where it can.
+-- Rebuilds the request list, keeping the selection where it can and skipping items the filter does not match.
 local function refreshRequests()
 	local keep = self.selectedIndex
 
@@ -345,16 +346,25 @@ local function refreshRequests()
 
 	rowIds = {}
 	rowPaths = {}
+	rowStripes = {}
+
+	local needle = string.lower(self.filterText or "")
+	local shown = 0
 
 	for index, request in ipairs(self.state.requests) do
-		local rowId = widget.addListItem(REQUESTS_LIST)
-		rowIds[rowId] = index
+		if needle == "" or string.find(string.lower(request.item), needle, 1, true) ~= nil then
+			local rowId = widget.addListItem(REQUESTS_LIST)
+			rowIds[rowId] = index
 
-		local path = string.format("%s.%s", REQUESTS_LIST, rowId)
+			shown = shown + 1
 
-		widget.setData(path .. ".rowRemove", index)
+			local path = string.format("%s.%s", REQUESTS_LIST, rowId)
 
-		rowPaths[index] = path
+			widget.setData(path .. ".rowRemove", index)
+
+			rowPaths[index] = path
+			rowStripes[index] = shown
+		end
 	end
 
 	self.rebuilding = false
@@ -372,8 +382,9 @@ local function refreshRequests()
 
 	paintRows()
 
-	dbg("refreshRequests: %s row(s), selection %s",
-		tostring(#self.state.requests), tostring(self.selectedIndex))
+	dbg("refreshRequests: %s of %s row(s) shown for filter '%s', selection %s",
+		tostring(shown), tostring(#self.state.requests), needle,
+		tostring(self.selectedIndex))
 end
 
 -- Redraws the slot, the list, the fields and the summary.
@@ -574,7 +585,8 @@ local function lockWithNotice()
 		"slotBacking", "itemSlot_request", "requestHeading", "requestName",
 		"requestHint", "enabledCheckbox", "enabledLabel", "minLabel", "maxLabel",
 		"minFieldBacking", "maxFieldBacking", "tbMin", "tbMax", "summary",
-		"requestsScroll"
+		"requestsScroll", "requestFilterLabel", "requestFilterBacking",
+		"tbRequestFilter", "btnClearFilter"
 	}) do
 		pcall(widget.setVisible, name, false)
 	end
@@ -601,6 +613,7 @@ function init()
 
 	self.shownText = { min = "", max = "" }
 	self.selectedIndex = nil
+	self.filterText = ""
 	self.labels = {}
 
 	self.pendingWrite = false
@@ -832,6 +845,28 @@ end
 -- Syncs the max box.
 function maxChanged()
 	syncField("max")
+end
+
+-- Shows the filter clear button only with text in the filter.
+local function refreshFilterClear()
+	pcall(widget.setVisible, "btnClearFilter", (self.filterText or "") ~= "")
+end
+
+-- Stores the filter text and rebuilds the request list when it changed.
+function filterChanged()
+	local ok, text = pcall(widget.getText, "tbRequestFilter")
+	if not ok or type(text) ~= "string" or text == self.filterText then return end
+
+	self.filterText = text
+
+	refreshFilterClear()
+	refreshRequests()
+end
+
+-- Empties the filter box.
+function filterClearClicked()
+	pcall(widget.setText, "tbRequestFilter", "")
+	filterChanged()
 end
 
 -- Does nothing.

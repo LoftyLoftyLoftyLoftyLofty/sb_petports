@@ -50,7 +50,7 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-14 (the upcycler rule filter and field text insets)
+### What is built, as of 2026-09-15 (upcycler starved-input collection, restock request filter)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
@@ -60,89 +60,81 @@ here disagrees with anything below, this is right and that is stale.
 ISSUES table on that page is the list to work from. BACKLOG below is still real
 but is not the authority on what is next. The drawio was NOT edited this
 session: its cell asking for search/filter bars on "restock beacons and
-upcycler" is now half built, the upcycler half.
+upcycler" (`3ISfEoBmj6Lgr9TAVEry-68`) is now built for both.
 
-SINCE THE LAST WRITE, ONE COMMIT LANDED: `c4fde79`, the previous session's
-upcycler reshape and audit, committed together with its handoff.
+SINCE THE LAST WRITE, ONE COMMIT LANDED: `eb15e9d`, the previous session's
+upcycler rule filter and field insets, committed together with its handoff.
 
-PANE-SIDE ONLY. No machine, unit or port script changed.
+**BUILT THIS SESSION, TWO CHANGES, EACH TESTED BEFORE THE NEXT:**
+- The port collects flavored treats from an upcycler whose input holds blank
+	treats it has no charge or reagent to flavor -- `arch.upcycler.collectfloor`.
+	Port script only.
+- The restock beacon request filter, and the pane 16 px taller to hold it --
+	`arch.beacon.restockfilter`. Pane script, config, strings and art only.
 
-**BUILT THIS SESSION:**
-- The upcycler rule filter -- `arch.upcycler.rulefilter`.
-- The upcycler's left-edge widgets moved from x 10 to x 4, matching the lists.
-	That is step (2) of the previous NEXT list done for the LEFT edge only; see
-	LEFT AS-IS.
-- The upcycler progress label is `hAnchor` mid at x 64, the centre of the
-	120-wide bar frame placed at x 4.
-- Every `/interface/x.png` button in all four panes has `pressedOffset
-	[ 0, 1 ]` -- `fact.pane.xpressart`.
-- The x in every rule row -- deposit beacon, restock beacon, upcycler -- moved
-	down 1 px, to y 2.
-- Five text inputs moved down inside their backings, two of them also right --
-	`ref.pane.fieldinset`.
-
-**VERIFIED IN GAME (Lofty, 2026-09-14):**
-- Every position above was set by Lofty looking at the panes, one round at a
-	time, and the session ended on his call of a feature boundary.
-- Text no longer sits against the top of its backing, and Lofty reports the UI
-	reads a lot more easily for it.
-- The x press art moves on its own, under any `pressedOffset`.
+**VERIFIED IN GAME (Lofty, 2026-09-15):**
+- A unit cleared the starved machine's output, once it had worked through a
+	farming backlog.
+- The restock filter "works as expected, first try". No position was changed
+	after the first build.
 
 **NOT VERIFIED:**
-- WHETHER THE 337 RESHAPE ACHIEVED ITS GOAL. The upcycler was narrowed so the
-	engine would place it to the RIGHT of the inventory instead of centring it on
-	top (`dd.upcycler.panewidth`). There is still no screenshot with the
-	inventory open beside it.
-- The filter's individual behaviours. Lofty called the boundary on it; which of
-	typing, clearing, switching tabs and editing a filtered list were exercised
-	was not itemised.
-- The dimensions of `/interface/x.png`. The filter clear x was first placed on
-	an assumed ~9 px glyph and then moved by eye; the size was never read.
-- `inputNoCharge`: nobody has put a Pet Treat in the input slot with an empty
-	charge.
+- The restock filter's individual behaviours were not itemised, as with the
+	upcycler's last session.
+- WHETHER THE 337 RESHAPE ACHIEVED ITS GOAL (`dd.upcycler.panewidth`). Still no
+	screenshot with the inventory open beside the upcycler.
+- The dimensions of `/interface/x.png`. Both filter clear buttons were placed
+	without reading it.
+- `inputNoCharge` in the upcycler PANE. This session's case was a blank stack
+	with an empty charge, but only the port's behaviour was reported on.
 
 **LEFT AS-IS, KNOWINGLY:**
-- Only LEFT-EDGE widgets moved to x 4. The Rules and Flavors tabs stayed at 108
-	and 206, so the gap after Instructions is 16 where it was 10; the input slot
-	column stayed at 32, so the running light to input gap is 12 where it was 6.
-	The machine block still ends at 323. Raised with Lofty, not changed.
-- A rule the filter hides can still be the selected rule, and the threshold box
-	still edits it. A rule added from the sample slot while a filter is active is
-	selected and not shown if it does not match.
-- `row_96*.png` and `panewider_*.png` are on disk and unreferenced. Art was not
-	deleted on the assistant's own initiative.
-- Tab 3 has ~80px of dead band above its lists, the cost of the flush-top rule
-	Lofty asked for.
+- A machine whose reagent slot holds something it cannot spend (exempt, not a
+	reagent, reagent-denied) with blanks in the input is just as stuck and still
+	reads as converting. The stated case was an empty reagent slot.
+- The restock filter label has ~30 px before its backing where the upcycler's
+	has ~50 for translations. The 204 pane has no more to give.
+- In both filtered panes, a hidden entry can stay selected and its fields still
+	edit it, and an item added while a filter is active is not shown if it does
+	not match.
+- Only LEFT-EDGE upcycler widgets moved to x 4; the Rules and Flavors tabs stayed
+	at 108 and 206, and the input slot column at 32. Raised with Lofty, not changed.
+- `row_96*.png` and `panewider_*.png` are on disk and unreferenced.
+- Upcycler tab 3 has ~80px of dead band above its lists, the cost of the
+	flush-top rule Lofty asked for.
 
 **DO NOT REPEAT:**
-- BUILDING ON WHEN A TEXTBOX CALLBACK FIRES. The filter rebuilds the rule list
-	from `filterChanged`, the textbox callback, and nothing polls it.
-	`fact.pane.textboxpoll` says in capitals not to do exactly this, and it was
-	not read before the build -- `todo.upcycler.filterpoll`.
-- Everything on the earlier 2026-09-14 lists still stands: read the fact before
-	splicing art (`fact.art.chestslotshadow`), measure an engine key instead of
-	designing around it, no war story in a comment nobody observed, no date stamp
-	on unrun work, no stacked builds, and no substituting a judgement call for a
-	stated requirement.
+- COPYING A CONVENTION COPIES ITS OPEN TICKETS. The restock filter was built as
+	a faithful port of `arch.upcycler.rulefilter`, callback and all, one session
+	after this list said in capitals not to build on the callback. This document
+	was not opened before either build this session -- `todo.beacon.filterpoll`.
+	Read the ARCH entry, and its see-also, of anything being copied.
+- Everything on the 2026-09-14 lists still stands: read `fact.pane.textboxpoll`
+	before a textbox, read the fact before splicing art
+	(`fact.art.chestslotshadow`), measure an engine key instead of designing around
+	it, no war story in a comment nobody observed, no date stamp on unrun work, no
+	stacked builds, and no substituting a judgement call for a stated requirement.
 
-**BUILD STAMPS IN PLAY:** port `2026-09-14b`, petportconfig `2026-09-14b`,
-upcycler `2026-09-14a`, upcyclerconfig `2026-09-14k`, coarsenav `2026-09-13c`,
-taskAction `2026-09-13h`, contract `2026-09-12d`, flyapproach `2026-09-10c`,
-work `2026-09-11b`, overlay `2026-09-11d`. The petport, restock and beacon panes
-changed in config only this session.
+**BUILD STAMPS IN PLAY**, read from the tree: port `2026-09-15a`, restockconfig
+`2026-09-15a`, petportconfig `2026-09-13f`, upcycler `2026-09-14a`,
+upcyclerconfig `2026-09-14k`, beaconconfig `2026-08-30c`, coarsenav `2026-09-13c`,
+taskAction `2026-09-13h`, contract `2026-09-12d`, flyapproach `2026-09-10c`, work
+`2026-09-11b`, overlay `2026-09-11d`. The previous STATUS gave port and
+petportconfig as `2026-09-14b`; git has never held that stamp in either file, and
+they read `2026-09-13e` and `2026-09-13f` until this session.
 
-**NEXT, IN ORDER:** (1) open the inventory beside the upcycler -- one
-screenshot, and it still validates or sinks the 337 width; (2)
-`todo.upcycler.filterpoll`, one call in `update`; (3) regenerate the body art
-without the shadow bands (`todo.upcycler.shadowbands`); (4) the restock beacon
-half of the drawio filter-bar cell; (5) the four medic gaps from the earlier
-session on the 14th, all still open.
+**NEXT, IN ORDER:** (1) `todo.upcycler.filterpoll` and `todo.beacon.filterpoll`,
+one call in each pane's `update`; (2) open the inventory beside the upcycler --
+one screenshot, and it still validates or sinks the 337 width; (3) regenerate the
+upcycler body art without the shadow bands (`todo.upcycler.shadowbands`); (4) the
+four medic gaps from the earlier session on 2026-09-14, all still open.
 
-**COMMIT STATE:** `c4fde79` is the last commit. Modified in the working tree:
-`upcyclerconfig.config`, `upcyclerconfig.lua`, `petportconfig.config`,
-`restockconfig.config`, `beaconconfig.config`, `petports_strings.config` and
-this document. Untracked: `upcyclerconfig/filterfield_backing.png`. Nothing is
-committed.
+**COMMIT STATE:** `eb15e9d` is the last commit. Modified in the working tree:
+`petports_petport.lua`, `restockconfig.lua`, `restockconfig.config`,
+`restockconfig/panesmall_body.png`, `petports_strings.config` and this document.
+Untracked: `restockconfig/filterfield_backing.png`. Nothing is committed. Git
+warns that the working copy of `petports_petport.lua` is CRLF; `.gitattributes`
+normalises it on commit and the diff is 34 lines, not a rewrite.
 
 ## ARCHITECTURE
 
@@ -2211,6 +2203,45 @@ collecting the first one costs a round trip for three items. None of that applie
 to a single misplaced item: no more are coming, it can never reach a batch, and
 every second it sits there the machine is stopped.
 
+### Treats in an upcycler's output wait for a batch, unless no more are coming
+`arch.upcycler.collectfloor` -- see also `arch.upcycler.outputeviction`, `arch.upcycler.plaintreat`, `dd.upcycler.outputstall`
+
+BUILT 2026-09-15, port `2026-09-15a`, and verified by Lofty the same day.
+`fuelWork` takes a fuel-tagged output stack when any one of these holds:
+
+	batch     count >= ceil(stack size x MACHINE_MIN_BATCH), which is 0.25
+	full      count >= stack size
+	idle      input empty and the reagent slot holds nothing whose rule has
+	          both boxes on,
+	          OR starved
+	stalled   `petports_upcyclerBlocked` is true
+
+Non-treats skip all four -- `arch.upcycler.outputeviction`.
+
+**THE FLOOR IS ONLY RIGHT WHILE MORE IS COMING.** Every other clause is a way of
+knowing that nothing more is. `idle` was written when everything in an input was
+something to burn, so an occupied input meant progress.
+
+**A BLANK TREAT IN THE INPUT IS NOT PROGRESS.** Since `arch.upcycler.plaintreat`
+a stack of blanks can sit in the input with no charge to spend on it.
+`flavorTreat` returns "holding" without setting `storage.blocked`, because
+nothing was refused. Read from the code rather than a log line: input occupied,
+not blocked, output under the floor, so the machine counted as trickling and was
+never worth a trip.
+
+**STARVED IS THREE THINGS AT ONCE:** the input holds an item tagged
+`petports_plain_treat`, the reagent slot is empty, and the published blip queue
+`petports_upcyclerBlips` is empty. The tag is read through
+`petports_upcyclerPlainTreat`, the predicate the machine's own `plainTreat`
+calls, which is why the port now requires `petports_upcyclerstate.lua`.
+
+**AN UNSPENDABLE REAGENT DOES NOT COUNT.** A reagent slot holding something
+exempt, not a reagent, or reagent-denied leaves the machine as stuck as an empty
+one and still reads as converting. The stated case was an empty slot.
+
+**THE BLIP QUEUE LAGS BY `petports_pointsFlushInterval`, 5 s,** as the blocked
+flag does: `flushPoints` writes both, and only on change.
+
 ### `standableNear` ranks every column by true distance
 `arch.pathing.standablerank` -- see also `arch.pathing.homewardbias`
 
@@ -4065,6 +4096,41 @@ text, so it does not matter whether a script `setText` also fires the callback.
 
 The backing's right edge is 317, the rows' right edge. The ~50 px between the
 label and the backing is room left for longer translations of "Filter:".
+
+### The restock beacon's request filter is the upcycler's, callback and all
+`arch.beacon.restockfilter` -- see also `arch.upcycler.rulefilter`, `arch.beacon.restock`, `todo.beacon.filterpoll`, `fact.art.chestslotshadow`, `ref.pane.fieldinset`
+
+BUILT 2026-09-15, restockconfig `2026-09-15a`. Lofty: works as expected, first
+try. No position was changed after the first build.
+
+**EVERY RULE OF `arch.upcycler.rulefilter` HOLDS HERE.** Item id, not display
+name, as a lowercased plain substring; pane state only, `self.filterText`, never
+written; an unmatched request gets no list item; the remove button carries the
+real request index; stripes count shown rows (`rowStripes`); the clear x shows
+only with text in the box. The pane has no tabs, so `refreshFilterClear` tests
+the text alone. `lockWithNotice` hides all four widgets.
+
+**THE PANE IS 16 TALLER, 274 TO 290.** `panesmall_body.png` went from 204x224 to
+204x240. Its top 145 rows are one row repeated, so sixteen more copies of that
+row went on TOP and the bottom 79, the chest slot shadow behind the quota fields,
+are untouched. Everything above the list moved up 16: close, both checkboxes and
+their labels, the heading, and the three notice labels. The list rect, sample
+slot, quota rows and summary did not move.
+
+	requestFilterLabel    [ 10, 220 ]   size 7, grey 150/156/164, `restock.filter`
+	requestFilterBacking  [ 40, 215 ]   148x13, byte-identical to petports_fieldbacking.backing(148, 13)
+	tbRequestFilter       [ 44, 218 ]   maxWidth 128, inset +4 +3
+	btnClearFilter        [ 174, 216 ]  zlevel 3, the rule rows' x column
+
+The backing's right edge is 188, the rows' right edge. Its bottom sits 3 above
+the list top (212), the upcycler's gap, and the heading sits 2 above its top,
+which was the old heading-to-list gap.
+
+**THE LABEL HAS ~30 PX, NOT THE UPCYCLER'S ~50.** That 50 was room for longer
+translations of "Filter:". A 204 pane cannot give it and keep a usable box, so a
+long translation overlaps the backing here first.
+
+**IT IS CALLBACK-DRIVEN** -- `todo.beacon.filterpoll`.
 
 ### The report handler cleans up before it delivers
 `arch.port.reporthandler`
@@ -16230,6 +16296,21 @@ compares against `self.filterText` and returns on no change, so polling rebuilds
 nothing while the text is still, and the callback stays as the stub the parser
 needs. No `shownText` guard is needed: the only script write to the box is ""
 from `filterClearClicked`, which updates `self.filterText` in the same call.
+
+### The restock request filter should poll its text box, not trust the callback
+`todo.beacon.filterpoll` -- see also `arch.beacon.restockfilter`, `todo.upcycler.filterpoll`, `fact.pane.textboxpoll`
+
+OPENED 2026-09-15. `tbRequestFilter` is read only inside `filterChanged`, its
+callback. This is the one pane `fact.pane.textboxpoll` credits with polling
+already -- `pollFields` from `update` -- and the filter was built beside that
+without using it. It worked for Lofty, which is a second single-pane
+observation, not evidence against the rule.
+
+THE FIX IS ONE CALL: `filterChanged()` beside `pollFields()` in `update`, below
+the `self.state` guard, because `refreshRequests` reads `self.state.requests` and
+the notice path returns before it. No `shownText` guard, for the upcycler's
+reason: the only script write to the box is "" from `filterClearClicked`, which
+sets `self.filterText` in the same call.
 
 ### The rescue retry gate, if the churn ever matters
 `todo.upcycler.rescuechurn` -- see also `arch.upcycler.shuttle`
