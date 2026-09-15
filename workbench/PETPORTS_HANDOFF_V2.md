@@ -50,112 +50,71 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-15 (add by item id in the upcycler and restock panes, restock summary retired)
+### What is built, as of 2026-09-15 (add by item id, restock summary retired, fish medium gate)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-**THE PLAN LIVES IN `workbench/plan.drawio`, NOT HERE.** The OUTSTANDING KNOWN
-ISSUES table on that page is the list to work from. BACKLOG below is still real
-but is not the authority on what is next. The drawio was NOT edited this
-session. Its cell asking for manual adds by id in the upcycler and the restock
-beacon (`3ISfEoBmj6Lgr9TAVEry-67`) is now built for both; the currency half of
-that cell (money, essence) was not tested.
+**THE PLAN LIVES IN `workbench/plan.drawio`, NOT HERE.** Not edited this session.
+Cell `3ISfEoBmj6Lgr9TAVEry-67` (manual add by id) is now built; its currency half
+(money, essence) was not tested.
 
-SINCE THE LAST WRITE, NO COMMIT LANDED. `4eaf30f` is the previous session's work,
-committed together with its handoff. The drawio's working-tree changes were not
-made this session.
+SINCE THE LAST WRITE, NO COMMIT LANDED. `4eaf30f` is the last commit.
 
-**BUILT THIS SESSION, TWO CHANGES, EACH TESTED BEFORE THE NEXT:**
-- Add by name in the upcycler pane: an item id box and an "Add by name" button
-	under the rule slot, the slot hint moved to the slot's right --
-	`arch.pane.addbyname`. Pane script, config, strings and art only.
-- The same in the restock beacon pane on the old Fetch below row, both quota
-	rows moved down 18, and the summary line retired -- `arch.pane.addbyname`,
-	`dd.beacon.summaryretired`. Pane script, config, strings and art only.
+**BUILT THIS SESSION, FOUR CHANGES, EACH TESTED BEFORE THE NEXT:**
+- Add by name in the upcycler pane -- `arch.pane.addbyname`.
+- Add by name in the restock pane, quota rows down 18, summary retired --
+	`arch.pane.addbyname`, `dd.beacon.summaryretired`.
+- Port `2026-09-15b`: `fishWork` skips a fish in a liquid the chassis cannot
+	enter -- `arch.fishing.dispatch`. Closes `todo.fishing.medium`.
+- Port `2026-09-15c`: the `no dispatch` line lists the reason of every generator
+	that ran. It used to list them only when harvest ran, fell back to the collection
+	reason otherwise, and never included asterite. Fishing's reason is listed only
+	with a fishing module socketed.
 
-**VERIFIED IN GAME (Lofty, 2026-09-15):**
-- The upcycler build: "ok this works". No position was changed after the first
-	build.
-- The restock build: "ok that's working". No position was changed after the
-	first build.
-- A textbox naming `"callback" : "null"` constructs, in both panes --
-	`fact.pane.textboxcallback`, amended.
+**VERIFIED IN GAME (Lofty, 2026-09-15):** both panes work, first build each; on a
+poison world a fish was skipped with the poison module out (`1 in a liquid this
+chassis cannot enter`, no dispatch) and dispatched 86 ms after socketing it.
 
-**NOT VERIFIED:**
-- Neither report itemised behaviours. Unreported: a bad id adding nothing, an id
-	that already has an entry selecting it, the box clearing on a good add, and
-	the upcycler switching itself off on an add by name.
-- Whether currency ids (`money`, `essence`) resolve through `root.itemConfig`,
-	and what a rule or request on one would do. The drawio cell names them.
-- Whether the upcycler hint wraps to the three lines it was placed for. Its last
-	line was placed ~1 px above the name backing.
-- What Enter does in a textbox whose callback is `"null"`.
-- WHETHER THE 337 RESHAPE ACHIEVED ITS GOAL (`dd.upcycler.panewidth`). Still no
-	screenshot with the inventory open beside the upcycler.
-- The dimensions of `/interface/x.png`. Both filter clear buttons were placed
-	without reading it.
-- `inputNoCharge` in the upcycler PANE.
+**NOT VERIFIED:** bad-id, duplicate and box-clearing behaviour in either pane;
+currency ids; the upcycler hint's three-line wrap; Enter in a `"null"`-callback
+textbox; the 337 upcycler width against an open inventory; `/interface/x.png`
+dimensions; `inputNoCharge` in the upcycler pane.
 
 **LEFT AS-IS, KNOWINGLY:**
-- A bad id gets no on-screen feedback in either pane. The upcycler logs it behind
-	a `DEBUG` that is on; the restock pane's `DEBUG` is off, so nothing records it.
-- Neither pane's text mentions the name box. The upcycler instructions still say
-	to drop an item on the slot, and both slot hints still say "Click here".
-- The restock pane no longer shows a change held for an unreachable beacon --
-	`dd.beacon.summaryretired`.
-- "Add by name" is two strings, `upcycler.addbyname` and `restock.addbyname`,
-	not one under `common`.
-- `SUMMARY_CHARS` in restockconfig kept its name. It is now only `truncate`'s
-	default, which the notice lines use.
-- In both filtered panes a hidden entry can stay selected and its fields still
-	edit it, and an entry added while a filter is active is not shown if it does
-	not match. That now covers adds by name.
-- A machine whose reagent slot holds something it cannot spend, with blanks in
-	the input, is just as stuck and still reads as converting.
-- The restock filter label has ~30 px before its backing where the upcycler's
-	has ~50 for translations.
-- Only LEFT-EDGE upcycler widgets moved to x 4; the Rules and Flavors tabs stayed
-	at 108 and 206, and the input slot column at 32.
-- `row_96*.png` and `panewider_*.png` are on disk and unreferenced.
-- Upcycler tab 3 has ~80px of dead band above its lists.
+- `submergedSpot` places lures in any liquid, poison and lava included. Only
+	dispatch is gated.
+- A bad id gets no on-screen feedback; pane text does not mention the name box.
+- The restock pane no longer shows a held write -- `dd.beacon.summaryretired`.
+- "Add by name" is two strings, not one under `common`.
+- Filtered panes can keep a hidden entry selected, and hide new entries that do
+	not match.
+- Older items unchanged: stuck reagent slot reads as converting; restock filter
+	label ~30 px; upcycler tabs at 108/206; unreferenced `row_96*` and
+	`panewider_*` art; ~80 px dead band on upcycler tab 3.
 
 **DO NOT REPEAT:**
-- THIS DOCUMENT WAS NOT OPENED BEFORE EITHER BUILD, AGAIN, one session after this
-	list said to read the ARCH entry of anything being copied. Both builds put a
-	textbox beside a filter without reading `fact.pane.textboxpoll`,
-	`fact.pane.textboxcallback` or `ref.pane.fieldinset`. They landed inside those
-	entries by the shape of the feature, not by reading: the id is read only on
-	the click, and the inset was copied off the neighbouring filter field.
-	`petports_paneheck.py` caught the one construction hazard, a textbox with no
-	callback, before delivery.
-- A MARKED SCREENSHOT IS READ BY SAMPLING ITS PIXELS. The yellow box Lofty drew
-	was described back as white by eye; the pixels were (255, 242, 0). The box
-	bounds used for placement came from sampling.
-- Everything on the earlier lists still stands: read the ARCH entry and its
-	see-also of anything being copied, read the fact before splicing art
-	(`fact.art.chestslotshadow`), measure an engine key instead of designing around
-	it, no war story in a comment nobody observed, no date stamp on unrun work, no
-	stacked builds, and no substituting a judgement call for a stated requirement.
+- READ THE DOC BEFORE BUILDING. Both pane builds skipped it again.
+- Sample a marked screenshot's pixels rather than reading colours by eye.
+- Earlier rules stand: read the ARCH entry of anything copied, one change per
+	build, no war stories in comments, no date stamp on unrun work, no judgement
+	call in place of a stated requirement.
 
-**BUILD STAMPS IN PLAY**, read from the tree: port `2026-09-15a`, restockconfig
-`2026-09-15b`, petportconfig `2026-09-13f`, upcycler `2026-09-14a`,
-upcyclerconfig `2026-09-15a`, beaconconfig `2026-08-30c`, coarsenav `2026-09-13c`,
-taskAction `2026-09-13h`, contract `2026-09-12d`, flyapproach `2026-09-10c`, work
-`2026-09-11b`, overlay `2026-09-11d`.
+**BUILD STAMPS IN PLAY:** port `2026-09-15c`, restockconfig `2026-09-15b`,
+upcyclerconfig `2026-09-15a`, petportconfig `2026-09-13f`, upcycler `2026-09-14a`,
+beaconconfig `2026-08-30c`, coarsenav `2026-09-13c`, taskAction `2026-09-13h`,
+contract `2026-09-12d`, flyapproach `2026-09-10c`, work `2026-09-11b`, overlay
+`2026-09-11d`.
 
-**NEXT, IN ORDER:** (1) `todo.upcycler.filterpoll` and `todo.beacon.filterpoll`,
-one call in each pane's `update`; (2) open the inventory beside the upcycler --
-one screenshot, and it still validates or sinks the 337 width; (3) regenerate the
-upcycler body art without the shadow bands (`todo.upcycler.shadowbands`); (4) the
-four medic gaps from 2026-09-14, all still open.
+**NEXT, IN ORDER:** (1) `todo.upcycler.filterpoll` and `todo.beacon.filterpoll`;
+(2) inventory screenshot beside the upcycler for the 337 width;
+(3) `todo.upcycler.shadowbands`; (4) the four medic gaps from 2026-09-14.
 
-**COMMIT STATE:** `4eaf30f` is the last commit. Modified in the working tree:
+**COMMIT STATE:** `4eaf30f` is the last commit. Modified: `petports_petport.lua`,
 `upcyclerconfig.lua`, `upcyclerconfig.config`, `restockconfig.lua`,
-`restockconfig.config`, `petports_strings.config`, `plan.drawio` and this
-document. Untracked: `upcyclerconfig/namefield_backing.png` and
-`restockconfig/namefield_backing.png`. Nothing from this session is committed.
+`restockconfig.config`, `petports_strings.config`, `plan.drawio`, this document.
+Untracked: both `namefield_backing.png`.
 
 ## ARCHITECTURE
 
@@ -6197,6 +6156,10 @@ it stretches the first term only and does not scale throughput one for one.
 `fishedTiers`, walked out of the stats table. `FISH_RARITIES` is hardcoded in the
 pane because the tiers are NOT ours -- a zone declares its own -- which is the
 one way the treat rows in `arch.fuel.eat` improve on this.
+
+**A FISH IN A LIQUID THE CHASSIS CANNOT ENTER IS SKIPPED.** Port `2026-09-15b`:
+`targetSuits(position, nil)` after the coverage check, tallied as `medium`.
+Verified 2026-09-15 on a poison world, module out and in.
 
 ### A fish belongs to the network, not to the lure that spawned it
 `arch.fishing.network` -- see also `arch.fishing.dispatch`, `arch.dispatch.union`, `arch.network.registry`, `todo.fishing.outofcover`, `dd.fishing.catchwindow`, `todo.fishing.medium`
@@ -16656,6 +16619,8 @@ into this very class of file and once by a checker that could not see `\r`.
 
 ### A unit can be dispatched into magma at a fish it is not equipped for
 `todo.fishing.medium` -- see also `arch.fishing.network`, `arch.dispatch.eligibility`, `arch.fishing.lure`
+
+**CLOSED 2026-09-15 by `arch.fishing.dispatch`.** Built as described below.
 
 **FOUND 2026-09-03 while building `arch.fishing.network`, AND IT PREDATES IT.**
 Not caused by network-wide fish; made likelier by them, because a network now

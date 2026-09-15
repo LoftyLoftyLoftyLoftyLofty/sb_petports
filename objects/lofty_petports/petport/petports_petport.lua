@@ -614,7 +614,7 @@ local function abandonTask(reason)
   self.task = nil
 end
 
-local PETPORT_BUILD_STAMP = "2026-09-15a an upcycler holding plain treats with no charge and no reagent counts as idle for output collection"
+local PETPORT_BUILD_STAMP = "2026-09-15c no dispatch lists every generator that ran, not only when harvest did"
 
 PETPORT_PROFILE = true
 
@@ -4252,7 +4252,7 @@ local function fishWork()
   local best, bestDistance = nil, nil
   local offered = 0
   local rejected = { expired = 0, gone = 0, claimed = 0, backedOff = 0,
-    outside = 0 }
+    outside = 0, medium = 0 }
 
   for _, memberId in ipairs(petports_networkMemberIds(stationUniqueId())) do
     local entry = published[memberId]
@@ -4284,6 +4284,8 @@ local function fishWork()
 
         elseif not reachableWater(position) then
           rejected.outside = rejected.outside + 1
+        elseif not targetSuits(position, nil) then
+          rejected.medium = rejected.medium + 1
         else
           local distance = world.magnitude(from, position)
 
@@ -4303,10 +4305,12 @@ local function fishWork()
 
     return nil, string.format(
       "%s fish in the network, none takeable: %s held by another port, "
-      .. "%s backed off after a failure, %s outside network coverage, %s gone, "
+      .. "%s backed off after a failure, %s outside network coverage, "
+      .. "%s in a liquid this chassis cannot enter, %s gone, "
       .. "%s from a port that stopped reporting",
       sb.printJson(offered), sb.printJson(rejected.claimed),
       sb.printJson(rejected.backedOff), sb.printJson(rejected.outside),
+      sb.printJson(rejected.medium),
       sb.printJson(rejected.gone), sb.printJson(rejected.expired))
   end
 
@@ -9298,30 +9302,38 @@ local function findWork()
     return reason .. "; " .. optedOut
   end
 
-  -- Joins the place and fetch halves of a generator's reason, or falls back to a quiet one.
-  local function bothLegs(place, fetch, quiet)
+  -- Joins the place and fetch halves of a generator's reason.
+  local function bothLegs(place, fetch)
     if place ~= nil and fetch ~= nil then return place .. ", and " .. fetch end
-    return place or fetch or quiet
+    return place or fetch
   end
 
-  if noCrop ~= nil then
-    return nil, withOptOut(tostring(why or "collection not run")
-      .. "; " .. tostring(noCrop)
-      .. "; " .. tostring(bothLegs(noPutBack, noFetch, "no replant work"))
-      .. "; " .. tostring(bothLegs(noWet, noFetchWater, "no watering work"))
-      .. "; " .. tostring(noBeast or "no animal work")
-      .. "; " .. tostring(noTrap or "no trap work")
-      .. "; " .. tostring(noFish or "no fishing work")
-      .. "; " .. tostring(noStock or "no restock work")
-      .. "; " .. tostring(noFuel or "no fuel to collect")
-      .. "; " .. tostring(noTidy or "no tidying work")
-      .. "; " .. tostring(noSquash or "no compaction work")
-      .. "; " .. tostring(noGather or "no gathering work")
-      .. "; " .. tostring(noOrder or "no sorting work")
-      .. "; " .. tostring(noDrain or "no draining work"))
+  local reasons = {}
+
+  -- Adds a generator's reason to the list when it has one.
+  local function note(reason)
+    if reason ~= nil then table.insert(reasons, tostring(reason)) end
   end
 
-  return nil, withOptOut(why)
+  note(why)
+  if petportFishing() then note(noFish) end
+  note(noCrop)
+  note(bothLegs(noPutBack, noFetch))
+  note(bothLegs(noWet, noFetchWater))
+  note(noBeast)
+  note(noTrap)
+  note(noOre)
+  note(noStock)
+  note(noFuel)
+  note(noTidy)
+  note(noSquash)
+  note(noGather)
+  note(noOrder)
+  note(noDrain)
+
+  if #reasons == 0 then return nil, optedOut end
+
+  return nil, withOptOut(table.concat(reasons, "; "))
 end
 
 -- Logs why no work was taken, at most once per repeat window for a given reason.
