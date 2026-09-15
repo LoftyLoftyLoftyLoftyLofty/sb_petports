@@ -7,7 +7,7 @@ require "/scripts/lofty_petports/petports_strings.lua"
 
 local DEBUG = true
 
-local PANE_BUILD_STAMP = "2026-09-14a a burn button forces the input slot by hand past every refusal, and the pane captions, reports and cancels it"
+local PANE_BUILD_STAMP = "2026-09-14i the lists sit even between the frame borders"
 
 -- Returns the singular or plural string for a count of a noun.
 local function counted(count, noun)
@@ -43,13 +43,13 @@ local BLIP_EMPTY = "2a2a2aff"
 
 local blipShown = {}
 
-local RULE_ROW_ART = "/interface/lofty_petports/shared/row_164.png"
-local RULE_ROW_ART_ALT = "/interface/lofty_petports/shared/row_164_alt.png"
-local RULE_ROW_ART_SELECTED = "/interface/lofty_petports/shared/row_164_selected.png"
+local RULE_ROW_ART = "/interface/lofty_petports/shared/row_221.png"
+local RULE_ROW_ART_ALT = "/interface/lofty_petports/shared/row_221_alt.png"
+local RULE_ROW_ART_SELECTED = "/interface/lofty_petports/shared/row_221_selected.png"
 
-local FLAVOR_ROW_ART = "/interface/lofty_petports/shared/row_148.png"
-local FLAVOR_ROW_ART_ALT = "/interface/lofty_petports/shared/row_148_alt.png"
-local FLAVOR_ROW_ART_SELECTED = "/interface/lofty_petports/shared/row_148_selected.png"
+local FLAVOR_ROW_ART = "/interface/lofty_petports/shared/row_107.png"
+local FLAVOR_ROW_ART_ALT = "/interface/lofty_petports/shared/row_107_alt.png"
+local FLAVOR_ROW_ART_SELECTED = "/interface/lofty_petports/shared/row_107_selected.png"
 
 local POLYMORPHIC_CONFIG = "/scripts/lofty_petports/petports_polymorphic.config"
 
@@ -151,25 +151,10 @@ local function labelFor(name)
 	return self.labels[name]
 end
 
-local WARNING_ARGS = {
-	-- Returns the labels of both items named in a deadlock verdict.
-	slotsDeadlocked = function(v) return labelFor(v.item), labelFor(v.other) end
-}
-
 -- Returns the warning line for a refusal verdict.
 local function warningText(verdict)
-	local key = "upcycler.warn." .. string.lower(verdict.cause or "")
-
-	if petports_string(key) == nil then
-		return petports_format("upcycler.warn.generic", labelFor(verdict.item))
-	end
-
-	local args = WARNING_ARGS[verdict.cause]
-	if args ~= nil then
-		return petports_format(key, args(verdict))
-	end
-
-	return petports_format(key, labelFor(verdict.item))
+	return petports_format("upcycler.warn." .. string.lower(verdict.cause or ""),
+		labelFor(verdict.item))
 end
 
 
@@ -540,7 +525,7 @@ local function refreshBurnButton(input)
 	end
 end
 
--- Updates the burn button, the warning line and the status line from the slot contents.
+-- Updates the burn button and the warning line from the slot contents.
 function refreshStatus()
 	if not self.loaded then return end
 
@@ -568,40 +553,11 @@ function refreshStatus()
 	})
 
 	if verdict ~= nil then
-		local said = warningText(verdict)
-
-		if said ~= nil then
-			showWarning(said)
-		else
-			showWarning(string.format("%s is stopping the machine.",
-				labelFor(verdict.item)))
-		end
-
+		showWarning(warningText(verdict))
 		return
 	end
 
 	hideWarning()
-
-	if type(self.forcedName) == "string" then
-		widget.setText("lblStatus",
-			petports_format("upcycler.status.forced", labelFor(self.forcedName)))
-		return
-	end
-
-	if not self.enabled then
-		widget.setText("lblStatus",
-			petports_format("upcycler.status.off", counted(#self.rules, "rule")))
-		return
-	end
-
-	if input == nil then
-		widget.setText("lblStatus",
-			petports_format("upcycler.status.idle", counted(#self.rules, "rule")))
-		return
-	end
-
-	widget.setText("lblStatus", petports_format("upcycler.status.converting",
-		counted(#self.rules, "rule"), labelFor(input.name)))
 end
 
 
@@ -745,6 +701,8 @@ local rebuildingFlavors = false
 
 local FLAVOR_WIDGETS = { "flavorsScroll", "reagentsLabel", "reagentsScroll" }
 local INSTRUCTION_WIDGETS = { "instructionsText" }
+local RULES_WIDGETS = { "rulesScroll", "slotBacking", "itemSlot_sample",
+	"sampleHint", "thresholdLabel", "thresholdBacking", "tbThreshold" }
 
 -- Sets the visibility of a list of widgets.
 local function setWidgetsVisible(names, shown)
@@ -873,14 +831,16 @@ local function refreshFlavors()
 	dbg("refreshFlavors: %d flavor(s)", #shownFlavors)
 end
 
--- Shows the instructions or flavors widgets and sets the tab checkboxes.
+-- Shows one tab's widgets and sets the tab checkboxes.
 local function showTab(which)
 	activeTab = which
 
 	setWidgetsVisible(INSTRUCTION_WIDGETS, which == "instructions")
+	setWidgetsVisible(RULES_WIDGETS, which == "rules")
 	setWidgetsVisible(FLAVOR_WIDGETS, which == "flavors")
 
 	pcall(widget.setChecked, "tabInstructions", which == "instructions")
+	pcall(widget.setChecked, "tabRules", which == "rules")
 	pcall(widget.setChecked, "tabFlavors", which == "flavors")
 
 	dbg("showTab: %s", tostring(which))
@@ -926,6 +886,11 @@ end
 -- Shows the instructions tab.
 function tabInstructionsClicked()
 	showTab("instructions")
+end
+
+-- Shows the rules tab.
+function tabRulesClicked()
+	showTab("rules")
 end
 
 -- Shows the flavors tab, building the list on first use.
@@ -1063,7 +1028,8 @@ function init()
 	if direct ~= nil then
 		applyState(direct)
 	else
-		widget.setText("lblStatus", petports_stringOr("upcycler.status.unreadable"))
+		sb.logError("petports: upcycler pane could not read the machine state; "
+			.. "rules and checkboxes will stay empty for this pane")
 	end
 end
 

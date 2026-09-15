@@ -50,7 +50,7 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-14 (the medic's medkit slot)
+### What is built, as of 2026-09-14 (the upcycler pane reshape)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
@@ -63,84 +63,104 @@ the list to work from. BACKLOG below is still real but is no longer the
 authority on what is next. A human audit of this document is itself an item on
 that page.
 
-ONE FEATURE, THREE FILES, AND NO NAV WORK AT ALL. The port, its pane and the
-string table. `petportsTaskAction.lua` was read and NOT changed: the unit never
-reads the dose item name, so the whole feature is port-side.
+SINCE THE LAST WRITE, TWO COMMITS LANDED: `b40dfae`, the comment purge the
+previous STATUS described, and `a7f39b8`, documentation. Neither is this
+session's work, which is still uncommitted.
 
-**VERIFIED IN GAME:**
-- The preload outranking farm work (dd.dispatch.medicpreload). Confirmed by
-  Lofty 2026-09-14 after the rung was moved above fishing, harvest, livestock,
-  traps and mining. The build before that move was measured failing: log
-  12:13:58.501, medic rung idle with `no treatable patient`, medkit empty,
-  cargo empty, one medicalgoods sitting in beacon 89 which the unit had
-  deposited there itself at 12:13:36 -- and `animal:75` dispatched 12 ms later.
-- Returning the charge on module removal (arch.cargo.medkit). Log 12:13:18.696
-  `medic module is gone -- returning medicalgoods x1 from the medkit to cargo
-  for deposit`, deposited into beacon 89 at 12:13:36.968.
-- Persistence. The item read at 12:13:09.544 carries
-  `"medkit":{"name":"medicalgoods","count":1}` beside `cargo`, so it survives
-  an unsocket and a reload the way cargo does.
+FOUR FILES AND THREE ART FAMILIES, ALL PANE-SIDE. `upcyclerconfig.config`,
+`upcyclerconfig.lua`, `petports_upcyclerstate.lua` and the shared string table.
+`petports_upcycler.lua` was read repeatedly and NEVER CHANGED -- no machine
+behaviour moved this session, only what the pane says about the machine and
+where the pane puts it.
 
-**NOT VERIFIED, AND THESE ARE THE GAPS TO CLOSE FIRST:**
-- The skim. No run has picked up a stack of medicalgoods larger than one, so
-  "1 to the medkit, the rest to cargo" is reasoned and not measured.
-- The dose. No patient appeared in the whole log -- `dosed` sat at 7 from start
-  to finish -- so `spendMedkit` has never run and the medkit has never been
-  emptied by healing.
-- The fuel gate. Fuel ran 426 to 352 across the session and never approached
-  zero, so a starving medic declining to fetch or heal (dd.fuel.medicfed) has
-  not been seen.
-- The pane badge. Present in the mirror and the string table; nobody has
-  reported seeing it render.
+TWO HALVES: an audit that deleted refusal paths, then the reshape.
 
-**FOUR BUILDS WERE STACKED BEFORE ANY LOG WAS READ**, against
-proc.tooling.onechange: the medkit split, the fuel-gate move, the pane badge and
-the preload priority. It cost a diagnosis -- see proc.tooling.rungreason, where
-the rung that was actually in question had no reason log and the log could not
-say whether it had declined or never run.
+THE AUDIT DELETED FIVE THINGS. `slotsDeadlocked`, because the shuttle resolves
+it before a player can see it (`arch.upcycler.shuttlepriority`); the
+`upcycler.warn.generic` fallback and the unreachable hardcoded string beside it;
+the whole `lblStatus` line with its five `upcycler.status.*` strings, its
+`upcycler.count.rule` forms and the `editor` and `rules` labels; both
+`PETPORTS_UPCYCLER_CAUSES` and `petports_upcyclerAlerting`, dead and never read,
+the causes table already missing `inputNoCharge`; and with the alerting helper
+gone, the `slot` and `severity` fields on every verdict. A verdict is now
+`{ cause, item }`.
 
-**EVERY CODE COMMENT WRITTEN BY THE ASSISTANT IS BEING STRIPPED FROM THE
-PROJECT, 2026-09-14.** Several comments added this session narrated failures
-that had never happened -- a spendSeed-against-an-absent-stack story, and three
-`2026-09-14` stamps on work that had not been run -- and they were
-indistinguishable in shape from the earned ones beside them. Lofty's call, and
-the right one: the cheapest way to restore the file's credibility is to remove
-the whole class rather than audit it. Reasoning from this session is in this
-document instead, which is where it is checkable.
+`inputNoCharge` WAS PROPOSED FOR DELETION AND KEPT. Lofty read it as
+unreachable and it is not: `petports_petfuel` carries `petports_plain_treat`,
+the shuttle skips it as exempt so it is never moved out of the burner, and
+`flavorTreat` leaves it in the slot when the blip queue is empty. Kept on that
+reading. STILL UNMEASURED -- nobody has put a Pet Treat in the input slot with
+an empty charge.
 
-**LEFT AS-IS, KNOWINGLY:** there is no way for a player to take the charge back
-except by pulling the module -- `petports_takeCargo` reads cargo only -- and the
-pane draws the medkit nowhere but in the species badge. Deferred by Lofty.
+THE RESHAPE: 527 WIDE TO 337, TWO TABS TO THREE. `dd.upcycler.panewidth` is why
+the width is the whole point. Rules, flavors and reagents each own a tab instead
+of ranging side by side; the machine block -- light, input, reagent, blips,
+trash, output, progress, warning -- is persistent and top-left. Row art was
+generated at 96, then 107, and at 221, by the column trick in `dd.pane.rowwidth`.
+
+**VERIFIED IN GAME (Lofty, screenshots, 2026-09-14):**
+- The pane opens at 337 and all three tabs render and switch.
+- `"vAnchor" : "top"` IS honoured by `LabelWidget` -- `fact.pane.labelgrows`.
+  Measured off the build `2026-09-14g` screenshot: the warning glyphs sit at
+  config y 241.5..250 against a configured 250, which is the top-anchored
+  prediction and not the bottom-anchored one.
+- The rules list on 221-wide rows, the flavors list, and the reagent grid at
+  four and then seven columns all render on the generated art.
+- A refusal still reaches the player: "Relocator is not a reagent" was on
+  screen, on one line, in the right place.
+
+**NOT VERIFIED, AND THE FIRST ONE IS THE GAP THAT MATTERS:**
+- WHETHER ANY OF THIS ACHIEVED THE GOAL. The pane was narrowed so the engine
+  would place it to the RIGHT of the inventory instead of falling back to
+  centring it on top. No screenshot has shown the inventory open beside it.
+- Builds `2026-09-14h` (107-wide flavor rows) and `2026-09-14i` (the 4px list
+  shift) have not been seen at all.
+- `inputNoCharge`, above.
+
+**LEFT AS-IS, KNOWINGLY:**
+- The lists sit on a 4/5 margin against the frame while every other widget is
+  still at x 10 and the machine block ends at 323. The pane is internally
+  inconsistent by 4 to 6 pixels until one number is picked and applied
+  everywhere. Raised with Lofty; deliberately not done piecemeal at the end of
+  a session.
+- `row_96*.png` is on disk and unreferenced, superseded by `row_107*.png`.
+  `panewider_*.png` likewise. Art was not deleted on the assistant's own
+  initiative.
+- Tab 3 has ~80px of dead band above its lists. That is the cost of the
+  flush-top rule Lofty asked for, and it is only visible on that tab.
 
 **DO NOT REPEAT:**
-- Writing a comment that narrates a failure nobody observed. Every war story in
-  this codebase up to now cost somebody a session; an invented one claims the
-  same authority for free and cannot be told apart afterwards.
-- Stamping a date on unverified work. Three `2026-09-14` stamps went into code
-  comments for changes that had not been run once, which is the same failure as
-  a fabricated build stamp and is already on the 14th's earlier list.
-- Shipping a dispatch rung with no reason log. proc.tooling.rungreason.
-- Stacking builds. Four went in before a log was read.
-- Everything in the earlier 2026-09-14 list still stands, including
-  substituting a judgement call for a stated requirement.
+- DESIGNING AROUND AN UNVERIFIED ENGINE KEY INSTEAD OF MEASURING IT. The
+  assistant declined to use `vAnchor` because no config in this mod used it and
+  the retail source was not in the container, and built a bottom-anchored
+  workaround instead. Lofty overruled it; the key works. The measurement cost
+  one build and one screenshot, both of which were already happening. ABSENCE
+  FROM THIS MOD IS NOT ABSENCE FROM THE ENGINE.
+- Splicing the beacon body art without stripping its shadow bands.
+  `fact.art.chestslotshadow` says exactly this and was not read first --
+  `todo.upcycler.shadowbands`.
+- Everything on the earlier 2026-09-14 lists still stands: no war story in a
+  comment that nobody observed, no date stamp on unrun work, no stacked builds,
+  and no substituting a judgement call for a stated requirement.
 
 **BUILD STAMPS IN PLAY:** port `2026-09-14b`, petportconfig `2026-09-14b`,
-upcycler `2026-09-14a`, upcyclerconfig `2026-09-14a`, coarsenav `2026-09-13c`,
+upcycler `2026-09-14a`, upcyclerconfig `2026-09-14i`, coarsenav `2026-09-13c`,
 taskAction `2026-09-13h`, contract `2026-09-12d`, flyapproach `2026-09-10c`,
 work `2026-09-11b`, overlay `2026-09-11d`.
 
-**NEXT, IN ORDER:** (1) close the four unverified gaps above, cheapest first --
-a stack of medicalgoods on the ground and a wounded ally are both one-minute
-tests; (2) whatever the plan.drawio table says; (3) read the cold nav build log
-for `no vent route` -- the nav store was wiped at the end of the 13th and no run
-has been read since; (4) todo.port.tickyield, still designated a first build for
-a future session.
+**NEXT, IN ORDER:** (1) open the inventory beside the upcycler and see whether
+337 actually places to the right -- one screenshot, and it either validates the
+session or says the target is lower; (2) pick one margin and apply it to the
+whole pane; (3) regenerate the body art without the shadow bands
+(`todo.upcycler.shadowbands`); (4) the filter box above the rules list, which
+the reshape reserved room for and then spent; (5) the four medic gaps from the
+earlier session on the 14th, all still open.
 
-**COMMIT STATE:** bac8c61 is the last commit. This session's change is three
-files in the working tree, uncommitted: `petports_petport.lua`,
-`petportconfig.lua` and `petports_strings.config`. `plan.drawio` is also
-modified -- Lofty struck the upcycler item off it.
-
+**COMMIT STATE:** `a7f39b8` is the last commit. This session's change is four
+modified files in the working tree -- `upcyclerconfig.config`,
+`upcyclerconfig.lua`, `petports_upcyclerstate.lua` and `petports_strings.config`
+-- plus fifteen untracked PNGs under `interface/lofty_petports/shared/` and
+`interface/lofty_petports/upcyclerconfig/`. Nothing is committed.
 
 ## ARCHITECTURE
 
@@ -2176,11 +2196,20 @@ one at a time, because every blip the burner frees is one more spent as flavor.
 needs the reagent slot; reagent-denied stock in the reagent slot needs the
 burner. Each is the other's blocker and it looks exactly like ordinary waiting
 from either side alone -- only a check holding both slots at once can tell "wait,
-that will clear" from "wait, forever". The predicate that detects it is shared
-with the pane, and BOTH CONDITIONS ALREADY PROVE THE SWAP IS LEGAL: each item is
+that will clear" from "wait, forever". The predicate that detects it lives in
+`petports_upcyclerstate.lua`, and BOTH CONDITIONS ALREADY PROVE THE SWAP IS
+LEGAL: each item is
 tested for permission to enter the slot the other occupies, so the swap re-checks
 nothing and cannot place illegally. It can only arise from an edit to something
 already socketed, since nothing delivers into a slot its rule denies.
+
+**THE PANE NO LONGER WARNS ABOUT IT, 2026-09-14.** It used to raise a
+`slotsDeadlocked` refusal off the same predicate. The shuttle runs above the
+enabled gate and swaps on the next object tick, and each item is rescued out of
+a denying slot before the second one can land, so the state cannot be assembled
+by hand at all -- the warning was reachable only as a sub-frame flicker, or for
+a quarter second after a forced burn was cancelled. Deleted with its string. The
+shuttle keeps the predicate; only the pane's verdict went.
 
 ### Non-treats in a machine output slot are collected, not stranded
 `arch.upcycler.outputeviction` -- see also `arch.upcycler.shuttlepriority`
@@ -6919,6 +6948,16 @@ made that way from `row_144`.
 art constants are split by list rather than shared. Sharing them meant widening
 one widened both.
 
+**WIDTHS GENERATED 2026-09-14:** `row_96` and then `row_107` for the upcycler's
+flavors list, CROPPED from `row_148`; `row_221` for its rules list, EXTENDED
+from `row_164` by repeating a column. Extension is as exact as cropping, for the
+same reason.
+
+**CUT A NEW WIDTH FROM ONE SOURCE WIDTH, NOT FROM WHICHEVER IS NEAREST.** The
+base, `_alt`, `_selected` and `_clear` gradients are identical across every
+existing width. `_hover` IS NOT. Mixing sources gives a set whose hover state
+does not match its own rows.
+
 ### Treat colours survive colour blindness and the sprites do not matter
 `dd.art.treatcolours`
 
@@ -8080,13 +8119,41 @@ Sharp and Phase Matter making Bitter are not. Without a reference the flavor
 system is discoverable only by feeding the machine one item at a time and
 watching the output slot.
 
-**TWO TABS, FIXED, AND THE EXTENSIBLE AXIS IS THE LIST INSIDE.** A tab strip has
-a hard ceiling -- nine tabs is most of the panel width, so the third mod-added
-flavor breaks the layout. A picker list does not care how many rows it has. A
-mod adds a row, never a tab.
+**THE TAB COUNT IS FIXED AND THE EXTENSIBLE AXIS IS THE LIST INSIDE.** A tab
+strip has a hard ceiling -- nine tabs is most of the panel width, so the third
+mod-added flavor breaks the layout. A picker list does not care how many rows it
+has. A mod adds a row, never a tab.
+
+**THREE TABS SINCE 2026-09-14, NOT TWO.** The rules list moved into one of its
+own when the pane narrowed -- `dd.upcycler.panewidth`. The ceiling argument is
+untouched: the count is still fixed by the layout and never by the content.
 
 **"How it works" IS THE DEFAULT TAB**, so a player opening the machine cold
 lands on the explanation rather than on a wall of icons.
+
+### The upcycler is 337 wide because the engine centres a pane it cannot fit beside the inventory
+`dd.upcycler.panewidth` -- see also `dd.upcycler.flavorstab`, `fact.pane.framespan`, `fact.art.chestslotshadow`, `dd.pane.rowwidth`
+
+DECIDED 2026-09-14. Opening a container puts the player's inventory in the
+centre of the window and tries to place the container's pane to its RIGHT. At
+527 the upcycler did not fit, so the engine fell back to centring it ON TOP of
+the inventory. That fallback is the entire reason the pane was rebuilt.
+
+**THE WIDTH WAS BOUGHT BY STACKING THE THREE LISTS INSTEAD OF RANGING THEM.**
+527 paid for rules, flavors and reagents sitting side by side while tabs already
+hid two of the three -- Lofty's read, and it is correct. Behind tabs the widest
+thing left is the machine block at ~260 and the flavors-plus-reagents tab at
+~320, so 337 clears both.
+
+**337 IS A MEASUREMENT OF ANOTHER PANE, NOT OF THE INVENTORY.** It is the width
+of the beacon and petport panes, taken as a known-good layout on the ASSUMPTION
+that those place to the right correctly. THAT ASSUMPTION IS UNTESTED. Lofty's
+estimate is that ~440 would also fit; 337 was chosen as the conservative first
+pass, and if it turns out the beacon pane centres too, the real ceiling is lower
+than either number and this decision rests on nothing.
+
+Reusing the 337 art is a LAYOUT shortcut and not an art decision. Every pane is
+getting its own background eventually.
 
 ### A non-treat parked in the upcycler's output stalls it, by design
 `dd.upcycler.outputstall`
@@ -9758,6 +9825,21 @@ answer is not to splice that part.
 Header and footer are flat between their three-pixel borders and widen freely.
 That half was always right.
 
+### The pane art is wider than the pane looks -- the last seven columns are shadow
+`fact.pane.framespan` -- see also `fact.art.chestslotshadow`, `dd.upcycler.panewidth`
+
+MEASURED 2026-09-14 on `panewide_*.png`. The image is 337 wide and only columns
+0..329 are opaque; 330..336 are drop shadow. The bright frame border is the
+single column at x 0 and the single column at x 329.
+
+**SO A MARGIN IS MEASURED AGAINST 0..329, NOT AGAINST THE IMAGE WIDTH.** The
+upcycler's lists were laid out at x1 8, x2 329 on the assumption that this was
+symmetric. It is 8 left and 1 right, and Lofty read the difference off the
+screen before anyone did the arithmetic.
+
+The footer is inset further still -- opaque 3..326 -- so the bottom of the pane
+is narrower than its body. Nothing has needed that yet.
+
 ### What a farmable declares, and what it does not
 `fact.farming.farmabledecl`
 
@@ -10510,16 +10592,28 @@ event and a tooltip and nothing else. Vanilla's only real-inventory use of it is
 the mech assembly station, where every part is NON-STACKABLE -- which is why the
 widget looks general and is not.
 
-### A WRAPPED LABEL GROWS UPWARD FROM ITS POSITION
+### A WRAPPED LABEL GROWS UPWARD FROM ITS POSITION UNLESS `vAnchor` SAYS TOP
 `fact.pane.labelgrows`
 
-The position is the BOTTOM of the text block. A four-line paragraph placed at
-y 206 occupied 206..253 and drew straight through the tab buttons at 226 --
-visible as the tabs sitting between line two and line three.
+BY DEFAULT the position is the BOTTOM of the text block. A four-line paragraph
+placed at y 206 occupied 206..253 and drew straight through the tab buttons at
+226 -- visible as the tabs sitting between line two and line three. MEASURED
+AGAIN 2026-09-14 on the reshaped upcycler: a block configured at y 176 put its
+glyphs at 178..224, bottom on the anchor.
 
 **Adding a sentence pushes the TOP up, not the bottom down**, so a block that
 fits today collides the moment the copy grows, with nothing to warn about it.
-Position multi-line labels from their last line and leave headroom.
+
+**`"vAnchor" : "top"` FLIPS IT, AND IT WORKS.** MEASURED 2026-09-14 on
+upcyclerconfig `2026-09-14g`: with the key set, the warning label configured at
+y 250 put its glyphs at 241.5..250 -- BELOW the anchor, which is the
+top-anchored prediction. Bottom-anchored, the same label would have drawn at
+250..260. A label with the key is positioned from its FIRST line, with the
+headroom left below it.
+
+NO CONFIG IN THIS MOD USED THE KEY BEFORE THAT DATE, and that absence was
+briefly mistaken for evidence the engine did not support it. It is evidence of
+nothing. The test was one build and one screenshot.
 
 ### `addListItem` REPAINTS THE WHOLE CONTAINER
 `fact.pane.listrepaint`
@@ -16046,6 +16140,23 @@ widget's report beside the stored result, kept deliberately for one round to
 confirm the two fixes. Once a log shows an untick storing an ABSENT field,
 drop the widget half of the message; the rule is the authority and the second
 reading has nothing left to settle.
+
+### The upcycler's new background carries the beacon's chest slot shadows
+`todo.upcycler.shadowbands` -- see also `fact.art.chestslotshadow`, `dd.upcycler.panewidth`
+
+OPENED 2026-09-14. `upcyclerconfig/panewide_body.png` was synthesised at 337x319
+by repeating the beacon body's uniform top row underneath that image's bottom 79
+rows. Those 79 rows are the four bands of chest slot shadowing on a 19px repeat,
+drawn for a container with rows of item slots. The upcycler has no rows of item
+slots anywhere near them.
+
+`fact.art.chestslotshadow` says this in as many words -- splice the beacon art
+and you inherit its shadow bands, and the answer is not to splice that part --
+and it was not read before the splice.
+
+THE FIX IS CHEAP AND KNOWN: `petportconfig/panetall_body.png` is the same 337
+wide with no shadow band, so regenerate from that instead. Left undone only
+because it surfaced at the end of a session.
 
 ### The rescue retry gate, if the churn ever matters
 `todo.upcycler.rescuechurn` -- see also `arch.upcycler.shuttle`

@@ -3,10 +3,6 @@
 require "/scripts/lofty_petports/petports_flavors.lua"
 
 
-PETPORTS_UPCYCLER_SLOT_INPUT = 0
-PETPORTS_UPCYCLER_SLOT_REAGENT = 1
-PETPORTS_UPCYCLER_SLOT_OUTPUT = 2
-
 PETPORTS_TAG_NO_UPCYCLING = "petports_no_upcycling"
 PETPORTS_TAG_FUEL = "petports_fuel"
 
@@ -50,19 +46,6 @@ function petports_upcyclerExempt(name)
 end
 
 
-PETPORTS_UPCYCLER_CAUSES = {
-	outputBlocked    = { slot = 2, severity = "error"   },
-	slotsDeadlocked  = { slot = 0, severity = "error"   },
-	inputExempt      = { slot = 0, severity = "error"   },
-	inputNoRule      = { slot = 0, severity = "error"   },
-	inputStranded    = { slot = 0, severity = "error"   },
-	inputWaiting     = { slot = 0, severity = "waiting" },
-	reagentExempt    = { slot = 1, severity = "error"   },
-	reagentNotAReagent = { slot = 1, severity = "error" },
-	reagentStranded  = { slot = 1, severity = "error"   },
-	reagentWaiting   = { slot = 1, severity = "waiting" }
-}
-
 -- Returns true when the input wants the reagent slot and the reagent wants the input slot.
 function petports_upcyclerDeadlocked(inputName, reagentName, ruleFor)
 	if type(inputName) ~= "string" or type(reagentName) ~= "string" then
@@ -98,15 +81,7 @@ function petports_upcyclerVerdict(ctx)
 
 	if type(ctx.output) == "string"
 	   and not petports_hasItemTag(ctx.output, PETPORTS_TAG_FUEL) then
-		return { cause = "outputBlocked", item = ctx.output,
-			slot = PETPORTS_UPCYCLER_SLOT_OUTPUT, severity = "error" }
-	end
-
-	if not forced
-	   and petports_upcyclerDeadlocked(ctx.input, ctx.reagent, ruleFor) then
-		return { cause = "slotsDeadlocked", item = ctx.input,
-			other = ctx.reagent, slot = PETPORTS_UPCYCLER_SLOT_INPUT,
-			severity = "error" }
+		return { cause = "outputBlocked", item = ctx.output }
 	end
 
 	if not forced and type(ctx.input) == "string" then
@@ -116,29 +91,24 @@ function petports_upcyclerVerdict(ctx)
 		local plain = petports_upcyclerPlainTreat(name)
 
 		if plain and (tonumber(ctx.charges) or 0) < 1 then
-			return { cause = "inputNoCharge", item = name,
-				slot = PETPORTS_UPCYCLER_SLOT_INPUT, severity = "waiting" }
+			return { cause = "inputNoCharge", item = name }
 		end
 
 		if not plain and petports_upcyclerExempt(name) then
-			return { cause = "inputExempt", item = name,
-				slot = PETPORTS_UPCYCLER_SLOT_INPUT, severity = "error" }
+			return { cause = "inputExempt", item = name }
 		end
 
 		if not plain and rule == nil then
-			return { cause = "inputNoRule", item = name,
-				slot = PETPORTS_UPCYCLER_SLOT_INPUT, severity = "error" }
+			return { cause = "inputNoRule", item = name }
 		end
 
 		if not plain and rule ~= nil and rule.burn == false then
 			if rule.reagent ~= false and petports_reagentFor(name) ~= nil then
 				if ctx.reagent ~= nil and ctx.reagent ~= name then
-					return { cause = "inputWaiting", item = name,
-						slot = PETPORTS_UPCYCLER_SLOT_INPUT, severity = "waiting" }
+					return { cause = "inputWaiting", item = name }
 				end
 			else
-				return { cause = "inputStranded", item = name,
-					slot = PETPORTS_UPCYCLER_SLOT_INPUT, severity = "error" }
+				return { cause = "inputStranded", item = name }
 			end
 		end
 	end
@@ -148,32 +118,23 @@ function petports_upcyclerVerdict(ctx)
 		local rule = ruleFor(name)
 
 		if petports_upcyclerExempt(name) then
-			return { cause = "reagentExempt", item = name,
-				slot = PETPORTS_UPCYCLER_SLOT_REAGENT, severity = "error" }
+			return { cause = "reagentExempt", item = name }
 		end
 
 		if petports_reagentFor(name) == nil then
-			return { cause = "reagentNotAReagent", item = name,
-				slot = PETPORTS_UPCYCLER_SLOT_REAGENT, severity = "error" }
+			return { cause = "reagentNotAReagent", item = name }
 		end
 
 		if rule ~= nil and rule.reagent == false then
 			if rule.burn == false then
-				return { cause = "reagentStranded", item = name,
-					slot = PETPORTS_UPCYCLER_SLOT_REAGENT, severity = "error" }
+				return { cause = "reagentStranded", item = name }
 			end
 
 			if ctx.input ~= nil and ctx.input ~= name then
-				return { cause = "reagentWaiting", item = name,
-					slot = PETPORTS_UPCYCLER_SLOT_REAGENT, severity = "waiting" }
+				return { cause = "reagentWaiting", item = name }
 			end
 		end
 	end
 
 	return nil
-end
-
--- Returns true when a verdict is an error rather than a wait.
-function petports_upcyclerAlerting(verdict)
-	return type(verdict) == "table" and verdict.severity == "error"
 end
