@@ -1,6 +1,6 @@
 -- Unit-side contract: naming, modules, media and swim mode, dives, vent routing and fuel.
 
-local CONTRACT_BUILD_STAMP = "2026-09-16c with no live leg, swim mode reads the task's own target instead of the last leg"
+local CONTRACT_BUILD_STAMP = "2026-09-16e the board shuffle only runs on dry footing"
 
 local contractStamped = false
 
@@ -1483,11 +1483,11 @@ function petports_swimModeTick()
 
 	if plan ~= nil and plan.reached and not petports_diving()
 	   and petports_swimMode() == PETPORTS_SWIM_MODE_LAND
-	   and medium == "air" and mcontroller.onGround() then
+	   and (medium == "air" or medium == "mixed") and mcontroller.onGround() then
 
 		local foot = world.magnitude(mcontroller.position(), plan.launch)
 
-		if foot > PETPORTS_DIVE_BOARD_FOOT then
+		if foot > PETPORTS_DIVE_BOARD_FOOT and medium == "air" then
 			plan.shuffleUntil = plan.shuffleUntil
 				or (world.time() + PETPORTS_DIVE_SHUFFLE_TIMEOUT)
 
