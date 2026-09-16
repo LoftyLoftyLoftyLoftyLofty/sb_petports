@@ -1,6 +1,6 @@
 -- Coarse navigation: a cell graph of the world kept in world properties, and the routes taken across it.
 
-local COARSENAV_BUILD_STAMP = "2026-09-15d the widening candidate list is kept per survey side, so land cells stop becoming swim sweeps"
+local COARSENAV_BUILD_STAMP = "2026-09-15f NAV STORE counts reachable edges stored without a kind"
 
 local navStamped = false
 
@@ -2043,7 +2043,7 @@ function petports_navForget(profile, cellKey)
 end
 
 -- Records an edge verdict, updates the live graph, and flushes once the backlog or the interval is reached.
-function petports_navLearn(profile, fromKey, toKey, reachable, travelled)
+function petports_navLearn(profile, fromKey, toKey, reachable, travelled, extra)
 	self.petportsNavPending = self.petportsNavPending or {}
 	self.petportsNavPending[profile] = self.petportsNavPending[profile] or {}
 
@@ -2061,7 +2061,9 @@ function petports_navLearn(profile, fromKey, toKey, reachable, travelled)
 	end
 
 	local length = math.max(1, math.floor((travelled or navCellSpan(fromKey, toKey)) + 0.5))
-	self.petportsNavPending[profile][key] = { r = reachable, t = world.time(), g = navGenNow(), d = length }
+	local entry = { r = reachable, t = world.time(), g = navGenNow(), d = length }
+	for k, v in pairs(extra or {}) do entry[k] = v end
+	self.petportsNavPending[profile][key] = entry
 
 	if reachable == true and profile == petports_navProfile() then
 		local cells = navIndexRead()[profile]
@@ -2452,14 +2454,7 @@ local function navBridgeLearn(fromKey, toKey, reachable, extra)
 	local profile = navBridgeProfile()
 
 	navIndexRegister(profile)
-	petports_navLearn(profile, fromKey, toKey, reachable)
-
-	local pending = self.petportsNavPending and self.petportsNavPending[profile]
-	local entry = pending and pending[navEdgeKey(fromKey, toKey)]
-
-	if type(entry) == "table" and type(extra) == "table" then
-		for k, v in pairs(extra) do entry[k] = v end
-	end
+	petports_navLearn(profile, fromKey, toKey, reachable, nil, extra)
 
 	self.petportsNavBridgesLocal = self.petportsNavBridgesLocal or {}
 	self.petportsNavBridgesLocal[navEdgeKey(fromKey, toKey)] = {
@@ -5929,6 +5924,7 @@ function petports_navDumpStore()
 	for _, profile in ipairs(navIndexProfiles()) do
 		local cells = index[profile]
 		local cellCount, shards, trues, falses, bytes = 0, 0, 0, 0, 0
+		local kindless = 0
 
 		local okIdx, idxJson = pcall(sb.printJson, cells)
 		if okIdx then bytes = bytes + #idxJson end
@@ -5951,16 +5947,21 @@ function petports_navDumpStore()
 			end
 			for _, edges in pairs(navChunk.edgesDecode(profile, chunkKey)) do
 				for _, entry in pairs(edges) do
-					if entry.r == true then trues = trues + 1 else falses = falses + 1 end
+					if entry.r == true then
+						trues = trues + 1
+						if entry.k == nil then kindless = kindless + 1 end
+					else
+						falses = falses + 1
+					end
 				end
 			end
 		end
 
 		grand = grand + bytes
 
-		sb.logInfo("NAV STORE %s: %s cell(s), %s chunk(s), %s true / %s false edge(s), %s KB",
+		sb.logInfo("NAV STORE %s: %s cell(s), %s chunk(s), %s true (%s without a kind) / %s false edge(s), %s KB",
 			profile, sb.printJson(cellCount), sb.printJson(shards),
-			sb.printJson(trues), sb.printJson(falses),
+			sb.printJson(trues), sb.printJson(kindless), sb.printJson(falses),
 			sb.printJson(math.floor(bytes / 1024)))
 	end
 
