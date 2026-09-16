@@ -1,6 +1,6 @@
 -- Unit-side contract: naming, modules, media and swim mode, dives, vent routing and fuel.
 
-local CONTRACT_BUILD_STAMP = "2026-09-15a swim mode wants/throttled lines under PETPORTS_MEDIA_TRACE"
+local CONTRACT_BUILD_STAMP = "2026-09-16a aquatic versus exiting reads the destination with the body's bounds, so a wading stand exits"
 
 local contractStamped = false
 
@@ -1309,7 +1309,7 @@ function petports_desiredSwimMode(destination)
 
 	if destination == nil then return PETPORTS_SWIM_MODE_AQUATIC end
 
-	if petports_mediumAtPoint(destination) == "swim" then
+	if petports_mediumAt(destination, mcontroller.boundBox()) == "swim" then
 		return PETPORTS_SWIM_MODE_AQUATIC
 	end
 
@@ -1363,7 +1363,7 @@ local function swimModeNote(desired, destination)
 			source = "task"
 		end
 	end
-	local destMedium = destination ~= nil and petports_mediumAtPoint(destination) or "n/a"
+	local destMedium = destination ~= nil and petports_mediumAt(destination, mcontroller.boundBox()) or "n/a"
 	local plan = self.petportsDivePlan
 	local planState = plan == nil and "none"
 		or (plan.abandoned and "abandoned" or (plan.reached and "reached" or "to board"))
