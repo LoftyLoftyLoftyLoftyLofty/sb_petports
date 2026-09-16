@@ -1,6 +1,6 @@
 -- Unit-side contract: naming, modules, media and swim mode, dives, vent routing and fuel.
 
-local CONTRACT_BUILD_STAMP = "2026-09-16a aquatic versus exiting reads the destination with the body's bounds, so a wading stand exits"
+local CONTRACT_BUILD_STAMP = "2026-09-16b a reached dive plan is consumed once the unit is in the water"
 
 local contractStamped = false
 
@@ -1553,6 +1553,14 @@ function petports_swimModeTick()
 			if plan ~= nil then petports_diveRefuse(plan.launch, outcome) end
 			petports_diveForget()
 		end
+	end
+
+	local spent = self.petportsDivePlan
+	if spent ~= nil and spent.reached and not petports_diving()
+	   and petports_mediumAt(mcontroller.position(), mcontroller.boundBox()) == "swim" then
+		sb.logInfo("UNIT DIVE plan consumed at %s: in the water past its board at %s",
+			sb.printJson(mcontroller.position()), sb.printJson(spent.launch))
+		petports_diveForget()
 	end
 
 	petports_assertSwimMode()
