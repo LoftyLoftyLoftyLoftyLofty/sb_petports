@@ -1,6 +1,6 @@
 -- Coarse navigation: a cell graph of the world kept in world properties, and the routes taken across it.
 
-local COARSENAV_BUILD_STAMP = "2026-09-16b the clear-line waypoint search runs from the cell anchor and its saved state is keyed by graph version"
+local COARSENAV_BUILD_STAMP = "2026-09-16c a switchable chassis gets no land anchor where its standing body is fully submerged"
 
 local navStamped = false
 
@@ -340,9 +340,13 @@ local function navAnchorUncached(cx, cy, freeMover)
 				if ok and standable == true then
 					local okMedium, allowed, allowWhy = pcall(petports_mediumAllows, point, bounds)
 
-					if not okMedium or allowed ~= false then return point end
-
-					refusal = "medium at " .. sb.printJson(point) .. " refused: " .. tostring(allowWhy)
+					if petports_gravitySwitchable() and petports_mediumAt(point, bounds) == "swim" then
+						refusal = "the standing body is fully submerged at " .. sb.printJson(point)
+					elseif not okMedium or allowed ~= false then
+						return point
+					else
+						refusal = "medium at " .. sb.printJson(point) .. " refused: " .. tostring(allowWhy)
+					end
 				else
 					refusal = "not a valid standing position at " .. sb.printJson(point)
 				end
