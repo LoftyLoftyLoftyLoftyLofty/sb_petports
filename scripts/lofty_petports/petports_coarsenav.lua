@@ -1,6 +1,6 @@
 -- Coarse navigation: a cell graph of the world kept in world properties, and the routes taken across it.
 
-local COARSENAV_BUILD_STAMP = "2026-09-15f NAV STORE counts reachable edges stored without a kind"
+local COARSENAV_BUILD_STAMP = "2026-09-16b the clear-line waypoint search runs from the cell anchor and its saved state is keyed by graph version"
 
 local navStamped = false
 
@@ -3595,10 +3595,9 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdva
 	local sweepJob = self.petportsNavWaypointJob
 	local path
 	if sweepJob ~= nil and sweepJob.profile == profile and sweepJob.from == fromKey
-	   and sweepJob.to == toKey then
+	   and sweepJob.to == toKey and sweepJob.version == navGraphFor(profile).version then
 		path = sweepJob.path
 	else
-		self.petportsNavWaypointJob = nil
 		local expanded, verdict
 		path, expanded, verdict = navRouteStep(profile, fromKey, toKey)
 		if path == nil and verdict == "more" then return nil, "more" end
@@ -3693,22 +3692,22 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdva
 	end
 
 	local cellAnchor = origin
-	if freeMover then origin = mcontroller.position() end
+	local body = freeMover and mcontroller.position() or origin
 
 	local hopClear, hop = nil, nil
 	if freeMover and petports_flyPathClear ~= nil and #path >= 2 then
 		hop = anchorOf(path[2])
 
 		if hop ~= nil then
-			local okHop, verdict = pcall(petports_flyPathClear, origin, hop)
+			local okHop, verdict = pcall(petports_flyPathClear, body, hop)
 			hopClear = okHop and verdict == true
 			if not hopClear then
-				local gap = world.magnitude(origin, cellAnchor)
-				local okStep, stepClear = pcall(petports_flyPathClear, origin, cellAnchor)
+				local gap = world.magnitude(body, cellAnchor)
+				local okStep, stepClear = pcall(petports_flyPathClear, body, cellAnchor)
 				stepClear = okStep and stepClear == true
 				sb.logInfo("UNIT leg pick from %s: first hop %s is NOT clear from the body %s; "
 					.. "own anchor %s is %s tiles off and %s -- %s",
-					tostring(path[1]), sb.printJson(hop), sb.printJson(origin),
+					tostring(path[1]), sb.printJson(hop), sb.printJson(body),
 					sb.printJson(cellAnchor), sb.printJson(math.floor(gap * 100 + 0.5) / 100),
 					stepClear and "clear" or "NOT clear",
 					(stepClear and allowStep ~= false) and "stepping onto it first"
@@ -3777,12 +3776,17 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdva
 				origin, entry.anchor, { "Null", "Block", "Dynamic", "Slippery" })
 			return okLos and blocked == false
 		end
+		local reachParts = {}
+		for i, entry in ipairs(inReach) do
+			reachParts[i] = tostring(entry.at) .. "@" .. tostring(entry.anchor[1]) .. "," .. tostring(entry.anchor[2])
+		end
+		local reachKey = table.concat(reachParts, ";")
 		local job = self.petportsNavWaypointJob
 		if job == nil or job.profile ~= profile or job.from ~= fromKey or job.to ~= toKey
-		   or job.count ~= #inReach then
-			job = { profile = profile, from = fromKey, to = toKey, path = path,
-				count = #inReach, lo = 1, hi = #inReach, farTried = false, sweeps = 0,
-				loClear = (inReach[1].at == 2 and hopClear == true) }
+		   or job.version ~= graph.version or job.reachKey ~= reachKey then
+			job = { profile = profile, from = fromKey, to = toKey, path = path, version = graph.version,
+				reachKey = reachKey, lo = 1, hi = #inReach, farTried = false, sweeps = 0,
+				loClear = false }
 			self.petportsNavWaypointJob = job
 		end
 		local budgetLeft = NAV_WAYPOINT_SWEEPS_PER_CALL
