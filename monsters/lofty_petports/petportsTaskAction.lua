@@ -16,7 +16,7 @@ local FUEL_TRACE = false
 
 local MEDIA_TRACE_INTERVAL = 0.25
 
-local BUILD_STAMP = "2026-09-16e a switchable chassis in liquid passes a Land edge that ends in liquid"
+local BUILD_STAMP = "2026-09-16g a second progress strike no longer takes a coarse leg"
 local stampLogged = false
 
 local SEARCH_LIMIT = 6.0
@@ -443,8 +443,6 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
   stateData.searchingTimer = 0
   stateData.approachTimer = APPROACH_TIMEOUT
   stateData.groundTarget = nil
-  stateData.progressStrikes = 0
-  stateData.progressAnchor = nil
 
   freshPather("coarse leg")
 
@@ -586,7 +584,7 @@ function petportsTaskAction.enterWith(args)
     plan = nil,
     planIndex = 1,
     progressTimer = 0,
-    progressAnchor = nil,
+    progressAnchor = mcontroller.position(),
     progressStrikes = 0,
     ventHops = 0,
     triedVents = {},
@@ -3850,8 +3848,7 @@ local function petportsTaskUpdateInner(dt, stateData)
       stateData.progressTimer = 0
 
       local now = mcontroller.position()
-      local reference = stateData.progressAnchor or now
-      local moved = world.magnitude(now, reference)
+      local moved = world.magnitude(now, stateData.progressAnchor)
       stateData.progressAnchor = now
 
       sb.logInfo("UNIT progress window: moved %s (need %s) in %s s at %s",
@@ -3864,11 +3861,6 @@ local function petportsTaskUpdateInner(dt, stateData)
           sb.printJson(stateData.progressStrikes), sb.printJson(PROGRESS_STRIKES))
 
         if stateData.progressStrikes >= PROGRESS_STRIKES then
-          if tryCoarseLeg(stateData, routeTarget) then
-            stateData.progressStrikes = PROGRESS_STRIKES
-            return false
-          end
-
           local routing = tryVentRoute(stateData, routeTarget)
           if routing ~= "none" then
             stateData.routing = true
