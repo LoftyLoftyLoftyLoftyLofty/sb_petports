@@ -1,6 +1,6 @@
 -- Unit-side contract: naming, modules, media and swim mode, dives, vent routing and fuel.
 
-local CONTRACT_BUILD_STAMP = "2026-09-16b a reached dive plan is consumed once the unit is in the water"
+local CONTRACT_BUILD_STAMP = "2026-09-16c with no live leg, swim mode reads the task's own target instead of the last leg"
 
 local contractStamped = false
 
@@ -1321,9 +1321,6 @@ function petports_currentTaskDestination()
 	if type(self.petportsLegWaypoint) == "table" then
 		return self.petportsLegWaypoint
 	end
-	if type(self.petportsLegLast) == "table" then
-		return self.petportsLegLast
-	end
 
 	return petports_taskDestinationRaw()
 end
@@ -1357,8 +1354,6 @@ local function swimModeNote(desired, destination)
 	if destination ~= nil then
 		if destination == self.petportsLegWaypoint then
 			source = "leg waypoint"
-		elseif destination == self.petportsLegLast then
-			source = "last leg"
 		else
 			source = "task"
 		end
