@@ -14,7 +14,9 @@ local FLIGHT_TRACE = false
 
 local FUEL_TRACE = false
 
-local BUILD_STAMP = "2026-09-13h the fuel gate's hold and resume lines are behind FUEL_TRACE, off -- the gate is verified and a cold nav store would make a pair of them out of every failed task"
+local MEDIA_TRACE_INTERVAL = 0.25
+
+local BUILD_STAMP = "2026-09-15a media-boundary instrumentation: MEDIA trace, approach target sources, coarse leg refusals and target resolves"
 local stampLogged = false
 
 local SEARCH_LIMIT = 6.0
@@ -261,6 +263,18 @@ local NAV_LEG_SHARP_TURN = 75
 local NAV_ROUTE_LOOKAHEAD = 6
 local NAV_LEG_BRAKE_TURN = 45
 
+-- Logs why tryCoarseLeg handed out no leg, once per distinct reason and pair.
+local function noteLegRefusal(stateData, why, target, fromKey, toKey)
+	local key = why .. "|" .. tostring(fromKey) .. "|" .. tostring(toKey) .. "|" .. sb.printJson(target)
+	if stateData.navRefusalNoted == key then return end
+	stateData.navRefusalNoted = key
+	local here = mcontroller.position()
+	sb.logInfo("UNIT coarse leg NOT taken toward %s: %s (from %s to %s, unit at %s, mode %s, medium %s, freeMover %s, onGround %s)",
+		sb.printJson(target), tostring(why), tostring(fromKey), tostring(toKey), sb.printJson(here),
+		tostring(petports_swimMode()), tostring(petports_mediumAt(here, mcontroller.boundBox())),
+		tostring(petports_freeMover()), tostring(mcontroller.onGround()))
+end
+
 -- Asks the coarse graph for the next waypoint toward a target and starts a fresh pather on it.
 local function tryCoarseLeg(stateData, target, reach, fromOverride)
   if petports_navWaypoint == nil then return false end
@@ -272,7 +286,10 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
     and petports_navBridgeProfile()) or petports_navProfile()
   local freeMover = petports_freeMover()
 
-  if not freeMover and not mcontroller.onGround() then return false end
+  if not freeMover and not mcontroller.onGround() then
+		noteLegRefusal(stateData, "a walker off the ground cannot start a leg", target)
+		return false
+	end
 
   local here = mcontroller.position()
 
@@ -288,7 +305,10 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
     end
     fromKey, fromMore = key, more
   end
-  if fromMore then return false, "more" end
+  if fromMore then
+		noteLegRefusal(stateData, "the nearest-cell search for the unit is still running", target)
+		return false, "more"
+	end
 
   if fromKey == nil then
     local fx, fy = petports_navCell(here)
@@ -309,7 +329,10 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
     else
       key, _, _, more = petports_navNearestCell(target, freeMover, nearRadius + 0.5)
     end
-    if more then return false, "more" end
+    if more then
+			noteLegRefusal(stateData, "the nearest-cell search for the target is still running", target, fromKey)
+			return false, "more"
+		end
     toKey = key
 
     if toKey == nil then
@@ -317,11 +340,18 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
       toKey = petports_navCellKey(tx, ty)
     end
 
+		sb.logInfo("UNIT coarse target %s resolved to cell %s%s -- target medium %s, previous target %s was cell %s",
+			targetKey, tostring(toKey), key == nil and " (no graph cell in radius, its own cell)" or "",
+			tostring(petports_mediumAtPoint(target)), tostring(stateData.navToFor), tostring(stateData.navToKey))
+
     stateData.navToFor = targetKey
     stateData.navToKey = toKey
   end
 
-  if fromKey == toKey then return false end
+  if fromKey == toKey then
+		noteLegRefusal(stateData, "the unit's cell is the target's cell", target, fromKey, toKey)
+		return false
+	end
 
   if freeMover and reach == NAV_LEG_REACH then reach = NAV_FLYER_LEG_REACH end
 
@@ -329,7 +359,10 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
     petports_navWaypoint(profile, fromKey, toKey, reach, freeMover,
       ARRIVAL_DISTANCE + 0.5, (stateData.navStepFor or 0) < 2)
 
-  if waypoint == nil and remaining == "more" then return false, "more" end
+  if waypoint == nil and remaining == "more" then
+		noteLegRefusal(stateData, "the route search is still running", target, fromKey, toKey)
+		return false, "more"
+	end
 
   if waypoint == nil then
     local pairKey = fromKey .. ">" .. toKey
@@ -366,9 +399,13 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
     return false
   end
 
-  sb.logInfo("UNIT coarse leg from %s to %s: heading for %s, %s hop(s) left%s",
+  sb.logInfo("UNIT coarse leg from %s to %s: heading for %s, %s hop(s) left%s -- target %s, mode %s, freeMover %s, body at %s",
     fromKey, toKey, sb.printJson(waypoint), sb.printJson(remaining),
-    legKind == "step" and " (a step onto the route)" or "")
+    legKind == "step" and " (a step onto the route)" or "",
+		sb.printJson(target), tostring(petports_swimMode()), tostring(freeMover),
+		sb.printJson(mcontroller.position()))
+
+	stateData.navRefusalNoted = nil
 
   stateData.navWaypoint = waypoint
   stateData.navRemaining = remaining
@@ -1443,10 +1480,12 @@ freshPather = function(why)
   end
 
   self.petportsPatherBuilds = (self.petportsPatherBuilds or 0) + 1
-  sb.logInfo("UNIT freshPather #%s at %s: %s",
+  sb.logInfo("UNIT freshPather #%s at %s: %s (mode %s, freeMover %s, onGround %s)",
     sb.printJson(self.petportsPatherBuilds),
     sb.printJson(mcontroller.position()),
-    tostring(why or "no reason given"))
+    tostring(why or "no reason given"),
+		tostring(petports_swimMode()), tostring(petports_freeMover()),
+		tostring(mcontroller.onGround()))
 
   if TASK_DEBUG then
     sb.logInfo("UNIT pather boundBox %s standingBoundBox %s",
@@ -1798,6 +1837,21 @@ end
 
 local TARGET_DRIFT = 1.5
 
+-- Records where the approach target came from and logs a change for a switchable chassis.
+local function noteGroundTarget(stateData, why, rawPosition)
+	stateData.groundTargetWhy = why
+	if not PETPORTS_MEDIA_TRACE or not petports_gravitySwitchable() then return end
+	local key = tostring(why) .. "|" .. sb.printJson(stateData.groundTarget)
+	if stateData.groundTargetNoted == key then return end
+	stateData.groundTargetNoted = key
+	local plan = self.petportsDivePlan
+	sb.logInfo("UNIT approach target %s from %s for raw %s (mode %s, leg side %s, dive plan %s)",
+		sb.printJson(stateData.groundTarget), tostring(why), sb.printJson(rawPosition),
+		tostring(petports_swimMode()), tostring(self.petportsLegSide),
+		plan == nil and "none" or ((plan.route and "route " or "fish ")
+			.. (plan.abandoned and "abandoned" or (plan.reached and "reached" or "to board"))))
+end
+
 -- Returns the point the unit walks to for a target, holding it until the target drifts.
 local function approachTargetFor(stateData, rawPosition)
   if self.petportsDiveRetarget then
@@ -1831,6 +1885,7 @@ local function approachTargetFor(stateData, rawPosition)
      and petports_swimMode() == PETPORTS_SWIM_MODE_LAND then
     stateData.groundTarget = divePlan.launch
     stateData.petportsDiveEntry = divePlan.entry
+		noteGroundTarget(stateData, "the route dive's board", rawPosition)
     return stateData.groundTarget
   end
 
@@ -1844,6 +1899,7 @@ local function approachTargetFor(stateData, rawPosition)
     if launch ~= nil then
       stateData.groundTarget = launch
       stateData.petportsDiveEntry = entryOrWhy
+			noteGroundTarget(stateData, "the fish dive's board", rawPosition)
       return stateData.groundTarget
     end
 
@@ -1853,16 +1909,20 @@ local function approachTargetFor(stateData, rawPosition)
         sb.printJson(rawPosition), tostring(entryOrWhy))
     end
 
+		noteGroundTarget(stateData, "no fish dive", rawPosition)
     return nil
   end
 
+	local why = nil
   if homeward then
     stateData.groundTarget = standableNear(rawPosition, 0, nil, verified)
+		why = "standableNear below a homeward target"
 
     if stateData.groundTarget == nil then
       sb.logInfo("UNIT no floor beneath %s -- falling back to an unbiased search",
         sb.printJson(rawPosition))
       stateData.groundTarget = standableNear(rawPosition, nil, nil, verified)
+			why = "standableNear unbiased, the homeward fallback"
     end
   else
     local bounds = nil
@@ -1872,12 +1932,16 @@ local function approachTargetFor(stateData, rawPosition)
 
     if bounds ~= nil then
       stateData.groundTarget = petports_objectPointNear(rawPosition, bounds, verified)
+			why = "objectPointNear"
     end
 
     if stateData.groundTarget == nil then
       stateData.groundTarget = standableNear(rawPosition, nil, nil, verified)
+			why = "standableNear"
     end
   end
+
+	noteGroundTarget(stateData, why, rawPosition)
 
   return stateData.groundTarget
 end
@@ -2736,6 +2800,64 @@ local function unperchWatch(dt, stateData)
 	end
 end
 
+-- Logs a switchable chassis's mode, leg and pather while it is in, near or leaving the water.
+local function mediaTrace(dt, stateData, routeTarget, approachTo, overshot, legReached)
+	if not PETPORTS_MEDIA_TRACE or not petports_gravitySwitchable() then return end
+
+	local here = mcontroller.position()
+	local medium = petports_mediumAt(here, mcontroller.boundBox())
+	local mode = petports_swimMode()
+	local bridge = self.petportsLegBridge
+	local finder = self.pather and self.pather.finder
+	local hasPath = finder ~= nil and finder.hasPath == true
+	local wet = mode ~= PETPORTS_SWIM_MODE_LAND or medium ~= "air" or bridge ~= nil
+		or self.petportsLegSide == 1
+
+	local key = tostring(mode) .. "|" .. tostring(medium) .. "|" .. tostring(stateData.navLegTo)
+		.. "|" .. tostring(bridge and bridge.k) .. "|" .. tostring(self.petportsLegSide)
+		.. "|" .. sb.printJson(routeTarget) .. "|" .. sb.printJson(approachTo)
+		.. "|" .. tostring(hasPath) .. "|" .. tostring(stateData.navWaypoint ~= nil)
+
+	stateData.mediaTraceTimer = (stateData.mediaTraceTimer or 0) - dt
+	local changed = key ~= stateData.mediaTraceKey
+	if not changed and not (wet and stateData.mediaTraceTimer <= 0) then return end
+	stateData.mediaTraceKey = key
+	if not wet and not stateData.mediaTraceWet then return end
+	stateData.mediaTraceWet = wet
+	stateData.mediaTraceTimer = MEDIA_TRACE_INTERVAL
+
+	local edge = (hasPath and finder.edges ~= nil and finder.currentEdgeIndex ~= nil)
+		and finder.edges[finder.currentEdgeIndex] or nil
+	local wp = stateData.navWaypoint
+	local plan = self.petportsDivePlan
+	local flight = self.petportsDiveFlight
+
+	sb.logInfo("UNIT MEDIA%s at %s vel %s onGround %s | mode %s medium %s freeMover %s legSide %s"
+		.. " | leg %s cell %s from %s, %s left, bridge %s, step %s, turn %s, dist %s, overshot %s, reached %s"
+		.. " | routeTarget %s (%s) approachTo %s lastLeg %s"
+		.. " | pather hasPath %s aStar %s target %s edge %s %s of %s"
+		.. " | dive plan %s, flight %s",
+		changed and " CHANGE" or "", sb.printJson(here), sb.printJson(mcontroller.velocity()),
+		tostring(mcontroller.onGround()),
+		tostring(mode), tostring(medium), tostring(petports_freeMover()), tostring(self.petportsLegSide),
+		sb.printJson(wp), tostring(stateData.navLegTo), tostring(stateData.navLegFrom),
+		sb.printJson(stateData.navRemaining),
+		bridge ~= nil and (tostring(bridge.k) .. " " .. tostring(bridge.from) .. ">" .. tostring(bridge.to)) or "none",
+		tostring(stateData.navLegStep == true), sb.printJson(stateData.navLegTurn),
+		wp ~= nil and sb.printJson(world.magnitude(wp, here)) or "n/a",
+		tostring(overshot), tostring(legReached),
+		sb.printJson(routeTarget), tostring(stateData.groundTargetWhy), sb.printJson(approachTo),
+		sb.printJson(self.petportsLegLast),
+		tostring(hasPath), tostring(finder ~= nil and finder.aStar ~= nil),
+		sb.printJson(finder and finder.target), tostring(edge and edge.action),
+		tostring(finder and finder.currentEdgeIndex), tostring(finder and finder.edges and #finder.edges),
+		plan == nil and "none" or ("board " .. sb.printJson(plan.launch) .. " entry " .. sb.printJson(plan.entry)
+			.. (plan.route and " route" or " fish") .. (plan.reached and " reached" or "")
+			.. (plan.abandoned and " abandoned" or "")),
+		flight == nil and "none" or ("airborne " .. tostring(flight.airborne == true)
+			.. ", deadline in " .. sb.printJson(flight.deadline - world.time())))
+end
+
 -- Runs one tick of a task: fuel, coarse and vent routing, approach and arrival, then the work for the task's own type.
 local function petportsTaskUpdateInner(dt, stateData)
   local task = stateData.task
@@ -3245,6 +3367,14 @@ local function petportsTaskUpdateInner(dt, stateData)
       local taken, notYet = false, nil
       if wanted then taken, notYet = tryCoarseLeg(stateData, routeTarget) end
 
+			if not taken and notYet ~= "more" and stateData.coarseFirstNoted ~= routeKey then
+				stateData.coarseFirstNoted = routeKey
+				sb.logInfo("UNIT coarse first: target %s (%s tiles) -- %s",
+					routeKey, sb.printJson(math.floor(span * 10 + 0.5) / 10),
+					wanted and ("wanted because " .. tostring(why) .. ", but no leg was taken")
+						or "near and in sight, going direct")
+			end
+
       if taken then
         sb.logInfo("UNIT coarse first: target %s is %s (%s tiles) -- leg taken",
           routeKey, why, sb.printJson(math.floor(span * 10 + 0.5) / 10))
@@ -3636,7 +3766,8 @@ local function petportsTaskUpdateInner(dt, stateData)
       if chained then
         stateData.navChainWait = nil
         sb.logInfo("UNIT reached coarse leg %s with %s hop(s) left -- chaining "
-          .. "into the next", tostring(reachedCell), sb.printJson(remaining))
+          .. "into the next toward %s", tostring(reachedCell), sb.printJson(remaining),
+					sb.printJson(routeTarget))
       elseif notYet == "more" then
         stateData.navLegTo = reachedCell
         stateData.navRemaining = remaining
@@ -3652,7 +3783,12 @@ local function petportsTaskUpdateInner(dt, stateData)
       else
         stateData.navChainWait = nil
         sb.logInfo("UNIT reached coarse leg, %s hop(s) were left -- resuming "
-          .. "for the real target", sb.printJson(remaining))
+          .. "for the real target (chain from %s toward %s returned %s/%s, mode %s, "
+					.. "freeMover %s, onGround %s, medium %s)",
+					sb.printJson(remaining), tostring(reachedCell), sb.printJson(routeTarget),
+					tostring(chained), tostring(notYet), tostring(petports_swimMode()),
+					tostring(petports_freeMover()), tostring(mcontroller.onGround()),
+					tostring(petports_mediumAt(mcontroller.position(), mcontroller.boundBox())))
         freshPather("coarse leg reached")
       end
     end
@@ -3670,6 +3806,8 @@ local function petportsTaskUpdateInner(dt, stateData)
     self.petportsLegTightTurn = nil
     self.petportsLegBridge = nil
   end
+
+	mediaTrace(dt, stateData, routeTarget, approachTo, overshot, legReached)
 
   if not stateData.arrived then
     local turn = 0

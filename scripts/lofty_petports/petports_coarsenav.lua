@@ -1,6 +1,6 @@
 -- Coarse navigation: a cell graph of the world kept in world properties, and the routes taken across it.
 
-local COARSENAV_BUILD_STAMP = "2026-09-13c a probe learns under the profile it was started under, not the one live when it finishes"
+local COARSENAV_BUILD_STAMP = "2026-09-15d the widening candidate list is kept per survey side, so land cells stop becoming swim sweeps"
 
 local navStamped = false
 
@@ -248,6 +248,7 @@ local function navAnchorUncached(cx, cy, freeMover)
 	local lift = -(bounds[2] or -0.5)
 
 	local tried = 0
+	local refusal = nil
 
 	if freeMover then
 		local point = {
@@ -261,6 +262,7 @@ local function navAnchorUncached(cx, cy, freeMover)
 		tried = tried + 1
 
 		local ok, hit = true, petports_bodyHitsAt(point, { "Null", "Block", "Dynamic", "Slippery" })
+		if hit ~= false then refusal = "the body hits a solid at the window centre" end
 
 		local nearSurface = false
 
@@ -308,12 +310,20 @@ local function navAnchorUncached(cx, cy, freeMover)
 					end
 				end
 			end
+
+			if not nearSurface then
+				refusal = insideBody and "no surface, waterline or wall within 0.5 of the body"
+					or "the body leaves coverage"
+			end
 		end
 
 		if ok and hit == false and nearSurface then
-			local okMedium, allowed = pcall(petports_mediumAllows, point, bounds)
+			local okMedium, allowed, allowWhy = pcall(petports_mediumAllows, point, bounds)
 
 			if not okMedium or allowed ~= false then return point end
+
+			refusal = "medium " .. tostring(petports_mediumAt(point, bounds)) .. " at "
+				.. sb.printJson(point) .. " refused: " .. tostring(allowWhy)
 		end
 	else
 		for dx = 0, PETPORTS_NAV_CELL - 1 do
@@ -328,18 +338,24 @@ local function navAnchorUncached(cx, cy, freeMover)
 					petports_avoidLiquid())
 
 				if ok and standable == true then
-					local okMedium, allowed = pcall(petports_mediumAllows, point, bounds)
+					local okMedium, allowed, allowWhy = pcall(petports_mediumAllows, point, bounds)
 
 					if not okMedium or allowed ~= false then return point end
+
+					refusal = "medium at " .. sb.printJson(point) .. " refused: " .. tostring(allowWhy)
+				else
+					refusal = "not a valid standing position at " .. sb.printJson(point)
 				end
+			elseif refusal == nil then
+				refusal = "no footing under the cell"
 			end
 		end
 	end
 
 	return nil, string.format(
-		"no anchor in cell %s,%s -- %s candidate(s) tried, freeMover %s, lift %s",
+		"no anchor in cell %s,%s -- %s candidate(s) tried, freeMover %s, lift %s, last refusal: %s",
 		tostring(cx), tostring(cy), tostring(tried), tostring(freeMover),
-		tostring(lift))
+		tostring(lift), tostring(refusal))
 end
 
 -- Clears every cached nav structure and records the store generation.
@@ -3622,14 +3638,53 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdva
 	local startSide = sideOf(path[1])
 	self.petportsNavLastRoute.bridge = nil
 
-	local origin = anchorOf(path[1], startSide)
+	if PETPORTS_NAV_VERBOSE and sides ~= nil then
+		local sidesKey = fromKey .. ">" .. toKey .. "#" .. tostring(#path)
+		if self.petportsNavSidesNoted ~= sidesKey then
+			self.petportsNavSidesNoted = sidesKey
+			local runs, runSide, runStart, runCount = {}, startSide, path[1], 0
+			for i = 1, #path + 1 do
+				local cellSide = (i <= #path) and sideOf(path[i]) or nil
+				if cellSide ~= runSide then
+					runs[#runs + 1] = (runSide == 1 and "swim " or "land ") .. tostring(runStart)
+						.. " x" .. tostring(runCount)
+					if cellSide ~= nil then
+						local entry = graph.bridge ~= nil and graph.bridge[path[i - 1] .. ">" .. path[i]] or nil
+						runs[#runs + 1] = "[" .. (entry ~= nil and tostring(entry.k) or "NO BRIDGE ENTRY")
+							.. " " .. path[i - 1] .. ">" .. path[i] .. "]"
+					end
+					runSide, runStart, runCount = cellSide, path[i], 0
+				end
+				runCount = runCount + 1
+			end
+			sb.logInfo("NAV route sides %s -> %s, %s cell(s), unit side %s: %s",
+				fromKey, toKey, sb.printJson(#path), sb.printJson(startSide), table.concat(runs, " "))
+		end
+	end
 
-	if origin == nil then return nil end
+	local origin, originWhy = anchorOf(path[1], startSide)
+
+	if origin == nil then
+		if PETPORTS_NAV_VERBOSE then
+			sb.logInfo("NAV waypoint from %s to %s picked nothing: the start cell has no anchor as side %s (tag %s), %s-cell route -- %s",
+				fromKey, toKey, sb.printJson(startSide), sb.printJson(sides ~= nil and sides[path[1]] or nil),
+				sb.printJson(#path), tostring(originWhy))
+		end
+		return nil
+	end
 
 	if sides ~= nil and sideOf(path[2]) ~= startSide then
 		local entry = graph.bridge ~= nil and graph.bridge[path[1] .. ">" .. path[2]] or nil
-		local target = anchorOf(path[2])
-		if target == nil then return nil end
+		local target, targetWhy = anchorOf(path[2])
+		if target == nil then
+			if PETPORTS_NAV_VERBOSE then
+				sb.logInfo("NAV waypoint from %s to %s picked nothing: the crossing %s>%s has no anchor for %s as side %s (tag %s), bridge entry %s -- %s",
+					fromKey, toKey, tostring(path[1]), tostring(path[2]), tostring(path[2]),
+					sb.printJson(sideOf(path[2])), sb.printJson(sides[path[2]]), tostring(entry and entry.k),
+					tostring(targetWhy))
+			end
+			return nil
+		end
 		self.petportsNavLastRoute.bridge = {
 			k = entry and entry.k or "wade",
 			board = entry and entry.board, hole = entry and entry.hole,
@@ -3774,7 +3829,36 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdva
 	end
 
 	if chosen == nil and nearest ~= nil then chosen, chosenAt = nearest, nearestAt end
-	if chosen == nil then return nil end
+	if chosen == nil then
+		local pickKey = fromKey .. ">" .. toKey .. "#" .. tostring(#path)
+		if PETPORTS_NAV_VERBOSE and self.petportsNavPickNoted ~= pickKey then
+			self.petportsNavPickNoted = pickKey
+			local notes = {}
+			for i = 2, #path do
+				local tag = sides ~= nil and sides[path[i]] or nil
+				if sides ~= nil and sideOf(path[i]) ~= startSide then
+					notes[#notes + 1] = path[i] .. " tag " .. tostring(tag) .. " is the other side, run ends"
+					break
+				end
+				local anchor, anchorWhy = anchorOf(path[i], startSide)
+				if anchor == nil then
+					notes[#notes + 1] = path[i] .. " tag " .. tostring(tag) .. " NO ANCHOR as side " .. tostring(startSide)
+						.. " (" .. tostring(anchorWhy) .. ")"
+				else
+					local dx, dy = anchor[1] - origin[1], anchor[2] - origin[2]
+					notes[#notes + 1] = path[i] .. " tag " .. tostring(tag) .. " anchor " .. sb.printJson(anchor)
+						.. " at " .. tostring(math.floor(math.sqrt(dx * dx + dy * dy) * 100 + 0.5) / 100)
+				end
+			end
+			sb.logInfo("NAV waypoint from %s to %s picked nothing on a %s-cell route: origin %s, start %s tag %s as side %s, "
+				.. "minAdvance %s, reach %s, freeMover %s, first hop %s clear %s -- %s",
+				fromKey, toKey, sb.printJson(#path), sb.printJson(origin), tostring(path[1]),
+				sb.printJson(sides ~= nil and sides[path[1]] or nil), sb.printJson(startSide),
+				sb.printJson(minAdvance), sb.printJson(reach), tostring(freeMover),
+				sb.printJson(hop), tostring(hopClear), table.concat(notes, "; "))
+		end
+		return nil
+	end
 
 	self.petportsNavLastRoute.leg = path[chosenAt]
 	self.petportsNavLastRoute.waypoint = chosen
@@ -5206,8 +5290,10 @@ navCandidatesInner = function(limit)
 	end
 	self.petportsNavFrontierCount = 0
 
-	if (now - (self.petportsNavWideRebuiltAt or -1e9)) > NAV_FRONTIER_REBUILD then
-		self.petportsNavWideRebuiltAt = now
+	self.petportsNavWideRebuiltAt = self.petportsNavWideRebuiltAt or {}
+	self.petportsNavWideList = self.petportsNavWideList or {}
+	if (now - (self.petportsNavWideRebuiltAt[sideKey] or -1e9)) > NAV_FRONTIER_REBUILD then
+		self.petportsNavWideRebuiltAt[sideKey] = now
 		local wide = {}
 		for cellKey, entry in pairs(sweptCells or {}) do
 			candTick()
@@ -5221,9 +5307,9 @@ navCandidatesInner = function(limit)
 				end
 			end
 		end
-		self.petportsNavWideList = wide
+		self.petportsNavWideList[sideKey] = wide
 	end
-	for _, cellKey in ipairs(self.petportsNavWideList or {}) do
+	for _, cellKey in ipairs(self.petportsNavWideList[sideKey] or {}) do
 		candTick()
 		consider(cellKey)
 	end

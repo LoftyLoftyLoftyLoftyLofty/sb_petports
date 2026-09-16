@@ -1,6 +1,6 @@
 -- Unit-side contract: naming, modules, media and swim mode, dives, vent routing and fuel.
 
-local CONTRACT_BUILD_STAMP = "2026-09-12d the init clock is gone; a solid fly target needs range, not sight"
+local CONTRACT_BUILD_STAMP = "2026-09-15a swim mode wants/throttled lines under PETPORTS_MEDIA_TRACE"
 
 local contractStamped = false
 
@@ -1347,12 +1347,47 @@ end
 
 PETPORTS_SWIM_MODE_REBUILD_INTERVAL = 1.0
 
+PETPORTS_MEDIA_TRACE = true
+
+-- Logs the inputs behind the desired swim mode whenever any of them changes.
+local function swimModeNote(desired, destination)
+	local here = mcontroller.position()
+	local medium = petports_mediumAt(here, mcontroller.boundBox())
+	local source = "none"
+	if destination ~= nil then
+		if destination == self.petportsLegWaypoint then
+			source = "leg waypoint"
+		elseif destination == self.petportsLegLast then
+			source = "last leg"
+		else
+			source = "task"
+		end
+	end
+	local destMedium = destination ~= nil and petports_mediumAtPoint(destination) or "n/a"
+	local plan = self.petportsDivePlan
+	local planState = plan == nil and "none"
+		or (plan.abandoned and "abandoned" or (plan.reached and "reached" or "to board"))
+	local key = tostring(desired) .. "|" .. tostring(petports_swimMode()) .. "|" .. tostring(medium)
+		.. "|" .. source .. "|" .. tostring(destMedium) .. "|" .. tostring(self.petportsLegSide)
+		.. "|" .. planState .. "|" .. tostring(petports_diving())
+	if self.petportsSwimModeNoted == key then return end
+	self.petportsSwimModeNoted = key
+	sb.logInfo("UNIT swim mode wants %s (now %s) at %s: medium %s, destination %s from the %s reads %s, "
+		.. "leg side %s, task swims %s, dive plan %s, diving %s, onGround %s",
+		tostring(desired), tostring(petports_swimMode()), sb.printJson(here), tostring(medium),
+		sb.printJson(destination), source, tostring(destMedium), tostring(self.petportsLegSide),
+		tostring(taskWantsSwimming()), planState, tostring(petports_diving()),
+		tostring(mcontroller.onGround()))
+end
+
 -- Rebuilds the pather on a mode change, runs the wade and dive steps, and applies the mode.
 function petports_swimModeTick()
 	if not petports_gravitySwitchable() then return end
 
 	if not self.petportsSwimModeRebuilding then
-		local desired = petports_desiredSwimMode(petports_currentTaskDestination())
+		local destination = petports_currentTaskDestination()
+		local desired = petports_desiredSwimMode(destination)
+		if PETPORTS_MEDIA_TRACE then swimModeNote(desired, destination) end
 
 		if desired ~= petports_swimMode() then
 			if not petports_canPathfindIn(desired) then
@@ -1372,6 +1407,7 @@ function petports_swimModeTick()
 				if now - last >= PETPORTS_SWIM_MODE_REBUILD_INTERVAL then
 					self.petportsSwimModeRebuiltAt = now
 					self.petportsSwimModeRebuilding = true
+					self.petportsSwimModeThrottled = nil
 
 					local ok, err = pcall(petports_freshPather,
 						"swim mode wants " .. tostring(desired))
@@ -1382,6 +1418,12 @@ function petports_swimModeTick()
 						sb.logInfo("UNIT swim mode rebuild to %s FAILED: %s",
 							tostring(desired), tostring(err))
 					end
+				elseif PETPORTS_MEDIA_TRACE and self.petportsSwimModeThrottled ~= desired then
+					self.petportsSwimModeThrottled = desired
+					sb.logInfo("UNIT swim mode rebuild to %s THROTTLED at %s: last rebuild %s s ago "
+						.. "(interval %s), mode stays %s",
+						tostring(desired), sb.printJson(mcontroller.position()), sb.printJson(now - last),
+						sb.printJson(PETPORTS_SWIM_MODE_REBUILD_INTERVAL), tostring(petports_swimMode()))
 				end
 			end
 		end
