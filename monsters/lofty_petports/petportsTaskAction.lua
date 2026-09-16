@@ -16,7 +16,7 @@ local FUEL_TRACE = false
 
 local MEDIA_TRACE_INTERVAL = 0.25
 
-local BUILD_STAMP = "2026-09-16g a second progress strike no longer takes a coarse leg"
+local BUILD_STAMP = "2026-09-16h the fish dive board picker profiler wrap is removed"
 local stampLogged = false
 
 local SEARCH_LIMIT = 6.0
@@ -4900,10 +4900,6 @@ local function installTaskSections()
   tryVentRoute = taskProfWrap("ventRoute", tryVentRoute)
   standableNear = taskProfWrap("standable", standableNear)
   approachTargetFor = taskProfWrap("approachTarget", approachTargetFor)
-
-  if type(petports_diveApproach) == "function" then
-    petports_diveApproach = taskProfWrap("diveApproach", petports_diveApproach)
-  end
 
   if type(petports_habitatObjectBounds) == "function" then
     petports_habitatObjectBounds = taskProfWrap("objectBounds", petports_habitatObjectBounds)

@@ -1,6 +1,6 @@
 -- Unit-side contract: naming, modules, media and swim mode, dives, vent routing and fuel.
 
-local CONTRACT_BUILD_STAMP = "2026-09-16e the board shuffle only runs on dry footing"
+local CONTRACT_BUILD_STAMP = "2026-09-16f the fish dive board picker and its debug marks are removed"
 
 local contractStamped = false
 
@@ -676,39 +676,9 @@ function petports_swimMode()
 	return self.petportsSwimMode or PETPORTS_SWIM_MODE_LAND
 end
 
-
-PETPORTS_DIVE_TRACE_BUDGET = 400
-
-PETPORTS_DIVE_TRACE_RISE = 96
-
-PETPORTS_DIVE_TRACE_REACH = 48
-
-PETPORTS_DIVE_SPAN_MARGIN = 12
-
-PETPORTS_DIVE_SPAN_MAX = 72
-
-
 PETPORTS_DIVE_SOLID_SET = { "Null", "Block", "Slippery", "Dynamic" }
 
-PETPORTS_DIVE_DEBUG = true
-
-PETPORTS_DIVE_COLOR_WATER   = { 60, 120, 255, 160 }
-PETPORTS_DIVE_COLOR_BLOCKED = { 255, 80, 80, 200 }
-PETPORTS_DIVE_COLOR_NARROW  = { 255, 160, 0, 230 }
-PETPORTS_DIVE_COLOR_FOOTING = { 200, 200, 80, 180 }
-PETPORTS_DIVE_COLOR_ENTRY   = { 0, 255, 255, 255 }
-PETPORTS_DIVE_COLOR_LAUNCH  = { 80, 255, 80, 255 }
-
--- Clears the dive debug marks.
-local function diveDebugReset()
-	if not PETPORTS_DIVE_DEBUG then return end
-	self.petportsDiveMarks = {}
-	self.petportsDiveEntryMark = nil
-	self.petportsDiveLaunchMark = nil
-	self.petportsDiveFishMark = nil
-end
-
--- Drops the dive flight, plan, entry and debug marks.
+-- Drops the dive flight, plan and entry.
 function petports_diveForget()
 	self.petportsDiveFlight = nil
 
@@ -717,66 +687,6 @@ function petports_diveForget()
 	self.petportsDivePuddleNoted = nil
 
 	self.petportsDiveRetarget = nil
-	self.petportsDiveMarks = nil
-	self.petportsDiveEntryMark = nil
-	self.petportsDiveLaunchMark = nil
-	self.petportsDiveFishMark = nil
-end
-
--- Records a coloured dive debug point.
-local function diveDebugMark(position, color)
-	if not PETPORTS_DIVE_DEBUG then return end
-	if self.petportsDiveMarks == nil then self.petportsDiveMarks = {} end
-	table.insert(self.petportsDiveMarks, { position, color })
-end
-
--- Draws the dive marks and the fish, board and hole labels.
-function petports_diveDebugDraw()
-	if not PETPORTS_DIVE_DEBUG then return end
-
-	for _, mark in ipairs(self.petportsDiveMarks or {}) do
-		world.debugPoint(mark[1], mark[2])
-	end
-
-	local here = mcontroller.position()
-
-	if self.petportsDiveFishMark ~= nil then
-		world.debugText("fish", self.petportsDiveFishMark,
-			PETPORTS_DIVE_COLOR_WATER)
-	end
-
-	if self.petportsDiveLaunchMark ~= nil then
-		world.debugPoint(self.petportsDiveLaunchMark, PETPORTS_DIVE_COLOR_LAUNCH)
-		world.debugLine(here, self.petportsDiveLaunchMark,
-			PETPORTS_DIVE_COLOR_LAUNCH)
-		world.debugText("launch", self.petportsDiveLaunchMark,
-			PETPORTS_DIVE_COLOR_LAUNCH)
-	end
-
-	if self.petportsDiveEntryMark ~= nil then
-		world.debugPoint(self.petportsDiveEntryMark, PETPORTS_DIVE_COLOR_ENTRY)
-		world.debugText("entry", self.petportsDiveEntryMark,
-			PETPORTS_DIVE_COLOR_ENTRY)
-
-		local from = self.petportsDiveLaunchMark or here
-		world.debugLine(from, self.petportsDiveEntryMark,
-			PETPORTS_DIVE_COLOR_ENTRY)
-	end
-end
-
--- Returns whether a tile's centre is fully submerged.
-local function tileIsWater(x, y)
-	return petports_mediumAtPoint({ x + 0.5, y + 0.5 }) == "swim"
-end
-
--- Returns whether a tile's centre collides.
-local function tileIsSolid(x, y)
-	return world.pointTileCollision({ x + 0.5, y + 0.5 }, PETPORTS_DIVE_SOLID_SET)
-end
-
--- Returns whether the line between two points is clear of solid tiles.
-local function diveSighted(from, to)
-	return not world.lineTileCollision(from, to, PETPORTS_DIVE_SOLID_SET)
 end
 
 -- Returns whether the tile under the feet is a platform and not solid.
@@ -824,95 +734,6 @@ local function bodyFitsAt(position)
 	return not petports_bodyHitsAt(position, PETPORTS_DIVE_SOLID_SET)
 end
 
--- Walks the water up from the fish and returns every surface opening the body fits through.
-local function traceSurface(from, spanLow, spanHigh)
-	local startX = math.floor(from[1])
-	local startY = math.floor(from[2])
-
-	if not tileIsWater(startX, startY) then
-		return nil, "the fish is not in water at " .. sb.printJson(from)
-	end
-
-	diveDebugReset()
-	self.petportsDiveFishMark = { from[1], from[2] }
-
-	local seen = { [startX .. "," .. startY] = true }
-	local frontier = { { startX, startY } }
-	local entries = {}
-	local examined = 0
-
-	while #frontier > 0 and examined < PETPORTS_DIVE_TRACE_BUDGET do
-		local bestAt = 1
-		for i = 2, #frontier do
-			if frontier[i][2] > frontier[bestAt][2] then bestAt = i end
-		end
-
-		local node = table.remove(frontier, bestAt)
-		examined = examined + 1
-
-		local x, y = node[1], node[2]
-
-		diveDebugMark({ x + 0.5, y + 0.5 }, PETPORTS_DIVE_COLOR_WATER)
-
-		if not tileIsWater(x, y + 1) then
-			if not tileIsSolid(x, y + 1) then
-				local entry = { x + 0.5, y + 0.5 }
-
-				if bodyFitsAt(entry) then
-					table.insert(entries, entry)
-					diveDebugMark(entry, PETPORTS_DIVE_COLOR_ENTRY)
-				else
-					diveDebugMark(entry, PETPORTS_DIVE_COLOR_NARROW)
-				end
-			end
-
-			if tileIsSolid(x, y + 1) then
-				diveDebugMark({ x + 0.5, y + 1.5 }, PETPORTS_DIVE_COLOR_BLOCKED)
-			end
-
-			for _, dx in ipairs({ -1, 1 }) do
-				local nx = x + dx
-				local key = nx .. "," .. y
-
-				if not seen[key]
-				   and nx >= spanLow and nx <= spanHigh
-				   and tileIsWater(nx, y) then
-					seen[key] = true
-					table.insert(frontier, { nx, y })
-				end
-			end
-		else
-			local key = x .. "," .. (y + 1)
-
-			if not seen[key] and (y + 1 - startY) <= PETPORTS_DIVE_TRACE_RISE then
-				seen[key] = true
-				table.insert(frontier, { x, y + 1 })
-			end
-
-			for _, dx in ipairs({ -1, 1 }) do
-				local nx = x + dx
-				local sideKey = nx .. "," .. y
-
-				if not seen[sideKey]
-				   and nx >= spanLow and nx <= spanHigh
-				   and tileIsWater(nx, y) then
-					seen[sideKey] = true
-					table.insert(frontier, { nx, y })
-				end
-			end
-		end
-	end
-
-	if #entries > 0 then return entries, nil, examined end
-
-	if examined >= PETPORTS_DIVE_TRACE_BUDGET then
-		return nil, string.format("no surface within %s tiles of %s -- sealed, or a pool larger than the budget",
-			sb.printJson(PETPORTS_DIVE_TRACE_BUDGET), sb.printJson(from))
-	end
-
-	return nil, "the water around " .. sb.printJson(from) .. " has no reachable surface"
-end
-
 PETPORTS_DIVE_SWIM_SAMPLES = 14
 
 -- Returns whether the body clears every sample along a line.
@@ -941,203 +762,11 @@ local function swimReachable(target)
 	return petports_bodyFitsAlong(mcontroller.position(), target)
 end
 
--- Returns the refusal key for a point.
-local function diveRefusedKey(point)
-	return string.format("%s,%s", math.floor(point[1]), math.floor(point[2]))
-end
-
--- Strikes a launch point off for this task and logs why.
+-- Logs why a dive launch point was refused.
 function petports_diveRefuse(point, why)
 	if point == nil then return end
 
-	self.petportsDiveRefused = self.petportsDiveRefused or {}
-	self.petportsDiveRefused[diveRefusedKey(point)] = true
-
-	sb.logInfo("UNIT DIVE REFUSED from %s: %s -- board struck off, looking for another",
-		sb.printJson(point), tostring(why))
-end
-
--- Returns whether a launch point has been struck off.
-local function diveRefusedAt(point)
-	local refused = self.petportsDiveRefused
-	return refused ~= nil and refused[diveRefusedKey(point)] == true
-end
-
-PETPORTS_DIVE_ENTRY_KEEP = 12
-
--- Returns the column range between the unit and the fish, widened by a reach and capped.
-local function diveSpan(fish, reach)
-	local here = mcontroller.position()[1]
-
-	reach = reach or PETPORTS_DIVE_SPAN_MARGIN
-
-	local low = math.floor(math.min(fish[1], here)) - reach
-	local high = math.ceil(math.max(fish[1], here)) + reach
-
-	local widest = math.max(PETPORTS_DIVE_SPAN_MAX, reach * 2)
-
-	if (high - low) > widest then
-		if fish[1] < here then
-			high = low + widest
-		else
-			low = high - widest
-		end
-	end
-
-	return low, high
-end
-
--- Returns the lowest scoring pairing of dry footing with a surface opening it can see.
-local function pickBoardAndEntry(entries, fish, spanLow, spanHigh)
-	if type(entries) ~= "table" or type(entries[1]) ~= "table" then
-		sb.logInfo("UNIT DIVE cannot choose a board: traceSurface returned %s, "
-			.. "which is not a list of openings",
-			sb.printJson(entries))
-		return nil
-	end
-
-	local best = nil
-
-	for column = spanLow, spanHigh do
-		local x = column + 0.5
-
-		local seedY, seedGap = nil, nil
-
-		for _, entry in ipairs(entries) do
-			local gap = math.abs(entry[1] - x)
-
-			if seedGap == nil or gap < seedGap then
-				seedY, seedGap = entry[2], gap
-			end
-		end
-
-		local ok, spot = pcall(findGroundPosition, { x, seedY }, -4, 12, true)
-
-		if ok and type(spot) == "table" and type(spot[1]) == "number"
-		   and type(spot[2]) == "number" then
-
-			diveDebugMark({ spot[1], spot[2] }, PETPORTS_DIVE_COLOR_FOOTING)
-
-			if diveRefusedAt(spot) then spot = nil end
-
-			if spot ~= nil then
-				local sighted = false
-
-				for _, entry in ipairs(entries) do
-					if entry[2] < spot[2] and diveSighted(spot, entry) then
-
-						sighted = true
-
-						local dx = math.abs(entry[1] - spot[1])
-						local drop = spot[2] - entry[2]
-						local aligned = dx <= PETPORTS_DIVE_DROP_ALIGN
-						local walk = math.abs(spot[1] - mcontroller.position()[1])
-
-						local score = (aligned and 0 or 1000)
-							+ walk + dx + (drop * 0.1)
-
-						if best == nil or score < best.score then
-							best = {
-								launch = { spot[1], spot[2] },
-								entry = { entry[1], entry[2] },
-								score = score, dx = dx, drop = drop,
-								aligned = aligned, walk = walk
-							}
-						end
-					end
-				end
-
-				if not sighted then
-					diveDebugMark({ spot[1], spot[2] }, PETPORTS_DIVE_COLOR_NARROW)
-				end
-			end
-		end
-	end
-
-	return best
-end
-
--- Returns the launch and entry points for a dive at a fish, reusing this task's plan.
-function petports_diveApproach(fishPosition, taskId)
-	if fishPosition == nil then return nil, "no fish position" end
-
-	local plan = self.petportsDivePlan
-
-	if plan ~= nil and taskId ~= nil and plan.taskId == taskId then
-		return plan.launch, plan.entry
-	end
-
-	if taskId ~= nil and self.petportsDiveRefusedFor ~= taskId then
-		self.petportsDiveRefusedFor = taskId
-		self.petportsDiveRefused = nil
-	end
-
-	local traceLow, traceHigh = diveSpan(fishPosition, PETPORTS_DIVE_TRACE_REACH)
-
-	local entries, why, examined = traceSurface(fishPosition, traceLow, traceHigh)
-
-	if entries == nil then
-		self.petportsDiveEntry = nil
-		self.petportsDivePlan = nil
-		return nil, why
-	end
-
-	table.sort(entries, function(a, b)
-		return math.abs(a[1] - fishPosition[1]) < math.abs(b[1] - fishPosition[1])
-	end)
-
-	while #entries > PETPORTS_DIVE_ENTRY_KEEP do
-		table.remove(entries)
-	end
-
-	local boardLow = math.floor(fishPosition[1])
-	local boardHigh = boardLow
-
-	for _, entry in ipairs(entries) do
-		boardLow = math.min(boardLow, math.floor(entry[1]))
-		boardHigh = math.max(boardHigh, math.ceil(entry[1]))
-	end
-
-	local unitLow, unitHigh = diveSpan(fishPosition)
-
-	boardLow = math.min(boardLow - PETPORTS_DIVE_SPAN_MARGIN, unitLow)
-	boardHigh = math.max(boardHigh + PETPORTS_DIVE_SPAN_MARGIN, unitHigh)
-
-	local pair = pickBoardAndEntry(entries, fishPosition, boardLow, boardHigh)
-
-	if pair == nil then
-		self.petportsDivePlan = nil
-		self.petportsDiveEntry = nil
-
-		return nil, string.format("%s opening(s) kept near %s (traced %s tiles over "
-			.. "columns %s..%s) but no dry footing over columns %s..%s can see any "
-			.. "of them, unit at %s",
-			sb.printJson(#entries), sb.printJson(fishPosition),
-			sb.printJson(examined), sb.printJson(traceLow), sb.printJson(traceHigh),
-			sb.printJson(boardLow), sb.printJson(boardHigh),
-			sb.printJson(mcontroller.position()[1]))
-	end
-
-	local launch, entry = pair.launch, pair.entry
-
-	self.petportsDiveEntryMark = { entry[1], entry[2] }
-	self.petportsDiveLaunchMark = { launch[1], launch[2] }
-
-	self.petportsDiveEntry = { entry[1], entry[2] }
-	self.petportsDivePlan = {
-		taskId = taskId,
-		launch = { launch[1], launch[2] },
-		entry = { entry[1], entry[2] }
-	}
-
-	sb.logInfo("UNIT DIVE plan for fish at %s: %s opening(s) from %s tiles traced; "
-		.. "chose board %s -> hole %s (%s, dx %s, drop %s, walk %s)",
-		sb.printJson(fishPosition), sb.printJson(#entries), sb.printJson(examined),
-		sb.printJson(launch), sb.printJson(entry),
-		pair.aligned and "ALIGNED" or "offset",
-		sb.printJson(pair.dx), sb.printJson(pair.drop), sb.printJson(pair.walk))
-
-	return launch, entry
+	sb.logInfo("UNIT DIVE REFUSED from %s: %s", sb.printJson(point), tostring(why))
 end
 
 PETPORTS_DIVE_BOARD_ARRIVAL = 1.5
@@ -1425,7 +1054,7 @@ function petports_swimModeTick()
 	end
 
 	if not taskWantsSwimming()
-	   and (self.petportsDivePlan ~= nil or self.petportsDiveMarks ~= nil) then
+	   and self.petportsDivePlan ~= nil then
 		petports_diveForget()
 	end
 
@@ -1498,7 +1127,6 @@ function petports_swimModeTick()
 				mcontroller.controlFace(direction)
 
 				petports_assertSwimMode()
-				petports_diveDebugDraw()
 				return
 			end
 
@@ -1559,8 +1187,6 @@ function petports_swimModeTick()
 	end
 
 	petports_assertSwimMode()
-
-	petports_diveDebugDraw()
 end
 
 -- Applies the gravity and buoyancy control parameters for the current swim mode.
