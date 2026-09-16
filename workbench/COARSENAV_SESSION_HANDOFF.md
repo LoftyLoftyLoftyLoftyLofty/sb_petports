@@ -1,3 +1,63 @@
+# COARSE NAV -- SESSION HANDOFF
+
+> **WARNING -- NEEDS HUMAN AUDIT.** Everything below the 2026-09-16 section
+> has accumulated unverified and invented claims over many iterations. Treat
+> it as a hopeful suggestion, not fact. Progress is tracked in the drawio doc.
+> Do not add reasoning or history to this file; record state only.
+
+## 2026-09-16 -- amphibious coarse nav
+
+### Installed builds
+
+| File | Build | Verified in game |
+|---|---|---|
+| petports_coarsenav.lua | 2026-09-16c | yes |
+| petports_contract.lua | 2026-09-16e | yes |
+| petportsTaskAction.lua | 2026-09-16c | yes |
+
+### Changes
+
+- coarsenav 15d: the widening candidate list is kept per survey side.
+- coarsenav 15e: `petports_navLearn` takes `extra`; bridge kind and geometry are stored in the learned entry.
+- coarsenav 15f: `NAV STORE` counts reachable edges without a kind.
+- coarsenav 16b: clear-line waypoint search runs from the start cell's anchor; its saved state is keyed by graph version and in-reach anchors.
+- coarsenav 16c: a gravity-switchable chassis gets no land anchor where its standing hitbox is fully submerged.
+- contract 16a: aquatic versus exiting reads the destination with the body's bounds.
+- contract 16b: a reached dive plan is consumed once the body reads `swim`.
+- contract 16c: `petports_currentTaskDestination` no longer falls back to `petportsLegLast`.
+- contract 16d: a dive launches from `air` or `mixed`.
+- contract 16e: the board shuffle only runs in `air`.
+- taskAction 16a: fish tasks no longer plan a dive board; a switchable walker asks coarse nav first for a target in the water.
+- taskAction 16c: `tryCoarseLeg` sets `self.petportsLegWaypoint` before `freshPather`.
+- Reverted: taskAction 16b (walker approaches the dive board during a dive bridge leg).
+
+### Instrumentation still on
+
+- `PETPORTS_MEDIA_TRACE` (contract): `UNIT MEDIA`, `swim mode wants`, approach target sources.
+- `PETPORTS_NAV_VERBOSE` (coarsenav): `NAV route sides`, `NAV waypoint ... picked nothing`, anchor refusal reasons.
+- Coarse leg refusal and target resolve lines (taskAction).
+
+### Facts
+
+- The runtime is not Lua 5.1: `table.unpack` runs.
+- Resocketing a unit rebuilds its nav graph; with the current ports that takes about 35 s.
+
+### Amphibious backlog
+
+1. A walker in water keeps land mode until a dive plan reaches its board ("not diving yet, staying a walker").
+2. Exiting mode cannot take coarse legs.
+3. Shallow wading shelves need to be told apart from dive entries.
+4. `petports_diveApproach` and its board picker are unused.
+5. Unconfirmed, probably obsolete: a leg taken on the dive-launch tick; the picker skipping anchorless cells.
+
+### Out of scope (all chassis)
+
+- Tasks fail while the nav graph rebuilds.
+- The progress watchdog never fails when each strike re-takes a leg.
+- Stuck recovery only works when the target moves.
+
+---
+
 # COARSE NAV -- SESSION HANDOFF (as of coarsenav 13c / taskAction 13f / petport 13a / flyapproach 10c / contract 12d / habitat 07a)
 
 Read this before proposing anything. MEASURED means read out of a

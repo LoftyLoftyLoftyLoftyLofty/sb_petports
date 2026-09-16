@@ -16,7 +16,7 @@ local FUEL_TRACE = false
 
 local MEDIA_TRACE_INTERVAL = 0.25
 
-local BUILD_STAMP = "2026-09-16a fish tasks route to the fish through coarse nav instead of planning their own dive board"
+local BUILD_STAMP = "2026-09-16c a new coarse leg publishes its waypoint before the pather rebuild picks the swim mode"
 local stampLogged = false
 
 local SEARCH_LIMIT = 6.0
@@ -423,6 +423,7 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
   stateData.navBridge = bridge
   self.petportsLegBridge = bridge
   self.petportsLegSide = bridge and bridge.toSide or (freeMover and 1 or 0)
+	self.petportsLegWaypoint = waypoint
 
   if bridge ~= nil then
     sb.logInfo("UNIT coarse leg is a %s bridge %s -> %s (side %s)",
