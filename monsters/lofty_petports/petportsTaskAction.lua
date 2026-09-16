@@ -16,7 +16,7 @@ local FUEL_TRACE = false
 
 local MEDIA_TRACE_INTERVAL = 0.25
 
-local BUILD_STAMP = "2026-09-16c a new coarse leg publishes its waypoint before the pather rebuild picks the swim mode"
+local BUILD_STAMP = "2026-09-16e a switchable chassis in liquid passes a Land edge that ends in liquid"
 local stampLogged = false
 
 local SEARCH_LIMIT = 6.0
@@ -3018,6 +3018,22 @@ local function petportsTaskUpdateInner(dt, stateData)
     arcEdge = arcFinder.edges[arcFinder.currentEdgeIndex]
   end
 
+	if arcEdge ~= nil and arcEdge.action == "Land" and petports_gravitySwitchable()
+	   and arcEdge.target ~= nil and arcEdge.target.position ~= nil then
+		local landBounds = mcontroller.boundBox()
+		local landHere = mcontroller.position()
+		local landTargetMedium = petports_mediumAt(arcEdge.target.position, landBounds)
+		local landBodyMedium = petports_mediumAt(landHere, landBounds)
+		if (landTargetMedium == "swim" or landTargetMedium == "mixed")
+		   and (landBodyMedium == "swim" or landBodyMedium == "mixed") then
+			sb.logInfo("UNIT LAND edge %s of %s at %s ends in %s and the body reads %s -- passing it",
+				tostring(arcFinder.currentEdgeIndex), tostring(#arcFinder.edges),
+				sb.printJson(arcEdge.target.position), tostring(landTargetMedium), tostring(landBodyMedium))
+			arcFinder:advance()
+			arcEdge = arcFinder.edges[arcFinder.currentEdgeIndex]
+		end
+	end
+
   if arcEdge ~= nil and arcEdge.action == "Arc" then
     local arcHere = mcontroller.position()
     local arcVel = mcontroller.velocity()
@@ -3930,6 +3946,34 @@ local function petportsTaskUpdateInner(dt, stateData)
 
       stateData.lastHasPath = hasPath
     end
+
+	if TASK_DEBUG and hasPath and finder.edges ~= nil and finder.edges ~= stateData.wetEdgesLogged then
+		stateData.wetEdgesLogged = finder.edges
+		local bounds = mcontroller.boundBox()
+		local wanted = {}
+		for i, edge in ipairs(finder.edges) do
+			local to = edge.target and edge.target.position
+			local medium = to and petports_mediumAt(to, bounds)
+			if medium == "swim" or medium == "mixed" then
+				wanted[i] = true
+				wanted[i + 1] = true
+			end
+		end
+		local parts = {}
+		for i, edge in ipairs(finder.edges) do
+			if wanted[i] then
+				local from = edge.source and edge.source.position
+				local to = edge.target and edge.target.position
+				parts[#parts + 1] = string.format("#%s %s %s->%s (%s)", tostring(i), tostring(edge.action),
+					sb.printJson(from), sb.printJson(to), tostring(to and petports_mediumAt(to, bounds)))
+			end
+		end
+		if #parts > 0 then
+			sb.logInfo("UNIT WET PLAN at %s, mode %s, %s edge(s): %s",
+				sb.printJson(mcontroller.position()), tostring(petports_swimMode()),
+				sb.printJson(#finder.edges), table.concat(parts, " | "))
+		end
+	end
 
     if TASK_TRACE_MOVES and hasPath then
       local edge = finder.edges and finder.currentEdgeIndex
