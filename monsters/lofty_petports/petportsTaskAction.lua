@@ -16,7 +16,7 @@ local FUEL_TRACE = false
 
 local MEDIA_TRACE_INTERVAL = 0.25
 
-local BUILD_STAMP = "2026-09-15a media-boundary instrumentation: MEDIA trace, approach target sources, coarse leg refusals and target resolves"
+local BUILD_STAMP = "2026-09-16a fish tasks route to the fish through coarse nav instead of planning their own dive board"
 local stampLogged = false
 
 local SEARCH_LIMIT = 6.0
@@ -1889,30 +1889,6 @@ local function approachTargetFor(stateData, rawPosition)
     return stateData.groundTarget
   end
 
-  if not homeward and task ~= nil and task.type == "fish"
-     and petports_gravitySwitchable()
-     and petports_swimMode() == PETPORTS_SWIM_MODE_LAND
-     and not (divePlan ~= nil and divePlan.abandoned) then
-
-    local launch, entryOrWhy = petports_diveApproach(rawPosition, task.id)
-
-    if launch ~= nil then
-      stateData.groundTarget = launch
-      stateData.petportsDiveEntry = entryOrWhy
-			noteGroundTarget(stateData, "the fish dive's board", rawPosition)
-      return stateData.groundTarget
-    end
-
-    if self.petportsDiveWhy ~= entryOrWhy then
-      self.petportsDiveWhy = entryOrWhy
-      sb.logInfo("UNIT DIVE unavailable for fish at %s: %s",
-        sb.printJson(rawPosition), tostring(entryOrWhy))
-    end
-
-		noteGroundTarget(stateData, "no fish dive", rawPosition)
-    return nil
-  end
-
 	local why = nil
   if homeward then
     stateData.groundTarget = standableNear(rawPosition, 0, nil, verified)
@@ -3360,8 +3336,10 @@ local function petportsTaskUpdateInner(dt, stateData)
         local okLos, blocked = pcall(world.lineTileCollision, here, routeTarget,
           COARSE_LOS_SET)
         local blind = okLos and blocked == true
-        wanted = far or blind
-        why = far and "far" or "out of sight"
+				local otherSide = petports_gravitySwitchable()
+					and petports_mediumAt(routeTarget, mcontroller.boundBox()) == "swim"
+        wanted = far or blind or otherSide
+        why = far and "far" or (blind and "out of sight" or "in the water")
       end
 
       local taken, notYet = false, nil
