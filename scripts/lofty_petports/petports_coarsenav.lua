@@ -567,7 +567,7 @@ local function navProfileUncached()
 			(bounds[3] or 0) - (bounds[1] or 0),
 			(bounds[4] or 0) - (bounds[2] or 0)),
 		table.concat(liquids, "+"),
-		tostring(config.getParameter("petports_canOpenDoors", nil)),
+		self.petportsOpenDoors and "1" or "0",
 		petports_avoidLiquid() and "1" or "0")
 end
 

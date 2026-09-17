@@ -540,10 +540,12 @@ local function baseTeam(sent)
   return entity.damageTeam()
 end
 
--- Sets the damage team to ghostly while a camouflage module is socketed, otherwise back to the chassis default.
+-- Records the door-opening flag, and sets the damage team to ghostly while a camouflage module is socketed, otherwise back to the chassis default.
 function petports_applyModuleFlags(flags, sentBaseTeam)
   local set = {}
   for _, flag in ipairs(flags or {}) do set[flag] = true end
+
+  self.petportsOpenDoors = set.openDoors == true
 
   local base = baseTeam(sentBaseTeam)
 

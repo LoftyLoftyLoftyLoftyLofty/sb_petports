@@ -2716,6 +2716,246 @@ local function avoidLiquidAhead(stateData)
 	return true
 end
 
+local DOOR_REACH = 1.5
+local DOOR_TRAIL = 2.5
+local DOOR_RISE = 1.0
+local DOOR_CLIMB = 4.0
+local DOOR_CLEAR = 0.2
+local DOOR_PATH = 12.0
+local DOOR_DRIFT = 2.0
+local DOOR_BITE = 0.1
+
+-- Returns the body box extended by a distance to one side, on the x axis or the y axis.
+local function doorSpan(axis, direction, distance)
+	local span = rect.translate(mcontroller.boundBox(), mcontroller.position())
+	local low, high = axis, axis + 2
+
+	if direction > 0 then
+		span[low] = span[high]
+		span[high] = span[high] + distance
+	else
+		span[high] = span[low]
+		span[low] = span[low] - distance
+	end
+
+	return span
+end
+
+-- Returns whether a segment reaches into a rect that has already been padded for the body.
+local function doorSegmentHits(from, to, low, high)
+	local t0, t1 = 0, 1
+
+	for axis = 1, 2 do
+		local span = to[axis] - from[axis]
+
+		if math.abs(span) < 0.0001 then
+			if from[axis] < low[axis] or from[axis] > high[axis] then return false end
+		else
+			local near = (low[axis] - from[axis]) / span
+			local far = (high[axis] - from[axis]) / span
+
+			if near > far then near, far = far, near end
+
+			if near > t0 then t0 = near end
+			if far < t1 then t1 = far end
+
+			if t0 > t1 then return false end
+		end
+	end
+
+	return true
+end
+
+-- Returns whether the remaining plan carries the body through a door's tiles.
+local function doorOnPath(bounds)
+	local finder = self.pather and self.pather.finder
+
+	if finder == nil or not finder.hasPath or finder.edges == nil
+	   or finder.currentEdgeIndex == nil then
+		return false
+	end
+
+	local box = mcontroller.boundBox()
+	local here = mcontroller.position()
+
+	local low = { bounds[1] - 0.5 + box[1], bounds[2] - 0.5 + box[2] }
+	local high = { bounds[3] + 0.5 + box[3], bounds[4] + 0.5 + box[4] }
+
+	for i = finder.currentEdgeIndex, #finder.edges do
+		local edge = finder.edges[i]
+
+		if edge ~= nil and edge.source ~= nil and edge.target ~= nil
+		   and edge.source.position ~= nil and edge.target.position ~= nil then
+			if world.magnitude(here, edge.source.position) > DOOR_PATH then return false end
+
+			if doorSegmentHits(edge.source.position, edge.target.position, low, high) then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
+-- Returns -1, 0 or 1 for the vertical travel the open pass should look along: the climb the body is making, or the one the current path edge is asking for while it is near-stationary.
+local function doorVertical()
+	local vy = mcontroller.velocity()[2] or 0
+
+	if vy >= DOOR_CLIMB then return 1 end
+
+	local finder = self.pather and self.pather.finder
+
+	if finder == nil or not finder.hasPath or finder.edges == nil
+	   or finder.currentEdgeIndex == nil then
+		return 0
+	end
+
+	local edge = finder.edges[finder.currentEdgeIndex]
+
+	if edge == nil or edge.target == nil or edge.target.position == nil then return 0 end
+
+	local rise = edge.target.position[2] - mcontroller.position()[2]
+
+	if rise >= DOOR_RISE then return 1 end
+	if rise <= -DOOR_RISE then return -1 end
+
+	return 0
+end
+
+-- Opens any unlocked door the body is about to move into, along one axis.
+local function openDoorsAhead(axis, direction, dt)
+	local travel = math.abs(mcontroller.velocity()[axis] or 0) * (dt or 0)
+	local span = doorSpan(axis, direction, DOOR_REACH + travel)
+
+	if not world.rectTileCollision(span, { "Dynamic" }) then return end
+
+	local shut = world.entityQuery(rect.ll(span), rect.ur(span), {
+		includedTypes = { "object" },
+		callScript = "hasCapability",
+		callScriptArgs = { "closedDoor" }
+	})
+
+	for _, doorId in ipairs(shut) do
+		local toDoor = world.distance(world.entityPosition(doorId), mcontroller.position())
+		local bounds = petports_habitatObjectBounds(doorId)
+
+		if toDoor[axis] * direction > 0 and bounds ~= nil and doorOnPath(bounds) then
+			local side
+			if axis == 1 then
+				side = direction > 0 and "right" or "left"
+			else
+				side = direction > 0 and "above" or "below"
+			end
+
+			sb.logInfo("UNIT DOOR %s OPENING: shut, %s tiles %s the body at %s",
+				sb.printJson(doorId), sb.printJson(math.abs(toDoor[axis])), side,
+				sb.printJson(mcontroller.position()))
+
+			pcall(world.callScriptedEntity, doorId, "openDoor")
+		end
+	end
+end
+
+-- Opens a closed door the body is inside, which is the only way back out of one.
+local function openDoorsAround()
+	local me = rect.translate(mcontroller.boundBox(), mcontroller.position())
+
+	if not world.rectTileCollision(me, { "Dynamic" }) then return end
+
+	local shut = world.entityQuery(rect.ll(me), rect.ur(me), {
+		includedTypes = { "object" },
+		callScript = "hasCapability",
+		callScriptArgs = { "closedDoor" }
+	})
+
+	for _, doorId in ipairs(shut) do
+		local bounds = petports_habitatObjectBounds(doorId)
+
+		if bounds ~= nil then
+			local low = { bounds[1] - 0.5 + DOOR_BITE, bounds[2] - 0.5 + DOOR_BITE }
+			local high = { bounds[3] + 0.5 - DOOR_BITE, bounds[4] + 0.5 - DOOR_BITE }
+
+			local embedded = not (me[1] >= high[1] or me[3] <= low[1]
+			                   or me[2] >= high[2] or me[4] <= low[2])
+
+			if embedded then
+				sb.logInfo("UNIT DOOR %s OPENING: the body at %s is stuck inside it",
+					sb.printJson(doorId), sb.printJson(mcontroller.position()))
+
+				pcall(world.callScriptedEntity, doorId, "openDoor")
+			end
+		end
+	end
+end
+
+-- Closes any door the body has moved clear of along one axis, leaving one with something still standing in it.
+local function closeDoorsBehind(axis, direction)
+	local span = doorSpan(axis, -direction, DOOR_TRAIL)
+
+	if world.rectTileCollision(span, { "Dynamic" }) then return end
+
+	local open = world.entityQuery(rect.ll(span), rect.ur(span), {
+		includedTypes = { "object" },
+		callScript = "hasCapability",
+		callScriptArgs = { "openDoor" }
+	})
+
+	for _, doorId in ipairs(open) do
+		local toDoor = world.distance(world.entityPosition(doorId), mcontroller.position())
+		local bounds = petports_habitatObjectBounds(doorId)
+
+		if bounds ~= nil and toDoor[axis] * direction < 0 then
+			local low = { bounds[1] - 0.5 - DOOR_CLEAR, bounds[2] - 0.5 - DOOR_CLEAR }
+			local high = { bounds[3] + 0.5 + DOOR_CLEAR, bounds[4] + 0.5 + DOOR_CLEAR }
+
+			local trailed = not (low[1] >= span[3] or high[1] <= span[1]
+			                  or low[2] >= span[4] or high[2] <= span[2])
+
+			local me = rect.translate(mcontroller.boundBox(), mcontroller.position())
+
+			local clipping = not (me[1] >= high[1] or me[3] <= low[1]
+			                   or me[2] >= high[2] or me[4] <= low[2])
+
+			local inside = world.entityQuery(low, high,
+				{ includedTypes = { "npc", "player", "monster" } })
+
+			if trailed and not clipping and #inside == 0 and not doorOnPath(bounds) then
+				sb.logInfo("UNIT DOOR %s CLOSING: open and empty, behind the body at %s",
+					sb.printJson(doorId), sb.printJson(mcontroller.position()))
+
+				world.sendEntityMessage(doorId, "closeDoor")
+			end
+		end
+	end
+end
+
+-- Opens doors ahead of a unit carrying the big brain module, and closes the ones behind it.
+local function doorWatch(dt)
+	if not self.petportsOpenDoors then return end
+
+	openDoorsAround()
+
+	local facing = mcontroller.facingDirection()
+	if facing == 0 then facing = 1 end
+
+	openDoorsAhead(1, facing, dt)
+	closeDoorsBehind(1, facing)
+
+	local rising = doorVertical()
+
+	if rising ~= 0 then
+		openDoorsAhead(2, rising, dt)
+	end
+
+	local vy = mcontroller.velocity()[2] or 0
+
+	if vy >= DOOR_DRIFT then
+		closeDoorsBehind(2, 1)
+	elseif vy <= -DOOR_DRIFT then
+		closeDoorsBehind(2, -1)
+	end
+end
+
 -- Returns whether there is footing under the body's left and right corners.
 local function perchFooting()
 	local here = mcontroller.position()
@@ -4960,7 +5200,7 @@ local function installTaskSections()
   end
 end
 
--- Runs the task step inside the profiler, then the liquid-avoidance and unperch watches.
+-- Runs the task step inside the profiler, then the liquid-avoidance, unperch and door watches.
 function petportsTaskAction.update(dt, stateData)
   installTaskSections()
   if petports_profInstall ~= nil then petports_profInstall() end
@@ -4971,6 +5211,7 @@ function petportsTaskAction.update(dt, stateData)
 
   avoidLiquidAhead(stateData)
   unperchWatch(dt, stateData)
+	doorWatch(dt)
 
   if petports_profEnd ~= nil then petports_profEnd("update") end
   if petports_profTickEnd ~= nil then petports_profTickEnd() end

@@ -50,73 +50,139 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-15 (add by item id, restock summary retired, fish medium gate)
+### What is built, as of 2026-09-17 (big brain module: units open and close doors)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
-**THE PLAN LIVES IN `workbench/plan.drawio`, NOT HERE.** Not edited this session.
-Cell `3ISfEoBmj6Lgr9TAVEry-67` (manual add by id) is now built; its currency half
-(money, essence) was not tested.
+**THE PLAN LIVES IN `workbench/plan.drawio`, NOT HERE.** Not edited this session,
+and not edited by Claude ever. Cell `kWl2yqEFlSN1XD8LCRPn-59` -- no way to get a
+pet to open doors even though the nav supports it -- is now built.
 
-SINCE THE LAST WRITE, NO COMMIT LANDED. `4eaf30f` is the last commit.
+SINCE THE LAST WRITE, NO COMMIT LANDED. `9de55e0` is the last commit and is the
+commit this file was last written in. **THE TWENTY-THREE COMMITS BETWEEN
+`4eaf30f` AND `9de55e0` -- the amphibious pass, the dive node radius and the
+container reach change -- LANDED WITHOUT A STATUS WRITE AND ARE NOT DESCRIBED
+HERE.** The outgoing STATUS named `4eaf30f` as last; that was already stale.
 
-**BUILT THIS SESSION, FOUR CHANGES, EACH TESTED BEFORE THE NEXT:**
-- Add by name in the upcycler pane -- `arch.pane.addbyname`.
-- Add by name in the restock pane, quota rows down 18, summary retired --
-	`arch.pane.addbyname`, `dd.beacon.summaryretired`.
-- Port `2026-09-15b`: `fishWork` skips a fish in a liquid the chassis cannot
-	enter -- `arch.fishing.dispatch`. Closes `todo.fishing.medium`.
-- Port `2026-09-15c`: the `no dispatch` line lists the reason of every generator
-	that ran. It used to list them only when harvest ran, fell back to the collection
-	reason otherwise, and never included asterite. Fishing's reason is listed only
-	with a fishing module socketed.
+**BUILT THIS SESSION, ONE FEATURE ACROSS ELEVEN BUILDS, EACH TESTED IN GAME
+BEFORE THE NEXT:**
+- The big brain module flag is kept on the unit and feeds the nav profile's
+	door axis -- `arch.module.bigbrain`.
+- The door watch: open ahead, close behind, on both axes --
+	`arch.locomotion.doors`.
+- Opening and closing are both gated on whether the remaining plan crosses the
+	door -- `dd.locomotion.doorpath`.
+- A unit embedded in a shut door opens it -- `dd.locomotion.doorrescue`.
 
-**VERIFIED IN GAME (Lofty, 2026-09-15):** both panes work, first build each; on a
-poison world a fish was skipped with the poison module out (`1 in a liquid this
-chassis cannot enter`, no dispatch) and dispatched 86 ms after socketing it.
+**VERIFIED IN GAME (Lofty, 2026-09-17):** a unit walks through a plain door and
+closes it behind itself; jumps up through a ceiling hatch and closes it once
+clear; drops down through the same hatch and closes it from below; does NOT open
+a hatch overhead on a jump that lands on the floor beneath it; does not open a
+hatch it merely walks across; recovers without help when a door is shut on it by
+hand.
 
-**NOT VERIFIED:** bad-id, duplicate and box-clearing behaviour in either pane;
-currency ids; the upcycler hint's three-line wrap; Enter in a `"null"`-callback
-textbox; the 337 upcycler width against an open inventory; `/interface/x.png`
-dimensions; `inputNoCharge` in the upcycler pane.
+**NOT VERIFIED:**
+- That a locked, wired or sensor door is refused. The gate is vanilla's own
+	`hasCapability` (`fact.locomotion.doorapi`) and was never exercised.
+- Two units meeting at one door; the close pass counts monsters, untested.
+- A coarse-nav leg across a door. Every crossing so far was the vanilla pather.
+- `openDoorsAround`, which has not executed once -- `dd.locomotion.doorrescue`.
+- Wall-mounted and other non-vertical hatches.
 
 **LEFT AS-IS, KNOWINGLY:**
-- `submergedSpot` places lures in any liquid, poison and lava included. Only
-	dispatch is gated.
-- A bad id gets no on-screen feedback; pane text does not mention the name box.
-- The restock pane no longer shows a held write -- `dd.beacon.summaryretired`.
-- "Add by name" is two strings, not one under `common`.
-- Filtered panes can keep a hidden entry selected, and hide new entries that do
-	not match.
-- Older items unchanged: stuck reagent slot reads as converting; restock filter
-	label ~30 px; upcycler tabs at 108/206; unreferenced `row_96*` and
-	`panewider_*` art; ~80 px dead band on upcycler tab 3.
+- The horizontal close reads facing, the vertical one reads velocity --
+	`todo.locomotion.doorfacing`.
+- A door the body is clipping is left open rather than risk sealing a unit in.
+- A hatch is left open if a unit bonks it and falls back; rare since the reach
+	started scaling with speed, not impossible.
+- The comment above `doorVertical` describes the fallback more broadly than the
+	code now does.
+- Two older finds, unrelated to this work: `todo.pathing.doorstub`,
+	`todo.vent.objectbounds`.
 
 **DO NOT REPEAT:**
-- READ THE DOC BEFORE BUILDING. Both pane builds skipped it again.
-- Sample a marked screenshot's pixels rather than reading colours by eye.
-- Earlier rules stand: read the ARCH entry of anything copied, one change per
-	build, no war stories in comments, no date stamp on unrun work, no judgement
-	call in place of a stated requirement.
+- PROXIMITY AND BEARING ARE NOT INTENT. Four builds were spent tuning reach and
+	direction for a case that only the plan can answer -- `dd.locomotion.doorpath`.
+- A rect handed to `world.entityQuery` is a hint, not a filter. Test the result
+	against it.
+- Earlier rules stand: read the doc before building, read the ARCH entry of
+	anything copied, one change per build, no war stories in comments, no date
+	stamp on unrun work, no judgement call in place of a stated requirement.
 
-**BUILD STAMPS IN PLAY:** port `2026-09-15c`, restockconfig `2026-09-15b`,
-upcyclerconfig `2026-09-15a`, petportconfig `2026-09-13f`, upcycler `2026-09-14a`,
-beaconconfig `2026-08-30c`, coarsenav `2026-09-13c`, taskAction `2026-09-13h`,
-contract `2026-09-12d`, flyapproach `2026-09-10c`, work `2026-09-11b`, overlay
-`2026-09-11d`.
+**BUILD STAMPS IN PLAY:** taskAction `2026-09-17e`, contract `2026-09-17f`,
+coarsenav `2026-09-17b`, port `2026-09-15c`, restockconfig `2026-09-15b`,
+upcyclerconfig `2026-09-15a`, upcycler `2026-09-14a`, petportconfig
+`2026-09-13f`, work `2026-09-11b`, overlay `2026-09-11d`, flyapproach
+`2026-09-10c`, beaconconfig `2026-08-30c`.
 
-**NEXT, IN ORDER:** (1) `todo.upcycler.filterpoll` and `todo.beacon.filterpoll`;
-(2) inventory screenshot beside the upcycler for the 337 width;
-(3) `todo.upcycler.shadowbands`; (4) the four medic gaps from 2026-09-14.
+**NEXT, IN ORDER:** (1) the locked/wired/sensor refusal test, because the item
+description promises it; (2) two units at one door; (3) a coarse leg across a
+door; (4) `todo.locomotion.doorfacing`; (5) the four medic gaps from 2026-09-14.
 
-**COMMIT STATE:** `4eaf30f` is the last commit. Modified: `petports_petport.lua`,
-`upcyclerconfig.lua`, `upcyclerconfig.config`, `restockconfig.lua`,
-`restockconfig.config`, `petports_strings.config`, `plan.drawio`, this document.
-Untracked: both `namefield_backing.png`.
+**COMMIT STATE:** `9de55e0` is the last commit. Modified:
+`petportsTaskAction.lua`, `petports_contract.lua`, `petports_coarsenav.lua`,
+`plan.drawio`, `petports_modules.xcf`, this document. Untracked:
+`petports_module_bigbrain.item`, `petports_module_bigbrain.png`.
 
 ## ARCHITECTURE
+
+### A socketed big brain lets a unit work doors, and splits its graph from a unit without one
+`arch.module.bigbrain` -- see also `arch.locomotion.doors`, `arch.pathing.coarsenav`, `fact.pathing.dynamicdoors`
+
+BUILT AND VERIFIED 2026-09-17 (contract 17f, coarsenav 17b). The item carries
+`petports_moduleFlags: [ "openDoors" ]`. `petports_setModuleEffects` already
+forwarded the flag set to `petports_applyModuleFlags`, which read `camouflage`
+and discarded everything else; it now keeps the flag on the unit.
+
+THE `d` SEGMENT OF THE NAV PROFILE WAS RESERVED FOR THIS AND READ A KEY NOTHING
+SETS. `navProfileUncached` composed it from `config.getParameter` of
+`petports_canOpenDoors`, absent from every monstertype, so all six chassis
+profiled `dnil` and a door opener shared its graph with a unit that could not
+follow the route. It reads the socketed flag and spells it `0` or `1`. THE
+PROFILE STRING THEREFORE CHANGED FOR EVERY UNIT ON THIS BUILD, opener or not,
+and the learned graph was orphaned once; Lofty accepted the wipe up front.
+
+### The door watch opens what the plan runs through and closes what the body has left
+`arch.locomotion.doors` -- see also `arch.module.bigbrain`, `dd.locomotion.doorpath`, `dd.locomotion.doorrescue`, `fact.locomotion.doorapi`, `fact.locomotion.edgelag`, `todo.locomotion.doorfacing`
+
+BUILT AND VERIFIED 2026-09-17 (taskAction 17e). `doorWatch` runs from
+`petportsTaskAction.update` beside `avoidLiquidAhead` and `unperchWatch`, and
+returns immediately without a socketed big brain. Four passes, in order:
+
+`openDoorsAround` first: the body box against every shut door it overlaps by
+more than `DOOR_BITE` (0.1), opened regardless of plan or bearing. See
+`dd.locomotion.doorrescue`.
+
+`openDoorsAhead` on x from the facing direction, and on y from `doorVertical`
+when that is non-zero. The span is the body box extended `DOOR_REACH` (1.5)
+PLUS ONE TICK OF TRAVEL, because a climb at 45 tiles/s covers 3.6 tiles between
+script ticks and a fixed reach is outrun by it. A candidate must lie ahead on
+the axis AND satisfy `doorOnPath`.
+
+`closeDoorsBehind` on x from facing, and on y from the sign of vertical
+velocity past `DOOR_DRIFT` (2.0) -- not from `doorVertical`, which answers a
+different question (`fact.locomotion.edgelag`). Trail is `DOOR_TRAIL` (2.5) and
+does not scale with speed; a door left open is the cheaper failure. A candidate
+must overlap the trail span in Lua, lie behind on the axis, hold no npc, player
+or monster, not overlap the body within `DOOR_CLEAR` (0.2), and no longer
+satisfy `doorOnPath`.
+
+THE SPAN PASSED TO `world.entityQuery` DOES NOT CONSTRAIN THE RESULT. Its
+default bound mode returned doors well outside the rect -- at 14:02:15 a door at
+x 5801 came back from a vertical trail spanning x 5798.4 to 5800.0 and was
+closed in the unit's face. Every pass tests the returned rect against its own
+span in Lua. Vanilla's door sensor sets `detectBoundMode` explicitly for the
+same reason.
+
+`doorOnPath` expands a door's tile rect by the body's half extents and walks the
+pather's edge list from the current index, stopping at 12 tiles
+(`DOOR_PATH`); `doorSegmentHits` is a slab test per axis. `doorVertical`
+returns the sign of vertical velocity past `DOOR_CLIMB` (4.0), else the bearing
+of the current edge target past `DOOR_RISE` (1.0), else zero -- so a unit
+walking across a floor hatch never opens it, and a unit standing on one with a
+Drop edge below does.
 
 ### Every TRUE edge carries the tiles its path travelled, and the router costs by it
 `arch.pathing.edgelength` -- see also `arch.pathing.coarsenav`, `arch.pathing.chunkstore`, `fact.pathing.stretchclimb`, `plan.pathing.cityscale`
@@ -6876,6 +6942,34 @@ second. Lofty ruled the first wanted, 2026-09-14.
 
 ## DESIGN DECISIONS
 
+### A door opens only where the plan runs through it
+`dd.locomotion.doorpath` -- see also `arch.locomotion.doors`, `fact.locomotion.edgelag`
+
+DECIDED 2026-09-17 (Lofty: "a door should only be opened if the path actually
+intersects it"). REJECTED: proximity plus travel bearing, which is what the
+first four builds used. It opened a hatch overhead on any jump that merely rose
+past it, including jumps whose landing was the floor BELOW the hatch, and no
+tightening of reach or direction separates the two cases -- a jump through a
+hatch and a jump under one look identical until the plan is consulted. The same
+question now gates closing: a door the remaining plan still crosses is one the
+unit is not finished with, which is what stopped it shutting a door in front of
+itself after a jump fell short.
+
+### The embedded-body rescue stays although it has never fired
+`dd.locomotion.doorrescue` -- see also `arch.locomotion.doors`
+
+DECIDED 2026-09-17. `openDoorsAround` opens any shut door the body is inside,
+ignoring plan and bearing, on the grounds that a unit sealed in a door has no
+route out. IT HAS NOT EXECUTED ONCE. Two deliberate attempts to trap a unit by
+shutting a door on it were instrumented, and the dynamic-tile gate that opens
+the pass never tripped: the engine ejects the body out of the newly solid tiles
+before the next script tick, the unit is left standing flush to one side, and
+`openDoorsAhead` reopens the door on the ordinary path rule. REJECTED, FOR NOW:
+removing it as inert. The ejection was measured twice and not proven general --
+a body wedged with nowhere to be pushed to is untested -- and Lofty chose to
+keep the guard. The gate is a `world.rectTileCollision` of the body box, false
+in normal running.
+
 ### depositWork honours the failure backoff, like every other generator
 `dd.dispatch.depositbackoff` -- see also `arch.dispatch.eligibility`, `arch.port.reporthandler`, `todo.dispatch.sourcebackoff`
 
@@ -9802,6 +9896,48 @@ missing.
 ## DESIGN INTENT -- NICE TO HAVE
 
 ## ENGINE FACTS
+
+### Retail's platformer A* routes straight through a closed unlocked door
+`fact.pathing.dynamicdoors` -- see also `arch.module.bigbrain`, `arch.locomotion.doors`, `fact.locomotion.doorapi`
+
+MEASURED 2026-09-17 12:50:38.656: a unit held `hasPath true` to [5790.5,1153.8]
+with a shut door at x 5809 between it and the target, and walked to the door
+before anything opened it. A closed door sets its spaces to
+`metamaterial:door`, collisionKind `dynamic`; a locked one sets
+`metamaterial:lockedDoor`, collisionKind `block`. That pairing is the whole
+point -- dynamic is transparent to the pathfinder and block is not, which is how
+vanilla NPCs plan routes through doors they have yet to open. CONSEQUENCE: no
+door awareness was needed in coarse nav or in the probes. Observed on the
+vanilla pather only; no coarse leg crossed a door in that run, and probes use
+the same engine call.
+
+### Vanilla door.lua gates by capability, and its openDoor message does not
+`fact.locomotion.doorapi` -- see also `arch.locomotion.doors`, `fact.pathing.dynamicdoors`
+
+READ 2026-09-17 from retail `/objects/wired/door/door.lua`. `hasCapability`
+answers `door` and `closedDoor` FALSE when the door is locked, has an input
+node connected, or carries a `sensorConfig`, so an `entityQuery` filtered
+through it excludes locked, wired and sensor doors without a single check of
+our own -- which is what makes the module's "locked, wired and sensor doors stay
+shut" true. `closedDoor`, `openDoor` and `lockedDoor` are separate capabilities.
+THE `openDoor` MESSAGE HANDLER IS NOT GATED: it calls straight through, and the
+function clears `storage.locked` on the way ("make sure we don't get out of sync
+when wired"), so messaging a locked door opens it AND unlocks it permanently.
+The capability query is the gate, not the message. Vanilla opens with
+`world.callScriptedEntity` and closes with `world.sendEntityMessage`.
+
+### The arc follower's current edge index lags the body badly in fast flight
+`fact.locomotion.edgelag` -- see also `arch.locomotion.doors`, `dd.locomotion.doorpath`, `arch.pathing.coarsenav`
+
+MEASURED 2026-09-17 13:26:25.220: the body was at y 1164.11 climbing at 33.7
+tiles/s while the pather's current edge still targeted y 1161.3 -- four edges
+and three tiles behind. Taking the bearing of that edge target reports DESCENT
+during a hard climb. Any test of which way a unit is going must read
+`mcontroller.velocity`; the edge target answers where the plan wants the unit
+NEXT, which is only the same question when the body is near stationary. The
+door watch reads velocity above 4.0 tiles/s and falls back to the edge bearing
+below it. The lag is the arc skip consuming several edges per tick by design,
+not a defect.
 
 ### world.time() returns 0 during a monster's init
 `fact.unit.initclock` -- see also `fact.unit.uninitnokill`, `arch.unit.death`
@@ -14947,6 +15083,36 @@ Rule-row x buttons sit at y 2 in 16-tall rows in all three lists.
 
 
 ## BACKLOG
+
+### The horizontal door close takes its direction from facing, not from motion
+`todo.locomotion.doorfacing` -- see also `arch.locomotion.doors`, `fact.locomotion.edgelag`
+
+OPENED 2026-09-17. `doorWatch` passes `mcontroller.facingDirection` to
+`closeDoorsBehind` on x while the y pass uses the sign of vertical velocity.
+Facing and travel disagree whenever a unit slides, is knocked back, or turns
+while carrying momentum, and the trail would then sit in front of it. NOT
+OBSERVED -- the horizontal close has behaved across every run -- so this is a
+consistency gap, not a bug report. Fix is the same shape as the y pass.
+
+### A dead door stub sits in the free mover's probe
+`todo.pathing.doorstub` -- see also `arch.pathing.coarsenav`, `arch.locomotion.doors`
+
+OPENED 2026-09-17, entered 2026-09-05 in aeecdbd. `petports_navProbe` has
+`local okDoor, door = false, false` followed by `if not (okDoor and door ==
+true) then`, whose condition is constant. The branch is the else body with
+extra steps. It predates the big brain work and is unrelated to it; left alone
+to keep that diff clean. Remove the two names and unwrap the branch.
+
+### objectBounds is called and does not exist
+`todo.vent.objectbounds` -- see also `arch.locomotion.doors`
+
+OPENED 2026-09-17, found while writing the door close.
+`petportsTaskAction.touchingVent` calls `pcall(objectBounds, ventId)` and
+nothing in the mod or in vanilla defines `objectBounds`, so the call always
+fails and the function always takes its distance fallback -- vent touching has
+never used the vent's real rect. `petports_habitatObjectBounds` is the helper
+that exists and returns tile centres, which the door close pads by half a tile.
+NOT MEASURED in game; read from the code.
 
 ### Dispatch should ask whether the unit can get back
 `todo.dispatch.roundtrip` -- see also `fact.pathing.stretchclimb`, `dd.dispatch.familyhold`

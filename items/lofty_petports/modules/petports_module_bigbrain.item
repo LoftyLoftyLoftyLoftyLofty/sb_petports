@@ -1,0 +1,18 @@
+{
+	"itemName" : "petports_module_bigbrain",
+	"price" : 1500,
+	"rarity" : "Rare",
+
+	"category" : "petports_module",
+
+	"inventoryIcon" : "petports_module_bigbrain.png",
+
+	"description" : "Equip a pet with this module to ^green;open ^orange;simple^green; doors^reset;.\n^red;Not compatible with fancy or wired doors.",
+	"shortdescription" : "Big Brain Module",
+
+	"itemTags" : [ "petports", "petports_module", "petports_no_upcycling" ],
+
+	"maxStack" : 1,
+
+	"petports_moduleFlags" : [ "openDoors" ]
+}
