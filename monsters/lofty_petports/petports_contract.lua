@@ -1,6 +1,6 @@
 -- Unit-side contract: naming, modules, media and swim mode, dives, vent routing and fuel.
 
-local CONTRACT_BUILD_STAMP = "2026-09-16f the fish dive board picker and its debug marks are removed"
+local CONTRACT_BUILD_STAMP = "2026-09-17c a fully submerged body is never wading"
 
 local contractStamped = false
 
@@ -701,19 +701,66 @@ local function platformUnderfoot()
 	return world.pointTileCollision(probe, { "Platform" })
 end
 
-PETPORTS_WADE_DEPTH = 4
+PETPORTS_DROP_LIQUID_DEPTH = 4
 
--- Returns whether there is ground within wading depth below the feet.
-local function wadeableBottom()
+-- Returns whether liquid lies within drop depth under the tile beneath the feet.
+local function liquidUnderPlatform()
 	local position = mcontroller.position()
 	local bounds = mcontroller.boundBox()
 
 	local feet = position[2] + bounds[2]
 
-	return world.rectTileCollision({
-		position[1] + bounds[1], feet - PETPORTS_WADE_DEPTH,
-		position[1] + bounds[3], feet
-	}, { "Null", "Block", "Slippery", "Dynamic", "Platform" })
+	for row = math.floor(feet) - 2, math.floor(feet) - 1 - PETPORTS_DROP_LIQUID_DEPTH, -1 do
+		if petports_mediumAtPoint({ position[1], row + 0.5 }) == "swim" then return true end
+	end
+
+	return false
+end
+
+-- Scoots a grounded walker through the platform underfoot when its destination is liquid below it.
+local function dropIntoLiquid(destination)
+	if type(destination) ~= "table" then return end
+	if petports_swimMode() ~= PETPORTS_SWIM_MODE_LAND or petports_diving() then return end
+	if not mcontroller.onGround() then return end
+	if petports_scootThroughPlatform == nil then return end
+
+	local position = mcontroller.position()
+	local bounds = mcontroller.boundBox()
+	local feet = position[2] + bounds[2]
+
+	if destination[2] >= feet then return end
+	if petports_mediumAt(position, bounds) == "swim" then return end
+	if petports_mediumAt(destination, bounds) ~= "swim" then return end
+	if not platformUnderfoot() then return end
+
+	local key = string.format("%s,%s>%s,%s", math.floor(position[1]), math.floor(feet),
+		math.floor(destination[1]), math.floor(destination[2]))
+
+	if not liquidUnderPlatform() then
+		if self.petportsDropNoted ~= key then
+			self.petportsDropNoted = key
+			sb.logInfo("UNIT DROP refused at %s: destination %s is liquid below, a platform is underfoot, "
+				.. "but no liquid within %s tiles under it",
+				sb.printJson(position), sb.printJson(destination),
+				sb.printJson(PETPORTS_DROP_LIQUID_DEPTH))
+		end
+		return
+	end
+
+	local dropped, why = petports_scootThroughPlatform(self.pather, feet - 0.5)
+
+	if dropped then
+		self.petportsDropNoted = nil
+		self.petportsSwimModeRebuiltAt = nil
+		sb.logInfo("UNIT DROP through the platform at %s toward %s: %s | below: %s",
+			sb.printJson(position), sb.printJson(destination), tostring(why),
+			petports_probeBelow(mcontroller.position()))
+	elseif self.petportsDropNoted ~= key then
+		self.petportsDropNoted = key
+		sb.logInfo("UNIT DROP refused at %s toward %s: %s | below: %s",
+			sb.printJson(position), sb.printJson(destination), tostring(why),
+			petports_probeBelow(position))
+	end
 end
 
 -- Returns whether the body's collision poly, or its bound box, hits a collision set at a position.
@@ -902,21 +949,7 @@ function petports_desiredSwimMode(destination)
 	if petports_swimMode() == PETPORTS_SWIM_MODE_LAND then
 		if medium ~= "swim" then return PETPORTS_SWIM_MODE_LAND end
 
-		if self.petportsTask ~= nil then
-			if not taskWantsSwimming() then
-				if wadeableBottom() then return PETPORTS_SWIM_MODE_LAND end
-
-				if not self.petportsSinkNoted then
-					self.petportsSinkNoted = true
-					sb.logInfo("UNIT submerged at %s with no bottom within %s tiles and a "
-						.. "task that does not swim -- taking the water seriously rather "
-						.. "than walking down it",
-						sb.printJson(mcontroller.position()),
-						sb.printJson(PETPORTS_WADE_DEPTH))
-				end
-			else
-
-
+		if self.petportsTask ~= nil and taskWantsSwimming() then
 			local plan = self.petportsDivePlan
 
 			if plan ~= nil and not plan.reached and not plan.abandoned then
@@ -932,7 +965,6 @@ function petports_desiredSwimMode(destination)
 			end
 
 			self.petportsDivePuddleNoted = nil
-			end
 		end
 	end
 
@@ -1075,6 +1107,8 @@ function petports_swimModeTick()
 			end
 		end
 	end
+
+	dropIntoLiquid(petports_currentTaskDestination())
 
 	local plan = self.petportsDivePlan
 

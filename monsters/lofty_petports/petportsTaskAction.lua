@@ -16,7 +16,7 @@ local FUEL_TRACE = false
 
 local MEDIA_TRACE_INTERVAL = 0.25
 
-local BUILD_STAMP = "2026-09-16h the fish dive board picker profiler wrap is removed"
+local BUILD_STAMP = "2026-09-17b scootThroughPlatform and probeBelow are exposed to the contract"
 local stampLogged = false
 
 local SEARCH_LIMIT = 6.0
@@ -997,6 +997,9 @@ local function scootThroughPlatform(pather, floorFeet)
     sb.printJson(was), sb.printJson(mcontroller.position()[2]),
     sb.printJson(surface), sb.printJson(surface - feet))
 end
+
+petports_scootThroughPlatform = scootThroughPlatform
+petports_probeBelow = probeBelow
 
 -- Scoots through the platform underfoot, or falls back to holding down for a timed drop.
 function petportsTimedDrop(pather, time)

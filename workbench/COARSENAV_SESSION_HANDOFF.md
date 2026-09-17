@@ -5,6 +5,42 @@
 > it as a hopeful suggestion, not fact. Progress is tracked in the drawio doc.
 > Do not add reasoning or history to this file; record state only.
 
+## 2026-09-17 -- platform drop ingress
+
+### Installed builds
+
+| File | Build | Verified in game |
+|---|---|---|
+| petports_coarsenav.lua | 2026-09-16c | yes |
+| petports_contract.lua | 2026-09-17c | yes |
+| petportsTaskAction.lua | 2026-09-17b | yes |
+
+### Changes
+
+- contract 17a/17b: `dropIntoLiquid` in `petports_swimModeTick`, after the wade step. A land-mode body that is grounded, not fully submerged, with a `Platform` tile under its feet, liquid within `PETPORTS_DROP_LIQUID_DEPTH` (4) below that tile, and a current destination that reads `swim` and lies below the feet, calls `scootThroughPlatform` with a floor half a tile down (one row per call; the tick re-evaluates). Lines `UNIT DROP through the platform ... | below: P.. B..` and `UNIT DROP refused ...`, refusals logged once per feet-tile/destination-tile.
+- contract 17c: `wadeableBottom` and `PETPORTS_WADE_DEPTH` removed. A fully submerged land-mode body is never wading; the destination decides aquatic or exiting. The dive-board hold for a swimming task is unchanged.
+- taskAction 17a/17b: `scootThroughPlatform` and `probeBelow` exposed as `petports_scootThroughPlatform` and `petports_probeBelow`. No behaviour change.
+
+### Verified (fuelfetch to the submerged crate at 5838,1147, 01:31:25 -> 01:31:31)
+
+- Wade leg walks onto the crate top (`Platform` collision, feet at 1150). Drop fires at [5838.44,1150.8]; the body reads `swim` 0.4 s later; `land -> aquatic` on that tick; sight latch and string-pull to the fly point inside the crate's footprint; task done; `aquatic -> exiting`, jump out, `exiting -> land`.
+- A swimmer passes through platform-collision object spaces.
+- The 3 s at rest before `reporting done` is eating.
+
+### Facts
+
+- A wade bridge is learned across a platform-collision object: `petports_bodyFitsAlong` tests `PETPORTS_DIVE_SOLID_SET`, which has no `Platform`. The executor, not the store, tells the cases apart.
+- `scootThroughPlatform` refuses whenever a platform row lies between its floor and the row underfoot (standing gap against the lowest surface). Pass a floor half a tile down.
+- A body scooted 0.25 below a platform surface while `controlMove` pushes it sideways is lifted back onto the platform (two wasted scoots per crossing, 01:31:26.004 and 26.162). The scoot that holds is the one made standing still.
+- A submerged body 0.8 tall over a platform row reads `mixed` at the surface, never `swim`, until it falls.
+
+### Amphibious backlog
+
+- Closed: item 2 (`wadeableBottom`), observed 01:21:47..51 then removed.
+- New: the drop under the wade step's sideways push (above). Not blocking.
+- Unblocked, queued in this order: a more generous radius for learning dives (bigger jumps off dock tips, longer drops off platforms into open water); the object-reach check for deposit/withdraw respecting every tile of the object, not only its anchor.
+- Items 1, 3..6 unchanged.
+
 ## 2026-09-16 -- amphibious coarse nav
 
 ### Installed builds
@@ -12,8 +48,8 @@
 | File | Build | Verified in game |
 |---|---|---|
 | petports_coarsenav.lua | 2026-09-16c | yes |
-| petports_contract.lua | 2026-09-16e | yes |
-| petportsTaskAction.lua | 2026-09-16c | yes |
+| petports_contract.lua | 2026-09-16f | no |
+| petportsTaskAction.lua | 2026-09-16h | no (16g yes) |
 
 ### Changes
 
@@ -27,8 +63,14 @@
 - contract 16c: `petports_currentTaskDestination` no longer falls back to `petportsLegLast`.
 - contract 16d: a dive launches from `air` or `mixed`.
 - contract 16e: the board shuffle only runs in `air`.
+- contract 16f: removed `petports_diveApproach`, the surface trace, the board picker, the dive debug marks and the struck-off board list; `petports_diveRefuse` only logs.
 - taskAction 16a: fish tasks no longer plan a dive board; a switchable walker asks coarse nav first for a target in the water.
 - taskAction 16c: `tryCoarseLeg` sets `self.petportsLegWaypoint` before `freshPather`.
+- taskAction 16d: a new walker plan logs its edges that end in liquid.
+- taskAction 16e: a gravity-switchable chassis passes a `Land` edge when the edge target and the body both read `swim` or `mixed`.
+- taskAction 16f: the progress anchor is set at task start and at each window; `tryCoarseLeg` no longer resets the anchor or the strikes.
+- taskAction 16g: a second progress strike no longer takes a coarse leg; it goes to the vent route, then fails the task.
+- taskAction 16h: removed the `diveApproach` profiler wrap.
 - Reverted: taskAction 16b (walker approaches the dive board during a dive bridge leg).
 
 ### Instrumentation still on
@@ -36,24 +78,34 @@
 - `PETPORTS_MEDIA_TRACE` (contract): `UNIT MEDIA`, `swim mode wants`, approach target sources.
 - `PETPORTS_NAV_VERBOSE` (coarsenav): `NAV route sides`, `NAV waypoint ... picked nothing`, anchor refusal reasons.
 - Coarse leg refusal and target resolve lines (taskAction).
+- `UNIT WET PLAN` (taskAction, `TASK_DEBUG`).
 
 ### Facts
 
 - The runtime is not Lua 5.1: `table.unpack` runs.
 - Resocketing a unit rebuilds its nav graph; with the current ports that takes about 35 s.
+- The vanilla pather holds a `Land` edge until the body is on the ground.
+- Engine walker plans through liquid place `Land` edges on the water surface followed by `Swim` edges.
 
 ### Amphibious backlog
 
-1. A walker in water keeps land mode until a dive plan reaches its board ("not diving yet, staying a walker").
-2. Exiting mode cannot take coarse legs.
-3. Shallow wading shelves need to be told apart from dive entries.
-4. `petports_diveApproach` and its board picker are unused.
-5. Unconfirmed, probably obsolete: a leg taken on the dive-launch tick; the picker skipping anchorless cells.
+1. The "not diving yet, staying a walker" rule and the board-abandon branch are only reachable for one tick per dive leg. Removal pending decision.
+2. `wadeableBottom` counts water as wadeable when floor is within `PETPORTS_WADE_DEPTH` (4) of the feet, including a fully submerged body. No failure observed.
+3. Dive bridge pairing (`NAV_BRIDGE_RADIUS` 4) finds no land anchor for the drop from the hill top at 1133,1165 into the far pool; the pool is a separate graph component. Parked.
+4. The merged graph build restarts when the unit switches to aquatic. Not diagnosed.
+5. `petports_navWhyNoRoute` reads swept radius and edge state from the bridge profile for a switchable chassis, so its seam line reports land cells as `swept r0` and `ABSENT`.
+6. Unconfirmed, probably obsolete: a leg taken on the dive-launch tick; the picker skipping anchorless cells.
+
+### Closed, not observed
+
+- Exiting mode cannot take coarse legs.
+- Shallow wading shelves versus dive entries.
 
 ### Out of scope (all chassis)
 
-- Tasks fail while the nav graph rebuilds.
-- The progress watchdog never fails when each strike re-takes a leg.
+- Tasks stall while the nav graph builds.
+- `tryCoarseLeg` resets the approach timer on every leg.
+- The vent route branch at the second progress strike can keep a stuck unit alive when a vent plan exists.
 - Stuck recovery only works when the target moves.
 
 ---

@@ -5214,6 +5214,11 @@ only when the task failed on its own. `wadeableBottom` is the discriminator --
 solid or platform within `PETPORTS_WADE_DEPTH` of the feet. With a bottom it is a
 pool being crossed; without one the destination decides, which for such a task
 means `exiting`. See `todo.unit.progressdirection` for why nothing caught it.
+SUPERSEDED 2026-09-17 (contract 17c): `wadeableBottom` is removed. A fully
+submerged land-mode body is never wading; `mixed` is the wade, and at `swim` the
+destination decides. Observed 2026-09-17 01:21:47: a unit that dropped into water
+beside a submerged crate sat on the crate's lower platform row in land mode for
+three seconds because the row was within the wading depth.
 
 **FOUR THINGS HANG OFF petports_outOfMedium AND ALL FOUR ARE WRONG HERE**, so a
 gravity-switchable chassis reports `checked = false`: the port's 30s re-home,
@@ -5383,6 +5388,17 @@ shortest path to the board above it, and at that moment the board has nothing
 left to offer. "Am I inside the traced tiles" was the other candidate and is
 weaker: the trace floods contiguously, so two nearly separate pools joined at one
 tile read as one body. A swept BODY answers what a ray only approximates.
+
+**A THIRD WAY IN, 2026-09-17 (contract 17a..17c).** Ingress has three cases the
+executor tells apart at runtime from the geometry under the body, not from the
+bridge kind: a dive (board and hole, above), a wade (walked in with controlMove),
+and a drop through a platform or platform-collision object into liquid below it.
+The drop is `dropIntoLiquid` in `petports_swimModeTick`: grounded, not fully
+submerged, `Platform` under the feet, liquid within four tiles under that tile,
+destination reading `swim` and below the feet, then `scootThroughPlatform` with a
+floor half a tile down, one row per tick. Verified on a submerged crate whose top
+row the wade walked onto. State and the observed residue are in
+`workbench/COARSENAV_SESSION_HANDOFF.md`, 2026-09-17.
 
 ### A module that grants a setting, and the colour that could not ride the effect
 `arch.module.rgblight` -- see also `arch.module.effects`, `arch.port.pushsignature`, `dd.pane.fieldbooks`, `fact.unit.effectanimator`
@@ -6989,7 +7005,8 @@ coarse leg ends on the swim side got wet on purpose, so `taskWantsSwimming`
 is also true then, and the dive-plan forget, the wade, and the flip to
 aquatic all follow from it. SUPERSEDES the task-only reading of "entry is
 gated on the task"; the wading floor (`wadeableBottom`) is untouched for the
-accidental case.
+accidental case. THE WADING FLOOR IS GONE, 2026-09-17 -- see
+`arch.locomotion.swimmode`.
 
 ### A cell anchored on both sides is a wade in itself
 `dd.pathing.bothsideswade` -- see also `arch.pathing.mergedgraph`, `arch.pathing.bridges`
