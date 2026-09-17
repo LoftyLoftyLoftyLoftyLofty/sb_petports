@@ -1,6 +1,6 @@
 -- Coarse navigation: a cell graph of the world kept in world properties, and the routes taken across it.
 
-local COARSENAV_BUILD_STAMP = "2026-09-16c a switchable chassis gets no land anchor where its standing body is fully submerged"
+local COARSENAV_BUILD_STAMP = "2026-09-17a dive bridges pair boards up to 8 tiles from the hole"
 
 local navStamped = false
 
@@ -2424,8 +2424,8 @@ function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 end
 
 
-NAV_BRIDGE_RADIUS = 4
-NAV_BRIDGE_DX = 6
+NAV_BRIDGE_RADIUS = 8
+NAV_BRIDGE_DX = 8
 NAV_BRIDGE_PAIRS = 3
 NAV_BRIDGE_WADE_REACH = 3.0
 NAV_BRIDGE_EXIT_RATE = 300
