@@ -16,7 +16,7 @@ local FUEL_TRACE = false
 
 local MEDIA_TRACE_INTERVAL = 0.25
 
-local BUILD_STAMP = "2026-09-17b scootThroughPlatform and probeBelow are exposed to the contract"
+local BUILD_STAMP = "2026-09-17d the task action mirrors arrival to the contract"
 local stampLogged = false
 
 local SEARCH_LIMIT = 6.0
@@ -1854,6 +1854,27 @@ local function noteGroundTarget(stateData, why, rawPosition)
 			.. (plan.abandoned and "abandoned" or (plan.reached and "reached" or "to board"))))
 end
 
+-- Returns the nearest of the task object's tile centres within ARRIVAL_DISTANCE of the body, and its distance.
+local function objectTileInReach(stateData)
+	local task = stateData.task
+	if task == nil or task.type == "return" then return nil end
+
+	local points = petports_habitatObjectPoints(task.target)
+	if points == nil then return nil end
+
+	local here = mcontroller.position()
+	local best, bestDistance = nil, nil
+
+	for _, point in ipairs(points) do
+		local distance = world.magnitude(here, point)
+		if distance <= ARRIVAL_DISTANCE and (bestDistance == nil or distance < bestDistance) then
+			best, bestDistance = point, distance
+		end
+	end
+
+	return best, bestDistance
+end
+
 -- Returns the point the unit walks to for a target, holding it until the target drifts.
 local function approachTargetFor(stateData, rawPosition)
   if self.petportsDiveRetarget then
@@ -2839,6 +2860,8 @@ end
 -- Runs one tick of a task: fuel, coarse and vent routing, approach and arrival, then the work for the task's own type.
 local function petportsTaskUpdateInner(dt, stateData)
   local task = stateData.task
+
+  self.petportsArrived = stateData.arrived == true
 
   burnFuel(dt, task)
 
@@ -3834,6 +3857,34 @@ local function petportsTaskUpdateInner(dt, stateData)
     local legArrival = (stateData.navWaypoint ~= nil and petports_freeMover())
       and (stateData.navLegStep and NAV_LEG_STEP_ARRIVAL
         or (sharp and NAV_LEG_ARRIVAL_FREE or NAV_LEG_ARRIVAL_THROUGH)) or nil
+
+    local touchPoint, touchDistance = nil, nil
+    if petports_freeMover() or mcontroller.onGround() then
+      touchPoint, touchDistance = objectTileInReach(stateData)
+    end
+
+    if touchPoint ~= nil then
+      sb.logInfo("UNIT touching object %s at %s: %s from its tile %s -- arrived",
+        tostring(task.target), sb.printJson(mcontroller.position()),
+        sb.printJson(touchDistance), sb.printJson(touchPoint))
+
+      if petports_freeMover() then
+        mcontroller.controlFly({ 0, 0 })
+        mcontroller.setVelocity({ 0, 0 })
+      end
+
+      stateData.navWaypoint = nil
+      stateData.navRemaining = nil
+      stateData.navLegArrived = nil
+      stateData.navLegStep = nil
+      self.petportsLegWaypoint = nil
+      self.petportsLegTightTurn = nil
+      self.petportsLegBridge = nil
+
+      stateData.arrived = true
+      animator.setAnimationState("movement", "idle")
+      return false
+    end
 
     if approachPoint(dt, approachTo, ARRIVAL_DISTANCE, false, legArrival) then
       if stateData.navWaypoint ~= nil then

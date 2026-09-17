@@ -1,6 +1,6 @@
 -- Unit-side contract: naming, modules, media and swim mode, dives, vent routing and fuel.
 
-local CONTRACT_BUILD_STAMP = "2026-09-17c a fully submerged body is never wading"
+local CONTRACT_BUILD_STAMP = "2026-09-17e no drop once the task has arrived"
 
 local contractStamped = false
 
@@ -720,6 +720,7 @@ end
 -- Scoots a grounded walker through the platform underfoot when its destination is liquid below it.
 local function dropIntoLiquid(destination)
 	if type(destination) ~= "table" then return end
+	if self.petportsArrived then return end
 	if petports_swimMode() ~= PETPORTS_SWIM_MODE_LAND or petports_diving() then return end
 	if not mcontroller.onGround() then return end
 	if petports_scootThroughPlatform == nil then return end
@@ -2104,4 +2105,21 @@ function petports_feedFuel(descriptor, sparing)
     tostring(preferred), tostring(status.resource("petports_fuel")))
 
   return { amount = amount, flavor = eaten }
+end
+
+-- Sets the fuel level for testing: /entityeval <unitId> petports_setFuel(0)
+function petports_setFuel(amount)
+	local was = status.resource("petports_fuel")
+
+	status.setResource("petports_fuel", tonumber(amount) or 0)
+
+	if storage.petResources ~= nil then
+		storage.petResources.petports_fuel = status.resource("petports_fuel")
+	end
+
+	sb.logInfo("UNIT fuel set %s -> %s of %s by entityeval",
+		tostring(was), tostring(status.resource("petports_fuel")),
+		tostring(status.resourceMax("petports_fuel")))
+
+	return status.resource("petports_fuel")
 end
