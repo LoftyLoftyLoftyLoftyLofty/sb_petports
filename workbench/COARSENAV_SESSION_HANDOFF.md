@@ -11,21 +11,26 @@
 
 | File | Build | Verified in game |
 |---|---|---|
-| petports_coarsenav.lua | 2026-09-16c | yes |
-| petports_contract.lua | 2026-09-17c | yes |
-| petportsTaskAction.lua | 2026-09-17b | yes |
+| petports_coarsenav.lua | 2026-09-17a | no |
+| petports_contract.lua | 2026-09-17e | yes |
+| petportsTaskAction.lua | 2026-09-17d | yes |
 
 ### Changes
 
 - contract 17a/17b: `dropIntoLiquid` in `petports_swimModeTick`, after the wade step. A land-mode body that is grounded, not fully submerged, with a `Platform` tile under its feet, liquid within `PETPORTS_DROP_LIQUID_DEPTH` (4) below that tile, and a current destination that reads `swim` and lies below the feet, calls `scootThroughPlatform` with a floor half a tile down (one row per call; the tick re-evaluates). Lines `UNIT DROP through the platform ... | below: P.. B..` and `UNIT DROP refused ...`, refusals logged once per feet-tile/destination-tile.
 - contract 17c: `wadeableBottom` and `PETPORTS_WADE_DEPTH` removed. A fully submerged land-mode body is never wading; the destination decides aquatic or exiting. The dive-board hold for a swimming task is unchanged.
 - taskAction 17a/17b: `scootThroughPlatform` and `probeBelow` exposed as `petports_scootThroughPlatform` and `petports_probeBelow`. No behaviour change.
+- contract 17d: `petports_setFuel(amount)` for `/entityeval` (unused; `status.setResource("petports_fuel", 0)` does the same).
+- taskAction 17c: object touch. `objectTileInReach` reads `petports_habitatObjectPoints(task.target)`; a grounded walker or a free mover within `ARRIVAL_DISTANCE` (1.5) of any tile centre of the task's object has arrived, any live coarse leg is dropped. Non-object targets (drops, crops, animals, patients) and `return` fall through to `approachPoint` as before. Line `UNIT touching object <id> at <pos>: <dist> from its tile <centre> -- arrived`.
+- taskAction 17d / contract 17e: `petportsTaskUpdateInner` mirrors `stateData.arrived` to `self.petportsArrived` every tick; `dropIntoLiquid` does nothing once arrived.
+- coarsenav 17a: `NAV_BRIDGE_RADIUS` 4 -> 8, `NAV_BRIDGE_DX` 6 -> 8. Boards up to 8 tiles above and 8 tiles across from a hole are paired. Wade reach unchanged.
 
 ### Verified (fuelfetch to the submerged crate at 5838,1147, 01:31:25 -> 01:31:31)
 
 - Wade leg walks onto the crate top (`Platform` collision, feet at 1150). Drop fires at [5838.44,1150.8]; the body reads `swim` 0.4 s later; `land -> aquatic` on that tick; sight latch and string-pull to the fly point inside the crate's footprint; task done; `aquatic -> exiting`, jump out, `exiting -> land`.
 - A swimmer passes through platform-collision object spaces.
 - The 3 s at rest before `reporting done` is eating.
+- Object touch (taskAction 17c/17d, contract 17e), 01:50:43 and 01:51:07: a dry deposit crate arrived at 1.22 from a tile; the submerged fuel crate arrived at 1.43 from its top-row tile with the unit still on the shore, no drop fired, the unit stayed dry. With 17c alone (01:45:12) the touch fired and the drop still followed, because the drop read the task position as its destination.
 
 ### Facts
 
@@ -38,7 +43,9 @@
 
 - Closed: item 2 (`wadeableBottom`), observed 01:21:47..51 then removed.
 - New: the drop under the wade step's sideways push (above). Not blocking.
-- Unblocked, queued in this order: a more generous radius for learning dives (bigger jumps off dock tips, longer drops off platforms into open water); the object-reach check for deposit/withdraw respecting every tile of the object, not only its anchor.
+- Object touch: built and verified (above). The port's `servicePointNear` dispatch-time check still resolves a standable spot from the anchor; not touched, no failure observed.
+- Dive radius: built (coarsenav 17a), unverified. Item 3 (the hill top at 1133,1165) is the test. Stored pairs keep their old verdicts until re-examined or wiped.
+- Bridges learned across a platform-collision object (`petports_bodyFitsAlong` has no `Platform`): left as-is, the executor handles it.
 - Items 1, 3..6 unchanged.
 
 ## 2026-09-16 -- amphibious coarse nav

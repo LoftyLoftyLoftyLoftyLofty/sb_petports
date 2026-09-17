@@ -5397,8 +5397,16 @@ The drop is `dropIntoLiquid` in `petports_swimModeTick`: grounded, not fully
 submerged, `Platform` under the feet, liquid within four tiles under that tile,
 destination reading `swim` and below the feet, then `scootThroughPlatform` with a
 floor half a tile down, one row per tick. Verified on a submerged crate whose top
-row the wade walked onto. State and the observed residue are in
-`workbench/COARSENAV_SESSION_HANDOFF.md`, 2026-09-17.
+row the wade walked onto. The drop does nothing once the task has arrived
+(`self.petportsArrived`, mirrored from the task action every tick, contract 17e).
+State and the observed residue are in `workbench/COARSENAV_SESSION_HANDOFF.md`,
+2026-09-17.
+
+**ARRIVAL AT AN OBJECT IS A TOUCH, NOT A POINT, 2026-09-17 (taskAction 17c).** A
+task whose target is an object entity has arrived when a grounded walker or a
+free mover is within `ARRIVAL_DISTANCE` (1.5) of any tile centre of that object
+(`petports_habitatObjectPoints`); a live coarse leg is dropped. Everything else
+still arrives at the resolved approach point. Verified dry and submerged.
 
 ### A module that grants a setting, and the colour that could not ride the effect
 `arch.module.rgblight` -- see also `arch.module.effects`, `arch.port.pushsignature`, `dd.pane.fieldbooks`, `fact.unit.effectanimator`

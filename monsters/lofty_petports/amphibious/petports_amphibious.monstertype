@@ -135,8 +135,8 @@
                     [0.8, 0.4], [0.4, 0.8], [-0.4, 0.8], [-0.8, 0.4] ],
       "mass" : 1.0,
       "walkSpeed" : 6,
-      "runSpeed" : 9,
-      "flySpeed" : 9,
+      "runSpeed" : 6,
+      "flySpeed" : 6,
       "airForce" : 50.0,
 
 	  "liquidForce" : 9999.0,
