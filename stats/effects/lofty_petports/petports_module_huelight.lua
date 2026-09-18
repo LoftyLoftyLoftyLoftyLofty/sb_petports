@@ -2,6 +2,12 @@
 
 local LIGHT = "petports_module_huelamp"
 
+local SPEED_MIN = 1
+local SPEED_MAX = 16
+
+-- A speed of 1 is a turn every sixteen seconds, a speed of 16 a turn every one.
+local SPEED_SPAN = SPEED_MIN + SPEED_MAX
+
 
 -- Clamps a number to a range.
 local function fclamp(value, low, high)
@@ -39,7 +45,38 @@ end
 
 
 
--- Reads the huePeriod, saturation and intensity parameters and logs them.
+-- Returns the sweep period in seconds, signed by petports_lightReverse.
+local function wantedPeriod()
+	local speed = tonumber(status.statusProperty("petports_lightSpeed", nil))
+
+	if speed == nil then return self.period end
+
+	speed = math.floor(speed)
+	if speed < SPEED_MIN then speed = SPEED_MIN end
+	if speed > SPEED_MAX then speed = SPEED_MAX end
+
+	local period = SPEED_SPAN - speed
+
+	if status.statusProperty("petports_lightReverse", false) ~= true then return -period end
+
+	return period
+end
+
+-- Returns petports_lightIntensity as a whole 0-255 value, or the configured default.
+local function wantedIntensity()
+	local stored = tonumber(status.statusProperty("petports_lightIntensity", nil))
+
+	if stored == nil then return self.intensity end
+
+	stored = math.floor(stored)
+	if stored < 0 then stored = 0 end
+	if stored > 255 then stored = 255 end
+
+	return stored
+end
+
+
+-- Reads the default huePeriod, saturation and intensity parameters and logs them.
 function init()
 	self.period = tonumber(config.getParameter("huePeriod", -8)) or -8
 	if self.period == 0 then self.period = -8 end
@@ -52,7 +89,7 @@ function init()
 
 	self.applied = nil
 
-	sb.logInfo("PETPORTS huelight: a turn every %ss (%s), sat %s, intensity %s/255",
+	sb.logInfo("PETPORTS huelight: defaults -- a turn every %ss (%s), sat %s, intensity %s/255",
 		tostring(math.abs(self.period)),
 		self.period < 0 and "widdershins" or "deasil",
 		tostring(self.saturation), tostring(self.intensity))
@@ -60,9 +97,9 @@ end
 
 -- Advances the hue by dt and applies the resulting colour when it changes.
 function update(dt)
-	self.hue = (self.hue + dt / self.period) % 1
+	self.hue = (self.hue + dt / wantedPeriod()) % 1
 
-	local color = hueColor(self.hue, self.saturation, self.intensity / 255)
+	local color = hueColor(self.hue, self.saturation, wantedIntensity() / 255)
 	local applied = self.applied
 
 	if applied ~= nil

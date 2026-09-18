@@ -50,82 +50,75 @@ File it as that, not as the story.
 
 ## STATUS
 
-### What is built, as of 2026-09-17 (big brain module: units open and close doors)
+### What is built, as of 2026-09-17 (lamp modules: intensity, sweep speed and direction)
 `status.port.inventory`
 
 REWRITTEN WHOLESALE EVERY SESSION. Never edited, never appended to. If a claim
 here disagrees with anything below, this is right and that is stale.
 
 **THE PLAN LIVES IN `workbench/plan.drawio`, NOT HERE.** Not edited this session,
-and not edited by Claude ever. Cell `kWl2yqEFlSN1XD8LCRPn-59` -- no way to get a
-pet to open doors even though the nav supports it -- is now built.
+and not edited by Claude ever.
 
-SINCE THE LAST WRITE, NO COMMIT LANDED. `9de55e0` is the last commit and is the
-commit this file was last written in. **THE TWENTY-THREE COMMITS BETWEEN
-`4eaf30f` AND `9de55e0` -- the amphibious pass, the dive node radius and the
-container reach change -- LANDED WITHOUT A STATUS WRITE AND ARE NOT DESCRIBED
-HERE.** The outgoing STATUS named `4eaf30f` as last; that was already stale.
+SINCE THE LAST WRITE, NO COMMIT LANDED. `9de55e0` is still the last commit and is
+the commit this file was last written in. The big brain work described by the
+outgoing STATUS is still uncommitted, in the same working tree as this session's.
 
-**BUILT THIS SESSION, ONE FEATURE ACROSS ELEVEN BUILDS, EACH TESTED IN GAME
+**BUILT THIS SESSION, ONE FEATURE ACROSS THREE BUILDS, EACH TESTED IN GAME
 BEFORE THE NEXT:**
-- The big brain module flag is kept on the unit and feeds the nav profile's
-	door axis -- `arch.module.bigbrain`.
-- The door watch: open ahead, close behind, on both axes --
-	`arch.locomotion.doors`.
-- Opening and closing are both gated on whether the remaining plan crosses the
-	door -- `dd.locomotion.doorpath`.
-- A unit embedded in a shut door opens it -- `dd.locomotion.doorrescue`.
+- An Intensity row for the Prismatic Lamp -- `arch.module.lampsettings`.
+- A Speed row and a Reverse sweep checkbox for the Prismatic Lamp --
+	`arch.module.lampsettings`.
+- An Intensity row for the plain Lamp, which grew an effect script to read it --
+	`arch.module.lampsettings`.
 
-**VERIFIED IN GAME (Lofty, 2026-09-17):** a unit walks through a plain door and
-closes it behind itself; jumps up through a ceiling hatch and closes it once
-clear; drops down through the same hatch and closes it from below; does NOT open
-a hatch overhead on a jump that lands on the floor beneath it; does not open a
-hatch it merely walks across; recovers without help when a door is shut on it by
-hand.
+**VERIFIED IN GAME (Lofty, 2026-09-17):** the Prismatic Lamp's intensity, its
+sweep speed and its reverse checkbox; the plain Lamp's intensity.
 
 **NOT VERIFIED:**
-- That a locked, wired or sensor door is refused. The gate is vanilla's own
-	`hasCapability` (`fact.locomotion.doorapi`) and was never exercised.
-- Two units meeting at one door; the close pass counts monsters, untested.
-- A coarse-nav leg across a door. Every crossing so far was the vanilla pather.
-- `openDoorsAround`, which has not executed once -- `dd.locomotion.doorrescue`.
-- Wall-mounted and other non-vertical hatches.
+- The RGB Lamp's three colour rows since the channel list gained bounds --
+	`arch.module.lampsettings`. Nothing about them was meant to change.
+- An intensity carried across a lamp swap, which the shared channel implies.
+- A value typed into the field rather than spun.
+- Everything the outgoing STATUS listed for the big brain module, which is
+	uncommitted and untouched this session: the locked, wired or sensor door
+	refusal; two units at one door; a coarse leg across a door;
+	`openDoorsAround`; non-vertical hatches.
 
 **LEFT AS-IS, KNOWINGLY:**
-- The horizontal close reads facing, the vertical one reads velocity --
-	`todo.locomotion.doorfacing`.
-- A door the body is clipping is left open rather than risk sealing a unit in.
-- A hatch is left open if a unit bonks it and falls back; rare since the reach
-	started scaling with speed, not impossible.
-- The comment above `doorVertical` describes the fallback more broadly than the
-	code now does.
-- Two older finds, unrelated to this work: `todo.pathing.doorstub`,
+- The reverse checkbox lives in `PET_TOGGLES`, so it is cleared to false if
+	another checkbox is changed while no Prismatic Lamp is socketed. Every
+	module-gated toggle behaves this way -- `arch.module.lampsettings`.
+- No build stamp was bumped for the three builds.
+- `petports_petport.lua` is CRLF in the working tree while `.gitattributes`
+	pins LF, so git will renormalise it the next time it touches it.
+- `todo.locomotion.doorfacing`, `todo.pathing.doorstub`,
 	`todo.vent.objectbounds`.
 
 **DO NOT REPEAT:**
-- PROXIMITY AND BEARING ARE NOT INTENT. Four builds were spent tuning reach and
-	direction for a case that only the plan can answer -- `dd.locomotion.doorpath`.
-- A rect handed to `world.entityQuery` is a hint, not a filter. Test the result
-	against it.
 - Earlier rules stand: read the doc before building, read the ARCH entry of
 	anything copied, one change per build, no war stories in comments, no date
 	stamp on unrun work, no judgement call in place of a stated requirement.
 
-**BUILD STAMPS IN PLAY:** taskAction `2026-09-17e`, contract `2026-09-17f`,
-coarsenav `2026-09-17b`, port `2026-09-15c`, restockconfig `2026-09-15b`,
-upcyclerconfig `2026-09-15a`, upcycler `2026-09-14a`, petportconfig
-`2026-09-13f`, work `2026-09-11b`, overlay `2026-09-11d`, flyapproach
-`2026-09-10c`, beaconconfig `2026-08-30c`.
+**BUILD STAMPS IN PLAY**, read from the files rather than carried forward --
+they disagree with the outgoing STATUS for the first two: taskAction
+`2026-09-17d`, contract `2026-09-17e`, coarsenav `2026-09-17b`, port
+`2026-09-15c`, restockconfig `2026-09-15b`, upcyclerconfig `2026-09-15a`,
+upcycler `2026-09-14a`, petportconfig `2026-09-13f`, work `2026-09-11b`,
+overlay `2026-09-11d`, flyapproach `2026-09-10c`, beaconconfig `2026-08-30c`.
 
-**NEXT, IN ORDER:** (1) the locked/wired/sensor refusal test, because the item
-description promises it; (2) two units at one door; (3) a coarse leg across a
-door; (4) `todo.locomotion.doorfacing`; (5) the four medic gaps from 2026-09-14.
+**NEXT, IN ORDER:** (1) the RGB lamp's colour rows; (2) the locked/wired/sensor
+refusal test, because the item description promises it; (3) two units at one
+door; (4) a coarse leg across a door; (5) `todo.locomotion.doorfacing`; (6) the
+four medic gaps from 2026-09-14.
 
-**COMMIT STATE:** `9de55e0` is the last commit. Modified:
-`petportsTaskAction.lua`, `petports_contract.lua`, `petports_coarsenav.lua`,
-`plan.drawio`, `petports_modules.xcf`, this document. Untracked:
-`petports_module_bigbrain.item`, `petports_module_bigbrain.png`.
-
+**COMMIT STATE:** `9de55e0` is the last commit. Modified: `petportconfig.lua`,
+`petports_strings.config`, `petports_module_light.item`,
+`petports_module_light_rainbow.item`, `petports_module_light.statuseffect`,
+`petports_module_huelight.lua`, `petportsTaskAction.lua`,
+`petports_contract.lua`, `petports_coarsenav.lua`, `petports_petport.lua`,
+three helptooltip pngs, `plan.drawio`, `petports_modules.xcf`, this document.
+Untracked: `petports_module_light.lua`, `petports_module_bigbrain.item`,
+`petports_module_bigbrain.png`.
 ## ARCHITECTURE
 
 ### A socketed big brain lets a unit work doors, and splits its graph from a unit without one
@@ -5475,7 +5468,7 @@ free mover is within `ARRIVAL_DISTANCE` (1.5) of any tile centre of that object
 still arrives at the resolved approach point. Verified dry and submerged.
 
 ### A module that grants a setting, and the colour that could not ride the effect
-`arch.module.rgblight` -- see also `arch.module.effects`, `arch.port.pushsignature`, `dd.pane.fieldbooks`, `fact.unit.effectanimator`
+`arch.module.rgblight` -- see also `arch.module.effects`, `arch.module.lampsettings`, `arch.port.pushsignature`, `dd.pane.fieldbooks`, `fact.unit.effectanimator`
 
 **BUILT 2026-09-03.** The RGB Lamp Module is the plain lamp with the colour
 handed to the player: three rows in the petport pane's settings list, each a
@@ -5521,24 +5514,34 @@ socketed onto a unit that already has a colour lights correctly on its first
 frame instead of waiting for the next push to change something.
 
 **IT DOES NOT REPLACE THE PLAIN LAMP.** That is a common drop and this is a rare
-one; two separate items, two separate effects, and a unit carrying both gets two
-lights. Both default to vanilla's [140,140,140], so an untouched RGB module is
-indistinguishable from the lamp it upgrades -- which makes "did the module work"
-answerable before any value is moved.
+one; two separate items and two separate effects. A unit cannot wear both --
+`arch.module.exclusivity`, built the same day, puts all three lamps in the
+`light` family.
+
+**THE TWO DO NOT SEED THE SAME COLOUR.** The RGB lamp's animation holds
+[140,140,140] and the plain lamp's [80,80,80], so an untouched RGB module is
+brighter than the lamp it upgrades rather than indistinguishable from it.
+
+**THE CHANNEL LIST IT SENDS HAS SINCE GROWN** -- `arch.module.lampsettings`.
 
 ### A third lamp, and how little a module can be
-`arch.module.huelight` -- see also `arch.module.rgblight`, `arch.module.effects`, `fact.unit.effectanimator`
+`arch.module.huelight` -- see also `arch.module.rgblight`, `arch.module.lampsettings`, `arch.module.effects`, `fact.unit.effectanimator`
 
 **BUILT 2026-09-03, THE SAME DAY AS THE RGB LAMP AND IN A FRACTION OF THE
 WORK.** Opened as todo.module.huecycle (retired). The Prismatic Lamp walks the
 hue wheel on a timer: four new files, nothing existing touched.
 
-**IT IS THE FLOOR OF WHAT A MODULE COSTS, AND THAT IS WHY IT IS WORTH AN ENTRY.**
-No pane rows, no `petData`, no mirror field, no port handler, no push, no flag.
-An item naming an effect, and an effect with a script and an animation. Every
-module that grants a pure capability can be this small; the RGB lamp is large
-because it grants a SETTING, and the difference between those two is the whole
-cost.
+**IT WAS BUILT AT THE FLOOR OF WHAT A MODULE COSTS, AND THAT IS WHY IT IS WORTH
+AN ENTRY.** No pane rows, no `petData`, no mirror field, no port handler, no
+push, no flag. An item naming an effect, and an effect with a script and an
+animation. Every module that grants a pure capability can be this small; the RGB
+lamp is large because it grants a SETTING, and the difference between those two
+is the whole cost.
+
+**IT IS NO LONGER AT THAT FLOOR.** It gained a flag, pane rows and pushed
+properties on 2026-09-17 when it gained settings of its own --
+`arch.module.lampsettings`. What the floor costs is unchanged; this module is no
+longer an example of it.
 
 **A THIRD LAMP RATHER THAN A MODE OF THE SECOND.** A mode would need a fourth
 settings row and a rule for what the three colour rows mean while it is on. As
@@ -5551,9 +5554,12 @@ three lights and three slots spent, which is a player's business.
 all of this one's, one at a time; this one cannot be made to hold still. Same
 rarity for that reason.
 
-**EVERY KNOB IS IN `effectConfig`**, read once at init, so retuning is an asset
-edit and a resocket with no Lua touched -- `huePeriod`, `saturation`,
-`intensity`.
+**EVERY KNOB IS IN `effectConfig`** -- `huePeriod`, `saturation`, `intensity` --
+read once at init, so retuning is an asset edit and a resocket with no Lua
+touched. TWO OF THE THREE ARE NOW FALLBACKS RATHER THAN THE VALUE IN USE:
+intensity and the period are read from status properties every update when the
+player has set them -- `arch.module.lampsettings`. `saturation` is still only
+the config.
 
 **THE SIGN OF `huePeriod` IS THE DIRECTION, AND ONLY ZERO IS REFUSED.** It was
 guarded against negatives too, on the reasoning that a backwards sweep looked
@@ -5595,11 +5601,59 @@ logs every change because those are a player moving a control, a handful per
 session. These are continuous -- several hundred lines a minute per lit unit.
 The init line reports the tuning and nothing else does.
 
-**THE ZERO GUARD ON `huePeriod` ALSO REFUSES A NEGATIVE ONE, AND THAT MAY BE
-WRONG NOW.** It was written when a backwards sweep looked like a typo. Reversing
-the direction turned out to be a thing somebody wanted on the first day, and a
-negative period is the obvious way to ask for it -- so the guard should probably
-refuse zero only. Left as it is until somebody decides.
+**THE DIRECTION IS A CHECKBOX AS OF 2026-09-17**, so the config period's sign is
+only the fallback's -- `arch.module.lampsettings`. The guard refuses zero and
+nothing else.
+
+### One intensity channel, three lamps that cannot be worn together
+`arch.module.lampsettings` -- see also `arch.module.rgblight`, `arch.module.huelight`, `arch.module.exclusivity`, `arch.port.pushsignature`
+
+**BUILT 2026-09-17, VERIFIED IN GAME.** The plain Lamp and the Prismatic Lamp
+carry an Intensity row; the Prismatic Lamp also carries Speed and a Reverse
+sweep checkbox.
+
+**THE LIGHT WIRE CARRIES A CHANNEL LIST, NOT A COLOUR.** `arch.module.rgblight`
+sent three channels with one shared range. It now sends a list whose bounds and
+default are per channel, held in `LIGHT_RANGE` in both the pane and the port:
+
+    r, g, b      0..255, default 140
+    intensity    0..255, default 80
+    speed        1..16,  default 8
+
+`petports_setLightColor` carries intensity, speed and the sweep direction
+alongside the colour and writes one status property each:
+`petports_lightIntensity`, `petports_lightSpeed`, `petports_lightReverse`
+beside `petports_lightColor`.
+
+**ONE INTENSITY FOR ALL THREE LAMPS, BECAUSE ONLY ONE CAN BE SOCKETED.**
+`arch.module.exclusivity` puts all three in the `light` family, so there is
+never a second lamp to hold a second value. An intensity set on one lamp is
+worn by the next one socketed.
+
+**SPEED IS NOT A PERIOD.** It runs 1..16 and rises with the speed; the effect
+script takes the period as `17 - speed` seconds, so 1 is a sixteen-second turn
+and 16 is a one-second turn. The default of 8 is a nine-second turn, which is
+not the eight-second one the `effectConfig` shipped.
+
+**THE REVERSE CHECKBOX RIDES `petData.toggles`.** It is a boolean and the light
+message carries numbers; the toggles path already stores, echoes and paints
+booleans, so the checkbox cost a key in `PET_TOGGLES` and a `pushUnitLight` call
+in `petports_setToggles`. IT INHERITS THAT PATH'S BEHAVIOUR: the message carries
+only the checkboxes currently on screen, so a toggle changed while the lamp is
+unsocketed clears it to its default.
+
+**UNCHECKED IS THE DIRECTION THE MODULE ALREADY TURNED.** The script negates the
+period unless the property is set, so the shipped look is unchanged and the
+checkbox is the only way to reverse it.
+
+**THE PLAIN LAMP GREW A SCRIPT TO GAIN A SETTING.** It was an item, an effect and
+an animation holding a fixed colour, with no Lua at all -- the floor
+`arch.module.huelight` describes. Reading a property needs a script, so it now
+declares `petports_moduleFlags ["lamplight"]` and runs
+`petports_module_light.lua`, which writes `{level, level, level}`.
+
+**EACH EFFECT SCRIPT READS ITS PROPERTY EVERY UPDATE** and falls back to its
+`effectConfig` value while the property is unset.
 
 ### A textbox inside a list row, and the click it never receives
 `arch.pane.rowfocus` -- see also `fact.pane.rowdispatch`, `dead.pane.rowzlevel`, `dd.pane.fieldbooks`

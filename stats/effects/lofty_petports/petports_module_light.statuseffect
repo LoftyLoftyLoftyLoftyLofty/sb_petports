@@ -1,9 +1,14 @@
 {
 	"name" : "petports_module_light",
 
-	"effectConfig" : {},
+	"effectConfig" : {
+		"intensity" : 80
+	},
 
 	"defaultDuration" : 5,
+
+	"scripts" : [ "/stats/effects/lofty_petports/petports_module_light.lua" ],
+	"scriptDelta" : 5,
 
 	"animationConfig" : "petports_module_light.animation"
 }

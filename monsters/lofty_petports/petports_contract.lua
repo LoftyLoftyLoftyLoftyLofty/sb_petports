@@ -155,12 +155,12 @@ function petports_setUnitName(name, show)
   return true
 end
 
--- Stores a clamped colour triple in the light status property.
-function petports_setLightColor(r, g, b)
+-- Stores a clamped colour triple, lamp intensity, sweep speed and sweep direction in the light status properties.
+function petports_setLightColor(r, g, b, intensity, speed, reverse)
   -- Returns a value as a whole number clamped to 0-255, or the default.
-  local function channel(value)
+  local function channel(value, default)
     value = tonumber(value)
-    if value == nil then return 140 end
+    if value == nil then return default end
 
     value = math.floor(value)
     if value < 0 then return 0 end
@@ -169,7 +169,12 @@ function petports_setLightColor(r, g, b)
     return value
   end
 
-  local color = { channel(r), channel(g), channel(b) }
+  local color = { channel(r, 140), channel(g, 140), channel(b, 140) }
+  local level = channel(intensity, 80)
+
+  local rate = channel(speed, 8)
+  if rate < 1 then rate = 1 end
+  if rate > 16 then rate = 16 end
 
   local ok, err = pcall(status.setStatusProperty, "petports_lightColor", color)
 
@@ -178,7 +183,29 @@ function petports_setLightColor(r, g, b)
     return false
   end
 
-  sb.logInfo("UNIT light colour set to %s", sb.printJson(color))
+  local okLevel, errLevel = pcall(status.setStatusProperty, "petports_lightIntensity", level)
+
+  if not okLevel then
+    sb.logInfo("UNIT setLightIntensity FAILED: %s", tostring(errLevel))
+    return false
+  end
+
+  local okRate, errRate = pcall(status.setStatusProperty, "petports_lightSpeed", rate)
+
+  if not okRate then
+    sb.logInfo("UNIT setLightSpeed FAILED: %s", tostring(errRate))
+    return false
+  end
+
+  local okDir, errDir = pcall(status.setStatusProperty, "petports_lightReverse", reverse == true)
+
+  if not okDir then
+    sb.logInfo("UNIT setLightReverse FAILED: %s", tostring(errDir))
+    return false
+  end
+
+  sb.logInfo("UNIT light colour set to %s, intensity %s, speed %s, reverse %s",
+    sb.printJson(color), tostring(level), tostring(rate), tostring(reverse == true))
   return true
 end
 

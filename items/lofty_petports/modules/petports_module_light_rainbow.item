@@ -7,7 +7,7 @@
 
 	"inventoryIcon" : "petports_module_light_rainbow.png",
 
-	"description" : "Equip a pet with this module to make it emit ^red;c^orange;o^yellow;l^green;o^cyan;r^blue;f^magenta;u^#f95c9f;l^reset; light.",
+	"description" : "Equip a pet with this module to make it emit ^red;c^orange;o^yellow;l^green;o^cyan;r^blue;f^magenta;u^#f95c9f;l^reset; light. ^green;You can adjust the light's intensity^reset; from the ^orange;Petport^reset; settings tab.",
 	"shortdescription" : "Prismatic Lamp Module",
 
 	"mutualExclusivityCategories" : [ "light" ],
@@ -16,5 +16,7 @@
 
 	"maxStack" : 1,
 
-	"petports_moduleEffects" : [ "petports_module_huelight" ]
+	"petports_moduleEffects" : [ "petports_module_huelight" ],
+
+	"petports_moduleFlags" : [ "huelight" ]
 }

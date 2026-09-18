@@ -68,6 +68,23 @@ local RGB_DEFAULT = 140
 
 local RGB_STEP = 1
 
+local LIGHT_CHANNELS = { "r", "g", "b", "intensity", "speed" }
+
+local LIGHT_RANGE = {
+	r = { min = RGB_MIN, max = RGB_MAX, default = RGB_DEFAULT },
+	g = { min = RGB_MIN, max = RGB_MAX, default = RGB_DEFAULT },
+	b = { min = RGB_MIN, max = RGB_MAX, default = RGB_DEFAULT },
+
+	intensity = { min = RGB_MIN, max = RGB_MAX, default = 80 },
+
+	speed = { min = 1, max = 16, default = 8 }
+}
+
+-- Returns a light channel's bounds.
+local function lightRange(channel)
+	return LIGHT_RANGE[channel] or { min = RGB_MIN, max = RGB_MAX, default = RGB_DEFAULT }
+end
+
 -- Returns a setting row's kind: check, rgb or sep.
 local function rowKind(row)
 	if row == nil then return nil end
@@ -160,7 +177,22 @@ local SETTING_ROWS = {
 	{ kind = "rgb", key = "g", owner = "light", needs = "rgblight",
 	  label = "petport.setting.rgbgreen", tip = "petport.tip.rgbgreen" },
 	{ kind = "rgb", key = "b", owner = "light", needs = "rgblight",
-	  label = "petport.setting.rgbblue", tip = "petport.tip.rgbblue" }
+	  label = "petport.setting.rgbblue", tip = "petport.tip.rgbblue" },
+
+	{ kind = "sep", needs = "lamplight", label = "petport.setting.lampblock" },
+
+	{ kind = "rgb", key = "intensity", owner = "light", needs = "lamplight",
+	  label = "petport.setting.lampintensity", tip = "petport.tip.lampintensity" },
+
+	{ kind = "sep", needs = "huelight", label = "petport.setting.hueblock" },
+
+	{ kind = "rgb", key = "intensity", owner = "light", needs = "huelight",
+	  label = "petport.setting.hueintensity", tip = "petport.tip.hueintensity" },
+	{ kind = "rgb", key = "speed", owner = "light", needs = "huelight",
+	  label = "petport.setting.huespeed", tip = "petport.tip.huespeed" },
+
+	{ key = "huereverse", owner = "toggles", needs = "huelight", default = false,
+	  label = "petport.setting.huereverse", tip = "petport.tip.huereverse" }
 }
 
 local SETTING_MESSAGE = {
@@ -625,14 +657,16 @@ local function blurPaneFields()
 end
 
 -- Returns text as a whole number clamped to the channel range, and whether it was clamped.
-local function rgbValue(text)
+local function rgbValue(text, channel)
 	local value = tonumber(text)
 	if value == nil then return nil end
 
+	local range = lightRange(channel)
+
 	value = math.floor(value)
 
-	if value < RGB_MIN then return RGB_MIN, true end
-	if value > RGB_MAX then return RGB_MAX, true end
+	if value < range.min then return range.min, true end
+	if value > range.max then return range.max, true end
 
 	return value, false
 end
@@ -650,10 +684,10 @@ local function applicableSettingRows()
 	return out
 end
 
--- Returns a colour channel's value, or the default.
+-- Returns a light channel's value, or the default.
 local function lightValue(channel)
 	local value = paneLight[channel]
-	if type(value) ~= "number" then return RGB_DEFAULT end
+	if type(value) ~= "number" then return lightRange(channel).default end
 	return value
 end
 
@@ -878,7 +912,7 @@ local function paintModules(state)
 
 	local light = state.light or {}
 
-	for _, channel in ipairs({ "r", "g", "b" }) do
+	for _, channel in ipairs(LIGHT_CHANNELS) do
 		local value = tonumber(light[channel])
 
 		if value ~= nil then
@@ -1681,7 +1715,7 @@ function settingsRowClicked(from, index)
 end
 
 
--- Stores a colour channel and sends all three to the port.
+-- Stores a light channel and sends every channel to the port.
 local function commitLight(channel, value)
 	if paneLight[channel] == value then return end
 
@@ -1691,11 +1725,11 @@ local function commitLight(channel, value)
 
 	dbg("light %s -> %s", channel, tostring(value))
 
-	local set = {
-		r = lightValue("r"),
-		g = lightValue("g"),
-		b = lightValue("b")
-	}
+	local set = {}
+
+	for _, name in ipairs(LIGHT_CHANNELS) do
+		set[name] = lightValue(name)
+	end
 
 	for channel, value in pairs(set) do
 		lightSent[channel] = value
@@ -1717,7 +1751,7 @@ local function pollLightFields()
 			if ok and type(text) == "string" and text ~= lightShown[row.key] then
 				lightShown[row.key] = text
 
-				local value, clamped = rgbValue(text)
+				local value, clamped = rgbValue(text, row.key)
 
 				if value ~= nil then
 					commitLight(row.key, value)
@@ -1741,8 +1775,10 @@ function settingsSpinClicked(from, index)
 	local step = (from == "settingDown") and -RGB_STEP or RGB_STEP
 	local value = lightValue(row.key) + step
 
-	if value < RGB_MIN then value = RGB_MIN end
-	if value > RGB_MAX then value = RGB_MAX end
+	local range = lightRange(row.key)
+
+	if value < range.min then value = range.min end
+	if value > range.max then value = range.max end
 
 	commitLight(row.key, value)
 	setLightField(path, row.key, value)

@@ -54,7 +54,8 @@ PET_TOGGLES =
   farmdeposit = true,
   farmrestock = true,
   waterdeposit = true,
-  waterrestock = true
+  waterrestock = true,
+  huereverse = false
 }
 
 -- Returns whether the socketed unit has a settings group turned on.
@@ -1159,6 +1160,8 @@ function init()
     self.dirty = true
     self.paneSignature = nil
 
+    pushUnitLight()
+
     pushPetName()
 
     pushUnitBubbles()
@@ -1213,13 +1216,15 @@ function init()
 
     local set = petportLightColor()
 
-    for _, channel in ipairs(RGB_CHANNELS) do
+    for _, channel in ipairs(LIGHT_CHANNELS) do
       local value = tonumber(payload[channel])
 
       if value ~= nil then
+        local range = LIGHT_RANGE[channel]
+
         value = math.floor(value)
-        if value < RGB_MIN then value = RGB_MIN end
-        if value > RGB_MAX then value = RGB_MAX end
+        if value < range.min then value = range.min end
+        if value > range.max then value = range.max end
         set[channel] = value
       end
     end
@@ -2967,10 +2972,17 @@ end
 FARMING_FLAG = "farming"
 FARMING_CLASSES = { "harvest", "water", "replant", "animals", "traps" }
 
-RGB_CHANNELS = { "r", "g", "b" }
+LIGHT_CHANNELS = { "r", "g", "b", "intensity", "speed" }
 RGB_MIN = 0
 RGB_MAX = 255
 RGB_DEFAULT = 140
+LIGHT_RANGE = {
+  r = { min = RGB_MIN, max = RGB_MAX, default = RGB_DEFAULT },
+  g = { min = RGB_MIN, max = RGB_MAX, default = RGB_DEFAULT },
+  b = { min = RGB_MIN, max = RGB_MAX, default = RGB_DEFAULT },
+  intensity = { min = RGB_MIN, max = RGB_MAX, default = 80 },
+  speed = { min = 1, max = 16, default = 8 }
+}
 MEDIC_ITEM = "medicalgoods"
 
 FISHING_FLAG = "fishing"
@@ -3153,14 +3165,14 @@ function pushModuleEffects()
 end
 
 
--- Returns the unit's stored light colour, defaulting each channel.
+-- Returns the unit's stored light colour, intensity and sweep speed, defaulting each channel.
 function petportLightColor()
   local stored = (self.petData and self.petData.light) or {}
   local out = {}
 
-  for _, channel in ipairs(RGB_CHANNELS) do
+  for _, channel in ipairs(LIGHT_CHANNELS) do
     local value = tonumber(stored[channel])
-    out[channel] = value ~= nil and value or RGB_DEFAULT
+    out[channel] = value ~= nil and value or LIGHT_RANGE[channel].default
   end
 
   return out
@@ -3175,8 +3187,11 @@ function pushUnitLight()
 
   local color = petportLightColor()
 
-  local signature = string.format("%s|%s|%s|%s",
-    tostring(self.petId), tostring(color.r), tostring(color.g), tostring(color.b))
+  local reverse = ((self.petData and self.petData.toggles) or {}).huereverse == true
+
+  local signature = string.format("%s|%s|%s|%s|%s|%s|%s",
+    tostring(self.petId), tostring(color.r), tostring(color.g), tostring(color.b),
+    tostring(color.intensity), tostring(color.speed), tostring(reverse))
 
   if signature == self.pushedUnitLight then return end
   self.pushedUnitLight = signature
@@ -3185,7 +3200,7 @@ function pushUnitLight()
     sb.printJson(self.petId), sb.printJson(color))
 
   world.callScriptedEntity(self.petId, "petports_setLightColor",
-    color.r, color.g, color.b)
+    color.r, color.g, color.b, color.intensity, color.speed, reverse)
 end
 
 -- Sends the bubble on or off state to the unit when it changes.

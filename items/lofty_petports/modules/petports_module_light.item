@@ -7,7 +7,7 @@
 
 	"inventoryIcon" : "petports_module_light.png",
 
-	"description" : "Equip a pet with this module to make it emit light.",
+	"description" : "Equip a pet with this module to make it emit light. ^green;You can adjust the light's intensity^reset; from the ^orange;Petport^reset; settings tab.",
 	"shortdescription" : "Lamp Module",
 
 	"mutualExclusivityCategories" : [ "light" ],
@@ -16,5 +16,7 @@
 
 	"maxStack" : 1,
 
-	"petports_moduleEffects" : [ "petports_module_light" ]
+	"petports_moduleEffects" : [ "petports_module_light" ],
+
+	"petports_moduleFlags" : [ "lamplight" ]
 }
