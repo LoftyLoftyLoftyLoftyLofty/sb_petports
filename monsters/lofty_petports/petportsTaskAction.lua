@@ -25,7 +25,7 @@ local FUEL_TRACE = false
 
 local MEDIA_TRACE_INTERVAL = 0.25
 
-local BUILD_STAMP = "2026-09-19l collect lives in tasks/collect.lua, no arrival branch is left in the ladder"
+local BUILD_STAMP = "2026-09-19s a leg search begun from an overridden cell resumes from it next tick"
 local stampLogged = false
 
 local SEARCH_LIMIT = 6.0
@@ -192,6 +192,12 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
 
   local nearRadius = freeMover and ((PETPORTS_NAV_STRIDE_FREE or 4) + 1.5) or 2.5
 
+  local pending = stateData.navFromPending
+  stateData.navFromPending = nil
+  if fromOverride == nil and pending ~= nil and pending.target == sb.printJson(target) then
+    fromOverride = pending.cell
+  end
+
   local fromKey, fromMore = fromOverride, false
   if fromKey == nil then
     local key, _, _, more
@@ -257,6 +263,9 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
       ARRIVAL_DISTANCE + 0.5, (stateData.navStepFor or 0) < 2)
 
   if waypoint == nil and remaining == "more" then
+		if fromOverride ~= nil then
+			stateData.navFromPending = { cell = fromOverride, target = targetKey }
+		end
 		noteLegRefusal(stateData, "the route search is still running", target, fromKey, toKey)
 		return false, "more"
 	end

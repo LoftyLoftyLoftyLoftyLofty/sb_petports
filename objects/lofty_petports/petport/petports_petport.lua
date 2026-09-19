@@ -190,8 +190,6 @@ REJECT_REPEAT = 30.0
 
 TASK_DEADLINE = 150.0
 
-DIAG_DWELL = 3.0
-
 FAILURE_BACKOFF = { 1.0, 2.0, 5.0, 10.0, 30.0 }
 
 RETRY_ALLOWANCE = 4
@@ -203,8 +201,6 @@ RECALL_LIMIT = 2
 STRANDED_LIMIT = 3
 
 VENT_SEARCH_MARGIN = 24
-
-DIAG_FALLBACK = false
 
 RESIDENCY_TYPE = "petports_residency"
 
@@ -602,7 +598,7 @@ local function abandonTask(reason)
   self.task = nil
 end
 
-local PETPORT_BUILD_STAMP = "2026-09-19o the fuel and drain machine jobs live in work/machines.lua"
+local PETPORT_BUILD_STAMP = "2026-09-19r return and diagnostic live in their own work files; only the two stop steps are registered here"
 
 PETPORT_PROFILE = true
 
@@ -1127,28 +1123,6 @@ function init()
        and self.task.type == "withdraw" and self.task.id == report.id then
       withdrawSeed(self.task.target, self.task.seed, self.task.id,
         self.task.count)
-    end
-
-    if report.outcome == "done" and self.task ~= nil
-       and self.task.type == "tidy" and self.task.id == report.id then
-      withdrawMisfit(self.task.target, self.task.item, self.task.count,
-        self.task.id, self.task.slot)
-    end
-
-    if report.outcome == "done" and self.task ~= nil
-       and self.task.type == "defrag" and self.task.id == report.id then
-      withdrawMisfit(self.task.target, self.task.item, self.task.count,
-        self.task.id, self.task.slot)
-    end
-
-    if report.outcome == "done" and self.task ~= nil
-       and self.task.type == "compact" and self.task.id == report.id then
-      compactContainer(self.task.target)
-    end
-
-    if report.outcome == "done" and self.task ~= nil
-       and self.task.type == "sort" and self.task.id == report.id then
-      sortContainer(self.task.target)
     end
 
     if report.outcome == "done" and self.task ~= nil
@@ -1826,7 +1800,7 @@ function petports_defragDestination(name, where, crates, perishable)
 end
 
 -- Returns the crates an item should be moved out of, smallest holding first, and how many refuse it outright.
-local function defragSources(name, where, destinationId, byId)
+function petports_defragSourcesFor(name, where, destinationId, byId)
   local sources = {}
   local misfiled = 0
 
@@ -1925,7 +1899,7 @@ local function defragBetterHomeExists(name, closest, deposits)
 end
 
 -- Returns every item that is scattered, in too broad a crate, or at the wrong temperature, in the order to move them.
-local function defragCandidates(spread, crates)
+function petports_defragCandidates(spread, crates)
   local chill = petportParticipates("chill")
   local byId = {}
   local deposits = {}
@@ -2019,7 +1993,7 @@ local function reportDefragPlan(spread, crates)
   if not petportDefrag() then return end
   if not petportParticipates("defrag") then return end
 
-  local names, deposits, byId = defragCandidates(spread, crates)
+  local names, deposits, byId = petports_defragCandidates(spread, crates)
 
   local lines = {}
   local signature = {}
@@ -2036,7 +2010,7 @@ local function reportDefragPlan(spread, crates)
       table.insert(lines, string.format("%s: NO TARGET (%s)",
         tostring(entry.name), tostring(why)))
     else
-      local sources, misfiled = defragSources(entry.name, where, target.id, byId)
+      local sources, misfiled = petports_defragSourcesFor(entry.name, where, target.id, byId)
 
       local from = {}
       local ids = {}
@@ -3177,7 +3151,7 @@ function petports_portStandingPointNear(position, radius, mediumVerified)
 end
 
 -- Asks the unit for a standable point at the port.
-local function homePointNear()
+function petports_portHomePointNear()
   if self.petId == nil or not world.entityExists(self.petId) then return nil end
 
   local ok, resolved = pcall(world.callScriptedEntity, self.petId,
@@ -3308,7 +3282,7 @@ function petports_servicePointNear(label, entityId, position, radius)
 end
 
 -- Returns a random floor tile inside a rect, or nil.
-local function findStandingPoint(rect)
+function petports_findStandingPoint(rect)
   for _ = 1, 12 do
     local x = math.floor(rect[1] + math.random() * (rect[3] - rect[1])) + 0.5
 
@@ -3325,26 +3299,8 @@ local function findStandingPoint(rect)
   return nil
 end
 
--- Returns a task that walks the unit to a floor tile in this port's rect.
-local function diagnosticWork()
-  local rect = petports_portCoverageRect()
-  local position = findStandingPoint(rect)
-
-  if position == nil then
-    return nil, "no standing point in rect"
-  end
-
-  return {
-    id = "diag:" .. stationUniqueId(),
-    type = "diag",
-    port = stationUniqueId(),
-    position = position,
-    dwell = DIAG_DWELL
-  }
-end
-
 -- Saves and despawns the unit, and clears the recall and unreachable counts.
-local function rehomeUnit(reason)
+function petports_rehomeUnit(reason)
   sb.logInfo("PETPORT %s re-homing unit: %s", stationUniqueId(), reason)
 
   saveAndDespawn()
@@ -3382,7 +3338,7 @@ local function mediumCheck()
 
   if self.mediumStrikes >= limit then
     self.mediumStrikes = 0
-    rehomeUnit("outside its own medium at "
+    petports_rehomeUnit("outside its own medium at "
       .. sb.printJson(answer.position) .. " (reads " .. tostring(answer.medium)
       .. ") for " .. tostring(ENVIRONMENT_INTERVAL * limit) .. "s")
   end
@@ -3423,14 +3379,14 @@ local function healthCheck()
   if self.healthStalls >= HEALTH_STALL_LIMIT then
     self.healthStalls = 0
     self.healthAnchor = nil
-    rehomeUnit("motionless away from the port for "
+    petports_rehomeUnit("motionless away from the port for "
       .. tostring(HEALTH_INTERVAL * HEALTH_STALL_LIMIT) .. "s")
   end
 end
 
 
 -- Returns the point the unit returns to, from its tethering type or a standable spot near the port.
-local function homePosition()
+function petports_portHomePosition()
   local tether = PETPORTS_TETHER_FLOOR
 
   if self.petData ~= nil and self.petData.monsterType ~= nil then
@@ -3452,67 +3408,13 @@ local function homePosition()
     return entity.position()
   end
 
-  local asked = homePointNear()
+  local asked = petports_portHomePointNear()
   if asked ~= nil then return asked end
 
-  return findStandingPoint({
+  return petports_findStandingPoint({
     entity.position()[1] - 4, entity.position()[2] - 4,
     entity.position()[1] + 4, entity.position()[2] + 4
-  }) or findStandingPoint(petports_portCoverageRect())
-end
-
--- Returns a task to walk the unit home when it is stranded or outside the network, re-homing it once the recalls run out.
-local function returnWork()
-  local rect = petports_portCoverageRect()
-
-  if self.petId == nil or not world.entityExists(self.petId) then return nil end
-
-  local stranded = (self.unreachableFailures or 0) >= STRANDED_LIMIT
-  local inside = inNetwork(world.entityPosition(self.petId))
-
-  local recallState = string.format("%s/%s/%s/%s", tostring(inside),
-    tostring(stranded), tostring(self.unreachableFailures or 0),
-    tostring(self.recallFailures or 0))
-
-  if recallState ~= self.recallState then
-    self.recallState = recallState
-
-    sb.logInfo("PETPORT %s returnWork: unit at %s inNetwork %s stranded %s (unreachableFailures %s of %s, recallFailures %s of %s)",
-      stationUniqueId(), sb.printJson(world.entityPosition(self.petId)),
-      tostring(inside), tostring(stranded),
-      sb.printJson(self.unreachableFailures or 0), sb.printJson(STRANDED_LIMIT),
-      sb.printJson(self.recallFailures or 0), sb.printJson(RECALL_LIMIT))
-  end
-
-  if not stranded and inside then
-    self.recallFailures = 0
-    return nil
-  end
-
-  sb.logInfo("PETPORT %s returnWork: RECALLING -- collection is suppressed this pass",
-    stationUniqueId())
-
-  if (self.recallFailures or 0) >= RECALL_LIMIT then
-    rehomeUnit("stranded outside rect at "
-      .. sb.printJson(world.entityPosition(self.petId))
-      .. " after " .. sb.printJson(RECALL_LIMIT) .. " failed recalls")
-    return nil
-  end
-
-  local position = homePosition()
-
-  if position == nil then
-    rehomeUnit("no standing point in rect to recall to")
-    return nil
-  end
-
-  return {
-    id = "return:" .. stationUniqueId(),
-    type = "return",
-    port = stationUniqueId(),
-    position = position,
-    dwell = 0.5
-  }
+  }) or petports_findStandingPoint(petports_portCoverageRect())
 end
 
 MACHINE_SLOT_INPUT = 0
@@ -4150,7 +4052,7 @@ local function parameterKey(parameters)
 end
 
 -- Returns every item held across more slots than its stack sizes need, with its parameter buckets.
-local function fragmentation(items)
+function petports_fragmentation(items)
   if type(items) ~= "table" then return {} end
 
   local groups = {}
@@ -4228,7 +4130,7 @@ function compactContainer(containerId)
   local ok, items = pcall(world.containerItems, containerId)
   if not ok or type(items) ~= "table" then return false end
 
-  local work = fragmentation(items)
+  local work = petports_fragmentation(items)
   if #work == 0 then return false end
 
   local settled = {}
@@ -4431,7 +4333,7 @@ local function sortLess(a, b)
 end
 
 -- Returns the slot order a container should hold, beacons pinned first, and how many stacks are out of place.
-local function sortPlan(items)
+function petports_sortPlan(items)
 	if type(items) ~= "table" then return {}, 0 end
 
 	local keys = {}
@@ -4557,7 +4459,7 @@ function sortContainer(containerId)
 	if not ok or type(items) ~= "table" then return false end
 
 	local before = sortTally(items)
-	local order, disorder = sortPlan(items)
+	local order, disorder = petports_sortPlan(items)
 
 	if disorder < SORT_MIN_DISORDER then
 		sb.logInfo("PETPORT %s sort of %s: nothing to do on arrival (%s slot(s) "
@@ -4858,640 +4760,6 @@ function petports_containerWithSeed(seedName, wantDeposit, wantRestock)
 	return nil
 end
 
--- Returns how much of an item a container holds.
-function petports_restockHeld(containerId, name)
-  if not world.entityExists(containerId) then return nil end
-
-  local ok, items = pcall(world.containerItems, containerId)
-  if not ok or type(items) ~= "table" then return nil end
-
-  local total = 0
-
-  for _, stack in pairs(items) do
-    if type(stack) == "table" and stack.name == name then
-      total = total + (stack.count or 1)
-    end
-  end
-
-  return total
-end
-
--- Returns the live restock beacons that carry requests.
-function petports_restockBeacons()
-  local out = {}
-
-  for _, beacon in ipairs(petports_beaconsFor("restock")) do
-    if beacon.requests ~= nil and world.entityExists(beacon.id) then
-      table.insert(out, beacon)
-    end
-  end
-
-  return out
-end
-
--- Returns a task to deliver carried cargo into a restock beacon that is short of it.
-local function restockDeliverWork()
-  if self.petData == nil or self.petData.cargo == nil then return nil end
-  if #self.petData.cargo == 0 then return nil end
-
-  local beacons = petports_restockBeacons()
-  if #beacons == 0 then return nil end
-
-  for _, beacon in ipairs(beacons) do
-    for _, request in ipairs(beacon.requests) do
-      local carried = nil
-      for _, stack in ipairs(self.petData.cargo) do
-        if stack.name == request.item then
-          carried = stack
-          break
-        end
-      end
-
-      if carried ~= nil then
-        local have = petports_restockHeld(beacon.id, request.item)
-
-        if have ~= nil and have < request.max then
-          local fits = world.containerItemsCanFit ~= nil
-            and world.containerItemsCanFit(beacon.id, carried) or nil
-
-          if fits == nil or fits > 0 then
-            local stand, standWhy = petports_servicePointNear("request crate " .. tostring(beacon.id),
-              beacon.id, beacon.position, 4)
-
-            if stand == nil then
-              sb.logInfo("PETPORT %s restock delivery to %s SKIPPED: %s of %s",
-                stationUniqueId(), sb.printJson(beacon.id), tostring(standWhy),
-                sb.printJson(beacon.position))
-            else
-              sb.logInfo("PETPORT %s delivering %s x%s to request crate %s (has %s of %s)",
-                stationUniqueId(), tostring(request.item),
-                sb.printJson(carried.count or 1), sb.printJson(beacon.id),
-                sb.printJson(have), sb.printJson(request.max))
-
-              return {
-                id = "restockput:" .. tostring(beacon.id)
-                  .. ":" .. tostring(request.item) .. "@" .. stationUniqueId(),
-                mediumVerified = true,
-                type = "deposit",
-                target = beacon.id,
-
-                only = request.item,
-
-                position = stand,
-                containerPosition = beacon.position,
-                port = stationUniqueId(),
-                dwell = 0
-              }
-            end
-          end
-        end
-      end
-    end
-  end
-
-  return nil
-end
-
--- Returns a task to fetch stock from a deposit crate for a restock beacon that has fallen below its minimum.
-local function restockFetchWork()
-  local beacons = petports_restockBeacons()
-  if #beacons == 0 then return nil, "no configured restock beacon in coverage" end
-
-  local short, unstocked, noRoom, unreachable = 0, 0, 0, 0
-
-  for _, beacon in ipairs(beacons) do
-    if petports_servicePointNear("request crate " .. tostring(beacon.id),
-       beacon.id, beacon.position, 4) == nil then
-      unreachable = unreachable + 1
-
-      if self.lastRestockSkip ~= beacon.id then
-        self.lastRestockSkip = beacon.id
-        sb.logInfo("PETPORT %s NOT restocking %s at %s: this unit cannot reach the request "
-          .. "crate, so fetching for it would only cycle stock in and out of storage",
-          stationUniqueId(), sb.printJson(beacon.id), sb.printJson(beacon.position))
-      end
-
-    else
-    for _, request in ipairs(beacon.requests) do
-      local have = petports_restockHeld(beacon.id, request.item)
-
-      if have ~= nil and have < request.min then
-        local want = request.max - have
-
-        if want > 0 then
-          short = short + 1
-
-          local workId = "restock:" .. tostring(beacon.id)
-            .. ":" .. tostring(request.item)
-
-          local failure = self.workFailures[workId]
-          local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
-
-          if not backedOff and petports_claimFree(workId) then
-            local source, available = nil, 0
-
-            for _, crate in ipairs(petports_beaconsFor("deposit")) do
-              if world.entityExists(crate.id) then
-                local n = world.containerAvailable(crate.id,
-                  { name = request.item, count = 1 })
-
-                if type(n) == "number" and n >= 1 then
-                  if petports_servicePointNear("crate " .. tostring(crate.id),
-                     crate.id, crate.position, 4) == nil then
-                    if self.lastRestockSourceSkip ~= crate.id then
-                      self.lastRestockSourceSkip = crate.id
-                      sb.logInfo("PETPORT %s restock source %s at %s SKIPPED: holds %s but "
-                        .. "this unit cannot reach it -- looking for another source",
-                        stationUniqueId(), sb.printJson(crate.id),
-                        sb.printJson(crate.position), tostring(request.item))
-                    end
-                  else
-                    source = crate
-                    available = n
-                    break
-                  end
-                end
-              end
-            end
-
-            if source == nil then
-              unstocked = unstocked + 1
-            else
-              local count = math.min(want, available, petports_stackSizeOf(request.item))
-
-              local fits = world.containerItemsCanFit ~= nil
-                and world.containerItemsCanFit(beacon.id,
-                  { name = request.item, count = count }) or nil
-
-              if fits ~= nil and fits <= 0 then
-                noRoom = noRoom + 1
-              else
-                sb.logInfo("PETPORT %s RESTOCK dispatch: %s x%s from %s for crate %s (has %s, wants %s-%s)",
-                  stationUniqueId(), tostring(request.item), sb.printJson(count),
-                  sb.printJson(source.id), sb.printJson(beacon.id),
-                  sb.printJson(have), sb.printJson(request.min),
-                  sb.printJson(request.max))
-
-                return {
-                  id = workId,
-                  mediumVerified = true,
-                  type = "withdraw",
-                  port = stationUniqueId(),
-                  target = source.id,
-
-                  seed = request.item,
-                  count = count,
-
-                  position = world.entityPosition(source.id)
-                }
-              end
-            end
-          end
-        end
-      end
-    end
-    end
-  end
-
-  if short == 0 then
-    return nil, "every restock request is at or above its minimum"
-  end
-
-  return nil, string.format(
-    "%s restock request(s) short, none actionable: %s with none in storage, "
-    .. "%s with the request crate full, %s with an unreachable request crate",
-    short, unstocked, noRoom, unreachable)
-end
-
--- Returns the crates this unit is allowed to tidy out of.
-local function tidySources(wantDeposit, wantRestock)
-  local sources = {}
-
-  if wantDeposit then
-    for _, beacon in ipairs(petports_beaconsFor("deposit")) do
-      table.insert(sources, beacon)
-    end
-  end
-
-  if wantRestock then
-    for _, beacon in ipairs(petports_beaconsFor("restock")) do
-      if beacon.requests ~= nil then
-        table.insert(sources, beacon)
-      end
-    end
-  end
-
-  return sources
-end
-
--- Returns a task to move the most valuable misfiled stack out of a crate into one that accepts it.
-local function tidyWork(doDeposit, doRestock)
-  local destinations = petports_beaconsFor("deposit")
-
-  if #destinations == 0 then
-    return nil, "no deposit beacon to tidy into"
-  end
-
-  local sources = tidySources(doDeposit, doRestock)
-
-  if #sources == 0 then
-    return nil, "no crate this unit is allowed to tidy"
-  end
-
-  local misfiled, homeless, full = 0, 0, 0
-
-  local viable = {}
-
-  for _, source in ipairs(sources) do
-    if world.entityExists(source.id) then
-      local items = world.containerItems(source.id)
-
-      if type(items) == "table" then
-        local misfits
-
-        if source.behavior == "restock" then
-          misfits = petports_restockMisfits(source.requests, items,
-            source.beaconSlot)
-        else
-          misfits = petports_filterMisfits(source.filter, items,
-            source.beaconSlot)
-        end
-
-        for _, misfit in ipairs(misfits) do
-          misfiled = misfiled + 1
-
-          local workId = "tidy:" .. tostring(source.id)
-            .. ":" .. tostring(misfit.name)
-
-          local failure = self.workFailures[workId]
-          local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
-
-          if not backedOff and petports_claimFree(workId) then
-            local stack = items[misfit.slot]
-            local accepted, roomFor = false, false
-
-            for _, destination in ipairs(destinations) do
-              if destination.id ~= source.id
-                 and world.entityExists(destination.id)
-                 and petports_filterAccepts(destination.filter, misfit.name) then
-                accepted = true
-
-                local fits = world.containerItemsCanFit ~= nil
-                  and world.containerItemsCanFit(destination.id, stack) or nil
-
-                if fits ~= nil and fits > 0 then
-                  roomFor = true
-                  break
-                end
-              end
-            end
-
-            if not accepted then
-              homeless = homeless + 1
-            elseif not roomFor then
-              full = full + 1
-            else
-              table.insert(viable, {
-                workId = workId,
-                source = source,
-                name = misfit.name,
-                count = misfit.count,
-                slot = misfit.slot,
-
-                unitValue = type(stack) == "table"
-                  and petports_itemValue(stack) or 0
-              })
-            end
-          end
-        end
-      end
-    end
-  end
-
-  table.sort(viable, function(a, b)
-    if a.unitValue ~= b.unitValue then return a.unitValue > b.unitValue end
-    if a.source.id ~= b.source.id then return a.source.id < b.source.id end
-    return (a.slot or 0) < (b.slot or 0)
-  end)
-
-  for _, pick in ipairs(viable) do
-    local source = pick.source
-
-    local stand, standWhy = petports_servicePointNear("crate " .. tostring(source.id),
-      source.id, source.position, 4)
-
-    if stand == nil then
-      sb.logInfo("PETPORT %s tidy source %s SKIPPED: %s of %s",
-        stationUniqueId(), sb.printJson(source.id), tostring(standWhy),
-        sb.printJson(source.position))
-    else
-      sb.logInfo("PETPORT %s tidying %s x%s out of %s (slot %s, %s each, "
-        .. "%s viable candidate(s))",
-        stationUniqueId(), tostring(pick.name), sb.printJson(pick.count),
-        sb.printJson(source.id), sb.printJson(pick.slot),
-        sb.printJson(pick.unitValue), sb.printJson(#viable))
-
-      return {
-        id = pick.workId,
-        mediumVerified = true,
-        type = "tidy",
-        target = source.id,
-        item = pick.name,
-        count = pick.count,
-        slot = pick.slot,
-        position = stand,
-        containerPosition = source.position,
-        port = stationUniqueId(),
-        dwell = 0
-      }
-    end
-  end
-
-  if misfiled == 0 then
-    return nil, "nothing misfiled in coverage"
-  end
-
-  return nil, string.format(
-    "%s misfiled stack(s), none actionable: %s with no crate that wants them, "
-    .. "%s with the right crate full",
-    misfiled, homeless, full)
-end
-
--- Returns a task to merge the split stacks in the first crate that has any.
-local function compactWork()
-  for _, source in ipairs(tidySources(true, true)) do
-    if world.entityExists(source.id) then
-      local ok, items = pcall(world.containerItems, source.id)
-
-      if ok and type(items) == "table" then
-        local split = fragmentation(items)
-
-        if #split > 0 then
-          local workId = "compact:" .. tostring(source.id)
-
-          local failure = self.workFailures[workId]
-          local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
-
-          if not backedOff and petports_claimFree(workId) then
-            local stand, standWhy = petports_servicePointNear("crate " .. tostring(source.id),
-              source.id, source.position, 4)
-
-            if stand == nil then
-              sb.logInfo("PETPORT %s compaction of %s SKIPPED: %s of %s",
-                stationUniqueId(), sb.printJson(source.id), tostring(standWhy),
-                sb.printJson(source.position))
-            else
-              sb.logInfo("PETPORT %s compacting %s: %s item(s) split across more slots than needed",
-                stationUniqueId(), sb.printJson(source.id), sb.printJson(#split))
-
-              return {
-                id = workId,
-
-                mediumVerified = true,
-                type = "compact",
-                target = source.id,
-                position = stand,
-                containerPosition = source.position,
-                port = stationUniqueId(),
-                dwell = 0
-              }
-            end
-          end
-        end
-      end
-    end
-  end
-
-  return nil, "no crate has stacks worth merging"
-end
-
--- Returns a task to pull a scattered or misplaced item out of a crate toward the one it belongs in.
-local function defragWork()
-  if self.petData == nil then return nil end
-  if self.petData.cargo ~= nil and #self.petData.cargo > 0 then return nil end
-
-  local names, deposits, byId = defragCandidates(self.spread, self.beacons or {})
-
-  if #names == 0 then return nil, "everything is already where it belongs" end
-  if #deposits == 0 then return nil, "no deposit beacon to gather into" end
-
-  local homeless, full, unreachable = 0, 0, 0
-  local claimed, backedOffN, noStack = 0, 0, 0
-
-  for index, entry in ipairs(names) do
-    if index > DEFRAG_PLAN_CAP then break end
-
-    local where = self.spread[entry.name]
-    local target = petports_defragDestination(entry.name, where, deposits)
-
-    if target == nil then
-      homeless = homeless + 1
-    else
-      local reachable, reachWhy = petports_servicePointNear("crate " .. tostring(target.id),
-        target.id, target.position, 4)
-
-      if reachable == nil then
-        unreachable = unreachable + 1
-        if self.defragSkip ~= target.id then
-          self.defragSkip = target.id
-          sb.logInfo("PETPORT %s defrag destination %s SKIPPED: %s of %s",
-            stationUniqueId(), sb.printJson(target.id), tostring(reachWhy),
-            sb.printJson(target.position))
-        end
-      else
-        local sources = defragSources(entry.name, where, target.id, byId)
-
-        for _, pick in ipairs(sources) do
-          local crate = pick.crate
-
-          local workId = "defrag:" .. tostring(crate.id)
-            .. ":" .. tostring(entry.name)
-
-          local failure = self.workFailures[workId]
-          local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
-
-          if backedOff then backedOffN = backedOffN + 1
-          elseif not petports_claimFree(workId) then claimed = claimed + 1 end
-
-          if not backedOff and petports_claimFree(workId) then
-            local ok, items = pcall(world.containerItems, crate.id)
-            local slot, stack = nil, nil
-
-            if ok and type(items) == "table" then
-              local keys = {}
-              for key in pairs(items) do table.insert(keys, key) end
-              table.sort(keys)
-
-              for _, key in ipairs(keys) do
-                local held = items[key]
-
-                if key ~= crate.beaconSlot and type(held) == "table"
-                   and held.name == entry.name then
-                  slot, stack = key, held
-                  break
-                end
-              end
-            end
-
-            if slot == nil then noStack = noStack + 1 end
-
-            if slot ~= nil then
-              local fits = world.containerItemsCanFit ~= nil
-                and world.containerItemsCanFit(target.id, stack) or nil
-
-              if fits == nil or fits <= 0 then
-                full = full + 1
-              else
-                local stand, standWhy = petports_servicePointNear(
-                  "crate " .. tostring(crate.id), crate.id, crate.position, 4)
-
-                if stand == nil then
-                  unreachable = unreachable + 1
-
-                  if self.defragSkip ~= crate.id then
-                    self.defragSkip = crate.id
-                    sb.logInfo("PETPORT %s defrag source %s SKIPPED: %s of %s",
-                      stationUniqueId(), sb.printJson(crate.id),
-                      tostring(standWhy), sb.printJson(crate.position))
-                  end
-                else
-                  self.defragPulled = self.defragPulled or {}
-                  self.defragPulled[entry.name] =
-                    { from = crate.id, workId = workId }
-
-                  sb.logInfo("PETPORT %s defrag: taking %s x%s from %s "
-                    .. "(slot %s, has %s) toward %s -- %s of %s crate(s), "
-                    .. "%s slot(s) total",
-                    stationUniqueId(), tostring(entry.name),
-                    sb.printJson(stack.count or 1), sb.printJson(crate.id),
-                    sb.printJson(slot), sb.printJson(pick.count),
-                    sb.printJson(target.id), sb.printJson(index),
-                    sb.printJson(entry.crates), sb.printJson(entry.slots))
-
-                  return {
-                    id = workId,
-                    mediumVerified = true,
-
-                    type = "defrag",
-                    target = crate.id,
-                    item = entry.name,
-                    count = stack.count or 1,
-                    slot = slot,
-                    position = stand,
-                    containerPosition = crate.position,
-                    port = stationUniqueId(),
-                    dwell = 0
-                  }
-                end
-              end
-            end
-          end
-        end
-      end
-    end
-  end
-
-  local why = string.format(
-    "%s name(s) misplaced or scattered, none actionable: %s with nowhere to "
-    .. "gather into, %s with the destination full, %s with a crate this unit "
-    .. "cannot reach, %s claimed by another unit, %s backed off, %s with no "
-    .. "stack found in the source", #names, homeless, full, unreachable,
-    claimed, backedOffN, noStack)
-
-  if self.defragWhy ~= why then
-    self.defragWhy = why
-    sb.logInfo("PETPORT %s defrag: %s", stationUniqueId(), why)
-  end
-
-  return nil, why
-end
-
--- Returns a task to sort one crate, stepping round the crates and leaving each alone for a while after.
-local function sortWork()
-	self.sortScan = (self.sortScan or 0) - (WORK_INTERVAL or 1.0)
-	if self.sortScan > 0 then return nil, "one crate is looked at every few seconds" end
-	self.sortScan = SORT_SCAN_INTERVAL
-
-	local sources = tidySources(true, true)
-	if #sources == 0 then return nil, "no crate to sort" end
-
-	self.sortCursor = (self.sortCursor or 0) + 1
-	if self.sortCursor > #sources then self.sortCursor = 1 end
-
-	local source = sources[self.sortCursor]
-	if source == nil then return nil, "no crate to sort" end
-
-	if not world.entityExists(source.id) then
-		return nil, "the crate in the ring this scan is gone"
-	end
-
-	self.sortQuiet = self.sortQuiet or {}
-
-	local quiet = self.sortQuiet[source.id]
-	if quiet ~= nil and quiet > world.time() then
-		return nil, string.format("crate %s was sorted recently",
-			tostring(source.id))
-	end
-
-	local ok, items = pcall(world.containerItems, source.id)
-	if not ok or type(items) ~= "table" then
-		return nil, "the crate in the ring this scan could not be read"
-	end
-
-	local _, disorder = sortPlan(items)
-
-	if disorder < SORT_MIN_DISORDER then
-		return nil, string.format("crate %s is already in order",
-			tostring(source.id))
-	end
-
-	local workId = "sort:" .. tostring(source.id)
-
-	local failure = self.workFailures[workId]
-	local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
-
-	if backedOff then
-		return nil, string.format("crate %s is backed off after a failed trip",
-			tostring(source.id))
-	end
-
-	if not petports_claimFree(workId) then
-		return nil, string.format("crate %s is already claimed", tostring(source.id))
-	end
-
-	local stand, standWhy = petports_servicePointNear("crate " .. tostring(source.id),
-		source.id, source.position, 4)
-
-	if stand == nil then
-		sb.logInfo("PETPORT %s sort of %s SKIPPED: %s of %s",
-			stationUniqueId(), sb.printJson(source.id), tostring(standWhy),
-			sb.printJson(source.position))
-
-		return nil, string.format("nowhere to stand at crate %s",
-			tostring(source.id))
-	end
-
-	self.sortQuiet[source.id] = world.time() + SORT_REVISIT
-
-	sb.logInfo("PETPORT %s sorting %s: %s slot(s) out of place (crate %s of %s "
-		.. "in the ring)",
-		stationUniqueId(), sb.printJson(source.id), sb.printJson(disorder),
-		sb.printJson(self.sortCursor), sb.printJson(#sources))
-
-	return {
-		id = workId,
-
-		mediumVerified = true,
-		type = "sort",
-		target = source.id,
-		position = stand,
-		containerPosition = source.position,
-		port = stationUniqueId(),
-		dwell = 0
-	}
-end
-
-
 PETPORTS_WORK = PETPORTS_WORK or {}
 
 -- Adds a work entry to the port's list in order, replacing any entry of the same name.
@@ -5554,19 +4822,6 @@ function petports_workFarming(class)
 end
 
 petports_registerWork({
-	name = "return",
-	order = 100,
-	generate = function() return returnWork() end
-})
-
-petports_registerWork({
-	name = "restock",
-	order = 600,
-	gate = function() return petports_workGroup("restock") end,
-	generate = function() return restockDeliverWork() end
-})
-
-petports_registerWork({
 	name = "fuelled",
 	order = 800,
 	profile = false,
@@ -5599,57 +4854,6 @@ petports_registerWork({
 			or ("carrying " .. sb.printJson(#self.petData.cargo)
 				.. " stack(s) with no dispatchable deposit target"), true
 	end
-})
-
-petports_registerWork({
-	name = "restockFetch",
-	order = 2000,
-	reasonOrder = true,
-	gate = function() return petports_workGroup("restock") end,
-	generate = function() return restockFetchWork() end
-})
-
-petports_registerWork({
-	name = "tidy",
-	order = 2200,
-	reasonOrder = true,
-	gate = function()
-		return petports_workDefrag("tidy") or petports_workGroup("restock")
-	end,
-	generate = function()
-		return tidyWork(petports_workDefrag("tidy"), petports_workGroup("restock"))
-	end
-})
-
-petports_registerWork({
-	name = "compact",
-	order = 2300,
-	reasonOrder = true,
-	gate = function() return petports_workDefrag("compact") end,
-	generate = function() return compactWork() end
-})
-
-petports_registerWork({
-	name = "defrag",
-	order = 2400,
-	reasonOrder = true,
-	gate = function() return petports_workDefrag("defrag") end,
-	generate = function() return defragWork() end
-})
-
-petports_registerWork({
-	name = "sort",
-	order = 2500,
-	reasonOrder = true,
-	gate = function() return petports_workDefrag("sort") end,
-	generate = function() return sortWork() end
-})
-
-petports_registerWork({
-	name = "diagnostic",
-	order = 2700,
-	gate = function() return DIAG_FALLBACK end,
-	generate = function() return diagnosticWork() end
 })
 
 -- Runs one named hook on every registered work entry that has it.

@@ -74,7 +74,7 @@
     }
   ],
 
-  "scripts" : [ "petports_petport.lua", "work/asterite.lua", "work/fish.lua", "work/animal.lua", "work/trap.lua", "work/harvest.lua", "work/water.lua", "work/replant.lua", "work/medic.lua", "work/collect.lua", "work/deposit.lua", "work/upcycle.lua", "work/feed.lua", "work/machines.lua" ],
+  "scripts" : [ "petports_petport.lua", "work/asterite.lua", "work/fish.lua", "work/animal.lua", "work/trap.lua", "work/harvest.lua", "work/water.lua", "work/replant.lua", "work/medic.lua", "work/collect.lua", "work/deposit.lua", "work/upcycle.lua", "work/feed.lua", "work/machines.lua", "work/restock.lua", "work/defrag.lua", "work/return.lua", "work/diagnostic.lua" ],
   "scriptDelta" : 5,
 
   "animation" : "petports_petport.animation",
