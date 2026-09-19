@@ -74,7 +74,7 @@
     }
   ],
 
-  "scripts" : [ "petports_petport.lua" ],
+  "scripts" : [ "petports_petport.lua", "work/asterite.lua" ],
   "scriptDelta" : 5,
 
   "animation" : "petports_petport.animation",

@@ -2,6 +2,8 @@
 
 petportsTaskAction = {}
 
+petports_taskArrive = petports_taskArrive or {}
+
 local APPROACH_TIMEOUT = 20.0
 
 local ARRIVAL_DISTANCE = 1.5
@@ -16,7 +18,7 @@ local FUEL_TRACE = false
 
 local MEDIA_TRACE_INTERVAL = 0.25
 
-local BUILD_STAMP = "2026-09-17d the task action mirrors arrival to the contract"
+local BUILD_STAMP = "2026-09-18e the asterite spark projectile is named in PETPORTS_CONSTANTS"
 local stampLogged = false
 
 local SEARCH_LIMIT = 6.0
@@ -1545,7 +1547,7 @@ local TASK_MOVING_DISTANCE = 2.0
 local TASK_MOVING_INTERVAL = 0.2
 
 -- Sends a task outcome to the port and drops the held task.
-local function report(stateData, outcome, reason, cargo, retry)
+function petports_taskReport(stateData, outcome, reason, cargo, retry)
   local task = stateData.task
 
   sb.logInfo("UNIT reporting %s for %s: %s (ended at %s, target %s, hops %s, moved %s)",
@@ -2465,94 +2467,14 @@ local function runAndMunch(dt, task)
 end
 
 
-local ASTERITE_SWING_PERIOD = 0.25
-local ASTERITE_SWINGS_MIN = 1
-
-local ASTERITE_SPARKS = 6
-
-local ASTERITE_CLEAR_MARGIN = 1
-
--- Returns the swing count, mining particle and mining sounds for a tile mod.
-local function asteriteEffects(modName)
-	local swings = ASTERITE_SWINGS_MIN
-	local particle = nil
-	local sounds = nil
-
-	local ok, mod = pcall(root.modConfig, modName)
-
-	if not ok or type(mod) ~= "table" or type(mod.config) ~= "table" then
-		return swings, particle, sounds
-	end
-
-	local health = tonumber(mod.config.health)
-	if health ~= nil and health > swings then swings = math.floor(health) end
-
-	if type(mod.config.miningParticle) == "string" then
-		particle = mod.config.miningParticle
-	end
-
-	if type(mod.config.miningSounds) == "table"
-	   and #mod.config.miningSounds > 0 then
-
-		local base = nil
-		if type(mod.path) == "string" then
-			base = mod.path:match("^(.*/)[^/]*$")
-		end
-
-		sounds = {}
-
-		for _, entry in ipairs(mod.config.miningSounds) do
-			if type(entry) == "string" then
-				if entry:sub(1, 1) == "/" or base == nil then
-					sounds[#sounds + 1] = entry
-				else
-					sounds[#sounds + 1] = base .. entry
-				end
-			end
-		end
-
-		if #sounds == 0 then sounds = nil end
-	end
-
-	return swings, particle, sounds
-end
-
 -- Tells every player to draw a mining beam at a tile.
-local function publishBeam(centre, swings, period)
+function petports_publishBeam(centre, swings, period)
 	local ok, players = pcall(world.players)
 	if not ok or players == nil then return end
 
 	for _, id in ipairs(players) do
 		world.sendEntityMessage(id, "petports_beamShow", entity.id(), centre,
 			swings, period)
-	end
-end
-
--- Spawns a projectile that plays the mining particles and sounds when it reaps.
-local function asteriteSwingEffect(centre, particle, sounds)
-	local reap = {}
-
-	if particle ~= nil then
-		reap[#reap + 1] =
-		{
-			action = "loop",
-			count = ASTERITE_SPARKS,
-			body = { { action = "particle", specification = particle } }
-		}
-	end
-
-	if sounds ~= nil then
-		reap[#reap + 1] = { action = "sound", options = sounds }
-	end
-
-	if #reap == 0 then return end
-
-	local ok, err = pcall(world.spawnProjectile, "petports_asteritespark",
-		centre, entity.id(), { 0, 0 }, false, { actionOnReap = reap })
-
-	if not ok then
-		sb.logInfo("UNIT asterite swing effect failed at %s: %s",
-			sb.printJson(centre), tostring(err))
 	end
 end
 
@@ -3126,7 +3048,7 @@ local function petportsTaskUpdateInner(dt, stateData)
 
     local movingAt = world.entityPosition(movingId)
     if movingAt ~= nil and not petports_inNetwork(movingAt) then
-      report(stateData, "failed",
+      petports_taskReport(stateData, "failed",
         "the " .. movingRow.noun .. " left network coverage at "
         .. sb.printJson(movingAt))
       return true
@@ -3578,13 +3500,13 @@ local function petportsTaskUpdateInner(dt, stateData)
   local target = currentTarget(task)
   if target == nil then
     if task.type == "harvest" and stateData.swung then
-      report(stateData, "done",
+      petports_taskReport(stateData, "done",
         "harvested " .. sb.printJson(task.target)
         .. " at " .. sb.printJson(task.position) .. " (crop consumed)")
       return true
     end
 
-    report(stateData, "failed",
+    petports_taskReport(stateData, "failed",
       (task.type == "harvest") and "crop is gone before the swing"
         or "drop is gone")
     return true
@@ -3687,7 +3609,7 @@ local function petportsTaskUpdateInner(dt, stateData)
 
     if routing == "none" then
       stateData.routing = false
-      report(stateData, "failed",
+      petports_taskReport(stateData, "failed",
         "no vent route to " .. sb.printJson(target)
         .. " (hops used " .. sb.printJson(stateData.ventHops) .. ")")
       return true
@@ -3749,7 +3671,7 @@ local function petportsTaskUpdateInner(dt, stateData)
 
       if stateData.hopSeen[hopKey] > MAX_REPEAT_HOPS
          or stateData.ventHops > MAX_TASK_HOPS then
-        report(stateData, "failed",
+        petports_taskReport(stateData, "failed",
           "vent loop: " .. hopKey .. " x" .. sb.printJson(stateData.hopSeen[hopKey])
           .. " (hops " .. sb.printJson(stateData.ventHops) .. ")")
         return true
@@ -3876,7 +3798,7 @@ local function petportsTaskUpdateInner(dt, stateData)
       stateData.settleTimer = stateData.settleTimer + dt
 
       if stateData.settleTimer >= SETTLE_GRACE then
-        report(stateData, "failed",
+        petports_taskReport(stateData, "failed",
           "no standable position near " .. tostring(task.type) .. " target at "
           .. sb.printJson(target)
           .. " after " .. sb.printJson(SETTLE_GRACE) .. "s")
@@ -4170,7 +4092,7 @@ local function petportsTaskUpdateInner(dt, stateData)
             return false
           end
 
-          report(stateData, "failed",
+          petports_taskReport(stateData, "failed",
             "no net progress -- moved " .. sb.printJson(moved)
             .. " in " .. sb.printJson(PROGRESS_WINDOW * PROGRESS_STRIKES)
             .. "s at " .. sb.printJson(now)
@@ -4321,7 +4243,7 @@ local function petportsTaskUpdateInner(dt, stateData)
       local route = self.petportsNavLastRoute
       local why = (route ~= nil and route.why) or "no coarse route asked"
 
-      report(stateData, "failed", string.format(
+      petports_taskReport(stateData, "failed", string.format(
         "the only local plan crosses a liquid this chassis will not enter, "
         .. "and coarse nav has nothing closer (%s)", tostring(why)), nil, true)
       return true
@@ -4483,7 +4405,7 @@ local function petportsTaskUpdateInner(dt, stateData)
       local why = (stateData.movedTotal < 0.5)
         and "never moved" or "could not reach"
 
-      report(stateData, "failed",
+      petports_taskReport(stateData, "failed",
         why .. ", unit at " .. sb.printJson(here)
         .. " target " .. sb.printJson(task.position)
         .. " moved " .. sb.printJson(stateData.movedTotal)
@@ -4499,7 +4421,7 @@ local function petportsTaskUpdateInner(dt, stateData)
 
     if self.pathing.stuck then
       sb.logInfo("UNIT pathing.stuck is set -- vanilla PathMover gave up")
-      report(stateData, "failed", "stuck at " .. sb.printJson(mcontroller.position()))
+      petports_taskReport(stateData, "failed", "stuck at " .. sb.printJson(mcontroller.position()))
       return true
     end
 
@@ -4510,7 +4432,7 @@ local function petportsTaskUpdateInner(dt, stateData)
   if chasedId ~= nil and chasedRow.reach ~= nil then
     if not world.entityExists(chasedId) then
       if not chasedRow.goneIsDone then
-        report(stateData, "failed", string.format(
+        petports_taskReport(stateData, "failed", string.format(
           "the %s was gone before the unit reached it", chasedRow.noun))
         return true
       end
@@ -4538,7 +4460,7 @@ local function petportsTaskUpdateInner(dt, stateData)
 
         stateData.dwellTimer = stateData.dwellTimer - dt
         if stateData.dwellTimer <= 0 then
-          report(stateData, "failed", string.format(
+          petports_taskReport(stateData, "failed", string.format(
             "arrived but the %s is %s away (reach %s) -- it kept moving",
             chasedRow.noun, sb.printJson(gap or "unknown"),
             sb.printJson(chasedRow.reach)), nil, true)
@@ -4548,6 +4470,9 @@ local function petportsTaskUpdateInner(dt, stateData)
       end
     end
   end
+
+  local arrive = petports_taskArrive[task.type]
+  if arrive ~= nil then return arrive(dt, stateData, task) end
 
   if task.type == "animal" then
     local here = mcontroller.position()
@@ -4563,7 +4488,7 @@ local function petportsTaskUpdateInner(dt, stateData)
       and (params.harvestTime or base.harvestTime) ~= nil
 
     if not harvestable then
-      report(stateData, "failed", string.format(
+      petports_taskReport(stateData, "failed", string.format(
         "animal %s is type %s, which declares no harvest -- not poking it",
         sb.printJson(task.target), tostring(animalType)))
       return true
@@ -4573,7 +4498,7 @@ local function petportsTaskUpdateInner(dt, stateData)
       "hasMonsterHarvest")
 
     if not okBefore or before ~= true then
-      report(stateData, "failed", string.format(
+      petports_taskReport(stateData, "failed", string.format(
         "animal %s is not ready (hasMonsterHarvest %s) -- harvested by someone else?",
         sb.printJson(task.target), tostring(before)))
       return true
@@ -4590,13 +4515,13 @@ local function petportsTaskUpdateInner(dt, stateData)
       tostring(before), tostring(after))
 
     if okAfter and after == false then
-      report(stateData, "done",
+      petports_taskReport(stateData, "done",
         "harvested animal " .. sb.printJson(task.target)
         .. " at " .. sb.printJson(there))
       return true
     end
 
-    report(stateData, "failed", string.format(
+    petports_taskReport(stateData, "failed", string.format(
       "poked %s and it is still ready (%s) -- dropMonsterHarvest did not run",
       sb.printJson(task.target), tostring(after)))
     return true
@@ -4604,7 +4529,7 @@ local function petportsTaskUpdateInner(dt, stateData)
 
   if task.type == "trap" then
     if not world.entityExists(task.target) then
-      report(stateData, "failed", "trap was gone on arrival")
+      petports_taskReport(stateData, "failed", "trap was gone on arrival")
       return true
     end
 
@@ -4613,7 +4538,7 @@ local function petportsTaskUpdateInner(dt, stateData)
     local reach = world.magnitude(here, there)
 
     if reach > TRAP_REACH then
-      report(stateData, "failed", string.format(
+      petports_taskReport(stateData, "failed", string.format(
         "arrived but %s tiles from the trap at %s (unit at %s)",
         sb.printJson(reach), sb.printJson(there), sb.printJson(here)))
       return true
@@ -4623,7 +4548,7 @@ local function petportsTaskUpdateInner(dt, stateData)
       "activeAge")
 
     if not okBefore or type(before) ~= "number" then
-      report(stateData, "failed", string.format(
+      petports_taskReport(stateData, "failed", string.format(
         "trap %s did not answer activeAge (%s) -- not a harvestable, or its "
         .. "script is dead",
         sb.printJson(task.target), tostring(before)))
@@ -4633,7 +4558,7 @@ local function petportsTaskUpdateInner(dt, stateData)
     local ripeAt = tonumber(task.ripeAt) or 0
 
     if before < ripeAt then
-      report(stateData, "failed", string.format(
+      petports_taskReport(stateData, "failed", string.format(
         "trap %s is not ready: active age %s of %s -- emptied by someone else?",
         sb.printJson(task.target), sb.printJson(before), sb.printJson(ripeAt)))
       return true
@@ -4651,13 +4576,13 @@ local function petportsTaskUpdateInner(dt, stateData)
       sb.printJson(before), tostring(after), sb.printJson(ripeAt))
 
     if okAfter and type(after) == "number" and after < before then
-      report(stateData, "done",
+      petports_taskReport(stateData, "done",
         "harvested trap " .. sb.printJson(task.target)
         .. " at " .. sb.printJson(there))
       return true
     end
 
-    report(stateData, "failed", string.format(
+    petports_taskReport(stateData, "failed", string.format(
       "called dropHarvest on %s and its active age did not reset (%s -> %s) "
       .. "-- the trap was not on its harvest stage",
       sb.printJson(task.target), sb.printJson(before), tostring(after)))
@@ -4666,7 +4591,7 @@ local function petportsTaskUpdateInner(dt, stateData)
 
   if task.type == "medic" then
     if task.target == nil or not world.entityExists(task.target) then
-      report(stateData, "done", string.format(
+      petports_taskReport(stateData, "done", string.format(
         "patient %s is gone -- no dose spent", sb.printJson(task.target)))
       return true
     end
@@ -4674,13 +4599,13 @@ local function petportsTaskUpdateInner(dt, stateData)
     local health = world.entityHealth(task.target)
 
     if type(health) ~= "table" or health[2] == nil or health[2] <= 0 then
-      report(stateData, "done", string.format(
+      petports_taskReport(stateData, "done", string.format(
         "patient %s reports no health -- no dose spent", sb.printJson(task.target)))
       return true
     end
 
     if health[1] >= health[2] then
-      report(stateData, "done", string.format(
+      petports_taskReport(stateData, "done", string.format(
         "patient %s recovered on the way (%s/%s) -- no dose spent",
         sb.printJson(task.target), tostring(health[1]), tostring(health[2])))
       return true
@@ -4694,7 +4619,7 @@ local function petportsTaskUpdateInner(dt, stateData)
       task.projectile or "petports_medicburst", there, entity.id(), {0, 0}, false, {})
 
     if not ok then
-      report(stateData, "failed", string.format(
+      petports_taskReport(stateData, "failed", string.format(
         "spawnProjectile failed at patient %s: %s",
         sb.printJson(task.target), tostring(err)))
       return true
@@ -4707,7 +4632,7 @@ local function petportsTaskUpdateInner(dt, stateData)
 
     task.dosed = 1
 
-    report(stateData, "done", string.format(
+    petports_taskReport(stateData, "done", string.format(
       "dosed patient %s at %s/%s health", sb.printJson(task.target),
       tostring(health[1]), tostring(health[2])))
     return true
@@ -4719,7 +4644,7 @@ local function petportsTaskUpdateInner(dt, stateData)
     local tile = tiles[index]
 
     if tile == nil then
-      report(stateData, "done",
+      petports_taskReport(stateData, "done",
         "swept " .. sb.printJson(task.watered or 0) .. " tile(s)")
       return true
     end
@@ -4728,7 +4653,7 @@ local function petportsTaskUpdateInner(dt, stateData)
     local standing = { tile[1] + 0.5, tile[2] + 1.5 }
 
     if world.magnitude(here, standing) > WATER_REACH then
-      report(stateData, "failed", string.format(
+      petports_taskReport(stateData, "failed", string.format(
         "arrived but %s from tile %s -- sweep abandoned after %s tile(s)",
         sb.printJson(world.magnitude(here, standing)), sb.printJson(tile),
         sb.printJson(task.watered or 0)))
@@ -4762,7 +4687,7 @@ local function petportsTaskUpdateInner(dt, stateData)
         tostring(task.tint or "none"), tostring(ok), tostring(err or ""))
 
       if not ok then
-        report(stateData, "failed", string.format(
+        petports_taskReport(stateData, "failed", string.format(
           "spawnProjectile failed at %s after %s tile(s): %s",
           sb.printJson(tile), sb.printJson(task.watered or 0), tostring(err)))
         return true
@@ -4774,7 +4699,7 @@ local function petportsTaskUpdateInner(dt, stateData)
     task.waterIndex = index + 1
 
     if task.waterIndex > #tiles then
-      report(stateData, "done",
+      petports_taskReport(stateData, "done",
         "swept " .. sb.printJson(#tiles) .. " tile(s), watered "
         .. sb.printJson(task.watered or 0))
       return true
@@ -4795,7 +4720,7 @@ local function petportsTaskUpdateInner(dt, stateData)
     }
 
     if tileOccupied(tile, task.seed) then
-      report(stateData, "failed", string.format(
+      petports_taskReport(stateData, "failed", string.format(
         "footprint for %s at %s is occupied -- not planting",
         tostring(task.seed), sb.printJson(tile)))
       return true
@@ -4807,12 +4732,12 @@ local function petportsTaskUpdateInner(dt, stateData)
       sb.printJson(tile), tostring(task.seed), tostring(ok), tostring(placed))
 
     if tileOccupied(tile, task.seed) then
-      report(stateData, "done",
+      petports_taskReport(stateData, "done",
         "planted " .. tostring(task.seed) .. " at " .. sb.printJson(tile))
       return true
     end
 
-    report(stateData, "failed", string.format(
+    petports_taskReport(stateData, "failed", string.format(
       "placeObject(%s) at %s left nothing there -- untilled ground, "
       .. "or placement refused",
       tostring(task.seed), sb.printJson(tile)))
@@ -4826,7 +4751,7 @@ local function petportsTaskUpdateInner(dt, stateData)
       local reach = world.magnitude(here, cropPosition)
 
       if reach > HARVEST_REACH then
-        report(stateData, "failed", string.format(
+        petports_taskReport(stateData, "failed", string.format(
           "arrived but %s tiles from the crop at %s (unit at %s)",
           tostring(reach), sb.printJson(cropPosition), sb.printJson(here)))
         return true
@@ -4860,7 +4785,7 @@ local function petportsTaskUpdateInner(dt, stateData)
         sb.printJson(task.target), sb.printJson(stateData.stageBefore),
         sb.printJson(after))
 
-      report(stateData, "done",
+      petports_taskReport(stateData, "done",
         "harvested " .. sb.printJson(task.target)
         .. " at " .. sb.printJson(task.position)
         .. " (crop reset to stage " .. sb.printJson(after) .. ")")
@@ -4869,7 +4794,7 @@ local function petportsTaskUpdateInner(dt, stateData)
 
     stateData.verifyTimer = (stateData.verifyTimer or HARVEST_TIMEOUT) - dt
     if stateData.verifyTimer <= 0 then
-      report(stateData, "failed", string.format(
+      petports_taskReport(stateData, "failed", string.format(
         "swung at %s and nothing changed in %ss (stage still %s) "
         .. "-- crop was not ready, or FARMABLE_STAGE_BASE is wrong",
         sb.printJson(task.target), sb.printJson(HARVEST_TIMEOUT),
@@ -4894,7 +4819,7 @@ local function petportsTaskUpdateInner(dt, stateData)
 
     if pool == nil or pool == "empty" then
       pcall(world.callScriptedEntity, task.target, "despawn")
-      report(stateData, "done", string.format(
+      petports_taskReport(stateData, "done", string.format(
         "caught %s but it has no treasure pool (declared %s)",
         tostring(task.fishType), sb.printJson(declared)))
       return true
@@ -4903,7 +4828,7 @@ local function petportsTaskUpdateInner(dt, stateData)
     local okPool, poolExists = pcall(root.isTreasurePool, pool)
     if not okPool or poolExists ~= true then
       pcall(world.callScriptedEntity, task.target, "despawn")
-      report(stateData, "done", string.format(
+      petports_taskReport(stateData, "done", string.format(
         "caught %s but pool %s does not exist (declared %s)",
         tostring(task.fishType), tostring(pool), sb.printJson(declared)))
       return true
@@ -4913,7 +4838,7 @@ local function petportsTaskUpdateInner(dt, stateData)
     local okTreasure, treasure = pcall(root.createTreasure, pool, level)
 
     if not okTreasure or type(treasure) ~= "table" or #treasure == 0 then
-      report(stateData, "failed", string.format(
+      petports_taskReport(stateData, "failed", string.format(
         "caught %s but pool %s (declared %s) produced nothing at level %s: %s",
         tostring(task.fishType), tostring(pool), sb.printJson(declared),
         sb.printJson(level), tostring(treasure)))
@@ -4929,7 +4854,7 @@ local function petportsTaskUpdateInner(dt, stateData)
       tostring(task.fishRarity or "unknown rarity"), sb.printJson(there),
       sb.printJson(#treasure), tostring(pool), sb.printJson(level))
 
-    report(stateData, "done", string.format(
+    petports_taskReport(stateData, "done", string.format(
       "caught %s (%s)", tostring(task.fishType),
       tostring(task.fishRarity or "unknown rarity")), treasure)
     return true
@@ -4943,155 +4868,19 @@ local function petportsTaskUpdateInner(dt, stateData)
       sb.printJson(stateData.dwellTimer))
 
     if ok and taken then
-      report(stateData, "done",
+      petports_taskReport(stateData, "done",
         "collected at " .. sb.printJson(task.position), taken)
       return true
     end
 
     stateData.dwellTimer = stateData.dwellTimer - dt
     if stateData.dwellTimer <= 0 then
-      report(stateData, "failed",
+      petports_taskReport(stateData, "failed",
         "arrived but could not take drop (pcall ok=" .. tostring(ok) .. ")")
       return true
     end
 
     return false
-  end
-
-  if task.type == "asterite" then
-    local tile = task.tile
-
-    if type(tile) ~= "table" or tile[1] == nil or tile[2] == nil then
-      report(stateData, "failed", "asterite task carried no tile")
-      return true
-    end
-
-    local modName = task.mod or PETPORTS_ASTERITE_MOD
-    local centre = { tile[1] + 0.5, tile[2] + 0.5 }
-
-    local okMod, before = pcall(world.mod, tile, "foreground")
-    local okMat, material = pcall(world.material, tile, "foreground")
-
-    if not okMod then
-      report(stateData, "failed", string.format(
-        "could not read the tile at %s on arrival", sb.printJson(tile)),
-        nil, true)
-      return true
-    end
-
-    if before ~= modName then
-      local cleared = petports_asteriteClear(task.target)
-
-      report(stateData, "failed", string.format(
-        "arrived to find %s at %s, not %s -- entry dropped: %s",
-        tostring(before), sb.printJson(tile), tostring(modName),
-        tostring(cleared)))
-      return true
-    end
-
-    local here = mcontroller.position()
-    local range = world.magnitude(here, centre)
-    local reach = petports_asteriteReach()
-
-    if range > reach then
-      report(stateData, "failed", string.format(
-        "arrived %s from the deposit at %s but reach is %s (unit at %s, "
-        .. "standing point was %s)", sb.printJson(math.floor(range * 100) / 100),
-        sb.printJson(tile), sb.printJson(reach), sb.printJson(here),
-        sb.printJson(task.position)), nil, true)
-      return true
-    end
-
-    if task.asteriteSwings == nil then
-      local swings, particle, sounds = asteriteEffects(modName)
-
-      task.asteriteSwings = swings
-      task.asteriteParticle = particle
-      task.asteriteSounds = sounds
-      task.asteriteSwung = 0
-      task.asteriteTimer = 0
-
-      publishBeam(centre, swings, ASTERITE_SWING_PERIOD)
-
-      sb.logInfo("UNIT asterite mining %s at %s: %s swing(s) at %ss, particle "
-        .. "%s, %s sound(s)", tostring(modName), sb.printJson(tile),
-        sb.printJson(swings), sb.printJson(ASTERITE_SWING_PERIOD),
-        tostring(particle or "none"),
-        sb.printJson(sounds ~= nil and #sounds or 0))
-    end
-
-    task.asteriteTimer = (task.asteriteTimer or 0) - dt
-
-    if task.asteriteTimer > 0 then return false end
-
-    if task.asteriteSwung < task.asteriteSwings then
-      task.asteriteSwung = task.asteriteSwung + 1
-      asteriteSwingEffect(centre, task.asteriteParticle, task.asteriteSounds)
-      task.asteriteTimer = ASTERITE_SWING_PERIOD
-
-      return false
-    end
-
-    local okConfig, mod = pcall(root.modConfig, modName)
-    local drop = nil
-
-    if okConfig and type(mod) == "table" and type(mod.config) == "table" then
-      drop = mod.config.itemDrop
-    end
-
-    if type(drop) ~= "string" or drop == "" then
-      report(stateData, "failed", string.format(
-        "matmod %s names no itemDrop -- refusing to remove it for nothing",
-        tostring(modName)))
-      return true
-    end
-
-    local okPlace, placed = pcall(world.placeMod, tile, "foreground",
-      PETPORTS_ASTERITE_CLEARED, nil, true)
-
-    local _, after = pcall(world.mod, tile, "foreground")
-    local _, materialAfter = pcall(world.material, tile, "foreground")
-
-    if after == modName then
-      report(stateData, "failed", string.format(
-        "placeMod at %s ok %s returned %s and the deposit is still there",
-        sb.printJson(tile), tostring(okPlace), tostring(placed)), nil, true)
-      return true
-    end
-
-    local clearHealth = 0
-    local okCleared, cleared = pcall(root.modConfig, PETPORTS_ASTERITE_CLEARED)
-
-    if okCleared and type(cleared) == "table" and type(cleared.config) == "table" then
-      clearHealth = tonumber(cleared.config.health) or 0
-    end
-
-    local okClear = pcall(world.damageTiles, { tile }, "foreground",
-      mcontroller.position(), "blockish", clearHealth + ASTERITE_CLEAR_MARGIN,
-      0, entity.id())
-
-    if not okClear then
-      sb.logInfo("UNIT asterite clearing damage THREW at %s -- the placeholder "
-        .. "stays until something overwrites it", sb.printJson(tile))
-    end
-
-
-    if okMat and materialAfter ~= material then
-      sb.logInfo("UNIT asterite DESTROYED THE TILE at %s: %s became %s. This "
-        .. "should be impossible via placeMod and the module must be pulled "
-        .. "until it is understood", sb.printJson(tile), tostring(material),
-        tostring(materialAfter))
-    end
-
-    petports_asteriteClear(task.target)
-
-    report(stateData, "done", string.format(
-      "mined %s at %s in %s swing(s) (%s -> %s, cleared, %s intact)",
-      tostring(drop), sb.printJson(tile), sb.printJson(task.asteriteSwung or 0),
-      tostring(before), tostring(after),
-      tostring(material)), { name = drop, count = 1 })
-
-    return true
   end
 
   if task.hold then
@@ -5134,7 +4923,7 @@ local function petportsTaskUpdateInner(dt, stateData)
 
   stateData.dwellTimer = stateData.dwellTimer - dt
   if stateData.dwellTimer <= 0 then
-    report(stateData, "done",
+    petports_taskReport(stateData, "done",
       "reached " .. sb.printJson(task.position)
       .. " from " .. sb.printJson(stateData.startPosition))
     return true
@@ -5165,7 +4954,7 @@ function petportsTaskAction.leavingState(stateData)
 
   if self.petportsTask ~= nil and stateData.task ~= nil
      and self.petportsTask.id == stateData.task.id then
-    report(stateData, "failed", "interrupted")
+    petports_taskReport(stateData, "failed", "interrupted")
   end
 end
 
@@ -5217,243 +5006,4 @@ function petportsTaskAction.update(dt, stateData)
   if petports_profTickEnd ~= nil then petports_profTickEnd() end
 
   return result
-end
-
-
-
-local ASTERITE_REACH_BASE = 8
-local ASTERITE_REACH_MAX = 12
-
--- Returns the mining reach for this body size, capped.
-function petports_asteriteReach()
-	local bounds = mcontroller.boundBox()
-	local body = 0
-
-	if type(bounds) == "table" and #bounds >= 4 then
-		body = math.max(math.abs(bounds[3] - bounds[1]),
-			math.abs(bounds[4] - bounds[2]))
-	end
-
-	return math.min(ASTERITE_REACH_BASE + body, ASTERITE_REACH_MAX)
-end
-
--- Returns the closest stored asterite deposit, with its key and range.
-local function nearestDeposit()
-	local here = mcontroller.position()
-	local bestKey, bestEntry, bestRange
-
-	for key, entry in pairs(petports_asteriteAll()) do
-		if type(entry) == "table" and type(entry.position) == "table" then
-			local range = world.magnitude(here,
-				{ entry.position[1] + 0.5, entry.position[2] + 0.5 })
-
-			if bestRange == nil or range < bestRange then
-				bestKey, bestEntry, bestRange = key, entry, range
-			end
-		end
-	end
-
-	return bestKey, bestEntry, bestRange
-end
-
--- Returns a number truncated to two decimal places.
-local function round2(n)
-	return math.floor((tonumber(n) or 0) * 100) / 100
-end
-
--- Places a matmod on a tile and logs the mod and material before and after.
-function petports_asteriteSetMod(x, y, newMod, allowOverlap)
-	if allowOverlap == nil then allowOverlap = true end
-
-	local tile = { math.floor(tonumber(x) or 0), math.floor(tonumber(y) or 0) }
-
-	local okMod, before = pcall(world.mod, tile, "foreground")
-	local okMat, material = pcall(world.material, tile, "foreground")
-
-	local okConfig = pcall(root.modConfig, tostring(newMod))
-
-	sb.logInfo("UNIT placeMod harness at %s: mod %s, material %s -- asking for "
-		.. "%s (modConfig resolves: %s), allowOverlap %s",
-		sb.printJson(tile), tostring(okMod and before),
-		tostring(okMat and material), tostring(newMod), tostring(okConfig),
-		tostring(allowOverlap))
-
-	local okPlace, placed = pcall(world.placeMod, tile, "foreground",
-		tostring(newMod), nil, allowOverlap)
-
-	local _, after = pcall(world.mod, tile, "foreground")
-	local _, materialAfter = pcall(world.material, tile, "foreground")
-
-	sb.logInfo("UNIT placeMod harness RESULT: ok %s returned %s -- mod %s to "
-		.. "%s (%s), material %s to %s (%s)",
-		tostring(okPlace), tostring(placed),
-		tostring(before), tostring(after),
-		(after ~= before) and "CHANGED" or "UNCHANGED",
-		tostring(material), tostring(materialAfter),
-		(materialAfter == material) and "INTACT" or "CHANGED")
-
-	return placed
-end
-
--- Damages a tile and logs the mod and material before and after.
-function petports_asteriteDamage(x, y, amount, damageType, harvestLevel)
-	local tile = { math.floor(tonumber(x) or 0), math.floor(tonumber(y) or 0) }
-
-	amount = tonumber(amount) or 5
-	damageType = tostring(damageType or "beamish")
-
-	local okMod, before = pcall(world.mod, tile, "foreground")
-	local okMat, material = pcall(world.material, tile, "foreground")
-
-	local modHealth, modHarvest
-	local okConfig, mod = pcall(root.modConfig, tostring(okMod and before))
-
-	if okConfig and type(mod) == "table" and type(mod.config) == "table" then
-		modHealth = mod.config.health
-		modHarvest = mod.config.harvestLevel
-	end
-
-	if harvestLevel == nil then harvestLevel = modHarvest end
-
-	sb.logInfo("UNIT damageTiles harness at %s: mod %s (health %s, harvest "
-		.. "%s), material %s -- %s damage of type %s at harvestLevel %s",
-		sb.printJson(tile), tostring(okMod and before),
-		sb.printJson(modHealth), sb.printJson(modHarvest),
-		tostring(okMat and material), sb.printJson(amount), damageType,
-		sb.printJson(harvestLevel))
-
-	local okDamage, damaged = pcall(world.damageTiles, { tile }, "foreground",
-		mcontroller.position(), damageType, amount,
-		tonumber(harvestLevel) or 0, entity.id())
-
-	local _, after = pcall(world.mod, tile, "foreground")
-	local _, materialAfter = pcall(world.material, tile, "foreground")
-
-	sb.logInfo("UNIT damageTiles harness RESULT: ok %s returned %s -- mod %s "
-		.. "to %s (%s), material %s to %s (%s)",
-		tostring(okDamage), tostring(damaged),
-		tostring(before), tostring(after),
-		(after ~= before) and "CHANGED" or "UNCHANGED",
-		tostring(material), tostring(materialAfter),
-		(materialAfter == material) and "INTACT" or "GONE")
-
-	return damaged
-end
-
--- Clears the asterite mod off a tile within reach, spawns its item drop, and drops the store entry.
-function petports_asteriteMine(x, y, allowOverlap, reachOverride)
-	if allowOverlap == nil then allowOverlap = true end
-
-	local modName = PETPORTS_ASTERITE_MOD
-	local tile, key
-
-	if x ~= nil and y ~= nil then
-		tile = { math.floor(tonumber(x) or 0), math.floor(tonumber(y) or 0) }
-		key = petports_tileKey(tile)
-	else
-		local entry
-		key, entry = nearestDeposit()
-
-		if entry == nil then
-			sb.logInfo("UNIT asterite probe: the store holds no deposits. Let a "
-				.. "port scan one up first, or pass a tile by hand")
-			return false
-		end
-
-		tile = { entry.position[1], entry.position[2] }
-
-		modName = entry.mod or modName
-	end
-
-	local centre = { tile[1] + 0.5, tile[2] + 0.5 }
-	local here = mcontroller.position()
-	local range = world.magnitude(here, centre)
-
-	local reach = tonumber(reachOverride) or petports_asteriteReach()
-
-	local okMod, before = pcall(world.mod, tile, "foreground")
-	local okMat, material = pcall(world.material, tile, "foreground")
-
-	sb.logInfo("UNIT asterite probe at %s: mod %s, material %s, range %s of "
-		.. "reach %s, allowOverlap %s",
-		sb.printJson(tile), tostring(okMod and before),
-		tostring(okMat and material), sb.printJson(round2(range)),
-		sb.printJson(reach), tostring(allowOverlap))
-
-	if not okMod or before ~= modName then
-		sb.logInfo("UNIT asterite probe REFUSED: that tile carries %s, not %s",
-			tostring(okMod and before), tostring(modName))
-
-		if okMod and petports_asteriteClear(key) then
-			sb.logInfo("UNIT asterite dropped the stale entry for %s (store "
-				.. "now %s)", tostring(key),
-				sb.printJson(petports_asteriteCount()))
-		end
-
-		return false
-	end
-
-	if range > reach then
-		sb.logInfo("UNIT asterite probe REFUSED: out of reach by %s tiles. "
-			.. "Unit is at %s, tile centre is %s -- pass a fourth argument to "
-			.. "override the reach and test the removal from here",
-			sb.printJson(round2(range - reach)), sb.printJson(here),
-			sb.printJson(centre))
-		return false
-	end
-
-	local okPlace, placed = pcall(world.placeMod, tile, "foreground",
-		PETPORTS_ASTERITE_CLEARED, nil, allowOverlap)
-
-	local _, after = pcall(world.mod, tile, "foreground")
-	local _, materialAfter = pcall(world.material, tile, "foreground")
-
-	local removed = (after ~= modName)
-	local intact = (materialAfter == material)
-
-	sb.logInfo("UNIT asterite probe RESULT: placeMod ok %s returned %s -- mod "
-		.. "%s to %s (%s), material %s to %s (%s)",
-		tostring(okPlace), tostring(placed),
-		tostring(before), tostring(after),
-		removed and "REMOVED" or "STILL THERE",
-		tostring(material), tostring(materialAfter),
-		intact and "INTACT" or "CHANGED")
-
-	if not removed then
-		sb.logInfo("UNIT asterite probe FAILED: the mod survived. If this ran "
-			.. "with allowOverlap true, try false; if both fail then placeMod "
-			.. "is not reaching the world from a monster and the removal needs "
-			.. "the projectile route instead")
-		return false
-	end
-
-	if not intact then
-		sb.logInfo("UNIT asterite probe DESTROYED THE TILE: %s became %s. "
-			.. "placeMod is not a safe removal for a breaksWithTile mod and the "
-			.. "feature needs a different primitive",
-			tostring(material), tostring(materialAfter))
-	end
-
-	local okConfig, mod = pcall(root.modConfig, modName)
-	local drop = nil
-
-	if okConfig and type(mod) == "table" and type(mod.config) == "table" then
-		drop = mod.config.itemDrop
-	end
-
-	if type(drop) == "string" and drop ~= "" then
-		local okSpawn = pcall(world.spawnItem, drop, centre, 1)
-		sb.logInfo("UNIT asterite probe dropped %s x1 at %s (spawn ok %s)",
-			tostring(drop), sb.printJson(centre), tostring(okSpawn))
-	else
-		sb.logInfo("UNIT asterite probe: matmod %s names no itemDrop, so "
-			.. "nothing was spawned", tostring(modName))
-	end
-
-	local cleared = petports_asteriteClear(key)
-
-	sb.logInfo("UNIT asterite probe cleared store entry %s: %s (store now %s)",
-		tostring(key), tostring(cleared), sb.printJson(petports_asteriteCount()))
-
-	return true
 end

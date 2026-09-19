@@ -47,6 +47,7 @@
       "/monsters/lofty_petports/petports_bubble.lua",
       "/monsters/lofty_petports/petportsSleepAction.lua",
       "/monsters/lofty_petports/petportsTaskAction.lua",
+      "/monsters/lofty_petports/tasks/asterite.lua",
 
       "/monsters/lofty_petports/petports_flyapproach.lua"
     ],

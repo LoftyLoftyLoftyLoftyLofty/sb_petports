@@ -258,13 +258,13 @@ function countFed(flavor)
 end
 
 -- Returns this port's coverage rect.
-local function coverageRect()
+function petports_portCoverageRect()
   return petports_coverageRect(entity.position(), COVERAGE_SIZE)
 end
 
 -- Writes this port's rect, position and network id into the registry, dropping any predecessor on the tile.
 local function publishRegistry()
-  local rect = coverageRect()
+  local rect = petports_portCoverageRect()
 
   petports_registryClearAt(entity.position(), stationUniqueId())
 
@@ -315,7 +315,7 @@ local function gatherVents()
 	local ventReport = {}
 
   local rects = self.networkRects
-  if rects == nil or #rects == 0 then rects = { coverageRect() } end
+  if rects == nil or #rects == 0 then rects = { petports_portCoverageRect() } end
 
   local inflated = {}
   for _, area in ipairs(rects) do
@@ -476,7 +476,7 @@ end
 -- Returns whether a position lies in the network's rects.
 local function inNetwork(position)
   local rects = self.networkRects
-  if rects == nil or #rects == 0 then rects = { coverageRect() } end
+  if rects == nil or #rects == 0 then rects = { petports_portCoverageRect() } end
 
   for _, area in ipairs(rects) do
     if petports_rectContains(area, position) then return true end
@@ -485,12 +485,12 @@ local function inNetwork(position)
 end
 
 
-FAMILY_HELD = { asterite = true, animal = true }
+FAMILY_HELD = { animal = true }
 FAMILY_STRIKES = 3
 FAMILY_HOLD = 120.0
 
 -- Returns whether a work family is held, releasing it once its hold expires.
-local function familyOnHold(family)
+function petports_familyOnHold(family)
   local until_ = self.familyHold and self.familyHold[family]
   if until_ == nil then return false end
   if world.time() >= until_ then
@@ -615,7 +615,7 @@ local function abandonTask(reason)
   self.task = nil
 end
 
-local PETPORT_BUILD_STAMP = "2026-09-15c no dispatch lists every generator that ran, not only when harvest did"
+local PETPORT_BUILD_STAMP = "2026-09-19a work entries sharing an order compete and the nearest work wins"
 
 PETPORT_PROFILE = true
 
@@ -687,166 +687,6 @@ end
 
 
 
--- Turns asterite scanning on only when the matmod exists and drops a real item.
-function asteriteLatch()
-  self.asteriteEnabled = false
-  self.asteriteDrop = nil
-
-  local ok, mod = pcall(root.modConfig, PETPORTS_ASTERITE_MOD)
-
-  if not ok or type(mod) ~= "table" or type(mod.config) ~= "table" then
-    sb.logInfo("PETPORT asterite scan OFF: no matmod named %s in this asset "
-      .. "tree, so there is nothing for this port to look for",
-      PETPORTS_ASTERITE_MOD)
-    return
-  end
-
-  local drop = mod.config.itemDrop
-
-  if type(drop) ~= "string" or drop == "" then
-    sb.logInfo("PETPORT asterite scan OFF: matmod %s declares no itemDrop, so "
-      .. "mining it would yield nothing", PETPORTS_ASTERITE_MOD)
-    return
-  end
-
-  local okItem, item = pcall(root.itemConfig, drop)
-
-  if not okItem or item == nil then
-    sb.logInfo("PETPORT asterite scan OFF: matmod %s drops %s and no such item "
-      .. "exists", PETPORTS_ASTERITE_MOD, tostring(drop))
-    return
-  end
-
-  self.asteriteEnabled = true
-  self.asteriteDrop = drop
-
-  sb.logInfo("PETPORT asterite scan ON: matmod %s drops %s, %s tiles per sweep",
-    PETPORTS_ASTERITE_MOD, tostring(drop),
-    sb.printJson(math.floor(COVERAGE_SIZE) * math.floor(COVERAGE_SIZE)))
-end
-
--- Returns a scan start index hashed from this port's unique id.
-function asteriteCursorSeed()
-  local uniqueId = tostring(stationUniqueId() or "")
-  local h = 0
-
-  for i = 1, #uniqueId do
-    h = (h * 31 + string.byte(uniqueId, i)) % 1048576
-  end
-
-  return h
-end
-
--- Checks one tile of the coverage rect for the asterite mod, noting it in the store, and wraps at the end of a sweep.
-function asteriteScanStep()
-  if not self.asteriteEnabled then return end
-
-  local size = math.floor(COVERAGE_SIZE)
-  if size < 1 then return end
-
-  local span = size * size
-
-  if self.asteriteCursor == nil then
-    self.asteriteCursor = asteriteCursorSeed() % span
-    self.asteriteSweepAt = world.time()
-    self.asteriteSweepNew = 0
-    self.asteriteSweepSeen = 0
-
-    sb.logInfo("PETPORT asterite scan starting at index %s of %s",
-      sb.printJson(self.asteriteCursor), sb.printJson(span))
-  end
-
-  local rect = coverageRect()
-  local index = self.asteriteCursor
-
-  local tile =
-  {
-    math.floor(rect[1]) + (index % size),
-    math.floor(rect[2]) + math.floor(index / size)
-  }
-
-  local ok, modName = pcall(world.mod, tile, "foreground")
-
-  if ok and modName == PETPORTS_ASTERITE_MOD then
-    self.asteriteSweepSeen = (self.asteriteSweepSeen or 0) + 1
-
-    local added, count, full =
-      petports_asteriteNote(tile, modName, stationUniqueId())
-
-    if added then
-      self.asteriteSweepNew = (self.asteriteSweepNew or 0) + 1
-
-      sb.logInfo("PETPORT asterite FOUND %s at %s (store now %s)",
-        tostring(modName), sb.printJson(tile), sb.printJson(count))
-    end
-
-    if full ~= self.asteriteFullSaid then
-      self.asteriteFullSaid = full
-
-      if full then
-        sb.logInfo("PETPORT asterite store FULL at %s entries; new deposits "
-          .. "refused until something is mined", sb.printJson(count))
-      else
-        sb.logInfo("PETPORT asterite store has room again at %s entries",
-          sb.printJson(count))
-      end
-    end
-  end
-
-  index = index + 1
-
-  if index >= span then
-    index = 0
-
-    local elapsed = world.time() - (self.asteriteSweepAt or world.time())
-    local seen = self.asteriteSweepSeen or 0
-    local new = self.asteriteSweepNew or 0
-
-    sb.logInfo("PETPORT asterite SCAN WRAP: %s tiles in %s s, %s deposit(s) "
-      .. "seen, %s new, %s already known, store %s",
-      sb.printJson(span), sb.printJson(math.floor(elapsed)),
-      sb.printJson(seen), sb.printJson(new), sb.printJson(seen - new),
-      sb.printJson(petports_asteriteCount()))
-
-    self.asteriteSweepAt = world.time()
-    self.asteriteSweepNew = 0
-    self.asteriteSweepSeen = 0
-  end
-
-  self.asteriteCursor = index
-end
-
--- Logs the stored deposits up to a limit and returns how many there are.
-function petports_asteriteDump(limit)
-  limit = tonumber(limit) or 40
-
-  local deposits = petports_asteriteAll()
-  local n = 0
-  local shown = 0
-
-  for _, entry in pairs(deposits) do
-    n = n + 1
-
-    if shown < limit then
-      shown = shown + 1
-
-      sb.logInfo("PETPORT asterite [%s] %s at %s, found at %s by %s",
-        sb.printJson(n), tostring(entry.mod), sb.printJson(entry.position),
-        sb.printJson(math.floor(tonumber(entry.found) or 0)),
-        tostring(entry.finder))
-    end
-  end
-
-  sb.logInfo("PETPORT asterite dump: %s deposit(s) of %s shown, cap %s, "
-    .. "this port's scan is %s, cursor %s",
-    sb.printJson(shown), sb.printJson(n),
-    sb.printJson(petports_asteriteCap()),
-    self.asteriteEnabled and "ON" or "OFF",
-    sb.printJson(self.asteriteCursor or -1))
-
-  return n
-end
-
 -- Reads the config, clears the port state, and installs every message handler.
 function init()
   sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
@@ -855,14 +695,7 @@ function init()
   COVERAGE_SIZE = config.getParameter("petports_coverageSize", COVERAGE_SIZE)
   sb.logInfo("PETPORT coverage size: %s tiles", sb.printJson(COVERAGE_SIZE))
 
-  self.asteriteCursor = nil
-  self.asteriteSweepAt = nil
-  self.asteriteSweepNew = 0
-  self.asteriteSweepSeen = 0
-
-  self.asteriteFullSaid = false
-
-  asteriteLatch()
+  petports_workInit()
 
   self.petId = nil
 
@@ -1772,7 +1605,7 @@ end
 -- Scans the network for containers, returning the beacons, the deposit census, the machines and where each item is spread.
 local function scanContainers()
   local rects = self.networkRects
-  if rects == nil or #rects == 0 then rects = { coverageRect() } end
+  if rects == nil or #rects == 0 then rects = { petports_portCoverageRect() } end
 
   local found = {}
   local seen = {}
@@ -2911,8 +2744,6 @@ CAMOUFLAGE_FLAG = "camouflage"
 
 HYDRATOR_FLAG = "hydrator"
 
-ASTERITE_FLAG = "asterite"
-
 FUEL_EFFICIENCY_BONUS = {
   fuelefficiency1 = 120,
   fuelefficiency2 = 300,
@@ -3094,14 +2925,6 @@ end
 function petportHydrator()
   for _, flag in ipairs(petportModuleFlags()) do
     if flag == HYDRATOR_FLAG then return true end
-  end
-  return false
-end
-
--- Returns whether an asterite module is socketed.
-function petportAsterite()
-  for _, flag in ipairs(petportModuleFlags()) do
-    if flag == ASTERITE_FLAG then return true end
   end
   return false
 end
@@ -3552,11 +3375,11 @@ local function dispatchable(work)
   if work == nil then return nil end
 
   if RECT_CHECKED_TYPES[work.type]
-     and not petports_rectContains(coverageRect(), work.position) then
+     and not petports_rectContains(petports_portCoverageRect(), work.position) then
 
     local note = string.format("%s type %s at %s outside own rect %s",
       tostring(work.id), tostring(work.type), sb.printJson(work.position),
-      sb.printJson(coverageRect()))
+      sb.printJson(petports_portCoverageRect()))
 
     if self.lastRectSkip ~= note then
       self.lastRectSkip = note
@@ -3654,7 +3477,7 @@ local function targetRefused(label, reason)
 end
 
 -- Returns whether a target suits the chassis, recording the refusal when it does not.
-local function targetEligible(label, position, entityId)
+function petports_targetEligible(label, position, entityId)
   local ok, reason = targetSuits(position, entityId)
   if ok then return true end
 
@@ -3663,7 +3486,7 @@ local function targetEligible(label, position, entityId)
 end
 
 -- Asks the unit for a standable point beside a target's object bounds, or near its position.
-local function standingPointForTarget(position, entityId, radius, mediumVerified)
+function petports_standingPointForTarget(position, entityId, radius, mediumVerified)
   local bounds = petports_habitatObjectBounds(entityId)
 
   if bounds == nil then
@@ -3694,7 +3517,7 @@ local function servicePointNearUncached(label, entityId, position, radius)
   end
 
   local bounds = petports_habitatObjectBounds(entityId)
-  local stand = standingPointForTarget(position, entityId, radius or 4, true)
+  local stand = petports_standingPointForTarget(position, entityId, radius or 4, true)
 
   if stand == nil then
     if bounds ~= nil then
@@ -3752,7 +3575,7 @@ end
 
 -- Returns a task that walks the unit to a floor tile in this port's rect.
 local function diagnosticWork()
-  local rect = coverageRect()
+  local rect = petports_portCoverageRect()
   local position = findStandingPoint(rect)
 
   if position == nil then
@@ -3814,7 +3637,7 @@ end
 -- Returns a task to fetch the nearest unclaimed drop in the network, or nil with a tally of why each was passed over.
 local function collectionWork(mergeOnly)
   local rects = self.networkRects
-  if rects == nil or #rects == 0 then rects = { coverageRect() } end
+  if rects == nil or #rects == 0 then rects = { petports_portCoverageRect() } end
 
   local drops = {}
   local seen = {}
@@ -3830,7 +3653,7 @@ local function collectionWork(mergeOnly)
     end
   end
 
-  local rect = coverageRect()
+  local rect = petports_portCoverageRect()
 
   if drops == nil or #drops == 0 then
     local wide = { rect[1] - COVERAGE_SIZE, rect[2] - COVERAGE_SIZE,
@@ -3893,7 +3716,7 @@ local function collectionWork(mergeOnly)
       if position == nil then
         rejected.gone = rejected.gone + 1
 
-      elseif not targetEligible("drop " .. tostring(dropId), position, dropId) then
+      elseif not petports_targetEligible("drop " .. tostring(dropId), position, dropId) then
         rejected.medium = rejected.medium + 1
       else
         local from = origin
@@ -4007,7 +3830,7 @@ end
 -- Returns the hurt entities in the network the medic settings allow, most hurt first.
 local function medicPatients()
   local rects = self.networkRects
-  if rects == nil or #rects == 0 then rects = { coverageRect() } end
+  if rects == nil or #rects == 0 then rects = { petports_portCoverageRect() } end
 
   local candidates = {}
   local seen = {}
@@ -4088,7 +3911,7 @@ end
 -- Returns the rects fishing may use.
 local function fishingRects()
   local rects = self.networkRects
-  if rects == nil or #rects == 0 then rects = { coverageRect() } end
+  if rects == nil or #rects == 0 then rects = { petports_portCoverageRect() } end
   return rects
 end
 
@@ -4420,12 +4243,12 @@ local function homePosition()
   return findStandingPoint({
     entity.position()[1] - 4, entity.position()[2] - 4,
     entity.position()[1] + 4, entity.position()[2] + 4
-  }) or findStandingPoint(coverageRect())
+  }) or findStandingPoint(petports_portCoverageRect())
 end
 
 -- Returns a task to walk the unit home when it is stranded or outside the network, re-homing it once the recalls run out.
 local function returnWork()
-  local rect = coverageRect()
+  local rect = petports_portCoverageRect()
 
   if self.petId == nil or not world.entityExists(self.petId) then return nil end
 
@@ -4503,7 +4326,6 @@ end
 
 
 
-local claimFree
 
 
 MACHINE_SLOT_INPUT = 0
@@ -4696,7 +4518,7 @@ local function upcyclerWork()
         tostring(math.floor(machine.position[2])),
         tostring(failure.count)))
 
-    elseif not claimFree(workId) then
+    elseif not petports_claimFree(workId) then
       table.insert(declined, string.format("%s@%s,%s (claimed by another unit)",
         tostring(machine.kind),
         tostring(math.floor(machine.position[1])),
@@ -6135,7 +5957,7 @@ end
 
 
 -- Returns whether a work claim is free for this port to take.
-claimFree = function(workId)
+function petports_claimFree(workId)
 	local claim = petports_claimGet(workId)
 
 	return (claim == nil)
@@ -6420,7 +6242,7 @@ end
 -- Scans the network for crops and traps, returning each with its stage and whether it is ripe.
 local function scanFarmables()
 	local rects = self.networkRects
-	if rects == nil or #rects == 0 then rects = { coverageRect() } end
+	if rects == nil or #rects == 0 then rects = { petports_portCoverageRect() } end
 
 	local found = {}
 	local traps = {}
@@ -6551,7 +6373,7 @@ end
 -- Scans the network for harvestable farm animals.
 local function scanAnimals()
 	local rects = self.networkRects
-	if rects == nil or #rects == 0 then rects = { coverageRect() } end
+	if rects == nil or #rects == 0 then rects = { petports_portCoverageRect() } end
 
 	local found = {}
 	local seen = {}
@@ -6652,7 +6474,7 @@ local function animalWork()
 				rejected.notReady = rejected.notReady + 1
 			elseif backedOff then
 				rejected.backedOff = rejected.backedOff + 1
-			elseif not claimFree(workId) then
+			elseif not petports_claimFree(workId) then
 				rejected.claimed = rejected.claimed + 1
 			else
 				local position = world.entityPosition(animal.id)
@@ -6743,7 +6565,7 @@ local function harvestWork()
 		elseif not world.entityExists(crop.id) then
 			rejected.gone = rejected.gone + 1
 
-		elseif not targetEligible("crop " .. tostring(crop.id), crop.position, crop.id) then
+		elseif not petports_targetEligible("crop " .. tostring(crop.id), crop.position, crop.id) then
 			rejected.medium = rejected.medium + 1
 		else
 			local distance = world.magnitude(from, crop.position)
@@ -6824,7 +6646,7 @@ local function trapWork()
 		elseif not world.entityExists(trap.id) then
 			rejected.gone = rejected.gone + 1
 
-		elseif not targetEligible("trap " .. tostring(trap.id),
+		elseif not petports_targetEligible("trap " .. tostring(trap.id),
 			trap.position, trap.id) then
 			rejected.medium = rejected.medium + 1
 		else
@@ -6871,9 +6693,9 @@ local function trapWork()
 end
 
 -- Returns whether a position lies in the network's rects.
-local function inNetworkCoverage(position)
+function petports_inNetworkCoverage(position)
 	local rects = self.networkRects
-	if rects == nil or #rects == 0 then rects = { coverageRect() } end
+	if rects == nil or #rects == 0 then rects = { petports_portCoverageRect() } end
 
 	for _, rect in ipairs(rects) do
 		if petports_rectContains(rect, position) then return true end
@@ -6886,7 +6708,7 @@ end
 local function waterRunFrom(anchor)
 	-- Returns the tilled soil at a tile inside coverage, or nil.
 	local function farmlandAt(tile)
-		if not inNetworkCoverage({ tile[1] + 0.5, tile[2] + 0.5 }) then
+		if not petports_inNetworkCoverage({ tile[1] + 0.5, tile[2] + 0.5 }) then
 			return nil
 		end
 
@@ -6987,7 +6809,7 @@ end
 local function waterRunWorkable(run, tile)
 	if run == nil or tile == nil then return false end
 
-	return targetEligible("water run " .. tostring(run.key),
+	return petports_targetEligible("water run " .. tostring(run.key),
 		{ tile[1] + 0.5, tile[2] + 1.5 }, nil)
 end
 
@@ -7003,7 +6825,7 @@ local function waterWork()
 
 		local stack, want = carriedWaterFor(run)
 
-		if stack ~= nil and not backedOff and claimFree(workId) then
+		if stack ~= nil and not backedOff and petports_claimFree(workId) then
 			local carried = math.min(stack.count or 1, petportWaterCarry())
 			local tiles = {}
 
@@ -7197,7 +7019,7 @@ local function sweepReplants(dt)
 	for key, intent in pairs(intents) do
 		if type(intent) ~= "table" or type(intent.position) ~= "table" then
 			table.insert(orphans, key)
-		elseif inNetworkCoverage(intent.position) then
+		elseif petports_inNetworkCoverage(intent.position) then
 			if not replantFootprintClear(intent.position, intent.name) then
 				petports_replantClear(key, "footprint occupied")
 			elseif not replantGroundTilled(intent.position) then
@@ -7256,7 +7078,7 @@ local function carriedSeedIntent()
 		for key, intent in pairs(intents) do
 			if intent.name ~= nil and stack.name == intent.name
 			   and intent.position ~= nil
-			   and inNetworkCoverage(intent.position) then
+			   and petports_inNetworkCoverage(intent.position) then
 				return key, intent, stack
 			end
 		end
@@ -7272,7 +7094,7 @@ local function carriedSeedIntent()
 		for key, intent in pairs(intents) do
 			table.insert(wanted, string.format("%s@%s%s", tostring(intent.name),
 				tostring(key),
-				inNetworkCoverage(intent.position or {0, 0}) and "" or " (OUT OF RANGE)"))
+				petports_inNetworkCoverage(intent.position or {0, 0}) and "" or " (OUT OF RANGE)"))
 		end
 
 		table.sort(held)
@@ -7360,8 +7182,8 @@ local function withdrawWaterWork()
 			local reachableEnd = waterRunWorkable(run, run.tiles[1])
 				or waterRunWorkable(run, run.tiles[#run.tiles])
 
-			if not backedOff and reachableEnd and claimFree(workId)
-			   and claimFree("water:" .. tostring(run.key)) then
+			if not backedOff and reachableEnd and petports_claimFree(workId)
+			   and petports_claimFree("water:" .. tostring(run.key)) then
 				local wanted = math.min(#run.tiles, petportWaterCarry())
 
 				for _, want in ipairs(run.wants) do
@@ -7621,7 +7443,7 @@ local function fuelFetchWork()
             local failure = self.workFailures[workId]
             local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
 
-            if not backedOff and claimFree(workId) then
+            if not backedOff and petports_claimFree(workId) then
               local available = world.containerAvailable(beacon.id,
                 { name = treat.name, count = 1 })
 
@@ -7657,7 +7479,7 @@ local function fuelFetchWork()
           local failure = self.workFailures[workId]
           local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
 
-          if not backedOff and claimFree(workId) then
+          if not backedOff and petports_claimFree(workId) then
             local okAt, at = pcall(world.containerItemAt, machine.id,
               MACHINE_SLOT_OUTPUT)
 
@@ -7705,7 +7527,7 @@ local function fuelGroundWork()
   end
 
   local rects = self.networkRects
-  if rects == nil or #rects == 0 then rects = { coverageRect() } end
+  if rects == nil or #rects == 0 then rects = { petports_portCoverageRect() } end
 
   local from = entity.position()
   if self.petId ~= nil and world.entityExists(self.petId) then
@@ -7736,14 +7558,14 @@ local function fuelGroundWork()
 
           if backedOff then
             rejected.backedOff = rejected.backedOff + 1
-          elseif not claimFree(workId) then
+          elseif not petports_claimFree(workId) then
             rejected.claimed = rejected.claimed + 1
           elseif not world.entityExists(dropId) then
             rejected.gone = rejected.gone + 1
           else
             local position = world.entityPosition(dropId)
 
-            if not targetEligible("treat " .. tostring(dropId), position, dropId) then
+            if not petports_targetEligible("treat " .. tostring(dropId), position, dropId) then
               rejected.medium = rejected.medium + 1
             else
               local distance = world.magnitude(from, position)
@@ -7798,7 +7620,7 @@ local function withdrawWork()
 
 	for key, intent in pairs(intents) do
 		if intent.name ~= nil and intent.position ~= nil
-		   and inNetworkCoverage(intent.position) then
+		   and petports_inNetworkCoverage(intent.position) then
 			wanted = wanted + 1
 
 			local workId = "withdraw:" .. key
@@ -7814,10 +7636,10 @@ local function withdrawWork()
 			local placeAbove = { intent.position[1] + 0.5, intent.position[2] + 1.5 }
 
 			local free = not backedOff
-				and claimFree(workId)
-				and claimFree("replant:" .. key)
+				and petports_claimFree(workId)
+				and petports_claimFree("replant:" .. key)
 
-			if free and not targetEligible("replant at " .. tostring(key),
+			if free and not petports_targetEligible("replant at " .. tostring(key),
 				placeAbove, nil) then
 				wrongMedium = wrongMedium + 1
 				free = false
@@ -7953,7 +7775,7 @@ local function medicWork(preloadOnly)
     local failure = self.workFailures[workId]
     local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
 
-    if not backedOff and claimFree(workId) then
+    if not backedOff and petports_claimFree(workId) then
       local stand = standingPointNear(patient.position, MEDIC_REACH)
 
       if stand ~= nil then
@@ -8086,7 +7908,7 @@ local function restockFetchWork()
           local failure = self.workFailures[workId]
           local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
 
-          if not backedOff and claimFree(workId) then
+          if not backedOff and petports_claimFree(workId) then
             local source, available = nil, 0
 
             for _, crate in ipairs(petports_beaconsFor("deposit")) do
@@ -8225,7 +8047,7 @@ local function tidyWork(doDeposit, doRestock)
           local failure = self.workFailures[workId]
           local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
 
-          if not backedOff and claimFree(workId) then
+          if not backedOff and petports_claimFree(workId) then
             local stack = items[misfit.slot]
             local accepted, roomFor = false, false
 
@@ -8430,7 +8252,7 @@ local function drainWork()
                         local backedOff = failure ~= nil
                           and (failure["until"] or 0) > world.time()
 
-                        if not backedOff and claimFree(workId) then
+                        if not backedOff and petports_claimFree(workId) then
                           local stand, standWhy = servicePointNear("crate " .. tostring(source.id),
                             source.id, source.position, 4)
 
@@ -8635,7 +8457,7 @@ local function fuelWork()
           local backedOff = failure ~= nil
             and (failure["until"] or 0) > world.time()
 
-          if not backedOff and claimFree(workId) then
+          if not backedOff and petports_claimFree(workId) then
             local stand, standWhy = servicePointNear("machine " .. tostring(machine.id),
               machine.id, machine.position, 4)
 
@@ -8726,7 +8548,7 @@ local function compactWork()
           local failure = self.workFailures[workId]
           local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
 
-          if not backedOff and claimFree(workId) then
+          if not backedOff and petports_claimFree(workId) then
             local stand, standWhy = servicePointNear("crate " .. tostring(source.id),
               source.id, source.position, 4)
 
@@ -8805,9 +8627,9 @@ local function defragWork()
           local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
 
           if backedOff then backedOffN = backedOffN + 1
-          elseif not claimFree(workId) then claimed = claimed + 1 end
+          elseif not petports_claimFree(workId) then claimed = claimed + 1 end
 
-          if not backedOff and claimFree(workId) then
+          if not backedOff and petports_claimFree(workId) then
             local ok, items = pcall(world.containerItems, crate.id)
             local slot, stack = nil, nil
 
@@ -8949,7 +8771,7 @@ local function sortWork()
 			tostring(source.id))
 	end
 
-	if not claimFree(workId) then
+	if not petports_claimFree(workId) then
 		return nil, string.format("crate %s is already claimed", tostring(source.id))
 	end
 
@@ -8986,369 +8808,451 @@ local function sortWork()
 end
 
 
-ASTERITE_STAND_RADIUS = 8
+PETPORTS_WORK = PETPORTS_WORK or {}
 
-ASTERITE_CACHE_TTL = 5.0
+-- Adds a work entry to the port's list in order, replacing any entry of the same name.
+function petports_registerWork(entry)
+	assert(type(entry) == "table" and type(entry.name) == "string",
+		"petports_registerWork needs a table with a name")
+	assert(type(entry.generate) == "function",
+		"petports_registerWork entry " .. entry.name .. " needs a generate function")
 
-ASTERITE_STAND_TRIES = 6
+	petports_unregisterWork(entry.name)
 
--- Returns a task to mine the nearest known asterite deposit the unit can stand at.
-function asteriteWork()
-	if self.asteriteCacheAt == nil or world.time() >= self.asteriteCacheAt then
-		self.asteriteCacheAt = world.time() + ASTERITE_CACHE_TTL
-		self.asteriteCache = petports_asteriteAll()
-	end
+	entry.order = tonumber(entry.order) or 0
+	if entry.reasonOrder == true then entry.reasonOrder = entry.order end
 
-	local deposits = self.asteriteCache or {}
+	local at = #PETPORTS_WORK + 1
 
-	local from = entity.position()
-	if self.petId ~= nil and world.entityExists(self.petId) then
-		from = world.entityPosition(self.petId)
-	end
-
-	local seen = 0
-	local candidates = {}
-	local rejected = { outside = 0, claimed = 0, backedOff = 0, medium = 0 }
-
-	for key, entry in pairs(deposits) do
-		if type(entry) == "table" and type(entry.position) == "table" then
-			seen = seen + 1
-
-			local centre = { entry.position[1] + 0.5, entry.position[2] + 0.5 }
-			local workId = "asterite:" .. tostring(key)
-
-			local failure = self.workFailures[workId]
-			local backedOff = failure ~= nil
-				and (failure["until"] or 0) > world.time()
-
-			if not inNetworkCoverage(centre) then
-				rejected.outside = rejected.outside + 1
-			elseif backedOff then
-				rejected.backedOff = rejected.backedOff + 1
-			elseif not claimFree(workId) then
-				rejected.claimed = rejected.claimed + 1
-
-			elseif not targetEligible("asterite " .. tostring(key), centre) then
-				rejected.medium = rejected.medium + 1
-			else
-				candidates[#candidates + 1] = {
-					key = key,
-					entry = entry,
-					centre = centre,
-					workId = workId,
-					distance = world.magnitude(from, centre)
-				}
-			end
+	for index, other in ipairs(PETPORTS_WORK) do
+		if other.order > entry.order then
+			at = index
+			break
 		end
 	end
 
-	if #candidates == 0 then
-		local reason = string.format(
-			"%s deposit(s) known, none workable: %s outside network coverage, "
-			.. "%s claimed, %s backed off, %s in a medium this chassis cannot "
-			.. "work in", seen, rejected.outside, rejected.claimed,
-			rejected.backedOff, rejected.medium)
-
-		if reason ~= self.asteriteRejectReason then
-			self.asteriteRejectReason = reason
-			sb.logInfo("PETPORT %s asterite: %s", stationUniqueId(), reason)
-		end
-
-		return nil, reason
-	end
-
-	table.sort(candidates, function(a, b) return a.distance < b.distance end)
-
-	local tries = 0
-
-	for _, candidate in ipairs(candidates) do
-		if tries >= ASTERITE_STAND_TRIES then break end
-		tries = tries + 1
-
-		local stand = standingPointForTarget(candidate.centre, nil,
-			ASTERITE_STAND_RADIUS, true)
-
-		if stand ~= nil then
-			self.asteriteRejectReason = nil
-
-			sb.logInfo("PETPORT %s asterite deposit at %s, %s away -- "
-				.. "dispatching to stand at %s (%s of %s candidates tried)",
-				stationUniqueId(), sb.printJson(candidate.entry.position),
-				sb.printJson(math.floor(candidate.distance * 10) / 10),
-				sb.printJson(stand), sb.printJson(tries),
-				sb.printJson(#candidates))
-
-			return {
-				id = candidate.workId,
-				mediumVerified = true,
-
-				type = "asterite",
-				port = stationUniqueId(),
-
-				target = candidate.key,
-
-				tile = { candidate.entry.position[1], candidate.entry.position[2] },
-
-				mod = candidate.entry.mod,
-
-				position = stand
-			}
-		end
-	end
-
-	local reason = string.format(
-		"%s workable deposit(s), nowhere to stand within %s tiles of the "
-		.. "nearest %s", #candidates, ASTERITE_STAND_RADIUS, tries)
-
-	if reason ~= self.asteriteRejectReason then
-		self.asteriteRejectReason = reason
-		sb.logInfo("PETPORT %s asterite: %s", stationUniqueId(), reason)
-	end
-
-	return nil, reason
+	table.insert(PETPORTS_WORK, at, entry)
 end
 
--- Calls every work generator in priority order in one pass and returns the first task, or nil with the reason and the switched-off work.
-local function findWork()
-  local oblivious = petportOblivious()
+-- Removes a work entry by name and returns it.
+function petports_unregisterWork(name)
+	for index, entry in ipairs(PETPORTS_WORK) do
+		if entry.name == name then
+			return table.remove(PETPORTS_WORK, index)
+		end
+	end
 
-  local doHauling = not oblivious and petportParticipates("hauling")
+	return nil
+end
 
-  local doRestock = not oblivious and petportParticipates("restock")
+-- Returns a work entry by name.
+function petports_workEntry(name)
+	for _, entry in ipairs(PETPORTS_WORK) do
+		if entry.name == name then return entry end
+	end
 
-  local defrag = not oblivious and petportDefrag()
+	return nil
+end
 
-  local doTidyDeposit = defrag and petportParticipates("tidy")
-  local doTidyRestock = doRestock
-  local doTidy = doTidyDeposit or doTidyRestock
-  local doCompact = defrag and petportParticipates("compact")
-  local doDefrag = defrag and petportParticipates("defrag")
+-- Returns whether the port takes part in a participation group and is not oblivious.
+function petports_workGroup(group)
+	return not petportOblivious() and petportParticipates(group)
+end
 
-  local doSort = defrag and petportParticipates("sort")
+-- Returns whether a defrag module is live and the port takes part in one of its groups.
+function petports_workDefrag(group)
+	return not petportOblivious() and petportDefrag() and petportParticipates(group)
+end
 
-  local farming = not oblivious and petportFarming()
+-- Returns whether a farming module is live and does one class of farm work.
+function petports_workFarming(class)
+	return not petportOblivious() and petportFarming() and petportFarmingDoes(class)
+end
 
-  local doHarvest = farming and petportFarmingDoes("harvest")
-  local doWater = farming and petportFarmingDoes("water")
-  local doReplant = farming and petportFarmingDoes("replant")
-  local doAnimals = farming and petportFarmingDoes("animals")
-  local doTraps = farming and petportFarmingDoes("traps")
-  local doMachines = not oblivious and petportParticipates("machines")
+petports_registerWork({
+	name = "return",
+	order = 100,
+	generate = function() return returnWork() end
+})
 
-  local doAsterite = not oblivious and petportAsterite()
+petports_registerWork({
+	name = "fuelGround",
+	order = 200,
+	idleLog = { key = "fuelGroundReason", label = "ground feed idle" },
+	generate = function() return fuelGroundWork() end
+})
 
-  local recall = portProf("g.return", returnWork)
-  if dispatchable(recall) ~= nil then return recall end
+petports_registerWork({
+	name = "fuelFetch",
+	order = 300,
+	idleLog = { key = "fuelReason", label = "fuel fetch idle" },
+	generate = function() return fuelFetchWork() end
+})
 
-  local scrap, noScrap = portProf("g.fuelGround", fuelGroundWork)
-  if dispatchable(scrap) ~= nil then return scrap end
+petports_registerWork({
+	name = "replant",
+	order = 400,
+	reasonOrder = 1410,
+	reasonJoin = "replant",
+	gate = function() return petports_workFarming("replant") end,
+	generate = function() return replantWork() end
+})
 
-  local grub, noGrub = portProf("g.fuelFetch", fuelFetchWork)
-  if dispatchable(grub) ~= nil then return grub end
+petports_registerWork({
+	name = "water",
+	order = 500,
+	reasonOrder = 1420,
+	reasonJoin = "water",
+	gate = function() return petports_workFarming("water") end,
+	generate = function() return waterWork() end
+})
 
-  if noScrap ~= nil and noScrap ~= self.fuelGroundReason then
-    self.fuelGroundReason = noScrap
-    sb.logInfo("PETPORT %s ground feed idle: %s", stationUniqueId(), tostring(noScrap))
-  end
+petports_registerWork({
+	name = "restock",
+	order = 600,
+	gate = function() return petports_workGroup("restock") end,
+	generate = function() return restockDeliverWork() end
+})
 
-  if noGrub ~= nil and noGrub ~= self.fuelReason then
-    self.fuelReason = noGrub
-    sb.logInfo("PETPORT %s fuel fetch idle: %s", stationUniqueId(), tostring(noGrub))
-  end
+petports_registerWork({
+	name = "deposit",
+	order = 700,
+	generate = function() return depositWork() end
+})
 
-  local putBack, noPutBack
-  if doReplant then putBack, noPutBack = portProf("g.replant", replantWork) end
-  if dispatchable(putBack) ~= nil then return putBack end
+petports_registerWork({
+	name = "fuelled",
+	order = 800,
+	profile = false,
+	generate = function()
+		if petportFuelled() then return nil end
+		return nil, "out of fuel -- finishing what it holds, taking nothing new", true
+	end
+})
 
-  local wet, noWet
-  if doWater then wet, noWet = portProf("g.water", waterWork) end
-  if dispatchable(wet) ~= nil then return wet end
+petports_registerWork({
+	name = "medic",
+	order = 900,
+	idleLog = { key = "medicReason", label = "medic idle" },
+	generate = function() return medicWork() end
+})
 
-  local restock
-  if doRestock then restock = portProf("g.restock", restockDeliverWork) end
-  if dispatchable(restock) ~= nil then return restock end
+petports_registerWork({
+	name = "cargoStall",
+	order = 1000,
+	profile = false,
+	generate = function(ctx)
+		if self.petData == nil or self.petData.cargo == nil
+		   or #self.petData.cargo == 0 then
+			return nil
+		end
 
-  local drop, noDrop = portProf("g.deposit", depositWork)
-  if dispatchable(drop) ~= nil then return drop end
-
-  if not petportFuelled() then
-    return nil, "out of fuel -- finishing what it holds, taking nothing new"
-  end
-
-  local dose, noDose = portProf("g.medic", medicWork)
-  if dispatchable(dose) ~= nil then return dose end
-
-  if noDose ~= nil and noDose ~= self.medicReason then
-    self.medicReason = noDose
-    sb.logInfo("PETPORT %s medic idle: %s", stationUniqueId(), tostring(noDose))
-  end
-
-	if self.petData ~= nil and self.petData.cargo ~= nil
-	   and #self.petData.cargo > 0 then
-
-		local topUp = doHauling and portProf("g.collectTopUp", collectionWork, true) or nil
+		local topUp = petports_workGroup("hauling")
+			and portProf("g.collectTopUp", collectionWork, true) or nil
 
 		if topUp ~= nil then
 			sb.logInfo("PETPORT %s stalled with cargo -- topping up %s instead of idling",
 				stationUniqueId(), tostring(topUp.id))
-			return topUp
+			return topUp, nil, true
 		end
 
-		return nil, noDrop
+		return nil, ctx.reasons.deposit
 			or ("carrying " .. sb.printJson(#self.petData.cargo)
-				.. " stack(s) with no dispatchable deposit target")
+				.. " stack(s) with no dispatchable deposit target"), true
+	end
+})
+
+petports_registerWork({
+	name = "collect",
+	order = 1100,
+	reasonOrder = true,
+	gate = function() return petports_workGroup("hauling") end,
+	generate = function() return collectionWork() end
+})
+
+petports_registerWork({
+	name = "medicPreload",
+	order = 1200,
+	idleLog = { key = "medicPreloadReason", label = "medic preload idle" },
+	generate = function() return medicWork(true) end
+})
+
+petports_registerWork({
+	name = "fish",
+	order = 1300,
+	reasonOrder = true,
+	generate = function()
+		local work, reason = fishWork()
+		if not petportFishing() then reason = nil end
+		return work, reason
+	end
+})
+
+petports_registerWork({
+	name = "harvest",
+	order = 1400,
+	reasonOrder = true,
+	gate = function() return petports_workFarming("harvest") end,
+	generate = function() return harvestWork() end
+})
+
+petports_registerWork({
+	name = "animal",
+	order = 1500,
+	reasonOrder = true,
+	gate = function()
+		return petports_workFarming("animals") and not petports_familyOnHold("animal")
+	end,
+	generate = function() return animalWork() end
+})
+
+petports_registerWork({
+	name = "trap",
+	order = 1600,
+	reasonOrder = true,
+	gate = function() return petports_workFarming("traps") end,
+	generate = function() return trapWork() end
+})
+
+petports_registerWork({
+	name = "withdraw",
+	order = 1800,
+	reasonOrder = 1410,
+	reasonJoin = "replant",
+	gate = function() return petports_workFarming("replant") end,
+	generate = function() return withdrawWork() end
+})
+
+petports_registerWork({
+	name = "withdrawWater",
+	order = 1900,
+	reasonOrder = 1420,
+	reasonJoin = "water",
+	gate = function() return petports_workFarming("water") end,
+	generate = function() return withdrawWaterWork() end
+})
+
+petports_registerWork({
+	name = "restockFetch",
+	order = 2000,
+	reasonOrder = true,
+	gate = function() return petports_workGroup("restock") end,
+	generate = function() return restockFetchWork() end
+})
+
+petports_registerWork({
+	name = "fuel",
+	order = 2100,
+	reasonOrder = true,
+	gate = function() return petports_workGroup("machines") end,
+	generate = function() return fuelWork() end
+})
+
+petports_registerWork({
+	name = "tidy",
+	order = 2200,
+	reasonOrder = true,
+	gate = function()
+		return petports_workDefrag("tidy") or petports_workGroup("restock")
+	end,
+	generate = function()
+		return tidyWork(petports_workDefrag("tidy"), petports_workGroup("restock"))
+	end
+})
+
+petports_registerWork({
+	name = "compact",
+	order = 2300,
+	reasonOrder = true,
+	gate = function() return petports_workDefrag("compact") end,
+	generate = function() return compactWork() end
+})
+
+petports_registerWork({
+	name = "defrag",
+	order = 2400,
+	reasonOrder = true,
+	gate = function() return petports_workDefrag("defrag") end,
+	generate = function() return defragWork() end
+})
+
+petports_registerWork({
+	name = "sort",
+	order = 2500,
+	reasonOrder = true,
+	gate = function() return petports_workDefrag("sort") end,
+	generate = function() return sortWork() end
+})
+
+petports_registerWork({
+	name = "drain",
+	order = 2600,
+	reasonOrder = true,
+	gate = function() return petports_workGroup("machines") end,
+	generate = function() return drainWork() end
+})
+
+petports_registerWork({
+	name = "diagnostic",
+	order = 2700,
+	gate = function() return DIAG_FALLBACK end,
+	generate = function() return diagnosticWork() end
+})
+
+-- Runs the init hook of every registered work entry.
+function petports_workInit()
+	for _, entry in ipairs(PETPORTS_WORK) do
+		if entry.init ~= nil then entry.init() end
+	end
+end
+
+-- Runs the tick hook of every registered work entry.
+function petports_workTick(dt)
+	for _, entry in ipairs(PETPORTS_WORK) do
+		if entry.tick ~= nil then
+			portProf("tick." .. entry.name, entry.tick, dt)
+		end
+	end
+end
+
+-- Returns the text naming the work this port has switched off, or nil.
+function petports_findWorkOptedOut()
+	local oblivious = petportOblivious()
+	local off = {}
+
+	if not petports_workGroup("hauling") then table.insert(off, "hauling") end
+	if not petports_workGroup("restock") then table.insert(off, "restock") end
+
+	if oblivious or not petportDefrag() then
+		table.insert(off, petportDefrag() and "defrag module (port off)"
+			or "tidy (deposit crates)/compact/defrag (no module)")
+	else
+		if not petportParticipates("tidy") then table.insert(off, "tidy (deposit crates)") end
+		if not petportParticipates("compact") then table.insert(off, "compact") end
+		if not petportParticipates("defrag") then table.insert(off, "defrag") end
+		if not petportParticipates("sort") then table.insert(off, "sort") end
 	end
 
-  local work, why
-  if doHauling then work, why = portProf("g.collect", collectionWork) end
-  if dispatchable(work) ~= nil then return work end
+	if oblivious or not petportFarming() then
+		table.insert(off, petportFarming() and "farming (port off)" or "farming (no module)")
+	else
+		for _, class in ipairs(FARMING_CLASSES) do
+			if not petportFarmingDoes(class) then
+				table.insert(off, "farming: " .. class)
+			end
+		end
+	end
 
-  local preload, noPreload = portProf("g.medicPreload", medicWork, true)
-  if dispatchable(preload) ~= nil then return preload end
+	if not petports_workGroup("machines") then table.insert(off, "machines") end
 
-  if noPreload ~= nil and noPreload ~= self.medicPreloadReason then
-    self.medicPreloadReason = noPreload
-    sb.logInfo("PETPORT %s medic preload idle: %s", stationUniqueId(),
-      tostring(noPreload))
-  end
+	if #off == 0 then return nil end
 
-  local fish, noFish = portProf("g.fish", fishWork)
-  if dispatchable(fish) ~= nil then return fish end
+	return "port does not participate in " .. table.concat(off, ", ")
+end
 
-  local crop, noCrop
-  if doHarvest then crop, noCrop = portProf("g.harvest", harvestWork) end
-  if dispatchable(crop) ~= nil then return crop end
+-- Joins the reasons the entries left behind, in reasonOrder.
+function petports_findWorkReasons(ctx)
+	local slots = {}
+	local joined = {}
 
-  local beast, noBeast
-  if doAnimals and not familyOnHold("animal") then
-    beast, noBeast = portProf("g.animal", animalWork)
-  end
-  if dispatchable(beast) ~= nil then return beast end
+	for index, entry in ipairs(PETPORTS_WORK) do
+		if entry.reasonOrder then
+			local reason = ctx.reasons[entry.name]
+			local slot = entry.reasonJoin and joined[entry.reasonJoin] or nil
 
-  local trap, noTrap
-  if doTraps then trap, noTrap = portProf("g.trap", trapWork) end
-  if dispatchable(trap) ~= nil then return trap end
+			if slot == nil then
+				slot = { order = entry.reasonOrder, index = index, parts = {} }
+				table.insert(slots, slot)
+				if entry.reasonJoin then joined[entry.reasonJoin] = slot end
+			end
 
-  local ore, noOre
-  if doAsterite and not familyOnHold("asterite") then
-    ore, noOre = portProf("g.asterite", asteriteWork)
-  end
-  if dispatchable(ore) ~= nil then return ore end
+			if reason ~= nil then table.insert(slot.parts, tostring(reason)) end
+		end
+	end
 
-  local fetch, noFetch
-  if doReplant then fetch, noFetch = portProf("g.withdraw", withdrawWork) end
-  if dispatchable(fetch) ~= nil then return fetch end
+	table.sort(slots, function(a, b)
+		if a.order ~= b.order then return a.order < b.order end
+		return a.index < b.index
+	end)
 
-  local fetchWater, noFetchWater
-  if doWater then fetchWater, noFetchWater = portProf("g.withdrawWater", withdrawWaterWork) end
-  if dispatchable(fetchWater) ~= nil then return fetchWater end
+	local reasons = {}
 
-  local stock, noStock
-  if doRestock then stock, noStock = portProf("g.restockFetch", restockFetchWork) end
-  if dispatchable(stock) ~= nil then return stock end
+	for _, slot in ipairs(slots) do
+		if #slot.parts > 0 then
+			table.insert(reasons, table.concat(slot.parts, ", and "))
+		end
+	end
 
-  local fuel, noFuel
-  if doMachines then fuel, noFuel = portProf("g.fuel", fuelWork) end
-  if dispatchable(fuel) ~= nil then return fuel end
+	return reasons
+end
 
-  local tidy, noTidy
-  if doTidy then
-    tidy, noTidy = portProf("g.tidy", function()
-      return tidyWork(doTidyDeposit, doTidyRestock)
-    end)
-  end
-  if dispatchable(tidy) ~= nil then return tidy end
+-- Runs the registered work entries in order and returns the first task, the nearest one among entries sharing an order, or nil with the reason and the switched-off work.
+function petports_findWork()
+	local ctx = { reasons = {} }
+	local index = 1
 
-  local squash, noSquash
-  if doCompact then squash, noSquash = portProf("g.compact", compactWork) end
-  if dispatchable(squash) ~= nil then return squash end
+	while index <= #PETPORTS_WORK do
+		local order = PETPORTS_WORK[index].order
+		local best, bestEntry, offers = nil, nil, {}
 
-  local gather, noGather
-  if doDefrag then gather, noGather = portProf("g.defrag", defragWork) end
-  if dispatchable(gather) ~= nil then return gather end
+		while index <= #PETPORTS_WORK and PETPORTS_WORK[index].order == order do
+			local entry = PETPORTS_WORK[index]
+			index = index + 1
 
-  local order, noOrder
-  if doSort then order, noOrder = portProf("g.sort", sortWork) end
-  if dispatchable(order) ~= nil then return order end
+			if entry.gate == nil or entry.gate(ctx) then
+				local work, reason, stop
 
-  local drain, noDrain
-  if doMachines then drain, noDrain = portProf("g.drain", drainWork) end
-  if dispatchable(drain) ~= nil then return drain end
+				if entry.profile == false then
+					work, reason, stop = entry.generate(ctx)
+				else
+					work, reason, stop = portProf(entry.profile or ("g." .. entry.name),
+						entry.generate, ctx)
+				end
 
+				if stop then return work, reason end
 
-  if DIAG_FALLBACK then
-    local diag = portProf("g.diagnostic", diagnosticWork)
-    if dispatchable(diag) ~= nil then return diag end
-  end
+				if dispatchable(work) ~= nil then
+					local distance = tonumber(work.distance) or math.huge
 
-  local off = {}
-  if not doHauling then table.insert(off, "hauling") end
-  if not doRestock then table.insert(off, "restock") end
+					table.insert(offers, entry.name .. " " .. string.format("%.1f", distance))
 
-  if not defrag then
-    table.insert(off, petportDefrag() and "defrag module (port off)"
-      or "tidy (deposit crates)/compact/defrag (no module)")
-  else
-    if not doTidyDeposit then table.insert(off, "tidy (deposit crates)") end
-    if not doCompact then table.insert(off, "compact") end
-    if not doDefrag then table.insert(off, "defrag") end
-    if not doSort then table.insert(off, "sort") end
-  end
-  if not farming then
-    table.insert(off, petportFarming() and "farming (port off)" or "farming (no module)")
-  else
-    for _, class in ipairs(FARMING_CLASSES) do
-      if not petportFarmingDoes(class) then
-        table.insert(off, "farming: " .. class)
-      end
-    end
-  end
-  if not doMachines then table.insert(off, "machines") end
+					if best == nil or distance < (tonumber(best.distance) or math.huge) then
+						best, bestEntry = work, entry
+					end
+				else
+					ctx.reasons[entry.name] = reason
 
-  local optedOut = nil
-  if #off > 0 then
-    optedOut = "port does not participate in " .. table.concat(off, ", ")
-  end
+					local idle = entry.idleLog
 
-  -- Appends the switched-off work to a reason.
-  local function withOptOut(reason)
-    if optedOut == nil then return reason end
-    if reason == nil then return optedOut end
-    return reason .. "; " .. optedOut
-  end
+					if idle ~= nil and reason ~= nil and reason ~= self[idle.key] then
+						self[idle.key] = reason
+						sb.logInfo("PETPORT %s %s: %s", stationUniqueId(), idle.label,
+							tostring(reason))
+					end
+				end
+			end
+		end
 
-  -- Joins the place and fetch halves of a generator's reason.
-  local function bothLegs(place, fetch)
-    if place ~= nil and fetch ~= nil then return place .. ", and " .. fetch end
-    return place or fetch
-  end
+		if best ~= nil then
+			if #offers > 1 then
+				sb.logInfo("PETPORT %s order %s tie: %s wins of %s", stationUniqueId(),
+					sb.printJson(order), bestEntry.name, table.concat(offers, ", "))
+			end
 
-  local reasons = {}
+			return best
+		end
+	end
 
-  -- Adds a generator's reason to the list when it has one.
-  local function note(reason)
-    if reason ~= nil then table.insert(reasons, tostring(reason)) end
-  end
+	local optedOut = petports_findWorkOptedOut()
+	local reasons = petports_findWorkReasons(ctx)
 
-  note(why)
-  if petportFishing() then note(noFish) end
-  note(noCrop)
-  note(bothLegs(noPutBack, noFetch))
-  note(bothLegs(noWet, noFetchWater))
-  note(noBeast)
-  note(noTrap)
-  note(noOre)
-  note(noStock)
-  note(noFuel)
-  note(noTidy)
-  note(noSquash)
-  note(noGather)
-  note(noOrder)
-  note(noDrain)
+	if #reasons == 0 then return nil, optedOut end
 
-  if #reasons == 0 then return nil, optedOut end
+	local reason = table.concat(reasons, "; ")
 
-  return nil, withOptOut(table.concat(reasons, "; "))
+	if optedOut ~= nil then reason = reason .. "; " .. optedOut end
+
+	return nil, reason
 end
 
 -- Logs why no work was taken, at most once per repeat window for a given reason.
@@ -9371,7 +9275,7 @@ local function dispatchWork()
     return reject("no unit")
   end
 
-  local work, why = portProf("findWork", findWork)
+  local work, why = portProf("findWork", petports_findWork)
   if work == nil then
     return reject(why)
   end
@@ -9912,7 +9816,7 @@ local function updateInner(dt)
 
   portProf("sweepReplants", sweepReplants, dt)
 
-  portProf("asteriteScan", asteriteScanStep)
+  petports_workTick(dt)
 
   portProf("mirrorPaneState", mirrorPaneState, dt)
 
