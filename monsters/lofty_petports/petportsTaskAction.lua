@@ -25,7 +25,7 @@ local FUEL_TRACE = false
 
 local MEDIA_TRACE_INTERVAL = 0.25
 
-local BUILD_STAMP = "2026-09-19j replant lives in tasks/replant.lua"
+local BUILD_STAMP = "2026-09-19l collect lives in tasks/collect.lua, no arrival branch is left in the ladder"
 local stampLogged = false
 
 local SEARCH_LIMIT = 6.0
@@ -100,24 +100,16 @@ local PROGRESS_WINDOW = 5.0
 local PROGRESS_DISTANCE = 2.5
 local PROGRESS_STRIKES = 2
 
-local MEDIC_REACH = 5.0
-
 local CHASE_RETARGET_INTERVAL = 0.5
 
 local CHASE_BUDGET = 10.0
 
 PETPORTS_APPROACH_TYPES = {
-  collect = true,
-  medic = true,
   withdraw = true,
   fuelfetch = true
 }
 
-PETPORTS_TRACKED_TARGETS = {
-  collect = { field = "target", noun = "drop", reach = nil, moves = false },
-  medic = { field = "target", noun = "patient", reach = MEDIC_REACH, moves = true,
-            goneIsDone = true }
-}
+PETPORTS_TRACKED_TARGETS = {}
 
 -- Returns a task's tracked entity id and its tracking row.
 local function trackedEntity(task)
@@ -4361,78 +4353,6 @@ local function petportsTaskUpdateInner(dt, stateData)
 
   local arrive = petports_taskArrive[task.type]
   if arrive ~= nil then return arrive(dt, stateData, task) end
-
-  if task.type == "medic" then
-    if task.target == nil or not world.entityExists(task.target) then
-      petports_taskReport(stateData, "done", string.format(
-        "patient %s is gone -- no dose spent", sb.printJson(task.target)))
-      return true
-    end
-
-    local health = world.entityHealth(task.target)
-
-    if type(health) ~= "table" or health[2] == nil or health[2] <= 0 then
-      petports_taskReport(stateData, "done", string.format(
-        "patient %s reports no health -- no dose spent", sb.printJson(task.target)))
-      return true
-    end
-
-    if health[1] >= health[2] then
-      petports_taskReport(stateData, "done", string.format(
-        "patient %s recovered on the way (%s/%s) -- no dose spent",
-        sb.printJson(task.target), tostring(health[1]), tostring(health[2])))
-      return true
-    end
-
-    local here = mcontroller.position()
-    local there = world.entityPosition(task.target)
-    local gap = world.magnitude(here, there)
-
-    local ok, err = pcall(world.spawnProjectile,
-      task.projectile or "petports_medicburst", there, entity.id(), {0, 0}, false, {})
-
-    if not ok then
-      petports_taskReport(stateData, "failed", string.format(
-        "spawnProjectile failed at patient %s: %s",
-        sb.printJson(task.target), tostring(err)))
-      return true
-    end
-
-    sb.logInfo("UNIT medic DOSE patient %s (%s) at %s: health %s/%s, gap %s, effect %s for %ss",
-      sb.printJson(task.target), tostring(task.patientClass), sb.printJson(there),
-      tostring(health[1]), tostring(health[2]), sb.printJson(gap),
-      tostring(task.effect), tostring(task.duration))
-
-    task.dosed = 1
-
-    petports_taskReport(stateData, "done", string.format(
-      "dosed patient %s at %s/%s health", sb.printJson(task.target),
-      tostring(health[1]), tostring(health[2])))
-    return true
-  end
-
-  if task.type == "collect" then
-    local ok, taken = pcall(world.takeItemDrop, task.target, entity.id())
-
-    sb.logInfo("UNIT pickup attempt on %s: ok %s taken %s (dwell left %s)",
-      sb.printJson(task.target), tostring(ok), sb.printJson(taken),
-      sb.printJson(stateData.dwellTimer))
-
-    if ok and taken then
-      petports_taskReport(stateData, "done",
-        "collected at " .. sb.printJson(task.position), taken)
-      return true
-    end
-
-    stateData.dwellTimer = stateData.dwellTimer - dt
-    if stateData.dwellTimer <= 0 then
-      petports_taskReport(stateData, "failed",
-        "arrived but could not take drop (pcall ok=" .. tostring(ok) .. ")")
-      return true
-    end
-
-    return false
-  end
 
   if task.hold then
     local station = approachTargetFor(stateData, task.position) or task.position

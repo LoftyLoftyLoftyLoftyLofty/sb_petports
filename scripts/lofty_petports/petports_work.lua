@@ -1,6 +1,6 @@
--- World-property stores for work claims, the port registry and heals.
+-- World-property stores for work claims and the port registry.
 
-PETPORTS_WORK_BUILD_STAMP = "2026-09-19j the replant store lives in work/replant.lua"
+PETPORTS_WORK_BUILD_STAMP = "2026-09-19k the heal store lives in work/medic.lua"
 
 local CLAIM_KEY = "petports_claims"
 
@@ -379,62 +379,6 @@ function petports_isUnitType(monsterType)
 	return verdict
 end
 
-
-local HEAL_KEY = "petports_heals"
-
--- Returns every recorded heal cooldown.
-function petports_healsAll()
-	return world.getProperty(HEAL_KEY) or {}
-end
-
--- Drops heal cooldowns that have passed or whose entity is gone.
-local function pruneHeals(heals)
-	local now = world.time()
-
-	for key, readyAt in pairs(heals) do
-		local id = tonumber(key)
-		if type(readyAt) ~= "number" or readyAt <= now
-		   or id == nil or not world.entityExists(id) then
-			heals[key] = nil
-		end
-	end
-
-	return heals
-end
-
--- Returns the heal table key for an entity id.
-local function healKey(entityId)
-	return tostring(entityId)
-end
-
--- Returns the seconds left on an entity's heal cooldown.
-function petports_healCooldownRemaining(entityId)
-	if entityId == nil then return 0 end
-
-	local heals = petports_healsAll()
-	local readyAt = heals[healKey(entityId)]
-	if type(readyAt) ~= "number" then return 0 end
-
-	return math.max(readyAt - world.time(), 0)
-end
-
--- Records a heal cooldown for an entity.
-function petports_healRecord(entityId, duration)
-	if entityId == nil then return false end
-
-	local heals = pruneHeals(petports_healsAll())
-	heals[healKey(entityId)] = world.time() + (duration or 0)
-	world.setProperty(HEAL_KEY, heals)
-
-	sb.logInfo("PETPORTS heal recorded for entity %s, next dose in %ss",
-		tostring(entityId), tostring(duration or 0))
-	return true
-end
-
--- Returns the work id for healing an entity.
-function petports_healWorkId(entityId)
-	return "heal:" .. tostring(entityId)
-end
 
 local chassisTeamCache = {}
 

@@ -55,6 +55,8 @@
       "/monsters/lofty_petports/tasks/harvest.lua",
       "/monsters/lofty_petports/tasks/water.lua",
       "/monsters/lofty_petports/tasks/replant.lua",
+      "/monsters/lofty_petports/tasks/medic.lua",
+      "/monsters/lofty_petports/tasks/collect.lua",
 
       "/monsters/lofty_petports/petports_flyapproach.lua"
     ],
