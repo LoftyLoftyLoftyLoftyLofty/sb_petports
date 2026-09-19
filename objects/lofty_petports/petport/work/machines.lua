@@ -390,7 +390,7 @@ function petports_machinesFuelWork()
 	end
 
 	if #parts == 0 then
-		table.insert(parts, "nothing was classified, which is a bug in petports_machinesDrainWork")
+		table.insert(parts, "nothing was classified, which is a bug in petports_machinesFuelWork")
 	end
 
 	return nil, string.format("%s machine(s) with output, but %s",

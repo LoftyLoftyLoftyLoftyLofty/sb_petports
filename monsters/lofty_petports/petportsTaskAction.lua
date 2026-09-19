@@ -25,7 +25,7 @@ local FUEL_TRACE = false
 
 local MEDIA_TRACE_INTERVAL = 0.25
 
-local BUILD_STAMP = "2026-09-19s a leg search begun from an overridden cell resumes from it next tick"
+local BUILD_STAMP = "2026-09-19t a leg search begun from a later cell resumes from it next tick, whichever cell the caller names"
 local stampLogged = false
 
 local SEARCH_LIMIT = 6.0
@@ -173,7 +173,7 @@ local function noteLegRefusal(stateData, why, target, fromKey, toKey)
 end
 
 -- Asks the coarse graph for the next waypoint toward a target and starts a fresh pather on it.
-local function tryCoarseLeg(stateData, target, reach, fromOverride)
+local function tryCoarseLeg(stateData, target, reach, fromOverride, asked)
   if petports_navWaypoint == nil then return false end
 
   reach = reach or NAV_LEG_REACH
@@ -194,8 +194,11 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
 
   local pending = stateData.navFromPending
   stateData.navFromPending = nil
-  if fromOverride == nil and pending ~= nil and pending.target == sb.printJson(target) then
-    fromOverride = pending.cell
+  if asked == nil then
+    asked = fromOverride or false
+    if pending ~= nil and pending.asked == asked and pending.target == sb.printJson(target) then
+      fromOverride = pending.cell
+    end
   end
 
   local fromKey, fromMore = fromOverride, false
@@ -264,7 +267,7 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
 
   if waypoint == nil and remaining == "more" then
 		if fromOverride ~= nil then
-			stateData.navFromPending = { cell = fromOverride, target = targetKey }
+			stateData.navFromPending = { cell = fromOverride, asked = asked, target = targetKey }
 		end
 		noteLegRefusal(stateData, "the route search is still running", target, fromKey, toKey)
 		return false, "more"
@@ -292,13 +295,13 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
       mcontroller.setPosition(waypoint)
       mcontroller.setVelocity({ 0, 0 })
       stateData.coarseFirstFor = nil
-      return tryCoarseLeg(stateData, target, reach, legFrom)
+      return tryCoarseLeg(stateData, target, reach, legFrom, asked)
     end
   elseif world.magnitude(waypoint, mcontroller.position()) < ARRIVAL_DISTANCE then
     if legCell ~= nil and legCell ~= fromKey then
       sb.logInfo("UNIT coarse leg %s is where we already are -- taking the next leg from %s",
         sb.printJson(waypoint), tostring(legCell))
-      return tryCoarseLeg(stateData, target, reach, legCell)
+      return tryCoarseLeg(stateData, target, reach, legCell, asked)
     end
     sb.logInfo("UNIT coarse leg %s is where we already are -- declining",
       sb.printJson(waypoint))

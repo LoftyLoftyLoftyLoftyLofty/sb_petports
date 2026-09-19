@@ -456,18 +456,6 @@ local function refreshNetwork()
   end
 end
 
--- Returns whether a position lies in the network's rects.
-local function inNetwork(position)
-  local rects = self.networkRects
-  if rects == nil or #rects == 0 then rects = { petports_portCoverageRect() } end
-
-  for _, area in ipairs(rects) do
-    if petports_rectContains(area, position) then return true end
-  end
-  return false
-end
-
-
 FAMILY_HELD = {}
 FAMILY_STRIKES = 3
 FAMILY_HOLD = 120.0
@@ -513,7 +501,7 @@ function petports_noteFailure(taskId, reason)
   end
 
   if self.petId ~= nil and world.entityExists(self.petId)
-     and not inNetwork(world.entityPosition(self.petId)) then
+     and not petports_inNetworkCoverage(world.entityPosition(self.petId)) then
     sb.logInfo("PETPORT %s not blaming %s: unit was outside the network at %s",
       stationUniqueId(), taskId, sb.printJson(world.entityPosition(self.petId)))
     return
@@ -598,7 +586,7 @@ local function abandonTask(reason)
   self.task = nil
 end
 
-local PETPORT_BUILD_STAMP = "2026-09-19r return and diagnostic live in their own work files; only the two stop steps are registered here"
+local PETPORT_BUILD_STAMP = "2026-09-19v dead drySoilAt and the duplicate inNetwork are gone"
 
 PETPORT_PROFILE = true
 
@@ -4702,17 +4690,6 @@ function petports_soilInfo(modName)
 
 	soilCache[key] = info
 	return info
-end
-
--- Returns the dry tilled soil at a tile and what it wants, or nil.
-local function drySoilAt(tile)
-	local modName = world.mod({ tile[1], tile[2] }, "foreground")
-	if modName == nil then return nil end
-
-	local info = petports_soilInfo(modName)
-	if info == nil or not info.tilled or not info.dry then return nil end
-
-	return { mod = tostring(modName), wants = info.wants }
 end
 
 -- Returns whether a position lies in the network's rects.

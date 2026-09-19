@@ -1,6 +1,6 @@
 -- Unit-side contract: naming, modules, media and swim mode, dives, vent routing and fuel.
 
-local CONTRACT_BUILD_STAMP = "2026-09-19d swim task types are filled in by the task files"
+local CONTRACT_BUILD_STAMP = "2026-09-19u a route dive plan is abandoned once submerged with a clear swim to its leg waypoint"
 
 local contractStamped = false
 
@@ -1158,17 +1158,17 @@ function petports_swimModeTick()
 	if plan ~= nil and not plan.reached and not plan.abandoned
 	   and medium == "swim" then
 
-		local fish = petports_taskDestinationRaw()
+		local goal = plan.route and self.petportsLegWaypoint or petports_taskDestinationRaw()
 
-		if swimReachable(fish) then
+		if swimReachable(goal) then
 			plan.abandoned = true
 
 			self.petportsDiveRetarget = true
 
 			sb.logInfo("UNIT DIVE abandoning its board at %s: already submerged at %s "
-				.. "with a clear body-width run to the fish at %s -- swimming instead",
+				.. "with a clear body-width run to the %s at %s -- swimming instead",
 				sb.printJson(plan.launch), sb.printJson(mcontroller.position()),
-				sb.printJson(fish))
+				plan.route and "leg waypoint" or "fish", sb.printJson(goal))
 		end
 	end
 
