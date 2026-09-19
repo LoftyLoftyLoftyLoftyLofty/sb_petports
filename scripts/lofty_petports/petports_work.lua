@@ -1,6 +1,6 @@
--- World-property stores for work claims, the port registry, replants and heals.
+-- World-property stores for work claims, the port registry and heals.
 
-PETPORTS_WORK_BUILD_STAMP = "2026-09-19e the fish store lives in work/fish.lua"
+PETPORTS_WORK_BUILD_STAMP = "2026-09-19j the replant store lives in work/replant.lua"
 
 local CLAIM_KEY = "petports_claims"
 
@@ -336,60 +336,6 @@ function petports_tileKey(position)
     math.floor(position[2]))
 end
 
-local REPLANT_KEY = "petports_replants"
-
--- Returns every replant intent.
-function petports_replantsAll()
-	return world.getProperty(REPLANT_KEY) or {}
-end
-
--- Returns the replant intent at a tile key.
-function petports_replantGet(tileKey)
-	return petports_replantsAll()[tileKey]
-end
-
--- Records a replant intent at a position and returns its tile key.
-function petports_replantSet(position, seedName, ownerId)
-	local key = petports_tileKey(position)
-	local intents = petports_replantsAll()
-
-	intents[key] = {
-		name = seedName,
-		position = { math.floor(position[1]), math.floor(position[2]) },
-		owner = ownerId,
-		created = world.time()
-	}
-
-	sb.logInfo("PETPORTS replant intent SET at %s for %s (by %s)",
-		key, tostring(seedName), tostring(ownerId))
-
-	world.setProperty(REPLANT_KEY, intents)
-	return key
-end
-
--- Drops the replant intents at a list of tile keys and returns how many went.
-function petports_replantClearMany(keys, why)
-	if type(keys) ~= "table" or #keys == 0 then return 0 end
-
-	local intents = petports_replantsAll()
-	local cleared = 0
-
-	for _, key in ipairs(keys) do
-		if intents[key] ~= nil then
-			intents[key] = nil
-			cleared = cleared + 1
-		end
-	end
-
-	if cleared == 0 then return 0 end
-
-	sb.logInfo("PETPORTS replant intents CLEARED x%s: %s",
-		sb.printJson(cleared), tostring(why or "no reason given"))
-
-	world.setProperty(REPLANT_KEY, intents)
-	return cleared
-end
-
 -- Returns whether any registered port's rect contains a position.
 function petports_anyPortCovers(position)
 	if type(position) ~= "table" then return false end
@@ -403,19 +349,6 @@ function petports_anyPortCovers(position)
 	end
 
 	return false
-end
-
--- Drops the replant intent at a tile key.
-function petports_replantClear(tileKey, why)
-	local intents = petports_replantsAll()
-	if intents[tileKey] == nil then return false end
-
-	sb.logInfo("PETPORTS replant intent CLEARED at %s: %s",
-		tostring(tileKey), tostring(why or "no reason given"))
-
-	intents[tileKey] = nil
-	world.setProperty(REPLANT_KEY, intents)
-	return true
 end
 
 -- Returns the key for a route out of a position through an exit.

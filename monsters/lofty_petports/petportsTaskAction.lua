@@ -4,7 +4,14 @@ petportsTaskAction = {}
 
 petports_taskArrive = petports_taskArrive or {}
 
-local APPROACH_TIMEOUT = 20.0
+petports_taskTargetGone = petports_taskTargetGone or {}
+
+petports_taskTarget = petports_taskTarget or {}
+
+PETPORTS_CONSTANTS = PETPORTS_CONSTANTS or {}
+PETPORTS_CONSTANTS.task = PETPORTS_CONSTANTS.task or {}
+
+PETPORTS_CONSTANTS.task.approachTimeout = 20.0
 
 local ARRIVAL_DISTANCE = 1.5
 
@@ -18,7 +25,7 @@ local FUEL_TRACE = false
 
 local MEDIA_TRACE_INTERVAL = 0.25
 
-local BUILD_STAMP = "2026-09-19d fish lives in tasks/fish.lua, tracked targets and approach types are global tables"
+local BUILD_STAMP = "2026-09-19j replant lives in tasks/replant.lua"
 local stampLogged = false
 
 local SEARCH_LIMIT = 6.0
@@ -93,106 +100,21 @@ local PROGRESS_WINDOW = 5.0
 local PROGRESS_DISTANCE = 2.5
 local PROGRESS_STRIKES = 2
 
-local HARVEST_DAMAGE = 0.2
-
-local HARVEST_LEVEL = 1
-
-local seedSpacesCache = {}
-
--- Returns a seed's occupied spaces, cached, assuming 1x2 when they cannot be read.
-local function seedSpaces(seedName)
-	if seedName == nil then return { {0, 0}, {0, 1} } end
-	if seedSpacesCache[seedName] ~= nil then return seedSpacesCache[seedName] end
-
-	local spaces = nil
-	local ok, config = pcall(root.itemConfig, seedName)
-
-	if ok and type(config) == "table" and type(config.config) == "table" then
-		local orientations = config.config.orientations
-
-		if type(orientations) == "table" and type(orientations[1]) == "table"
-		   and type(orientations[1].spaces) == "table"
-		   and #orientations[1].spaces > 0 then
-			spaces = orientations[1].spaces
-		end
-	end
-
-	if spaces == nil then
-		sb.logInfo("UNIT could not read spaces for %s -- assuming 1x2",
-			tostring(seedName))
-		spaces = { {0, 0}, {0, 1} }
-	end
-
-	seedSpacesCache[seedName] = spaces
-	return spaces
-end
-
--- Returns whether any object covers the tiles a seed would occupy at an anchor.
-local function tileOccupied(anchor, seedName)
-	local tiles = {}
-	local lox, loy = anchor[1], anchor[2]
-	local hix, hiy = lox, loy
-
-	for _, space in ipairs(seedSpaces(seedName)) do
-		local t = { anchor[1] + space[1], anchor[2] + space[2] }
-		table.insert(tiles, t)
-
-		lox = math.min(lox, t[1]); hix = math.max(hix, t[1])
-		loy = math.min(loy, t[2]); hiy = math.max(hiy, t[2])
-	end
-
-	local candidates = world.entityQuery(
-		{ lox - 1, loy - 1 }, { hix + 2, hiy + 2 },
-		{ includedTypes = { "object" } })
-
-	for _, id in ipairs(candidates or {}) do
-		local spaces = world.objectSpaces(id)
-		local origin = world.entityPosition(id)
-
-		if spaces ~= nil and origin ~= nil then
-			for _, space in ipairs(spaces) do
-				local x = math.floor(origin[1]) + space[1]
-				local y = math.floor(origin[2]) + space[2]
-
-				for _, tile in ipairs(tiles) do
-					if x == tile[1] and y == tile[2] then return true end
-				end
-			end
-		end
-	end
-
-	return false
-end
-
-local WATER_DROP_HEIGHT = 1.0
-
-local WATER_REACH = 4.0
-
 local MEDIC_REACH = 5.0
 
 local CHASE_RETARGET_INTERVAL = 0.5
 
 local CHASE_BUDGET = 10.0
 
-local ANIMAL_REACH = 6.0
-
 PETPORTS_APPROACH_TYPES = {
   collect = true,
-  harvest = true,
-  replant = true,
-  water = true,
-  animal = true,
   medic = true,
   withdraw = true,
-  trap = true,
   fuelfetch = true
 }
 
 PETPORTS_TRACKED_TARGETS = {
   collect = { field = "target", noun = "drop", reach = nil, moves = false },
-  harvest = { field = "target", noun = "crop", reach = nil, moves = false },
-  trap = { field = "target", noun = "trap", reach = nil, moves = false },
-  animal = { field = "target", noun = "animal", reach = ANIMAL_REACH, moves = true },
   medic = { field = "target", noun = "patient", reach = MEDIC_REACH, moves = true,
             goneIsDone = true }
 }
@@ -203,12 +125,6 @@ local function trackedEntity(task)
   if row == nil then return nil, nil end
   return task[row.field], row
 end
-
-local HARVEST_REACH = 4.0
-
-local HARVEST_TIMEOUT = 3.0
-
-local TRAP_REACH = 4.0
 
 local MAX_VENT_HOPS = 10
 
@@ -430,7 +346,7 @@ local function tryCoarseLeg(stateData, target, reach, fromOverride)
   end
 
   stateData.searchingTimer = 0
-  stateData.approachTimer = APPROACH_TIMEOUT
+  stateData.approachTimer = PETPORTS_CONSTANTS.task.approachTimeout
   stateData.groundTarget = nil
 
   freshPather("coarse leg")
@@ -451,7 +367,7 @@ local function tryVentRoute(stateData, target)
     stateData.ventLastPosition = nil
     stateData.ventLegStarted = false
     stateData.searchingTimer = 0
-    stateData.approachTimer = APPROACH_TIMEOUT
+    stateData.approachTimer = PETPORTS_CONSTANTS.task.approachTimeout
     stateData.groundTarget = nil
     sb.logInfo("UNIT leg %s of %s: vent %s exit %s",
       sb.printJson(stateData.planIndex), sb.printJson(#stateData.plan),
@@ -554,9 +470,9 @@ function petportsTaskAction.enterWith(args)
 
   return {
     task = task,
-    approachTimer = APPROACH_TIMEOUT,
+    approachTimer = PETPORTS_CONSTANTS.task.approachTimeout,
     dwellTimer = task.dwell
-      or ((task.type == "harvest") and HARVEST_TIMEOUT)
+      or (PETPORTS_TRACKED_TARGETS[task.type] ~= nil and PETPORTS_TRACKED_TARGETS[task.type].dwell)
       or (PETPORTS_TRACKED_TARGETS[task.type] ~= nil and PETPORTS_TRACKED_TARGETS[task.type].reach ~= nil
           and CHASE_BUDGET)
       or 3.0,
@@ -1808,14 +1724,10 @@ function petports_objectPointNear(position, bounds, mediumVerified)
   return objectRoofPoint(position, bounds)
 end
 
--- Returns a task's live target: the current water tile, the tracked entity's position, or the task position.
+-- Returns a task's live target: what its petports_taskTarget handler says, the tracked entity's position, or the task position.
 local function currentTarget(task)
-  if task.type == "water" then
-    local tile = task.tiles ~= nil and task.tiles[task.waterIndex or 1] or nil
-    if tile == nil then return nil end
-
-    return { tile[1] + 0.5, tile[2] + 1.5 }
-  end
+  local custom = petports_taskTarget[task.type]
+  if custom ~= nil then return custom(task) end
 
   local trackedId = trackedEntity(task)
   if trackedId == nil then
@@ -3486,16 +3398,10 @@ local function petportsTaskUpdateInner(dt, stateData)
 
   local target = currentTarget(task)
   if target == nil then
-    if task.type == "harvest" and stateData.swung then
-      petports_taskReport(stateData, "done",
-        "harvested " .. sb.printJson(task.target)
-        .. " at " .. sb.printJson(task.position) .. " (crop consumed)")
-      return true
-    end
+    local gone = petports_taskTargetGone[task.type]
+    if gone ~= nil then return gone(stateData, task) end
 
-    petports_taskReport(stateData, "failed",
-      (task.type == "harvest") and "crop is gone before the swing"
-        or "drop is gone")
+    petports_taskReport(stateData, "failed", "drop is gone")
     return true
   end
   task.position = target
@@ -3589,7 +3495,7 @@ local function petportsTaskUpdateInner(dt, stateData)
       sb.logInfo("UNIT station-keeping: no vent route home either, retrying the walk")
       stateData.routing = false
       stateData.searchingTimer = 0
-      stateData.approachTimer = APPROACH_TIMEOUT
+      stateData.approachTimer = PETPORTS_CONSTANTS.task.approachTimeout
       freshPather("station-keeping: no route offered, retry")
       return false
     end
@@ -3628,7 +3534,7 @@ local function petportsTaskUpdateInner(dt, stateData)
       stateData.ventLegStarted = false
       stateData.groundTarget = nil
       stateData.searchingTimer = 0
-      stateData.approachTimer = APPROACH_TIMEOUT
+      stateData.approachTimer = PETPORTS_CONSTANTS.task.approachTimeout
       stateData.arrived = false
 
       if not travelled then
@@ -3760,7 +3666,7 @@ local function petportsTaskUpdateInner(dt, stateData)
 
       stateData.groundTarget = nil
       stateData.searchingTimer = 0
-      stateData.approachTimer = APPROACH_TIMEOUT
+      stateData.approachTimer = PETPORTS_CONSTANTS.task.approachTimeout
       stateData.arrived = false
       stateData.planOrigin = nil
       freshPather("line 1979")
@@ -4069,7 +3975,7 @@ local function petportsTaskUpdateInner(dt, stateData)
           if task.hold then
             sb.logInfo("UNIT station-keeping: no net progress, resetting and retrying")
             stateData.progressStrikes = 0
-            stateData.approachTimer = APPROACH_TIMEOUT
+            stateData.approachTimer = PETPORTS_CONSTANTS.task.approachTimeout
             freshPather("station-keeping: no net progress, resett")
             return false
           end
@@ -4364,21 +4270,21 @@ local function petportsTaskUpdateInner(dt, stateData)
     stateData.approachTimer = stateData.approachTimer - dt
     if stateData.approachTimer <= 0 and task.hold then
       sb.logInfo("UNIT could not reach station within %s s, retrying from %s",
-        sb.printJson(APPROACH_TIMEOUT), sb.printJson(mcontroller.position()))
-      stateData.approachTimer = APPROACH_TIMEOUT
+        sb.printJson(PETPORTS_CONSTANTS.task.approachTimeout), sb.printJson(mcontroller.position()))
+      stateData.approachTimer = PETPORTS_CONSTANTS.task.approachTimeout
       stateData.routingTried = false
       freshPather("could not reach station within")
       return false
     end
 
     if stateData.approachTimer <= 0 then
-      sb.logInfo("UNIT approach timer expired (APPROACH_TIMEOUT %s), routingTried %s",
-        sb.printJson(APPROACH_TIMEOUT), tostring(stateData.routingTried))
+      sb.logInfo("UNIT approach timer expired (PETPORTS_CONSTANTS.task.approachTimeout %s), routingTried %s",
+        sb.printJson(PETPORTS_CONSTANTS.task.approachTimeout), tostring(stateData.routingTried))
 
       if not stateData.routingTried then
         stateData.routingTried = true
         stateData.routing = true
-        stateData.approachTimer = APPROACH_TIMEOUT
+        stateData.approachTimer = PETPORTS_CONSTANTS.task.approachTimeout
         return false
       end
 
@@ -4437,7 +4343,7 @@ local function petportsTaskUpdateInner(dt, stateData)
           stateData.chaseRetarget = CHASE_RETARGET_INTERVAL
           stateData.arrived = false
           stateData.groundTarget = nil
-          stateData.approachTimer = APPROACH_TIMEOUT
+          stateData.approachTimer = PETPORTS_CONSTANTS.task.approachTimeout
         end
 
         stateData.dwellTimer = stateData.dwellTimer - dt
@@ -4455,121 +4361,6 @@ local function petportsTaskUpdateInner(dt, stateData)
 
   local arrive = petports_taskArrive[task.type]
   if arrive ~= nil then return arrive(dt, stateData, task) end
-
-  if task.type == "animal" then
-    local here = mcontroller.position()
-    local there = world.entityPosition(task.target)
-    local reach = world.magnitude(here, there)
-
-    local animalType = world.monsterType(task.target)
-    local okParams, params = pcall(root.monsterParameters, animalType)
-    local base = (okParams and type(params) == "table"
-      and type(params.baseParameters) == "table") and params.baseParameters or {}
-    local harvestable = okParams and type(params) == "table"
-      and (params.harvestPool or base.harvestPool) ~= nil
-      and (params.harvestTime or base.harvestTime) ~= nil
-
-    if not harvestable then
-      petports_taskReport(stateData, "failed", string.format(
-        "animal %s is type %s, which declares no harvest -- not poking it",
-        sb.printJson(task.target), tostring(animalType)))
-      return true
-    end
-
-    local okBefore, before = pcall(world.callScriptedEntity, task.target,
-      "hasMonsterHarvest")
-
-    if not okBefore or before ~= true then
-      petports_taskReport(stateData, "failed", string.format(
-        "animal %s is not ready (hasMonsterHarvest %s) -- harvested by someone else?",
-        sb.printJson(task.target), tostring(before)))
-      return true
-    end
-
-    local okDrop, dropped = pcall(world.callScriptedEntity, task.target,
-      "dropMonsterHarvest")
-
-    local okAfter, after = pcall(world.callScriptedEntity, task.target,
-      "hasMonsterHarvest")
-
-    sb.logInfo("UNIT animal poke %s: drop ok %s returned %s, ready %s -> %s",
-      sb.printJson(task.target), tostring(okDrop), tostring(dropped),
-      tostring(before), tostring(after))
-
-    if okAfter and after == false then
-      petports_taskReport(stateData, "done",
-        "harvested animal " .. sb.printJson(task.target)
-        .. " at " .. sb.printJson(there))
-      return true
-    end
-
-    petports_taskReport(stateData, "failed", string.format(
-      "poked %s and it is still ready (%s) -- dropMonsterHarvest did not run",
-      sb.printJson(task.target), tostring(after)))
-    return true
-  end
-
-  if task.type == "trap" then
-    if not world.entityExists(task.target) then
-      petports_taskReport(stateData, "failed", "trap was gone on arrival")
-      return true
-    end
-
-    local here = mcontroller.position()
-    local there = world.entityPosition(task.target)
-    local reach = world.magnitude(here, there)
-
-    if reach > TRAP_REACH then
-      petports_taskReport(stateData, "failed", string.format(
-        "arrived but %s tiles from the trap at %s (unit at %s)",
-        sb.printJson(reach), sb.printJson(there), sb.printJson(here)))
-      return true
-    end
-
-    local okBefore, before = pcall(world.callScriptedEntity, task.target,
-      "activeAge")
-
-    if not okBefore or type(before) ~= "number" then
-      petports_taskReport(stateData, "failed", string.format(
-        "trap %s did not answer activeAge (%s) -- not a harvestable, or its "
-        .. "script is dead",
-        sb.printJson(task.target), tostring(before)))
-      return true
-    end
-
-    local ripeAt = tonumber(task.ripeAt) or 0
-
-    if before < ripeAt then
-      petports_taskReport(stateData, "failed", string.format(
-        "trap %s is not ready: active age %s of %s -- emptied by someone else?",
-        sb.printJson(task.target), sb.printJson(before), sb.printJson(ripeAt)))
-      return true
-    end
-
-    local okDrop, dropped = pcall(world.callScriptedEntity, task.target,
-      "dropHarvest")
-
-    local okAfter, after = pcall(world.callScriptedEntity, task.target,
-      "activeAge")
-
-    sb.logInfo("UNIT trap harvest %s: dropHarvest ok %s returned %s, "
-      .. "active age %s -> %s (threshold %s)",
-      sb.printJson(task.target), tostring(okDrop), tostring(dropped),
-      sb.printJson(before), tostring(after), sb.printJson(ripeAt))
-
-    if okAfter and type(after) == "number" and after < before then
-      petports_taskReport(stateData, "done",
-        "harvested trap " .. sb.printJson(task.target)
-        .. " at " .. sb.printJson(there))
-      return true
-    end
-
-    petports_taskReport(stateData, "failed", string.format(
-      "called dropHarvest on %s and its active age did not reset (%s -> %s) "
-      .. "-- the trap was not on its harvest stage",
-      sb.printJson(task.target), sb.printJson(before), tostring(after)))
-    return true
-  end
 
   if task.type == "medic" then
     if task.target == nil or not world.entityExists(task.target) then
@@ -4620,173 +4411,6 @@ local function petportsTaskUpdateInner(dt, stateData)
     return true
   end
 
-  if task.type == "water" then
-    local tiles = task.tiles or {}
-    local index = task.waterIndex or 1
-    local tile = tiles[index]
-
-    if tile == nil then
-      petports_taskReport(stateData, "done",
-        "swept " .. sb.printJson(task.watered or 0) .. " tile(s)")
-      return true
-    end
-
-    local here = mcontroller.position()
-    local standing = { tile[1] + 0.5, tile[2] + 1.5 }
-
-    if world.magnitude(here, standing) > WATER_REACH then
-      petports_taskReport(stateData, "failed", string.format(
-        "arrived but %s from tile %s -- sweep abandoned after %s tile(s)",
-        sb.printJson(world.magnitude(here, standing)), sb.printJson(tile),
-        sb.printJson(task.watered or 0)))
-      return true
-    end
-
-    local modNow = world.mod({ tile[1], tile[2] }, "foreground")
-
-    if tostring(modNow) ~= tostring(task.previousMod) then
-      sb.logInfo("UNIT water SKIP tile %s: mod is %s, expected %s -- "
-        .. "already wet or no longer farmland",
-        sb.printJson(tile), tostring(modNow), tostring(task.previousMod))
-    else
-      local spawn = { tile[1] + 0.25, standing[2] + WATER_DROP_HEIGHT }
-
-      local ok, err = pcall(world.spawnProjectile,
-        "petports_watersprinkle", spawn, entity.id(), {0, -1}, false, {
-          actionOnReap = { {
-            action = "applySurfaceMod",
-            previousMod = task.previousMod,
-            newMod = task.newMod,
-            radius = 0
-          } },
-
-          processing = task.tint ~= nil and ("?multiply=" .. task.tint) or nil
-        })
-
-      sb.logInfo("UNIT water CAST tile %s aim x %s spawn %s: %s -> %s, tint %s, ok %s %s",
-        sb.printJson(tile), sb.printJson(spawn[1]), sb.printJson(spawn),
-        tostring(task.previousMod), tostring(task.newMod),
-        tostring(task.tint or "none"), tostring(ok), tostring(err or ""))
-
-      if not ok then
-        petports_taskReport(stateData, "failed", string.format(
-          "spawnProjectile failed at %s after %s tile(s): %s",
-          sb.printJson(tile), sb.printJson(task.watered or 0), tostring(err)))
-        return true
-      end
-
-      task.watered = (task.watered or 0) + 1
-    end
-
-    task.waterIndex = index + 1
-
-    if task.waterIndex > #tiles then
-      petports_taskReport(stateData, "done",
-        "swept " .. sb.printJson(#tiles) .. " tile(s), watered "
-        .. sb.printJson(task.watered or 0))
-      return true
-    end
-
-    stateData.arrived = false
-    stateData.groundTarget = nil
-    stateData.approachTimer = APPROACH_TIMEOUT
-    stateData.searchingTimer = 0
-    freshPather("water sweep advancing to tile " .. sb.printJson(task.waterIndex))
-
-    return false
-  end
-
-  if task.type == "replant" then
-    local tile = task.tile or {
-      math.floor(task.position[1]), math.floor(task.position[2])
-    }
-
-    if tileOccupied(tile, task.seed) then
-      petports_taskReport(stateData, "failed", string.format(
-        "footprint for %s at %s is occupied -- not planting",
-        tostring(task.seed), sb.printJson(tile)))
-      return true
-    end
-
-    local ok, placed = pcall(world.placeObject, task.seed, tile, 1)
-
-    sb.logInfo("UNIT replant at %s: placeObject(%s) ok %s returned %s",
-      sb.printJson(tile), tostring(task.seed), tostring(ok), tostring(placed))
-
-    if tileOccupied(tile, task.seed) then
-      petports_taskReport(stateData, "done",
-        "planted " .. tostring(task.seed) .. " at " .. sb.printJson(tile))
-      return true
-    end
-
-    petports_taskReport(stateData, "failed", string.format(
-      "placeObject(%s) at %s left nothing there -- untilled ground, "
-      .. "or placement refused",
-      tostring(task.seed), sb.printJson(tile)))
-    return true
-  end
-
-  if task.type == "harvest" then
-    if not stateData.swung then
-      local here = mcontroller.position()
-      local cropPosition = world.entityPosition(task.target)
-      local reach = world.magnitude(here, cropPosition)
-
-      if reach > HARVEST_REACH then
-        petports_taskReport(stateData, "failed", string.format(
-          "arrived but %s tiles from the crop at %s (unit at %s)",
-          tostring(reach), sb.printJson(cropPosition), sb.printJson(here)))
-        return true
-      end
-
-      local okBefore, before = pcall(world.farmableStage, task.target)
-      stateData.stageBefore = okBefore and before or nil
-
-      local tile = { math.floor(cropPosition[1]), math.floor(cropPosition[2]) }
-
-      local okDamage, damaged = pcall(world.damageTiles, { tile }, "foreground",
-        here, "plantish", HARVEST_DAMAGE, HARVEST_LEVEL)
-
-      stateData.swung = true
-      stateData.verifyTimer = HARVEST_TIMEOUT
-
-      sb.logInfo("UNIT harvest swing at %s tile %s: damageTiles ok %s returned %s "
-        .. "(ignored), stage before %s -- watching for the result",
-        sb.printJson(task.target), sb.printJson(tile), tostring(okDamage),
-        tostring(damaged), sb.printJson(stateData.stageBefore))
-
-      return false
-    end
-
-    local okAfter, after = pcall(world.farmableStage, task.target)
-    if not okAfter then after = nil end
-
-    if type(after) == "number" and type(stateData.stageBefore) == "number"
-       and after ~= stateData.stageBefore then
-      sb.logInfo("UNIT harvest confirmed on %s: stage %s -> %s (crop survived)",
-        sb.printJson(task.target), sb.printJson(stateData.stageBefore),
-        sb.printJson(after))
-
-      petports_taskReport(stateData, "done",
-        "harvested " .. sb.printJson(task.target)
-        .. " at " .. sb.printJson(task.position)
-        .. " (crop reset to stage " .. sb.printJson(after) .. ")")
-      return true
-    end
-
-    stateData.verifyTimer = (stateData.verifyTimer or HARVEST_TIMEOUT) - dt
-    if stateData.verifyTimer <= 0 then
-      petports_taskReport(stateData, "failed", string.format(
-        "swung at %s and nothing changed in %ss (stage still %s) "
-        .. "-- crop was not ready, or FARMABLE_STAGE_BASE is wrong",
-        sb.printJson(task.target), sb.printJson(HARVEST_TIMEOUT),
-        sb.printJson(after)))
-      return true
-    end
-
-    return false
-  end
-
   if task.type == "collect" then
     local ok, taken = pcall(world.takeItemDrop, task.target, entity.id())
 
@@ -4822,7 +4446,7 @@ local function petportsTaskUpdateInner(dt, stateData)
       stateData.onStation = false
 
       stateData.arrived = false
-      stateData.approachTimer = APPROACH_TIMEOUT
+      stateData.approachTimer = PETPORTS_CONSTANTS.task.approachTimeout
       stateData.progressStrikes = 0
       freshPather("pushed off station (")
       return false

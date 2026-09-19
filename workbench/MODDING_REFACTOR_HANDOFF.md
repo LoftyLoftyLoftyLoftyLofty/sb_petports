@@ -2,7 +2,7 @@
 
 State only. No history, no reasoning, no theories. Anything not verified in game says UNTESTED.
 
-Last updated at build 2026-09-19e.
+Last updated at build 2026-09-19j.
 
 ## Goals
 
@@ -21,6 +21,7 @@ Acceptance test, PASSED in game 2026-09-19: copy the three asterite files, find-
 - Asset names inside a behaviour file (projectiles, items) are constants, so a blanket find-replace cannot break them silently.
 - Entries sharing an `order` compete; the nearest work wins. A malformed work table from a modder's generator is the modder's problem.
 - Line endings: LF. Git already stores LF; a CRLF working copy is converted when a build touches it (no git diff results).
+- A whole class (port and unit side) moves per build since 19f; if a class build breaks it gets split back into one side per build.
 - The handoff doc is updated at stopping points, not per build. Modified files are presented individually, not zipped.
 
 ## Layout
@@ -31,9 +32,11 @@ Acceptance test, PASSED in game 2026-09-19: copy the three asterite files, find-
 | `monsters/lofty_petports/tasks/<behaviour>.lua` | unit side: constants, per-type table rows, arrival handler, registration |
 | `scripts/lofty_petports/shared/<behaviour>.lua` | only when both sides need the same store or constants; both side files `require` it and add their own fields to `PETPORTS_CONSTANTS.<behaviour>` |
 
-Load order: `petports_petport.object` lists `petports_petport.lua`, `work/asterite.lua`, `work/fish.lua`. Each monstertype lists `tasks/asterite.lua`, `tasks/fish.lua` after `petportsTaskAction.lua`.
+Load order: `petports_petport.object` lists `petports_petport.lua`, then `work/` asterite, fish, animal, trap, harvest, water, replant. Each monstertype lists the same seven under `tasks/` after `petportsTaskAction.lua`. Every file is listed directly in the arrays; no loader file.
 
-Done: asterite (`shared/`, `work/`, `tasks/`), fish (`work/`, `tasks/`; its store is port-only so it has no shared file).
+Done: asterite (`shared/`, `work/`, `tasks/`), fish, animal, trap, harvest, water (with its withdraw), replant (with its withdraw and its store). Only asterite needed a shared file; every other store turned out to be port-only and lives in its `work/` file.
+
+Dependencies between behaviour files: `work/water.lua` reads the crops `work/harvest.lua` leaves in `self.farmables`; `work/harvest.lua` calls `petports_replantSet` from `work/replant.lua` when a crop is consumed.
 
 ## Port work registry (`petports_petport.lua`)
 
@@ -61,6 +64,7 @@ Hooks, each optional, each profiled as `"<hook>." .. name`, each called from the
 | `init()` | port `init()` |
 | `firstUpdate()` | first update after load |
 | `tick(dt)` | every port update |
+| `scanBeat(interval)` | stage 2 of the work beat, where the farmable and animal scans ran |
 | `workBeat()` | the work interval, before dispatch |
 | `environmentBeat()` | the environment interval, after the medium check |
 | `done(task, report)` | a task reporting done; the hook checks `task.type` itself |
@@ -68,26 +72,34 @@ Hooks, each optional, each profiled as `"<hook>." .. name`, each called from the
 
 Orders: return 100, fuelGround 200, fuelFetch 300, replant 400, water 500, restock 600, deposit 700, fuelled 800, medic 900, cargoStall 1000, collect 1100, medicPreload 1200, fish 1300, harvest 1400, animal 1500, trap 1600, asterite 1700 (copper example also 1700), withdraw 1800, withdrawWater 1900, restockFetch 2000, fuel 2100, tidy 2200, compact 2300, defrag 2400, sort 2500, drain 2600, diagnostic 2700.
 
-Port globals delocalized so far: `petports_inNetworkCoverage`, `petports_claimFree`, `petports_targetEligible`, `petports_targetSuits`, `petports_standingPointForTarget`, `petports_familyOnHold`, `petports_portCoverageRect` (zero-argument; the two-argument `petports_coverageRect` in `petports_work.lua` is a different function), `petports_metrics`. `FAMILY_HELD` is a global table a behaviour file adds its family to.
+Port globals delocalized so far: `petports_inNetworkCoverage`, `petports_claimFree`, `petports_targetEligible`, `petports_targetSuits`, `petports_targetRefused`, `petports_standingPointForTarget`, `petports_portStandingPointNear` (the unit has a different `petports_standingPointNear` that the port calls remotely by name), `petports_servicePointNear`, `petports_soilInfo`, `petports_containerWithSeed`, `petports_familyOnHold`, `petports_portCoverageRect` (zero-argument; the two-argument `petports_coverageRect` in `petports_work.lua` is a different function), `petports_metrics`. `FAMILY_HELD` is a global table a behaviour file adds its family to.
 
 ## Unit side (`petportsTaskAction.lua`, `petports_contract.lua`)
 
-`petports_taskArrive[task.type]` is looked up just before the arrival ladder; a handler `(dt, stateData, task)` returns whether the task is over. Types without a handler fall through to the ladder.
+Handler tables, each looked up by `task.type` at call time; types without a handler get the old generic behaviour:
+
+| Table | Handler | Asked when |
+|---|---|---|
+| `petports_taskArrive` | `(dt, stateData, task)` returns whether the task is over | just before the arrival ladder |
+| `petports_taskTarget` | `(task)` returns the live target point, or nil when there is none | `currentTarget`; default is the tracked entity or `task.position` |
+| `petports_taskTargetGone` | `(stateData, task)` reports and returns whether the task is over | the live target is nil; default fails with `drop is gone` |
 
 Per-type tables a task file fills in for itself:
 
 | Table | Row means |
 |---|---|
-| `PETPORTS_TRACKED_TARGETS[type]` | the task chases an entity: `{ field, noun, reach, moves, goneIsDone }` |
+| `PETPORTS_TRACKED_TARGETS[type]` | the task chases an entity: `{ field, noun, reach, moves, goneIsDone, dwell }`; `dwell` sets the default dwell timer |
 | `PETPORTS_APPROACH_TYPES[type] = true` | the task uses the approach-target path |
 | `PETPORTS_SWIM_TASK_TYPES[type] = true` | the task swims to its target |
 
-Unit globals delocalized so far: `petports_taskReport`, `petports_publishBeam`.
+Unit globals delocalized so far: `petports_taskReport`, `petports_publishBeam`, `PETPORTS_CONSTANTS.task.approachTimeout`. `petports_freshPather` already existed as a global wrapper around the local `freshPather`; moved code calls the wrapper.
 
 ## Still in the big files
 
-- Port generators: return, fuelGround, fuelFetch, replant, water, restock, deposit, medic, collect, harvest, animal, trap, withdraw, withdrawWater, restockFetch, fuel, tidy, compact, defrag, sort, drain, diagnostic. All registered in a block just above `petports_findWork`.
-- Unit arrival branches: animal, trap, medic, water, replant, harvest, collect; their rows in the three per-type tables.
+- Port generators: return, fuelGround, fuelFetch, restock, deposit, medic, collect, restockFetch, fuel, tidy, compact, defrag, sort, drain, diagnostic, and the non-generator entries fuelled and cargoStall. All registered in a block just above `petports_findWork`.
+- Unit arrival branches: medic, collect; their rows in the per-type tables (collect, medic, withdraw, fuelfetch).
+- Farming plumbing shared by several classes, kept in `petports_petport.lua` as globals: the module flag and class switches (`petportFarming`, `petportFarmingDoes`, `petports_workFarming`), `petports_soilInfo`, `spendSeed`, `withdrawSeed`, and the generic `withdraw` task (unit branch and port done handler) that water, replant and medic all use.
+- Dead code: `drySoilAt` in `petports_petport.lua` is defined and never called. Awaiting Lofty's word to remove.
 - The pane's stat list is fixed; a copied behaviour's metric is stored in the pet's stats but not shown. The stat mirror in `petports_petport.lua` still names `asteriteDepositsMined` and `fished`.
 - Module items and the socket: not yet checked whether a new module flag needs anything beyond a copied `.item`.
 - Shared plumbing (movers, doors, standable search, coarse nav) is still `local`.
@@ -107,12 +119,19 @@ Unit globals delocalized so far: `petports_taskReport`, `petports_publishBeam`.
 | 2026-09-19c | fish port side to `work/fish.lua`; one `petports_workHook`; four more hooks | in game OK |
 | 2026-09-19d | fish unit side to `tasks/fish.lua`; three per-type tables global | in game OK for the catch and for land approach tasks. The swim list was not seen driving a swim in the logs (`task swims true` never logged) -- UNTESTED |
 | 2026-09-19e | fish store into `work/fish.lua` | in game OK |
+| 2026-09-19f | animal class, both sides; `scanBeat` hook | in game OK |
+| 2026-09-19g | trap class, both sides; trap scan split from the crop scan (new logic, not only a move) | in game OK |
+| 2026-09-19h | harvest class, both sides; `dwell` row field; `petports_taskTargetGone` | in game OK; the `drop is gone` fallback was exercised |
+| 2026-09-19i | water class and its withdraw, both sides; `petports_taskTarget` | in game OK; withdraw from storage confirmed with swampwater from a deposit crate |
+| 2026-09-19j | replant class, its withdraw and its store, both sides | in game OK for harvest, withdraw, replant and the intent being cleared. The sweep's `footprint occupied` path was not exercised -- UNTESTED |
 
 Known log differences from before the refactor: `ground feed idle` logs as soon as `fuelGround` fails with a new reason; profiler phases `asteriteScan` and `fishSweep` are now `tick.asterite` and `workBeat.fish`; the asterite generator says `offering a stand at` where it said `dispatching to stand at`.
 
 ## Verification per build
 
-- patch script with exactly-once anchors and a dry-run mode; refuses to write on any failure
+- patch script with exactly-once anchors and a dry-run mode; refuses to write on any failure. From 19f the shared steps live in `movekit.py`: it assembles every file in memory, runs the checks below on the result, and writes nothing unless all pass
+- `defs()` on every cut block: the block must define exactly the functions named. This caught `petports_inNetworkCoverage` riding along with the trap generator and `petports_anyPortCovers` sitting inside the replant store
+- `delocalize` refuses a rename onto a name that already exists (the 18a failure; it would have recurred with `petports_freshPather`)
 - `texluac -p <file>` (syntax, and the 200-local limit), `petports_luabalance.py`
 - context check over every script loaded into the same context: every global function defined exactly once (this is what 18a lacked), every free name in a new file resolves to a global, and no identifier in a new file matches a top-level `local` of the file it left
 - where a ladder is replaced: old-versus-new harness under `texlua` with stubbed generators (200,000 random port states)
@@ -120,9 +139,11 @@ Known log differences from before the refactor: `ground feed idle` logs as soon 
 
 ## Issues found during this work, not fixed
 
+
 1. Habitat rule judges the target's own tiles. `servicePointNear` calls `petports_targetSuits` on the object first; an object wholly inside a liquid the chassis will not enter is refused before any stand point is looked for. Seen: feeder 72 in lava refused for a walker that could reach it from dry land; the unit sat out of fuel. Applies to every job on that object, not only feeding.
 2. Misleading idle reason. With a feeder refused as above, `fuelFetchWork` reports `N feeder source(s), none holding a treat this unit can use`. The `SKIPPING feeder ...` line that names the real cause prints once per chassis.
 3. Metabolism module and vertical-launch jumps. The planner assumes full horizontal speed at the apex; the body ramps (0, 4.17, 8.33 per tick seen). At plan speed 11.7 a 2-tile apex turn landed 1 tile short and 2 low at `[5810.98,1184.68]`, 4 stalls there. Shortfall estimated to grow with the square of the speed (inferred from the velocity steps, not measured).
 4. Socketing a speed module mid-route: by code reading, the mover re-reads the scaled speed every tick while the path in hand was planned at the old speed. Not confirmed in a log.
 5. Stalls that predate the module: unit standing 1 to 2 tiles below the source of its Jump edge, at `[5798.38,1153.8]` (7 stalls) and `[5797.73,1157.8]` (3).
 6. Report of pets without the bigbrain module using doors and hatches. No evidence in any log seen; the unit in the logs carried `openDoors`. Needs a run with the module out.
+7. `/events/sb_events.lua:119` (another mod's player script) throws `attempt to compare number with nil`. Not Petports.

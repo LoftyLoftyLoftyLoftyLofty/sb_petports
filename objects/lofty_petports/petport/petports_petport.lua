@@ -179,19 +179,7 @@ BEACON_ITEM_KEY = "petports_beaconItem"
 BEACON_MIN_KEY = "petports_beaconMin"
 BEACON_MAX_KEY = "petports_beaconMax"
 
-HARVEST_INTERVAL = 5.0
 
-FARMABLE_STAGE_BASE = 0
-
-TRAP_INTERVAL = 5.0
-
-
-
-WATER_CARRY = 10
-
-WATER_CARRY_HYDRATED = 30
-
-WATER_RUN_REACH = 32
 
 PET_NAME_MAX = 24
 
@@ -485,7 +473,7 @@ local function inNetwork(position)
 end
 
 
-FAMILY_HELD = { animal = true }
+FAMILY_HELD = {}
 FAMILY_STRIKES = 3
 FAMILY_HOLD = 120.0
 
@@ -615,7 +603,7 @@ local function abandonTask(reason)
   self.task = nil
 end
 
-local PETPORT_BUILD_STAMP = "2026-09-19c fish port side lives in work/fish.lua, one petports_workHook walks every entry hook"
+local PETPORT_BUILD_STAMP = "2026-09-19j replant, its withdraw and its store live in work/replant.lua"
 
 PETPORT_PROFILE = true
 
@@ -1217,21 +1205,6 @@ function init()
     end
 
     if report.outcome == "done" and self.task ~= nil
-       and self.task.type == "water" and self.task.id == report.id then
-      local watered = tonumber(report.watered) or 0
-
-      for _ = 1, watered do
-        spendSeed(self.task.item)
-      end
-
-      petports_metrics.add("watered", watered)
-
-      sb.logInfo("PETPORT %s watering finished: %s tile(s), %s %s spent",
-        stationUniqueId(), sb.printJson(watered), sb.printJson(watered),
-        tostring(self.task.item))
-    end
-
-    if report.outcome == "done" and self.task ~= nil
        and self.task.type == "medic" and self.task.id == report.id then
       local dosed = tonumber(report.dosed) or 0
 
@@ -1248,36 +1221,6 @@ function init()
         sb.logInfo("PETPORT %s medic returned without dosing: %s",
           stationUniqueId(), tostring(report.reason))
       end
-    end
-
-    if report.outcome == "done" and self.task ~= nil
-       and self.task.type == "replant" and self.task.id == report.id then
-      spendSeed(self.task.seed)
-
-      petports_metrics.add("planted", 1)
-
-      petports_replantClear(self.task.target, "replanted")
-    end
-
-    if report.outcome == "done" and self.task ~= nil
-       and self.task.type == "harvest" and self.task.id == report.id then
-      petports_metrics.add("harvested", 1)
-
-      if not world.entityExists(self.task.target)
-         and self.task.targetName ~= nil then
-        petports_replantSet(self.task.position, self.task.targetName,
-          stationUniqueId())
-      end
-    end
-
-    if report.outcome == "done" and self.task ~= nil
-       and self.task.type == "animal" and self.task.id == report.id then
-      petports_metrics.add("livestock", 1)
-    end
-
-    if report.outcome == "done" and self.task ~= nil
-       and self.task.type == "trap" and self.task.id == report.id then
-      petports_metrics.add("traps", 1)
     end
 
     if report.outcome == "done" and self.task ~= nil
@@ -2862,12 +2805,6 @@ function petportHydrator()
   return false
 end
 
--- Returns how much water the unit carries, raised by a hydrator.
-function petportWaterCarry()
-  if petportHydrator() then return WATER_CARRY_HYDRATED end
-  return WATER_CARRY
-end
-
 -- Returns whether a class of farming work is turned on.
 function petportFarmingDoes(class)
   if self.petData == nil then return false end
@@ -3343,7 +3280,7 @@ local function petUniqueId()
 end
 
 -- Asks the unit for a standable point near a position.
-local function standingPointNear(position, radius, mediumVerified)
+function petports_portStandingPointNear(position, radius, mediumVerified)
   if self.petId ~= nil and world.entityExists(self.petId) then
     local ok, resolved = pcall(world.callScriptedEntity, self.petId,
       "petports_standingPointNear", position, radius or 4, mediumVerified)
@@ -3391,7 +3328,7 @@ function petports_targetSuits(position, entityId)
 end
 
 -- Records a target refusal against a label, once per distinct reason and chassis.
-local function targetRefused(label, reason)
+function petports_targetRefused(label, reason)
   local chassis = self.petData ~= nil and self.petData.monsterType or nil
 
   if self.eligibilitySkips == nil or self.eligibilitySkipsChassis ~= chassis then
@@ -3414,7 +3351,7 @@ function petports_targetEligible(label, position, entityId)
   local ok, reason = petports_targetSuits(position, entityId)
   if ok then return true end
 
-  targetRefused(label, reason)
+  petports_targetRefused(label, reason)
   return false
 end
 
@@ -3423,7 +3360,7 @@ function petports_standingPointForTarget(position, entityId, radius, mediumVerif
   local bounds = petports_habitatObjectBounds(entityId)
 
   if bounds == nil then
-    return standingPointNear(position, radius, mediumVerified)
+    return petports_portStandingPointNear(position, radius, mediumVerified)
   end
 
   if self.petId ~= nil and world.entityExists(self.petId) then
@@ -3445,7 +3382,7 @@ local function servicePointNearUncached(label, entityId, position, radius)
   local suits, why = petports_targetSuits(position, entityId)
 
   if not suits then
-    targetRefused(label, why)
+    petports_targetRefused(label, why)
     return nil, why
   end
 
@@ -3469,7 +3406,7 @@ SERVICE_POINT_TTL = 30.0
 SERVICE_POINT_RETRY = 5.0
 
 -- Returns a target's service point, cached, with a shorter hold on failures.
-local function servicePointNear(label, entityId, position, radius)
+function petports_servicePointNear(label, entityId, position, radius)
   self.servicePoints = self.servicePoints or {}
 
   local key = tostring(entityId) .. "|" .. tostring(radius or 4) .. "|"
@@ -4232,7 +4169,7 @@ local function upcyclerWork()
   for _, candidate in ipairs(candidates) do
     local machine = candidate.machine
 
-    local stand, standWhy = servicePointNear("upcycler " .. tostring(machine.id),
+    local stand, standWhy = petports_servicePointNear("upcycler " .. tostring(machine.id),
       machine.id, machine.position, 4)
 
     if stand == nil then
@@ -4433,7 +4370,7 @@ local function depositWork()
 
     if backedOff then
     else
-      local stand, standWhy = servicePointNear("crate " .. tostring(beacon.id),
+      local stand, standWhy = petports_servicePointNear("crate " .. tostring(beacon.id),
         beacon.id, beacon.position, 4)
 
       if stand == nil then
@@ -5681,7 +5618,7 @@ local function wetModName(dryName, transformModId)
 end
 
 -- Returns whether a matmod is tilled and dry, and which liquids it takes, cached.
-local function soilInfo(modName)
+function petports_soilInfo(modName)
 	if modName == nil then return nil end
 
 	local key = tostring(modName)
@@ -5750,961 +5687,26 @@ local function drySoilAt(tile)
 	local modName = world.mod({ tile[1], tile[2] }, "foreground")
 	if modName == nil then return nil end
 
-	local info = soilInfo(modName)
+	local info = petports_soilInfo(modName)
 	if info == nil or not info.tilled or not info.dry then return nil end
 
 	return { mod = tostring(modName), wants = info.wants }
 end
 
--- Returns a crop's stage list from the object or its item config.
-local function farmableStages(id)
-	local ok, stages = pcall(world.getObjectParameter, id, "stages")
-	if ok and type(stages) == "table" and #stages > 0 then
-		return stages
-	end
-
-	local name = world.entityName(id)
-	if name == nil then return nil end
-
-	local okItem, config = pcall(root.itemConfig, name)
-	if okItem and type(config) == "table" and type(config.config) == "table"
-	   and type(config.config.stages) == "table" then
-		return config.config.stages
-	end
-
-	return nil
-end
-
--- Returns the first stage that carries a harvest pool.
-local function harvestStageOf(stages)
-	for index, stage in ipairs(stages) do
-		if type(stage) == "table" and stage.harvestPool ~= nil then
-			return index - 1 + FARMABLE_STAGE_BASE
-		end
-	end
-
-	return nil
-end
-
--- Returns a trap's ripening age, active window and whether it can ever ripen, cached by name.
-local function trapProfile(id)
-	local name = world.entityName(id)
-	if name == nil then return nil end
-
-	self.trapProfiles = self.trapProfiles or {}
-
-	local cached = self.trapProfiles[name]
-	if cached ~= nil then
-		if cached == false then return nil end
-		return cached
-	end
-
-	local okStages, stages = pcall(world.getObjectParameter, id, "stages")
-
-	if not okStages or type(stages) ~= "table" or #stages == 0
-	   or type(stages[#stages]) ~= "table"
-	   or stages[#stages].harvestPool == nil then
-		self.trapProfiles[name] = false
-		return nil
-	end
-
-	local ripeAt = 0
-	local stalls = false
-
-	for index, stage in ipairs(stages) do
-		if index < #stages then
-			local duration = type(stage) == "table" and stage.duration or nil
-			local span = nil
-
-			if type(duration) == "table" then
-				span = math.max(tonumber(duration[1]) or 0,
-					tonumber(duration[2]) or 0)
-			elseif type(duration) == "number" then
-				span = duration
-			end
-
-			if span == nil or span <= 0 then
-				stalls = true
-			else
-				ripeAt = ripeAt + span
-			end
-		end
-	end
-
-	local okRange, range = pcall(world.getObjectParameter, id, "activeTimeRange")
-	if not okRange or type(range) ~= "table" then range = { 0, 1 } end
-
-	local span = ((tonumber(range[2]) or 1) - (tonumber(range[1]) or 0)) % 1.0
-
-	local lockedBy = nil
-	if span == 0 then
-		lockedBy = "its activeTimeRange spans zero of the day"
-	elseif stalls then
-		lockedBy = "one of its growth stages declares no duration"
-	end
-
-	local profile = {
-		name = name,
-		ripeAt = ripeAt,
-		span = span,
-		locked = (lockedBy ~= nil),
-		lockedBy = lockedBy,
-		stageCount = #stages
-	}
-
-	self.trapProfiles[name] = profile
-	return profile
-end
-
--- Returns a trap's active age, or nil.
-local function trapAge(id)
-	local ok, age = pcall(world.callScriptedEntity, id, "activeAge")
-
-	if not ok or type(age) ~= "number" then return nil end
-	return age
-end
-
--- Logs the traps and their ages when the picture changes, warning once per trap that can never ripen.
-local function reportTraps(traps)
-	self.trapWarned = self.trapWarned or {}
-
-	local ripe = 0
-	local parts = {}
-
-	for _, trap in ipairs(traps) do
-		if trap.ripe then ripe = ripe + 1 end
-
-		table.insert(parts, string.format("%s#%s age %s of %s%s%s",
-			tostring(trap.name), tostring(trap.id),
-			trap.age == nil and "unreadable"
-				or string.format("%.0f", trap.age),
-			string.format("%.0f", trap.ripeAt),
-			trap.locked and " LOCKED" or "",
-			trap.ripe and " RIPE" or ""))
-
-		if trap.locked and not self.trapWarned[trap.id] then
-			self.trapWarned[trap.id] = true
-
-			sb.logWarn("PETPORT %s trap %s (%s) at %s CAN NEVER RIPEN: %s, so "
-				.. "harvestable.lua holds it on an early stage forever and "
-				.. "nobody -- player or unit -- can harvest it. Note that "
-				.. "OMITTING activeTimeRange defaults it to [0, 1], which that "
-				.. "script reads as a span of ZERO.",
-				stationUniqueId(), sb.printJson(trap.id), tostring(trap.name),
-				sb.printJson(trap.position),
-				tostring(trap.lockedBy or "its config stalls stage growth"))
-		end
-	end
-
-	table.sort(parts)
-	local signature = table.concat(parts, " | ")
-
-	if signature ~= self.trapSignature then
-		self.trapSignature = signature
-		sb.logInfo("PETPORT %s traps: %s found, %s ripe -- %s",
-			stationUniqueId(), sb.printJson(#traps), sb.printJson(ripe),
-			signature == "" and "none" or signature)
-	end
-end
-
--- Scans the network for crops and traps, returning each with its stage and whether it is ripe.
-local function scanFarmables()
-	local rects = self.networkRects
-	if rects == nil or #rects == 0 then rects = { petports_portCoverageRect() } end
-
-	local found = {}
-	local traps = {}
-	local seen = {}
-	local objects = 0
-
-	for _, rect in ipairs(rects) do
-		local ids = world.entityQuery({ rect[1], rect[2] }, { rect[3], rect[4] }, {
-			includedTypes = { "object" }
-		})
-
-		for _, id in ipairs(ids or {}) do
-			if not seen[id] then
-				seen[id] = true
-				objects = objects + 1
-
-				local ok, stage = pcall(world.farmableStage, id)
-
-				if ok and type(stage) == "number" then
-					local stages = farmableStages(id)
-					local harvestAt = stages ~= nil and harvestStageOf(stages) or nil
-
-					if harvestAt ~= nil then
-						table.insert(found, {
-							id = id,
-							name = world.entityName(id),
-							stage = stage,
-							harvestAt = harvestAt,
-							stageCount = #stages,
-							position = world.entityPosition(id),
-							ripe = (stage == harvestAt)
-						})
-					end
-				else
-					local profile = trapProfile(id)
-
-					if profile ~= nil then
-						local age = profile.locked and 0 or trapAge(id)
-
-						table.insert(traps, {
-							id = id,
-							name = profile.name,
-							age = age,
-							ripeAt = profile.ripeAt,
-							locked = profile.locked,
-							lockedBy = profile.lockedBy,
-							stageCount = profile.stageCount,
-							position = world.entityPosition(id),
-							ripe = (not profile.locked) and age ~= nil
-								and age >= profile.ripeAt
-						})
-					end
-				end
-			end
-		end
-	end
-
-	return found, objects, traps
-end
-
--- Rescans the crops and traps on an interval.
-local function refreshFarmables(dt)
-	self.harvestTimer = (self.harvestTimer or 0) - dt
-	if self.harvestTimer > 0 then return end
-	self.harvestTimer = HARVEST_INTERVAL
-
-	local found, objects, traps = scanFarmables()
-	self.farmables = found
-	self.traps = traps
-
-	local ripe = 0
-	local parts = {}
-
-	for _, crop in ipairs(found) do
-		if crop.ripe then ripe = ripe + 1 end
-		table.insert(parts, string.format("%s#%s stage %s of %s harvestAt %s%s",
-			tostring(crop.name), tostring(crop.id),
-			tostring(crop.stage), tostring(crop.stageCount),
-			tostring(crop.harvestAt), crop.ripe and " RIPE" or ""))
-	end
-
-	table.sort(parts)
-	local signature = table.concat(parts, " | ")
-
-	if signature ~= self.farmableSignature then
-		self.farmableSignature = signature
-		sb.logInfo("PETPORT %s farmables: %s of %s object(s), %s ripe -- %s",
-			stationUniqueId(), sb.printJson(#found), sb.printJson(objects),
-			sb.printJson(ripe), signature == "" and "none" or signature)
-	end
-
-	reportTraps(traps)
-end
-
-local animalTypeCache = {}
-
--- Returns whether a monster type can be harvested at all.
-local function animalHarvestable(monsterType)
-	if monsterType == nil then return false end
-
-	local key = tostring(monsterType)
-	if animalTypeCache[key] ~= nil then return animalTypeCache[key] end
-
-	local harvestable = false
-	local ok, params = pcall(root.monsterParameters, key)
-
-	if ok and type(params) == "table" then
-		local base = type(params.baseParameters) == "table"
-			and params.baseParameters or {}
-
-		local pool = params.harvestPool or base.harvestPool
-		local time = params.harvestTime or base.harvestTime
-
-		harvestable = (pool ~= nil and time ~= nil)
-
-		sb.logInfo("PETPORT %s monster type %s: harvestPool %s harvestTime %s -> %s",
-			stationUniqueId(), key, tostring(pool ~= nil), tostring(time ~= nil),
-			harvestable and "HARVESTABLE" or "not livestock")
-	else
-		sb.logInfo("PETPORT %s monster type %s: root.monsterParameters gave nothing",
-			stationUniqueId(), key)
-	end
-
-	animalTypeCache[key] = harvestable
-	return harvestable
-end
-
--- Scans the network for harvestable farm animals.
-local function scanAnimals()
-	local rects = self.networkRects
-	if rects == nil or #rects == 0 then rects = { petports_portCoverageRect() } end
-
-	local found = {}
-	local seen = {}
-	local monsters = 0
-
-	for _, rect in ipairs(rects) do
-		local ids = world.entityQuery({ rect[1], rect[2] }, { rect[3], rect[4] }, {
-			includedTypes = { "monster" }
-		})
-
-		for _, id in ipairs(ids or {}) do
-			if not seen[id] then
-				seen[id] = true
-				monsters = monsters + 1
-
-				local monsterType = world.monsterType(id)
-
-				if animalHarvestable(monsterType) then
-					local ok, ready = pcall(world.callScriptedEntity, id,
-						"hasMonsterHarvest")
-
-					if ok and type(ready) == "boolean" then
-						table.insert(found, {
-							id = id,
-							name = monsterType,
-							ready = ready,
-							position = world.entityPosition(id)
-						})
-					end
-				end
-			end
-		end
-	end
-
-	return found, monsters
-end
-
--- Rescans the farm animals on an interval.
-local function refreshAnimals(dt)
-	self.animalTimer = (self.animalTimer or 0) - dt
-	if self.animalTimer > 0 then return end
-	self.animalTimer = HARVEST_INTERVAL
-
-	local found, monsters = scanAnimals()
-	self.animals = found
-
-	local ready = 0
-	local parts = {}
-
-	for _, animal in ipairs(found) do
-		if animal.ready then ready = ready + 1 end
-		table.insert(parts, string.format("%s#%s%s", tostring(animal.name),
-			tostring(animal.id), animal.ready and " READY" or ""))
-	end
-
-	table.sort(parts)
-	local signature = table.concat(parts, " | ")
-
-	if signature ~= self.animalSignature then
-		self.animalSignature = signature
-		sb.logInfo("PETPORT %s animals: %s farmable of %s monster(s), %s ready -- %s",
-			stationUniqueId(), sb.printJson(#found), sb.printJson(monsters),
-			sb.printJson(ready), signature == "" and "none" or signature)
-	end
-end
-
--- Returns a task to harvest the nearest ready animal, or nil with a tally of why each was passed over.
-local function animalWork()
-	local animals = self.animals
-
-	if animals == nil or #animals == 0 then
-		return nil, "no farm animals in network coverage"
-	end
-
-	local from = entity.position()
-	if self.petId ~= nil and world.entityExists(self.petId) then
-		from = world.entityPosition(self.petId)
-	end
-
-	local best, bestDistance = nil, nil
-	local rejected = { notReady = 0, claimed = 0, backedOff = 0, gone = 0,
-		unreachable = 0 }
-
-	for _, animal in ipairs(animals) do
-		local workId = "animal:" .. animal.id
-		local failure = self.workFailures[workId]
-		local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
-
-		if not world.entityExists(animal.id) then
-			rejected.gone = rejected.gone + 1
-		elseif not animalHarvestable(animal.name) then
-			rejected.notReady = rejected.notReady + 1
-		else
-			local ok, ready = pcall(world.callScriptedEntity, animal.id,
-				"hasMonsterHarvest")
-
-			if not (ok and ready == true) then
-				rejected.notReady = rejected.notReady + 1
-			elseif backedOff then
-				rejected.backedOff = rejected.backedOff + 1
-			elseif not petports_claimFree(workId) then
-				rejected.claimed = rejected.claimed + 1
-			else
-				local position = world.entityPosition(animal.id)
-				local distance = world.magnitude(from, position)
-
-				if standingPointNear(position, 4) == nil then
-					rejected.unreachable = rejected.unreachable + 1
-				elseif bestDistance == nil or distance < bestDistance then
-					best = { id = animal.id, name = animal.name, position = position }
-					bestDistance = distance
-				end
-			end
-		end
-	end
-
-	if best == nil then
-		local reason = string.format(
-			"%s farm animal(s), none harvestable: %s not ready, %s claimed, "
-			.. "%s backed off, %s gone, %s with nowhere this chassis can stand",
-			#animals, rejected.notReady, rejected.claimed,
-			rejected.backedOff, rejected.gone, rejected.unreachable)
-
-		if reason ~= self.animalRejectReason then
-			self.animalRejectReason = reason
-			sb.logInfo("PETPORT %s animals: %s", stationUniqueId(), reason)
-		end
-
-		return nil, reason
-	end
-
-	self.animalRejectReason = nil
-
-	sb.logInfo("PETPORT %s ANIMAL dispatch: %s#%s at %s, %s away",
-		stationUniqueId(), tostring(best.name), sb.printJson(best.id),
-		sb.printJson(best.position), sb.printJson(bestDistance))
-
-	return {
-		id = "animal:" .. best.id,
-		type = "animal",
-		port = stationUniqueId(),
-		target = best.id,
-		position = best.position
-	}
-end
-
--- Returns a task to harvest the nearest ripe crop, or nil with a tally of why each was passed over.
-local function harvestWork()
-	local crops = self.farmables
-
-	if crops == nil or #crops == 0 then
-		return nil, "no farmables in network coverage"
-	end
-
-	local from = entity.position()
-	if self.petId ~= nil and world.entityExists(self.petId) then
-		from = world.entityPosition(self.petId)
-	end
-
-	local best, bestDistance = nil, nil
-	local rejected = { unripe = 0, claimed = 0, backedOff = 0, gone = 0, medium = 0 }
-
-	for _, crop in ipairs(crops) do
-		local workId = "harvest:" .. crop.id
-		local claim = petports_claimGet(workId)
-		local failure = self.workFailures[workId]
-		local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
-
-		local free = not backedOff and ((claim == nil)
-			or claim.owner == stationUniqueId()
-			or (claim.expires or 0) <= world.time())
-
-		local okStage, stage = pcall(world.farmableStage, crop.id)
-		local ripe = okStage and type(stage) == "number"
-			and stage == crop.harvestAt
-
-		if not ripe then
-			rejected.unripe = rejected.unripe + 1
-		elseif backedOff then
-			sb.logInfo("PETPORT %s crop %s SKIPPED: backed off until %s (failures %s)",
-				stationUniqueId(), sb.printJson(crop.id),
-				sb.printJson(failure["until"]), sb.printJson(failure.count))
-			rejected.backedOff = rejected.backedOff + 1
-		elseif not free then
-			sb.logInfo("PETPORT %s crop %s SKIPPED: claimed by %s until %s",
-				stationUniqueId(), sb.printJson(crop.id),
-				tostring(claim.owner), sb.printJson(claim.expires))
-			rejected.claimed = rejected.claimed + 1
-		elseif not world.entityExists(crop.id) then
-			rejected.gone = rejected.gone + 1
-
-		elseif not petports_targetEligible("crop " .. tostring(crop.id), crop.position, crop.id) then
-			rejected.medium = rejected.medium + 1
-		else
-			local distance = world.magnitude(from, crop.position)
-
-			if bestDistance == nil or distance < bestDistance then
-				sb.logInfo("PETPORT %s crop %s (%s) RIPE at %s, %s away -- new best",
-					stationUniqueId(), sb.printJson(crop.id), tostring(crop.name),
-					sb.printJson(crop.position), sb.printJson(distance))
-				best, bestDistance = crop, distance
-			end
-		end
-	end
-
-	if best == nil then
-		local reason = string.format(
-			"%s farmable(s) in coverage, none harvestable: %s unripe, "
-			.. "%s claimed, %s backed off, %s gone, %s in a medium this "
-			.. "chassis cannot work in",
-			#crops, rejected.unripe, rejected.claimed,
-			rejected.backedOff, rejected.gone, rejected.medium)
-
-		if reason ~= self.harvestRejectReason then
-			self.harvestRejectReason = reason
-			sb.logInfo("PETPORT %s harvest: %s", stationUniqueId(), reason)
-		end
-
-		return nil, reason
-	end
-
-	self.harvestRejectReason = nil
-
-	return {
-		id = "harvest:" .. best.id,
-		mediumVerified = true,
-		type = "harvest",
-		port = stationUniqueId(),
-		target = best.id,
-		targetName = best.name,
-		position = best.position
-	}
-end
-
--- Returns a task to empty the nearest ripe trap, or nil with a tally of why each was passed over.
-local function trapWork()
-	local traps = self.traps
-
-	if traps == nil or #traps == 0 then
-		return nil, "no harvestable traps in network coverage"
-	end
-
-	local from = entity.position()
-	if self.petId ~= nil and world.entityExists(self.petId) then
-		from = world.entityPosition(self.petId)
-	end
-
-	local best, bestDistance = nil, nil
-	local rejected = { unripe = 0, locked = 0, claimed = 0, backedOff = 0,
-		gone = 0, medium = 0 }
-
-	for _, trap in ipairs(traps) do
-		local workId = "trap:" .. trap.id
-		local claim = petports_claimGet(workId)
-		local failure = self.workFailures[workId]
-		local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
-
-		local free = not backedOff and ((claim == nil)
-			or claim.owner == stationUniqueId()
-			or (claim.expires or 0) <= world.time())
-
-		if trap.locked then
-			rejected.locked = rejected.locked + 1
-		elseif not trap.ripe then
-			rejected.unripe = rejected.unripe + 1
-		elseif backedOff then
-			rejected.backedOff = rejected.backedOff + 1
-		elseif not free then
-			rejected.claimed = rejected.claimed + 1
-		elseif not world.entityExists(trap.id) then
-			rejected.gone = rejected.gone + 1
-
-		elseif not petports_targetEligible("trap " .. tostring(trap.id),
-			trap.position, trap.id) then
-			rejected.medium = rejected.medium + 1
-		else
-			local distance = world.magnitude(from, trap.position)
-
-			if bestDistance == nil or distance < bestDistance then
-				best, bestDistance = trap, distance
-			end
-		end
-	end
-
-	if best == nil then
-		local reason = string.format(
-			"%s trap(s) in coverage, none harvestable: %s unripe, %s age "
-			.. "locked, %s claimed, %s backed off, %s gone, %s in a medium "
-			.. "this chassis cannot work in",
-			#traps, rejected.unripe, rejected.locked, rejected.claimed,
-			rejected.backedOff, rejected.gone, rejected.medium)
-
-		if reason ~= self.trapRejectReason then
-			self.trapRejectReason = reason
-			sb.logInfo("PETPORT %s traps: %s", stationUniqueId(), reason)
-		end
-
-		return nil, reason
-	end
-
-	self.trapRejectReason = nil
-
-	sb.logInfo("PETPORT %s trap %s (%s) RIPE at %s, %s away -- dispatching",
-		stationUniqueId(), sb.printJson(best.id), tostring(best.name),
-		sb.printJson(best.position), sb.printJson(bestDistance))
-
-	return {
-		id = "trap:" .. best.id,
-		mediumVerified = true,
-		type = "trap",
-		port = stationUniqueId(),
-		target = best.id,
-		targetName = best.name,
-		ripeAt = best.ripeAt,
-		position = best.position
-	}
-end
-
 -- Returns whether a position lies in the network's rects.
 function petports_inNetworkCoverage(position)
-	local rects = self.networkRects
-	if rects == nil or #rects == 0 then rects = { petports_portCoverageRect() } end
+  local rects = self.networkRects
+  if rects == nil or #rects == 0 then rects = { petports_portCoverageRect() } end
 
-	for _, rect in ipairs(rects) do
-		if petports_rectContains(rect, position) then return true end
-	end
+  for _, rect in ipairs(rects) do
+    if petports_rectContains(rect, position) then return true end
+  end
 
-	return false
-end
-
--- Returns the unbroken run of dry tilled tiles reaching out from an anchor, and the liquids they take.
-local function waterRunFrom(anchor)
-	-- Returns the tilled soil at a tile inside coverage, or nil.
-	local function farmlandAt(tile)
-		if not petports_inNetworkCoverage({ tile[1] + 0.5, tile[2] + 0.5 }) then
-			return nil
-		end
-
-		local modName = world.mod({ tile[1], tile[2] }, "foreground")
-		if modName == nil then return nil end
-
-		local info = soilInfo(modName)
-		if info == nil or not info.tilled then return nil end
-
-		return { mod = tostring(modName), dry = info.dry, wants = info.wants }
-	end
-
-	local ordered = { anchor }
-
-	for direction = -1, 1, 2 do
-		for step = 1, WATER_RUN_REACH do
-			local tile = { anchor[1] + direction * step, anchor[2] }
-			if farmlandAt(tile) == nil then break end
-
-			if direction < 0 then
-				table.insert(ordered, 1, tile)
-			else
-				table.insert(ordered, tile)
-			end
-		end
-	end
-
-	local soil = nil
-	local tiles = {}
-
-	for _, tile in ipairs(ordered) do
-		local here = farmlandAt(tile)
-
-		if here ~= nil and here.dry then
-			if soil == nil then soil = here end
-
-			if here.mod == soil.mod then
-				table.insert(tiles, tile)
-			end
-		end
-	end
-
-	if soil == nil or #tiles == 0 then return nil end
-
-	return { tiles = tiles, wants = soil.wants, mod = soil.mod }
-end
-
--- Returns every dry soil run under the crops in coverage.
-local function waterRuns()
-	local runs = {}
-	local seen = {}
-
-	for _, crop in ipairs(self.farmables or {}) do
-		if world.entityExists(crop.id) then
-			local position = world.entityPosition(crop.id)
-
-			local tile = { math.floor(position[1]), math.floor(position[2]) - 1 }
-			local key = petports_tileKey(tile)
-
-			if not seen[key] then
-				local run = waterRunFrom(tile)
-
-				if run ~= nil then
-					seen[key] = true
-
-					for _, t in ipairs(run.tiles) do
-						seen[petports_tileKey(t)] = true
-					end
-
-					run.key = key
-					table.insert(runs, run)
-				else
-					seen[key] = true
-				end
-			end
-		end
-	end
-
-	return runs
-end
-
--- Returns the carried stack that waters a run, with the liquid it matches.
-local function carriedWaterFor(run)
-	if self.petData == nil or self.petData.cargo == nil then return nil end
-
-	for _, stack in ipairs(self.petData.cargo) do
-		for _, want in ipairs(run.wants or {}) do
-			if stack.name == want.item then
-				return stack, want
-			end
-		end
-	end
-
-	return nil
-end
-
--- Returns whether the unit can stand over a run's first tile.
-local function waterRunWorkable(run, tile)
-	if run == nil or tile == nil then return false end
-
-	return petports_targetEligible("water run " .. tostring(run.key),
-		{ tile[1] + 0.5, tile[2] + 1.5 }, nil)
-end
-
--- Returns a task to water a run from its nearer end, as far as the carried water reaches.
-local function waterWork()
-	local runs = waterRuns()
-	if #runs == 0 then return nil, "no dry soil under any crop in coverage" end
-
-	for _, run in ipairs(runs) do
-		local workId = "water:" .. tostring(run.key)
-		local failure = self.workFailures[workId]
-		local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
-
-		local stack, want = carriedWaterFor(run)
-
-		if stack ~= nil and not backedOff and petports_claimFree(workId) then
-			local carried = math.min(stack.count or 1, petportWaterCarry())
-			local tiles = {}
-
-			for index = 1, math.min(carried, #run.tiles) do
-				table.insert(tiles, run.tiles[index])
-			end
-
-			local from = entity.position()
-			if self.petId ~= nil and world.entityExists(self.petId) then
-				from = world.entityPosition(self.petId)
-			end
-
-			local head = world.magnitude(from, run.tiles[1])
-			local tail = world.magnitude(from, run.tiles[#run.tiles])
-
-			if tail < head then
-				tiles = {}
-				for index = 0, math.min(carried, #run.tiles) - 1 do
-					table.insert(tiles, run.tiles[#run.tiles - index])
-				end
-			end
-
-			local runHead = tiles[1]
-
-			if waterRunWorkable(run, runHead) then
-				sb.logInfo("PETPORT %s WATER dispatch: %s tile(s) of %s in run, "
-					.. "%s carried, from %s to %s",
-					stationUniqueId(), sb.printJson(#tiles), sb.printJson(#run.tiles),
-					sb.printJson(stack.count or 1), sb.printJson(tiles[1]),
-					sb.printJson(tiles[#tiles]))
-
-				return {
-					id = workId,
-					mediumVerified = true,
-					type = "water",
-					port = stationUniqueId(),
-					tiles = tiles,
-					waterIndex = 1,
-					item = want.item,
-					previousMod = run.mod,
-					newMod = want.newMod,
-					tint = want.tint,
-					position = { runHead[1] + 0.5, runHead[2] + 1.5 }
-				}
-			end
-		end
-	end
-
-	return nil, string.format("%s dry run(s), none actionable", #runs)
-end
-
-
-local seedSpacesCache = {}
-
--- Returns the spaces a seed occupies, cached.
-local function seedSpaces(seedName)
-	if seedName == nil then return { {0, 0}, {0, 1} } end
-	if seedSpacesCache[seedName] ~= nil then return seedSpacesCache[seedName] end
-
-	local spaces = nil
-	local ok, config = pcall(root.itemConfig, seedName)
-
-	if ok and type(config) == "table" and type(config.config) == "table" then
-		local orientations = config.config.orientations
-
-		if type(orientations) == "table" and type(orientations[1]) == "table"
-		   and type(orientations[1].spaces) == "table"
-		   and #orientations[1].spaces > 0 then
-			spaces = orientations[1].spaces
-		end
-	end
-
-	if spaces == nil then
-		sb.logInfo("PETPORT %s could not read spaces for %s -- assuming 1x2",
-			stationUniqueId(), tostring(seedName))
-		spaces = { {0, 0}, {0, 1} }
-	else
-		sb.logInfo("PETPORT %s footprint for %s: %s tile(s) %s",
-			stationUniqueId(), tostring(seedName), sb.printJson(#spaces),
-			sb.printJson(spaces))
-	end
-
-	seedSpacesCache[seedName] = spaces
-	return spaces
-end
-
--- Returns the tiles a seed would fill at a position.
-local function seedTiles(position, seedName)
-	local anchor = { math.floor(position[1]), math.floor(position[2]) }
-	local tiles = {}
-
-	for _, space in ipairs(seedSpaces(seedName)) do
-		table.insert(tiles, { anchor[1] + space[1], anchor[2] + space[2] })
-	end
-
-	return tiles
-end
-
--- Returns whether an object covers any of a set of tiles.
-local function objectOccupies(objectId, tiles)
-	local spaces = world.objectSpaces(objectId)
-	if spaces == nil then return false end
-
-	local origin = world.entityPosition(objectId)
-	if origin == nil then return false end
-
-	for _, space in ipairs(spaces) do
-		local x = math.floor(origin[1]) + space[1]
-		local y = math.floor(origin[2]) + space[2]
-
-		for _, tile in ipairs(tiles) do
-			if x == tile[1] and y == tile[2] then return true end
-		end
-	end
-
-	return false
-end
-
--- Returns whether nothing already stands where a seed would go.
-local function replantFootprintClear(position, seedName)
-	local tiles = seedTiles(position, seedName)
-
-	local lox, loy = tiles[1][1], tiles[1][2]
-	local hix, hiy = lox, loy
-
-	for _, t in ipairs(tiles) do
-		lox = math.min(lox, t[1]); hix = math.max(hix, t[1])
-		loy = math.min(loy, t[2]); hiy = math.max(hiy, t[2])
-	end
-
-	local candidates = world.entityQuery(
-		{ lox - 1, loy - 1 }, { hix + 2, hiy + 2 },
-		{ includedTypes = { "object" } })
-
-	for _, id in ipairs(candidates or {}) do
-		if objectOccupies(id, tiles) then
-			sb.logInfo("PETPORT %s footprint for %s at %s BLOCKED by object %s",
-				stationUniqueId(), tostring(seedName), sb.printJson(tiles),
-				sb.printJson(id))
-			return false
-		end
-	end
-
-	return true
-end
-
--- Returns whether the tile under a replant position is tilled.
-local function replantGroundTilled(position)
-	local under = world.mod({ position[1], position[2] - 1 }, "foreground")
-	local at = world.mod({ position[1], position[2] }, "foreground")
-
-	local info = soilInfo(under)
-	local tilled = info ~= nil and info.tilled
-
-
-	if not tilled then
-		sb.logInfo("PETPORT %s replant ground at %s: mod below is %s (tilled %s), "
-			.. "mod at is %s -- not farmland",
-			stationUniqueId(), sb.printJson(position), tostring(under),
-			tostring(info ~= nil and info.tilled), tostring(at))
-	end
-
-	return tilled
-end
-
-REPLANT_SWEEP_INTERVAL = 5.0
-
--- Drops replant intents whose footprint filled, whose ground was untilled, or that no port covers.
-local function sweepReplants(dt)
-	self.replantSweepTimer = (self.replantSweepTimer or 0) - dt
-	if self.replantSweepTimer > 0 then return end
-	self.replantSweepTimer = REPLANT_SWEEP_INTERVAL
-
-	local intents = petports_replantsAll()
-
-	local outstanding = {}
-	for key, intent in pairs(intents) do
-		table.insert(outstanding, tostring(key) .. "=" .. tostring(intent.name))
-	end
-	table.sort(outstanding)
-
-	local signature = table.concat(outstanding, " | ")
-	if signature ~= self.replantSignature then
-		self.replantSignature = signature
-		sb.logInfo("PETPORT %s replant intents outstanding: %s",
-			stationUniqueId(), signature == "" and "none" or signature)
-	end
-
-	local orphans = {}
-
-	for key, intent in pairs(intents) do
-		if type(intent) ~= "table" or type(intent.position) ~= "table" then
-			table.insert(orphans, key)
-		elseif petports_inNetworkCoverage(intent.position) then
-			if not replantFootprintClear(intent.position, intent.name) then
-				petports_replantClear(key, "footprint occupied")
-			elseif not replantGroundTilled(intent.position) then
-				petports_replantClear(key, "ground no longer tilled")
-			end
-		elseif not petports_anyPortCovers(intent.position) then
-			table.insert(orphans, key)
-		end
-	end
-
-	if #orphans > 0 then
-		petports_replantClearMany(orphans, "no port covers the tile")
-	end
+  return false
 end
 
 -- Returns the nearest reachable beacon holding a seed.
-local function containerWithSeed(seedName, wantDeposit, wantRestock)
+function petports_containerWithSeed(seedName, wantDeposit, wantRestock)
 	local sources = {}
 
 	if wantRestock then
@@ -6725,7 +5727,7 @@ local function containerWithSeed(seedName, wantDeposit, wantRestock)
 				{ name = seedName, count = 1 })
 
 			if type(available) == "number" and available >= 1 then
-				if servicePointNear("crate " .. tostring(beacon.id),
+				if petports_servicePointNear("crate " .. tostring(beacon.id),
 					beacon.id, beacon.position, 4) ~= nil then
 					return beacon.id
 				end
@@ -6734,162 +5736,6 @@ local function containerWithSeed(seedName, wantDeposit, wantRestock)
 	end
 
 	return nil
-end
-
--- Returns the replant intent a carried seed matches, with the intent's key and the stack.
-local function carriedSeedIntent()
-	if self.petData == nil or self.petData.cargo == nil then return nil end
-
-	local intents = petports_replantsAll()
-
-	for _, stack in ipairs(self.petData.cargo) do
-		for key, intent in pairs(intents) do
-			if intent.name ~= nil and stack.name == intent.name
-			   and intent.position ~= nil
-			   and petports_inNetworkCoverage(intent.position) then
-				return key, intent, stack
-			end
-		end
-	end
-
-	if #self.petData.cargo > 0 then
-		local held = {}
-		for _, stack in ipairs(self.petData.cargo) do
-			table.insert(held, tostring(stack.name))
-		end
-
-		local wanted = {}
-		for key, intent in pairs(intents) do
-			table.insert(wanted, string.format("%s@%s%s", tostring(intent.name),
-				tostring(key),
-				petports_inNetworkCoverage(intent.position or {0, 0}) and "" or " (OUT OF RANGE)"))
-		end
-
-		table.sort(held)
-		table.sort(wanted)
-
-		local signature = table.concat(held, ",") .. " vs " .. table.concat(wanted, ",")
-
-		if signature ~= self.replantMissSignature then
-			self.replantMissSignature = signature
-			sb.logInfo("PETPORT %s carrying [%s] but no intent matches: intents are [%s]",
-				stationUniqueId(),
-				table.concat(held, ", "),
-				#wanted > 0 and table.concat(wanted, ", ") or "none")
-		end
-	end
-
-	return nil
-end
-
--- Returns a task to plant a carried seed at its intent tile, clearing the intent when the tile has filled.
-local function replantWork()
-	local key, intent = carriedSeedIntent()
-	if key == nil then return nil, "no carried seed matches an intent" end
-
-	local failure = self.workFailures["replant:" .. key]
-	if failure ~= nil and (failure["until"] or 0) > world.time() then
-		return nil, string.format("replant at %s backed off until %s",
-			tostring(key), sb.printJson(failure["until"]))
-	end
-
-	if not replantFootprintClear(intent.position, intent.name) then
-		petports_replantClear(key, "footprint occupied at dispatch")
-		return nil, "intent tile is occupied"
-	end
-
-	local above = { intent.position[1] + 0.5, intent.position[2] + 1.5 }
-	local suits, why = petports_targetSuits(above, nil)
-
-	if not suits then
-		targetRefused("replant at " .. tostring(key), why)
-		return nil, "replant tile " .. tostring(key) .. " " .. tostring(why)
-	end
-
-	sb.logInfo("PETPORT %s REPLANT dispatch: %s back into %s (tile %s)",
-		stationUniqueId(), tostring(intent.name), tostring(key),
-		sb.printJson(intent.position))
-
-	return {
-		id = "replant:" .. key,
-		mediumVerified = true,
-		type = "replant",
-		port = stationUniqueId(),
-		target = key,
-		seed = intent.name,
-		position = { intent.position[1] + 0.5, intent.position[2] + 0.5 },
-		tile = intent.position
-	}
-end
-
--- Returns a task to fetch water from a beacon for the first dry run the unit can reach.
-local function withdrawWaterWork()
-	local runs = waterRuns()
-	if #runs == 0 then return nil, "no dry soil needing water" end
-
-	local sources = {}
-
-	if petportParticipates("waterrestock") then
-		for _, beacon in ipairs(petports_beaconsFor("restock")) do
-			table.insert(sources, beacon)
-		end
-	end
-
-	if petportParticipates("waterdeposit") then
-		for _, beacon in ipairs(petports_beaconsFor("deposit")) do
-			table.insert(sources, beacon)
-		end
-	end
-
-	for _, run in ipairs(runs) do
-		if carriedWaterFor(run) == nil then
-			local workId = "fetchwater:" .. tostring(run.key)
-			local failure = self.workFailures[workId]
-			local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
-
-			local reachableEnd = waterRunWorkable(run, run.tiles[1])
-				or waterRunWorkable(run, run.tiles[#run.tiles])
-
-			if not backedOff and reachableEnd and petports_claimFree(workId)
-			   and petports_claimFree("water:" .. tostring(run.key)) then
-				local wanted = math.min(#run.tiles, petportWaterCarry())
-
-				for _, want in ipairs(run.wants) do
-					for _, beacon in ipairs(sources) do
-						if world.entityExists(beacon.id) then
-							local available = world.containerAvailable(beacon.id,
-								{ name = want.item, count = 1 })
-
-							if type(available) == "number" and available >= 1
-								and servicePointNear("crate " .. tostring(beacon.id),
-									beacon.id, beacon.position, 4) ~= nil then
-								local take = math.min(wanted, available)
-
-								sb.logInfo("PETPORT %s FETCHWATER dispatch: %s x%s "
-									.. "from %s for a %s tile run",
-									stationUniqueId(), tostring(want.item),
-									sb.printJson(take), sb.printJson(beacon.id),
-									sb.printJson(#run.tiles))
-
-								return {
-									id = workId,
-									mediumVerified = true,
-									type = "withdraw",
-									port = stationUniqueId(),
-									target = beacon.id,
-									seed = want.item,
-									count = take,
-									position = world.entityPosition(beacon.id)
-								}
-							end
-						end
-					end
-				end
-			end
-		end
-	end
-
-	return nil, string.format("%s dry run(s), no liquid in storage for any", #runs)
 end
 
 -- Returns the treats worth fetching with their fuel value, the preferred flavor first.
@@ -7116,7 +5962,7 @@ local function fuelFetchWork()
                 { name = treat.name, count = 1 })
 
               if type(available) == "number" and available >= 1
-                 and servicePointNear("feeder " .. tostring(beacon.id),
+                 and petports_servicePointNear("feeder " .. tostring(beacon.id),
                    beacon.id, beacon.position, 4) ~= nil then
                 return {
                   id = workId,
@@ -7153,7 +5999,7 @@ local function fuelFetchWork()
 
             if okAt and type(at) == "table" and at.name == treat.name
                and (at.count or 0) >= 1
-               and servicePointNear("feeder " .. tostring(machine.id),
+               and petports_servicePointNear("feeder " .. tostring(machine.id),
                  machine.id, machine.position, 4) ~= nil then
 
               return {
@@ -7275,77 +6121,6 @@ local function fuelGroundWork()
   }
 end
 
--- Returns a task to fetch the seed a replant intent needs from storage.
-local function withdrawWork()
-	if carriedSeedIntent() ~= nil then
-		return nil, "unit is already carrying a seed for an intent"
-	end
-
-	local intents = petports_replantsAll()
-	local wanted = 0
-
-	local wrongMedium = 0
-
-	for key, intent in pairs(intents) do
-		if intent.name ~= nil and intent.position ~= nil
-		   and petports_inNetworkCoverage(intent.position) then
-			wanted = wanted + 1
-
-			local workId = "withdraw:" .. key
-			local failure = self.workFailures[workId]
-			local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
-
-			local placeFailure = self.workFailures["replant:" .. key]
-			local placeBackedOff = placeFailure ~= nil
-				and (placeFailure["until"] or 0) > world.time()
-
-			if placeBackedOff then backedOff = true end
-
-			local placeAbove = { intent.position[1] + 0.5, intent.position[2] + 1.5 }
-
-			local free = not backedOff
-				and petports_claimFree(workId)
-				and petports_claimFree("replant:" .. key)
-
-			if free and not petports_targetEligible("replant at " .. tostring(key),
-				placeAbove, nil) then
-				wrongMedium = wrongMedium + 1
-				free = false
-			end
-
-			if free then
-				local containerId = containerWithSeed(intent.name,
-					petportParticipates("farmdeposit"),
-					petportParticipates("farmrestock"))
-
-				if containerId ~= nil then
-					return {
-						id = "withdraw:" .. key,
-						mediumVerified = true,
-						type = "withdraw",
-						port = stationUniqueId(),
-						target = containerId,
-						seed = intent.name,
-						intent = key,
-						position = world.entityPosition(containerId)
-					}
-				end
-			end
-		end
-	end
-
-	if wanted == 0 then
-		return nil, "no replant intents in network coverage"
-	end
-
-	return nil, string.format(
-		"%s replant intent(s), none actionable (no seed in storage, claimed, "
-		.. "or the replant leg has backed off); %s in a medium this chassis "
-		.. "cannot work in",
-		wanted, wrongMedium)
-end
-
-
 -- Returns how much of an item a container holds.
 local function restockHeld(containerId, name)
   if not world.entityExists(containerId) then return nil end
@@ -7386,7 +6161,7 @@ local function medicWork(preloadOnly)
 
   -- Returns a task to fetch a dose from storage, or nil with the reason.
   local function fetchDose()
-    local containerId = containerWithSeed(MEDIC_ITEM,
+    local containerId = petports_containerWithSeed(MEDIC_ITEM,
       petportParticipates("medicdeposit"),
       petportParticipates("medicrestock"))
 
@@ -7444,7 +6219,7 @@ local function medicWork(preloadOnly)
     local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
 
     if not backedOff and petports_claimFree(workId) then
-      local stand = standingPointNear(patient.position, MEDIC_REACH)
+      local stand = petports_portStandingPointNear(patient.position, MEDIC_REACH)
 
       if stand ~= nil then
         sb.logInfo("PETPORT %s MEDIC dispatch: patient %s class %s at %s pct "
@@ -7504,7 +6279,7 @@ local function restockDeliverWork()
             and world.containerItemsCanFit(beacon.id, carried) or nil
 
           if fits == nil or fits > 0 then
-            local stand, standWhy = servicePointNear("request crate " .. tostring(beacon.id),
+            local stand, standWhy = petports_servicePointNear("request crate " .. tostring(beacon.id),
               beacon.id, beacon.position, 4)
 
             if stand == nil then
@@ -7549,7 +6324,7 @@ local function restockFetchWork()
   local short, unstocked, noRoom, unreachable = 0, 0, 0, 0
 
   for _, beacon in ipairs(beacons) do
-    if servicePointNear("request crate " .. tostring(beacon.id),
+    if petports_servicePointNear("request crate " .. tostring(beacon.id),
        beacon.id, beacon.position, 4) == nil then
       unreachable = unreachable + 1
 
@@ -7585,7 +6360,7 @@ local function restockFetchWork()
                   { name = request.item, count = 1 })
 
                 if type(n) == "number" and n >= 1 then
-                  if servicePointNear("crate " .. tostring(crate.id),
+                  if petports_servicePointNear("crate " .. tostring(crate.id),
                      crate.id, crate.position, 4) == nil then
                     if self.lastRestockSourceSkip ~= crate.id then
                       self.lastRestockSourceSkip = crate.id
@@ -7766,7 +6541,7 @@ local function tidyWork(doDeposit, doRestock)
   for _, pick in ipairs(viable) do
     local source = pick.source
 
-    local stand, standWhy = servicePointNear("crate " .. tostring(source.id),
+    local stand, standWhy = petports_servicePointNear("crate " .. tostring(source.id),
       source.id, source.position, 4)
 
     if stand == nil then
@@ -7823,7 +6598,7 @@ local function drainWork()
     if machine.kind == "upcycler" and machine.enabled
        and world.entityExists(machine.id) then
 
-      local reachable = servicePointNear("upcycler " .. tostring(machine.id),
+      local reachable = petports_servicePointNear("upcycler " .. tostring(machine.id),
         machine.id, machine.position, 4)
 
       if reachable == nil then
@@ -7921,7 +6696,7 @@ local function drainWork()
                           and (failure["until"] or 0) > world.time()
 
                         if not backedOff and petports_claimFree(workId) then
-                          local stand, standWhy = servicePointNear("crate " .. tostring(source.id),
+                          local stand, standWhy = petports_servicePointNear("crate " .. tostring(source.id),
                             source.id, source.position, 4)
 
                           if stand == nil then
@@ -8126,7 +6901,7 @@ local function fuelWork()
             and (failure["until"] or 0) > world.time()
 
           if not backedOff and petports_claimFree(workId) then
-            local stand, standWhy = servicePointNear("machine " .. tostring(machine.id),
+            local stand, standWhy = petports_servicePointNear("machine " .. tostring(machine.id),
               machine.id, machine.position, 4)
 
             if stand == nil then
@@ -8217,7 +6992,7 @@ local function compactWork()
           local backedOff = failure ~= nil and (failure["until"] or 0) > world.time()
 
           if not backedOff and petports_claimFree(workId) then
-            local stand, standWhy = servicePointNear("crate " .. tostring(source.id),
+            local stand, standWhy = petports_servicePointNear("crate " .. tostring(source.id),
               source.id, source.position, 4)
 
             if stand == nil then
@@ -8271,7 +7046,7 @@ local function defragWork()
     if target == nil then
       homeless = homeless + 1
     else
-      local reachable, reachWhy = servicePointNear("crate " .. tostring(target.id),
+      local reachable, reachWhy = petports_servicePointNear("crate " .. tostring(target.id),
         target.id, target.position, 4)
 
       if reachable == nil then
@@ -8326,7 +7101,7 @@ local function defragWork()
               if fits == nil or fits <= 0 then
                 full = full + 1
               else
-                local stand, standWhy = servicePointNear(
+                local stand, standWhy = petports_servicePointNear(
                   "crate " .. tostring(crate.id), crate.id, crate.position, 4)
 
                 if stand == nil then
@@ -8443,7 +7218,7 @@ local function sortWork()
 		return nil, string.format("crate %s is already claimed", tostring(source.id))
 	end
 
-	local stand, standWhy = servicePointNear("crate " .. tostring(source.id),
+	local stand, standWhy = petports_servicePointNear("crate " .. tostring(source.id),
 		source.id, source.position, 4)
 
 	if stand == nil then
@@ -8558,24 +7333,6 @@ petports_registerWork({
 })
 
 petports_registerWork({
-	name = "replant",
-	order = 400,
-	reasonOrder = 1410,
-	reasonJoin = "replant",
-	gate = function() return petports_workFarming("replant") end,
-	generate = function() return replantWork() end
-})
-
-petports_registerWork({
-	name = "water",
-	order = 500,
-	reasonOrder = 1420,
-	reasonJoin = "water",
-	gate = function() return petports_workFarming("water") end,
-	generate = function() return waterWork() end
-})
-
-petports_registerWork({
 	name = "restock",
 	order = 600,
 	gate = function() return petports_workGroup("restock") end,
@@ -8643,50 +7400,6 @@ petports_registerWork({
 	order = 1200,
 	idleLog = { key = "medicPreloadReason", label = "medic preload idle" },
 	generate = function() return medicWork(true) end
-})
-
-petports_registerWork({
-	name = "harvest",
-	order = 1400,
-	reasonOrder = true,
-	gate = function() return petports_workFarming("harvest") end,
-	generate = function() return harvestWork() end
-})
-
-petports_registerWork({
-	name = "animal",
-	order = 1500,
-	reasonOrder = true,
-	gate = function()
-		return petports_workFarming("animals") and not petports_familyOnHold("animal")
-	end,
-	generate = function() return animalWork() end
-})
-
-petports_registerWork({
-	name = "trap",
-	order = 1600,
-	reasonOrder = true,
-	gate = function() return petports_workFarming("traps") end,
-	generate = function() return trapWork() end
-})
-
-petports_registerWork({
-	name = "withdraw",
-	order = 1800,
-	reasonOrder = 1410,
-	reasonJoin = "replant",
-	gate = function() return petports_workFarming("replant") end,
-	generate = function() return withdrawWork() end
-})
-
-petports_registerWork({
-	name = "withdrawWater",
-	order = 1900,
-	reasonOrder = 1420,
-	reasonJoin = "water",
-	gate = function() return petports_workFarming("water") end,
-	generate = function() return withdrawWaterWork() end
 })
 
 petports_registerWork({
@@ -9354,7 +8067,7 @@ end
 
 local workBeatDispatch
 
--- Runs the work beat: the sweeps and network refresh, then the beacon, farmable and animal scans across three ticks, then the dispatch.
+-- Runs the work beat: the sweeps and network refresh, then the beacon scan and the scanBeat hooks across three ticks, then the dispatch.
 local function workUpdate(dt)
   if self.beatStage ~= nil then
     local stage = self.beatStage
@@ -9364,8 +8077,7 @@ local function workUpdate(dt)
       self.beatStage = 2
       return
     elseif stage == 2 then
-      portProf("refreshFarmables", refreshFarmables, WORK_INTERVAL)
-      portProf("refreshAnimals", refreshAnimals, WORK_INTERVAL)
+      petports_workHook("scanBeat", WORK_INTERVAL)
       portProf("publishUnitPosition", publishUnitPosition)
       portProf("ensureResidency", ensureResidency)
       self.beatStage = 3
@@ -9449,7 +8161,7 @@ function setAnimationStateForAllHullComponents(anim)
     animator.setAnimationState("interiorState", anim)
 end
 
--- Runs the port's tick: markers, replant sweep, tick hooks, pane mirror, the socketed item, the environment and health checks, the spawn, and the work beat.
+-- Runs the port's tick: markers, tick hooks, pane mirror, the socketed item, the environment and health checks, the spawn, and the work beat.
 local function updateInner(dt)
   if self.firstUpdate then
     self.firstUpdate = false
@@ -9463,8 +8175,6 @@ local function updateInner(dt)
   end
 
   portProf("crosshairRefresh", crosshairRefresh, dt)
-
-  portProf("sweepReplants", sweepReplants, dt)
 
   petports_workHook("tick", dt)
 

@@ -48,6 +48,11 @@
       "/monsters/lofty_petports/petportsTaskAction.lua",
       "/monsters/lofty_petports/tasks/asterite.lua",
       "/monsters/lofty_petports/tasks/fish.lua",
+      "/monsters/lofty_petports/tasks/animal.lua",
+      "/monsters/lofty_petports/tasks/trap.lua",
+      "/monsters/lofty_petports/tasks/harvest.lua",
+      "/monsters/lofty_petports/tasks/water.lua",
+      "/monsters/lofty_petports/tasks/replant.lua",
 
       "/monsters/lofty_petports/petports_flyapproach.lua"
     ],
