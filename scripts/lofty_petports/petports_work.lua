@@ -1,6 +1,6 @@
--- World-property stores for work claims, the port registry, fish, replants and heals.
+-- World-property stores for work claims, the port registry, replants and heals.
 
-PETPORTS_WORK_BUILD_STAMP = "2026-09-18d the asterite store lives in shared/asterite.lua"
+PETPORTS_WORK_BUILD_STAMP = "2026-09-19e the fish store lives in work/fish.lua"
 
 local CLAIM_KEY = "petports_claims"
 
@@ -326,55 +326,6 @@ function petports_rectListsEqual(a, b)
     end
   end
   return true
-end
-
-
-local FISH_KEY = "petports_fish"
-
--- Returns every published fish entry.
-function petports_fishAll()
-	return world.getProperty(FISH_KEY) or {}
-end
-
--- Writes a port's fish entry.
-function petports_fishPublish(portId, entry)
-	if portId == nil then return end
-
-	local fish = petports_fishAll()
-	fish[portId] = entry
-	world.setProperty(FISH_KEY, fish)
-end
-
--- Drops a port's fish entry.
-function petports_fishClearOwner(portId)
-	if portId == nil then return end
-
-	local fish = petports_fishAll()
-	if fish[portId] == nil then return end
-
-	sb.logInfo("PETPORTS fish entry from %s withdrawn (was %s)",
-		tostring(portId), sb.printJson(fish[portId].id))
-
-	fish[portId] = nil
-	world.setProperty(FISH_KEY, fish)
-end
-
--- Drops every fish entry whose expiry has passed.
-function petports_fishSweep()
-	local fish = petports_fishAll()
-	local now = world.time()
-	local changed = false
-
-	for portId, entry in pairs(fish) do
-		if (entry.expires or 0) <= now then
-			sb.logInfo("PETPORTS fish entry from %s EXPIRED (fish %s) -- its port "
-				.. "never withdrew it", tostring(portId), sb.printJson(entry.id))
-			fish[portId] = nil
-			changed = true
-		end
-	end
-
-	if changed then world.setProperty(FISH_KEY, fish) end
 end
 
 

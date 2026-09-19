@@ -233,10 +233,10 @@ local function trace(label, value)
   end
 end
 
-local metrics = {}
+petports_metrics = {}
 
 -- Adds an amount to one of the unit's stat counters.
-metrics.add = function(key, amount)
+petports_metrics.add = function(key, amount)
   if self.petData == nil then return end
   if amount == nil or amount == 0 then return end
 
@@ -246,10 +246,10 @@ end
 
 -- Counts a treat against the total and against its flavor.
 function countFed(flavor)
-  metrics.add("fed", 1)
+  petports_metrics.add("fed", 1)
 
   if type(flavor) == "string" and flavor ~= "" then
-    metrics.add("fed_" .. flavor, 1)
+    petports_metrics.add("fed_" .. flavor, 1)
   else
     sb.logError("PETPORT %s counted a treat with no flavor (%s) -- the "
       .. "per-flavor rows will not add up to the total",
@@ -615,7 +615,7 @@ local function abandonTask(reason)
   self.task = nil
 end
 
-local PETPORT_BUILD_STAMP = "2026-09-19a work entries sharing an order compete and the nearest work wins"
+local PETPORT_BUILD_STAMP = "2026-09-19c fish port side lives in work/fish.lua, one petports_workHook walks every entry hook"
 
 PETPORT_PROFILE = true
 
@@ -695,7 +695,7 @@ function init()
   COVERAGE_SIZE = config.getParameter("petports_coverageSize", COVERAGE_SIZE)
   sb.logInfo("PETPORT coverage size: %s tiles", sb.printJson(COVERAGE_SIZE))
 
-  petports_workInit()
+  petports_workHook("init")
 
   self.petId = nil
 
@@ -710,37 +710,6 @@ function init()
   self.writeTimer = WRITE_INTERVAL
   self.firstUpdate = true
 
-  message.setHandler("petports_fishSpawned", simpleHandler(function(fishId, fishType, rarity)
-    self.fishId = fishId
-    self.fishType = fishType
-
-    self.fishRarity = rarity
-
-    petports_fishPublish(stationUniqueId(), {
-      id = fishId,
-      type = fishType,
-      rarity = rarity,
-      expires = world.time() + FISHING_LURE_LIFETIME[2]
-    })
-
-    sb.logInfo("PETPORT %s has a fish: %s (%s, %s)",
-      stationUniqueId(), sb.printJson(fishId), tostring(fishType),
-      tostring(rarity or "unknown rarity"))
-  end))
-
-  message.setHandler("petports_fishGone", simpleHandler(function(fishId)
-    if self.fishId == fishId then
-      self.fishId = nil
-      self.fishType = nil
-      self.fishRarity = nil
-
-      petports_fishClearOwner(stationUniqueId())
-
-      sb.logInfo("PETPORT %s fish %s is gone", stationUniqueId(),
-        sb.printJson(fishId))
-    end
-  end))
-
   message.setHandler("petports_status", simpleHandler(function(status, storage)
     if self.petData then
       self.petData.status = status or self.petData.status
@@ -753,7 +722,7 @@ function init()
   message.setHandler("petports_headpat", simpleHandler(function()
     if self.petData == nil then return end
 
-    metrics.add("headpats", 1)
+    petports_metrics.add("headpats", 1)
 
     sb.logInfo("PETPORT %s headpat (%s lifetime)", stationUniqueId(),
       sb.printJson((self.petData.stats and self.petData.stats.headpats) or 0))
@@ -1255,7 +1224,7 @@ function init()
         spendSeed(self.task.item)
       end
 
-      metrics.add("watered", watered)
+      petports_metrics.add("watered", watered)
 
       sb.logInfo("PETPORT %s watering finished: %s tile(s), %s %s spent",
         stationUniqueId(), sb.printJson(watered), sb.printJson(watered),
@@ -1269,7 +1238,7 @@ function init()
       if dosed > 0 then
         spendMedkit()
         petports_healRecord(report.target or self.task.target, MEDIC_DURATION)
-        metrics.add("dosed", dosed)
+        petports_metrics.add("dosed", dosed)
 
         sb.logInfo("PETPORT %s medic finished: patient %s dosed, one %s spent, "
           .. "next dose for them in %ss",
@@ -1285,14 +1254,14 @@ function init()
        and self.task.type == "replant" and self.task.id == report.id then
       spendSeed(self.task.seed)
 
-      metrics.add("planted", 1)
+      petports_metrics.add("planted", 1)
 
       petports_replantClear(self.task.target, "replanted")
     end
 
     if report.outcome == "done" and self.task ~= nil
        and self.task.type == "harvest" and self.task.id == report.id then
-      metrics.add("harvested", 1)
+      petports_metrics.add("harvested", 1)
 
       if not world.entityExists(self.task.target)
          and self.task.targetName ~= nil then
@@ -1303,29 +1272,18 @@ function init()
 
     if report.outcome == "done" and self.task ~= nil
        and self.task.type == "animal" and self.task.id == report.id then
-      metrics.add("livestock", 1)
+      petports_metrics.add("livestock", 1)
     end
 
     if report.outcome == "done" and self.task ~= nil
        and self.task.type == "trap" and self.task.id == report.id then
-      metrics.add("traps", 1)
+      petports_metrics.add("traps", 1)
     end
 
     if report.outcome == "done" and self.task ~= nil
-       and self.task.type == "asterite" and self.task.id == report.id then
-      metrics.add("asteriteDepositsMined", 1)
+       and self.task.id == report.id then
+      petports_workHook("done", self.task, report)
     end
-
-    if report.outcome == "done" and self.task ~= nil
-       and self.task.type == "fish" and self.task.id == report.id then
-      metrics.add("fished", 1)
-
-      local tier = self.task.fishRarity
-      if type(tier) == "string" and tier ~= "" then
-        metrics.add("fished_" .. tier, 1)
-      end
-    end
-
 
     petports_claimRelease(self.task.id, stationUniqueId())
     self.task = nil
@@ -1355,11 +1313,11 @@ function die()
   petports_registryRemove(stationUniqueId())
 end
 
--- Abandons the task, clears the fish entry and crosshairs, and saves the unit back into its item.
+-- Abandons the task, runs the uninit hooks, clears the crosshairs, and saves the unit back into its item.
 function uninit()
   abandonTask("petport unloading")
 
-  petports_fishClearOwner(stationUniqueId())
+  petports_workHook("uninit")
 
   crosshairClear()
 
@@ -2816,31 +2774,6 @@ LIGHT_RANGE = {
 }
 MEDIC_ITEM = "medicalgoods"
 
-FISHING_FLAG = "fishing"
-
-FISHING_LURE = "petports_fishinglure"
-
-FISHING_LURE_LIFETIME = { 120, 300 }
-
-FISH_DWELL = 10
-
-FISHING_FISH_PARAMETERS = {
-  hookDistance = 0,
-  approachTimeRange = { 45, 75 },
-  lurkTimeRange = { 45, 75 }
-}
-
-FISHING_SPAWNER_CONFIG = "/scripts/fishing/fishingspawner.config"
-
--- Returns whether a fishing module is socketed.
-function petportFishing()
-  for _, flag in ipairs(petportModuleFlags()) do
-    if flag == FISHING_FLAG then return true end
-  end
-  return false
-end
-
-
 MEDIC_DURATION = 120
 MEDIC_EFFECT = "redstim"
 MEDIC_PROJECTILE = "petports_medicburst"
@@ -3130,7 +3063,7 @@ local function paneSerial()
 end
 
 -- Returns the stat counters for the pane, with the per-tier and per-flavor rows gathered up.
-metrics.paneStats = function()
+petports_metrics.paneStats = function()
   local stats = (self.petData and self.petData.stats) or {}
 
   return {
@@ -3235,7 +3168,7 @@ function mirrorPaneState(dt)
       petId = (self.petId ~= nil and world.entityExists(self.petId)) and self.petId or nil,
 
       flavor = petportUnitFlavor(),
-      stats = metrics.paneStats(),
+      stats = petports_metrics.paneStats(),
 
       network = nil
     }
@@ -3439,7 +3372,7 @@ local function homePointNear()
 end
 
 -- Returns whether the chassis can work at a target, with the refusal reason.
-local function targetSuits(position, entityId)
+function petports_targetSuits(position, entityId)
   local caps = unitCapabilities()
   if caps == nil then return true end
 
@@ -3478,7 +3411,7 @@ end
 
 -- Returns whether a target suits the chassis, recording the refusal when it does not.
 function petports_targetEligible(label, position, entityId)
-  local ok, reason = targetSuits(position, entityId)
+  local ok, reason = petports_targetSuits(position, entityId)
   if ok then return true end
 
   targetRefused(label, reason)
@@ -3509,7 +3442,7 @@ end
 
 -- Returns the point the unit works a target from, or nil with the reason.
 local function servicePointNearUncached(label, entityId, position, radius)
-  local suits, why = targetSuits(position, entityId)
+  local suits, why = petports_targetSuits(position, entityId)
 
   if not suits then
     targetRefused(label, why)
@@ -3906,271 +3839,6 @@ local function mediumCheck()
       .. sb.printJson(answer.position) .. " (reads " .. tostring(answer.medium)
       .. ") for " .. tostring(ENVIRONMENT_INTERVAL * limit) .. "s")
   end
-end
-
--- Returns the rects fishing may use.
-local function fishingRects()
-  local rects = self.networkRects
-  if rects == nil or #rects == 0 then rects = { petports_portCoverageRect() } end
-  return rects
-end
-
--- Returns a random deep, clear water point inside the fishing rects below a ceiling, or nil.
-local function submergedSpot(cfg, ceiling)
-  local rects = fishingRects()
-  local threshold = cfg.liquidThreshold or 0.9
-
-  for _ = 1, 24 do
-    local rect = rects[math.random(#rects)]
-
-    local top = rect[4]
-    if ceiling ~= nil then top = math.min(top, ceiling) end
-    if top >= rect[2] then
-      local x = math.floor(rect[1] + math.random() * (rect[3] - rect[1])) + 0.5
-      local y = math.floor(rect[2] + math.random() * (top - rect[2])) + 0.5
-      local here = { x, y }
-
-      local liquid = world.liquidAt(here)
-      if liquid and liquid[2] >= threshold then
-        local box = { here[1] + cfg.checkRegion[1], here[2] + cfg.checkRegion[2],
-                      here[1] + cfg.checkRegion[3], here[2] + cfg.checkRegion[4] }
-
-        if not world.rectCollision(box) then
-          local fill = world.liquidAt(box)
-          if fill and fill[2] >= threshold then return here end
-        end
-      end
-    end
-  end
-
-  return nil
-end
-
--- Returns a lure spot, preferring the vanilla depth band, with the reason when there is none.
-local function fishingSpot()
-  local ok, cfg = pcall(root.assetJson, FISHING_SPAWNER_CONFIG)
-  if not ok or type(cfg) ~= "table" or type(cfg.pools) ~= "table"
-     or type(cfg.checkRegion) ~= "table" then
-    return nil, "vanilla's fishing spawner config is unreadable"
-  end
-
-  if cfg.pools[world.type()] ~= nil then
-    local ceiling = world.oceanLevel(entity.position()) - (cfg.minDepth or 8)
-    local spot = submergedSpot(cfg, ceiling)
-    if spot ~= nil then return spot, nil, "vanilla depth band" end
-  end
-
-  local spot = submergedSpot(cfg, nil)
-  if spot ~= nil then return spot, nil, "any submerged water, pending a zone" end
-
-  return nil, "no clear submerged spot anywhere in network coverage"
-end
-
--- Keeps one lure alive while fishing is wanted, and clears the lure and fish entry when it is not.
-local function fishingCheck()
-  local wanted = petportEnabled() and self.petId ~= nil
-    and world.entityExists(self.petId) and petportFishing()
-
-  if self.lureId ~= nil and not world.entityExists(self.lureId) then
-    self.lureId = nil
-  end
-
-  if not wanted then
-    if self.lureId ~= nil then
-      pcall(world.callScriptedEntity, self.lureId, "kill")
-      sb.logInfo("PETPORT %s fishing lure %s dismissed -- no unit with a "
-        .. "fishing module", stationUniqueId(), sb.printJson(self.lureId))
-      self.lureId = nil
-    end
-
-    self.fishId = nil
-    self.fishType = nil
-    self.fishRarity = nil
-
-    petports_fishClearOwner(stationUniqueId())
-    return
-  end
-
-  if self.lureId ~= nil then return end
-
-  local spot, why, tier = fishingSpot()
-  if spot == nil then
-    if self.fishingRefusal ~= why then
-      self.fishingRefusal = why
-      sb.logInfo("PETPORT %s cannot place a fishing lure: %s",
-        stationUniqueId(), tostring(why))
-    end
-    return
-  end
-  self.fishingRefusal = nil
-
-  local rects = fishingRects()
-
-  local lifetime = util.randomInRange(FISHING_LURE_LIFETIME)
-
-  local parameters = {
-    timeToLive = lifetime,
-    petports_coverage = rects,
-    petports_fishParameters = FISHING_FISH_PARAMETERS
-  }
-
-  local ok, result = pcall(world.spawnProjectile,
-    FISHING_LURE, spot, entity.id(), { 0, 0 }, false, parameters)
-
-  if ok and result ~= nil then
-    self.lureId = result
-    sb.logInfo("PETPORT %s fishing lure %s placed at %s for %ss -- %s, across "
-      .. "%s network rect(s)",
-      stationUniqueId(), sb.printJson(result), sb.printJson(spot),
-      sb.printJson(lifetime), tostring(tier),
-      sb.printJson(#rects))
-  else
-    sb.logInfo("PETPORT %s failed to place a fishing lure at %s: %s",
-      stationUniqueId(), sb.printJson(spot),
-      ok and "spawnProjectile returned nil" or tostring(result))
-  end
-end
-
--- Returns whether this chassis can reach a fish at all, with the reason when it cannot.
-local function petportCanFish()
-  if not petportFishing() then return false, "no fishing module" end
-
-  local monsterType = self.petData and self.petData.monsterType
-  if monsterType == nil then return false, "no unit" end
-
-  local caps = petports_habitatCapabilitiesForType(monsterType,
-    petports_habitatPermittedSet(petportModuleLiquids()))
-
-  if caps == nil then
-    return false, "chassis capabilities unreadable"
-  end
-
-  if caps.freeMover then
-    if caps.swim then return true end
-    return false, string.format(
-      "%s is a free mover that cannot swim, so it can never reach a fish",
-      tostring(monsterType))
-  end
-
-  if caps.avoidLiquid == false then return true end
-
-  return false, string.format(
-    "%s is a walker that avoids liquid, so it can never reach a fish",
-    tostring(monsterType))
-end
-
--- Returns a task to catch the nearest published fish the unit can reach, or nil with a tally of why each was passed over.
-local function fishWork()
-  local canFish, why = petportCanFish()
-  if not canFish then return nil, why end
-
-  local cargo = self.petData and self.petData.cargo
-  if cargo ~= nil and #cargo > 0 then
-    return nil, string.format(
-      "the unit is carrying %s stack(s) and should deposit before fishing",
-      sb.printJson(#cargo))
-  end
-
-  local published = petports_fishAll()
-  local now = world.time()
-
-  local from = entity.position()
-  if self.petId ~= nil and world.entityExists(self.petId) then
-    from = world.entityPosition(self.petId) or from
-  end
-
-  -- Returns whether a position lies in one of the fishing rects.
-  local function reachableWater(position)
-    for _, area in ipairs(fishingRects()) do
-      if petports_rectContains(area, position) then return true end
-    end
-    return false
-  end
-
-  local best, bestDistance = nil, nil
-  local offered = 0
-  local rejected = { expired = 0, gone = 0, claimed = 0, backedOff = 0,
-    outside = 0, medium = 0 }
-
-  for _, memberId in ipairs(petports_networkMemberIds(stationUniqueId())) do
-    local entry = published[memberId]
-
-    if entry ~= nil and entry.id ~= nil then
-      offered = offered + 1
-
-      local workId = "fish:" .. entry.id
-      local claim = petports_claimGet(workId)
-      local failure = self.workFailures[workId]
-
-      local free = (claim == nil)
-        or claim.owner == stationUniqueId()
-        or (claim.expires or 0) <= now
-
-      if (entry.expires or 0) <= now then
-        rejected.expired = rejected.expired + 1
-      elseif not world.entityExists(entry.id) then
-        rejected.gone = rejected.gone + 1
-      elseif failure ~= nil and (failure["until"] or 0) > now then
-        rejected.backedOff = rejected.backedOff + 1
-      elseif not free then
-        rejected.claimed = rejected.claimed + 1
-      else
-        local position = world.entityPosition(entry.id)
-
-        if position == nil then
-          rejected.gone = rejected.gone + 1
-
-        elseif not reachableWater(position) then
-          rejected.outside = rejected.outside + 1
-        elseif not targetSuits(position, nil) then
-          rejected.medium = rejected.medium + 1
-        else
-          local distance = world.magnitude(from, position)
-
-          if bestDistance == nil or distance < bestDistance then
-            best = { entry = entry, port = memberId, position = position }
-            bestDistance = distance
-          end
-        end
-      end
-    end
-  end
-
-  if best == nil then
-    if offered == 0 then
-      return nil, "no fish in the water anywhere in the network"
-    end
-
-    return nil, string.format(
-      "%s fish in the network, none takeable: %s held by another port, "
-      .. "%s backed off after a failure, %s outside network coverage, "
-      .. "%s in a liquid this chassis cannot enter, %s gone, "
-      .. "%s from a port that stopped reporting",
-      sb.printJson(offered), sb.printJson(rejected.claimed),
-      sb.printJson(rejected.backedOff), sb.printJson(rejected.outside),
-      sb.printJson(rejected.medium),
-      sb.printJson(rejected.gone), sb.printJson(rejected.expired))
-  end
-
-  sb.logInfo("PETPORT %s FISH dispatch: %s#%s (%s) at %s, %s away, from %s's "
-    .. "lure (%s offered)",
-    stationUniqueId(), tostring(best.entry.type), sb.printJson(best.entry.id),
-    tostring(best.entry.rarity or "unknown rarity"),
-    sb.printJson(best.position), sb.printJson(bestDistance),
-    tostring(best.port), sb.printJson(offered))
-
-  return {
-    id = "fish:" .. best.entry.id,
-    type = "fish",
-    port = stationUniqueId(),
-    target = best.entry.id,
-    position = best.position,
-
-    fishType = best.entry.type,
-    fishRarity = best.entry.rarity,
-
-    dwell = FISH_DWELL
-  }
 end
 
 -- Counts the intervals the unit sits motionless away from the port and re-homes it once the stalls run out.
@@ -4794,14 +4462,14 @@ end
 SLOT_KEY_TO_OFFSET = -1
 
 -- Counts a tidy when taking an item leaves a crate holding none of it.
-metrics.noteStorageTake = function(containerId, name)
+petports_metrics.noteStorageTake = function(containerId, name)
   if containerId == nil or name == nil then return end
   if machineAt(containerId) ~= nil then return end
 
   local ok, left = pcall(world.containerAvailable, containerId, name)
   if not ok or type(left) ~= "number" or left > 0 then return end
 
-  metrics.add("tidy", 1)
+  petports_metrics.add("tidy", 1)
 
   sb.logInfo("PETPORT %s TIDY +1: cleared the last %s out of %s (score %s)",
     stationUniqueId(), tostring(name), sb.printJson(containerId),
@@ -4914,7 +4582,7 @@ function withdrawSeed(containerId, seedName, workId, count)
       sb.printJson(containerId))
   end
 
-  metrics.noteStorageTake(containerId, seedName)
+  petports_metrics.noteStorageTake(containerId, seedName)
 end
 
 -- Takes a named stack out of one crate slot, refusing when that slot now holds something else.
@@ -4968,7 +4636,7 @@ function withdrawMisfit(containerId, name, count, workId, slot)
     stationUniqueId(), sb.printJson(taken.count or 1), tostring(name),
     sb.printJson(containerId), tostring(slot))
 
-  metrics.noteStorageTake(containerId, name)
+  petports_metrics.noteStorageTake(containerId, name)
 
   if machineAt(containerId) == nil then
     compactContainer(containerId)
@@ -5147,7 +4815,7 @@ function depositCargo(containerId)
         or "will re-check per descriptor")
   end
 
-  metrics.add("moved", delivered)
+  petports_metrics.add("moved", delivered)
 
   compactContainer(containerId)
 
@@ -5269,7 +4937,7 @@ function depositCargoToMachine(machineId, workId)
   cargoTrace("deposit: cargo replaced", remaining)
   self.petData.cargo = remaining
 
-  metrics.add("moved", moved)
+  petports_metrics.add("moved", moved)
 
   if moved == 0 then
     local reason = "machine input was full on arrival"
@@ -5338,7 +5006,7 @@ function depositCargoOnly(containerId, name)
   cargoTrace("deposit: cargo replaced", remaining)
   self.petData.cargo = remaining
 
-  metrics.add("moved", delivered)
+  petports_metrics.add("moved", delivered)
 
   compactContainer(containerId)
 
@@ -5942,7 +5610,7 @@ function sortContainer(containerId)
 	end
 
 	if moved > 0 then
-		metrics.add("tidy", 1)
+		petports_metrics.add("tidy", 1)
 
 		sb.logInfo("PETPORT %s sorted %s: %s slot(s) moved, %s stack(s) in order "
 			.. "(TIDY +1, score %s)",
@@ -7131,7 +6799,7 @@ local function replantWork()
 	end
 
 	local above = { intent.position[1] + 0.5, intent.position[2] + 1.5 }
-	local suits, why = targetSuits(above, nil)
+	local suits, why = petports_targetSuits(above, nil)
 
 	if not suits then
 		targetRefused("replant at " .. tostring(key), why)
@@ -8978,17 +8646,6 @@ petports_registerWork({
 })
 
 petports_registerWork({
-	name = "fish",
-	order = 1300,
-	reasonOrder = true,
-	generate = function()
-		local work, reason = fishWork()
-		if not petportFishing() then reason = nil end
-		return work, reason
-	end
-})
-
-petports_registerWork({
 	name = "harvest",
 	order = 1400,
 	reasonOrder = true,
@@ -9099,18 +8756,11 @@ petports_registerWork({
 	generate = function() return diagnosticWork() end
 })
 
--- Runs the init hook of every registered work entry.
-function petports_workInit()
+-- Runs one named hook on every registered work entry that has it.
+function petports_workHook(hook, ...)
 	for _, entry in ipairs(PETPORTS_WORK) do
-		if entry.init ~= nil then entry.init() end
-	end
-end
-
--- Runs the tick hook of every registered work entry.
-function petports_workTick(dt)
-	for _, entry in ipairs(PETPORTS_WORK) do
-		if entry.tick ~= nil then
-			portProf("tick." .. entry.name, entry.tick, dt)
+		if entry[hook] ~= nil then
+			portProf(hook .. "." .. entry.name, entry[hook], ...)
 		end
 	end
 end
@@ -9733,7 +9383,7 @@ local function workUpdate(dt)
 
   portProf("claimsSweep", petports_claimsSweep)
 
-  portProf("fishSweep", petports_fishSweep)
+  petports_workHook("workBeat")
 
   local registry = petports_registry()
   if (registry.ports or {})[stationUniqueId()] == nil then
@@ -9799,7 +9449,7 @@ function setAnimationStateForAllHullComponents(anim)
     animator.setAnimationState("interiorState", anim)
 end
 
--- Runs the port's tick: markers, replant sweep, asterite scan, pane mirror, the socketed item, the environment and health checks, the spawn, and the work beat.
+-- Runs the port's tick: markers, replant sweep, tick hooks, pane mirror, the socketed item, the environment and health checks, the spawn, and the work beat.
 local function updateInner(dt)
   if self.firstUpdate then
     self.firstUpdate = false
@@ -9807,7 +9457,7 @@ local function updateInner(dt)
 
     petports_claimsClearOwner(stationUniqueId())
 
-    petports_fishClearOwner(stationUniqueId())
+    petports_workHook("firstUpdate")
     ensureResidency()
     publishRegistry()
   end
@@ -9816,7 +9466,7 @@ local function updateInner(dt)
 
   portProf("sweepReplants", sweepReplants, dt)
 
-  petports_workTick(dt)
+  petports_workHook("tick", dt)
 
   portProf("mirrorPaneState", mirrorPaneState, dt)
 
@@ -9875,7 +9525,7 @@ local function updateInner(dt)
 
     mediumCheck()
 
-    fishingCheck()
+    petports_workHook("environmentBeat")
   end
 
   local unitPresent = self.petId ~= nil or self.fadingPetId ~= nil
@@ -9941,7 +9591,7 @@ end
 
   if self.petId ~= nil and world.entityExists(self.petId) then
     if self.task ~= nil then
-      metrics.add("active", dt)
+      petports_metrics.add("active", dt)
     end
 
     local position = world.entityPosition(self.petId)
@@ -9950,7 +9600,7 @@ end
       if self.odometerLast ~= nil and self.task ~= nil then
         local step = world.magnitude(position, self.odometerLast)
         if step < 10 then
-          metrics.add("traveled", step)
+          petports_metrics.add("traveled", step)
         end
       end
       self.odometerLast = position

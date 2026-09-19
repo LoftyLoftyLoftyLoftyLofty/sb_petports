@@ -295,6 +295,13 @@ function petports_asteriteWork()
 	return nil, reason
 end
 
+-- Counts a mined deposit when an asterite task reports done.
+function petports_asteriteDone(task, report)
+	if task.type ~= "asterite" then return end
+
+	petports_metrics.add("asteriteDepositsMined", 1)
+end
+
 -- Clears the scan state and latches scanning on or off.
 function petports_asteriteInit()
 	self.asteriteCursor = nil
@@ -317,5 +324,6 @@ petports_registerWork({
 	end,
 	generate = function() return petports_asteriteWork() end,
 	init = function() return petports_asteriteInit() end,
+	done = function(task, report) return petports_asteriteDone(task, report) end,
 	tick = function(dt) return petports_asteriteScanStep(dt) end
 })

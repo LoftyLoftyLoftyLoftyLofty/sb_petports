@@ -18,7 +18,7 @@ local FUEL_TRACE = false
 
 local MEDIA_TRACE_INTERVAL = 0.25
 
-local BUILD_STAMP = "2026-09-18e the asterite spark projectile is named in PETPORTS_CONSTANTS"
+local BUILD_STAMP = "2026-09-19d fish lives in tasks/fish.lua, tracked targets and approach types are global tables"
 local stampLogged = false
 
 local SEARCH_LIMIT = 6.0
@@ -170,49 +170,36 @@ local WATER_REACH = 4.0
 
 local MEDIC_REACH = 5.0
 
-local FISH_REACH = 5.0
-
 local CHASE_RETARGET_INTERVAL = 0.5
 
 local CHASE_BUDGET = 10.0
 
--- Returns the first pool name inside a treasure pool value.
-local function treasurePoolName(value)
-  if type(value) == "string" then return value end
-  if type(value) ~= "table" then return nil end
-
-  if type(value.default) == "string" then return value.default end
-
-  for _, entry in ipairs(value) do
-    if type(entry) == "string" then return entry end
-
-    if type(entry) == "table" then
-      if type(entry.default) == "string" then return entry.default end
-
-      for _, inner in ipairs(entry) do
-        if type(inner) == "string" then return inner end
-      end
-    end
-  end
-
-  return nil
-end
-
 local ANIMAL_REACH = 6.0
 
-local TRACKED_TARGETS = {
+PETPORTS_APPROACH_TYPES = {
+  collect = true,
+  harvest = true,
+  replant = true,
+  water = true,
+  animal = true,
+  medic = true,
+  withdraw = true,
+  trap = true,
+  fuelfetch = true
+}
+
+PETPORTS_TRACKED_TARGETS = {
   collect = { field = "target", noun = "drop", reach = nil, moves = false },
   harvest = { field = "target", noun = "crop", reach = nil, moves = false },
   trap = { field = "target", noun = "trap", reach = nil, moves = false },
   animal = { field = "target", noun = "animal", reach = ANIMAL_REACH, moves = true },
-  fish = { field = "target", noun = "fish", reach = FISH_REACH, moves = true },
   medic = { field = "target", noun = "patient", reach = MEDIC_REACH, moves = true,
             goneIsDone = true }
 }
 
 -- Returns a task's tracked entity id and its tracking row.
 local function trackedEntity(task)
-  local row = task ~= nil and TRACKED_TARGETS[task.type] or nil
+  local row = task ~= nil and PETPORTS_TRACKED_TARGETS[task.type] or nil
   if row == nil then return nil, nil end
   return task[row.field], row
 end
@@ -570,7 +557,7 @@ function petportsTaskAction.enterWith(args)
     approachTimer = APPROACH_TIMEOUT,
     dwellTimer = task.dwell
       or ((task.type == "harvest") and HARVEST_TIMEOUT)
-      or (TRACKED_TARGETS[task.type] ~= nil and TRACKED_TARGETS[task.type].reach ~= nil
+      or (PETPORTS_TRACKED_TARGETS[task.type] ~= nil and PETPORTS_TRACKED_TARGETS[task.type].reach ~= nil
           and CHASE_BUDGET)
       or 3.0,
     arrived = false,
@@ -3786,12 +3773,7 @@ local function petportsTaskUpdateInner(dt, stateData)
 
   if task.type == "return" then
     approachTo = approachTargetFor(stateData, target) or target
-  elseif task.type == "collect" or task.type == "harvest"
-     or task.type == "replant" or task.type == "water"
-     or task.type == "animal" or task.type == "medic"
-     or task.type == "withdraw" or task.type == "fish"
-     or task.type == "trap"
-     or task.type == "fuelfetch" then
+  elseif PETPORTS_APPROACH_TYPES[task.type] then
     approachTo = approachTargetFor(stateData, target)
 
     if approachTo == nil then
@@ -4803,61 +4785,6 @@ local function petportsTaskUpdateInner(dt, stateData)
     end
 
     return false
-  end
-
-  if task.type == "fish" then
-    local there = world.entityPosition(task.target)
-
-    local declared, pool = nil, nil
-    local okParams, params = pcall(root.monsterParameters, task.fishType)
-    if okParams and type(params) == "table" then
-      local base = type(params.baseParameters) == "table"
-        and params.baseParameters or {}
-      declared = params.landedTreasurePool or base.landedTreasurePool
-      pool = treasurePoolName(declared)
-    end
-
-    if pool == nil or pool == "empty" then
-      pcall(world.callScriptedEntity, task.target, "despawn")
-      petports_taskReport(stateData, "done", string.format(
-        "caught %s but it has no treasure pool (declared %s)",
-        tostring(task.fishType), sb.printJson(declared)))
-      return true
-    end
-
-    local okPool, poolExists = pcall(root.isTreasurePool, pool)
-    if not okPool or poolExists ~= true then
-      pcall(world.callScriptedEntity, task.target, "despawn")
-      petports_taskReport(stateData, "done", string.format(
-        "caught %s but pool %s does not exist (declared %s)",
-        tostring(task.fishType), tostring(pool), sb.printJson(declared)))
-      return true
-    end
-
-    local level = math.max(1, world.threatLevel())
-    local okTreasure, treasure = pcall(root.createTreasure, pool, level)
-
-    if not okTreasure or type(treasure) ~= "table" or #treasure == 0 then
-      petports_taskReport(stateData, "failed", string.format(
-        "caught %s but pool %s (declared %s) produced nothing at level %s: %s",
-        tostring(task.fishType), tostring(pool), sb.printJson(declared),
-        sb.printJson(level), tostring(treasure)))
-      pcall(world.callScriptedEntity, task.target, "despawn")
-      return true
-    end
-
-    pcall(world.callScriptedEntity, task.target, "despawn")
-
-    sb.logInfo("UNIT CAUGHT %s (%s, %s) at %s -- %s stack(s) from pool %s at "
-      .. "level %s",
-      sb.printJson(task.target), tostring(task.fishType),
-      tostring(task.fishRarity or "unknown rarity"), sb.printJson(there),
-      sb.printJson(#treasure), tostring(pool), sb.printJson(level))
-
-    petports_taskReport(stateData, "done", string.format(
-      "caught %s (%s)", tostring(task.fishType),
-      tostring(task.fishRarity or "unknown rarity")), treasure)
-    return true
   end
 
   if task.type == "collect" then

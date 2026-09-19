@@ -1,6 +1,6 @@
 -- Unit-side contract: naming, modules, media and swim mode, dives, vent routing and fuel.
 
-local CONTRACT_BUILD_STAMP = "2026-09-17e no drop once the task has arrived"
+local CONTRACT_BUILD_STAMP = "2026-09-19d swim task types are filled in by the task files"
 
 local contractStamped = false
 
@@ -952,9 +952,7 @@ function petports_diveOutcome()
 	return nil
 end
 
-PETPORTS_SWIM_TASK_TYPES = {
-	fish = true
-}
+PETPORTS_SWIM_TASK_TYPES = {}
 
 -- Returns whether the held task is one that swims.
 local function taskWantsSwimming()
