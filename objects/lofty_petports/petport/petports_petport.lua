@@ -12,6 +12,9 @@ require "/scripts/lofty_petports/petports_habitat.lua"
 require "/scripts/lofty_petports/petports_flavors.lua"
 require "/scripts/lofty_petports/petports_upcyclerstate.lua"
 
+PETPORTS_CONSTANTS = PETPORTS_CONSTANTS or {}
+PETPORTS_CONSTANTS.port = PETPORTS_CONSTANTS.port or {}
+
 
 STATUS_INTERVAL = 2.0
 
@@ -87,7 +90,7 @@ end
 
 WRITE_INTERVAL = 10.0
 
-local DEBUG = true
+PETPORTS_CONSTANTS.port.debug = true
 
 COVERAGE_SIZE = 64
 
@@ -198,9 +201,9 @@ VENT_SEARCH_MARGIN = 24
 
 RESIDENCY_TYPE = "petports_residency"
 
--- Logs a labelled value when DEBUG is set.
+-- Logs a labelled value when the debug constant is set.
 function petports_trace(label, value)
-  if not DEBUG then return end
+  if not PETPORTS_CONSTANTS.port.debug then return end
   if value == nil then
     sb.logInfo("[petport] %s: nil", label)
   elseif type(value) == "table" then
@@ -580,11 +583,11 @@ function petports_abandonTask(reason)
   self.task = nil
 end
 
-local PETPORT_BUILD_STAMP = "2026-09-20a every function and state table in the port script is a petports_ global"
+PETPORTS_CONSTANTS.port.buildStamp = "2026-09-20h the port script has no top-level locals; its last five are PETPORTS_CONSTANTS.port"
 
 PETPORT_PROFILE = true
 
-local PORT_PROF_INTERVAL = 10.0
+PETPORTS_CONSTANTS.port.profInterval = 10.0
 petports_portProfPhases = {}
 petports_portProfAt = nil
 
@@ -627,9 +630,9 @@ function petports_portProfReport()
   if not PETPORT_PROFILE then return end
 
   local t = world.time()
-  petports_portProfAt = petports_portProfAt or (t + PORT_PROF_INTERVAL)
+  petports_portProfAt = petports_portProfAt or (t + PETPORTS_CONSTANTS.port.profInterval)
   if t < petports_portProfAt then return end
-  petports_portProfAt = t + PORT_PROF_INTERVAL
+  petports_portProfAt = t + PETPORTS_CONSTANTS.port.profInterval
 
   local parts = {}
   for name, phase in pairs(petports_portProfPhases) do
@@ -643,7 +646,7 @@ function petports_portProfReport()
   table.sort(parts)
 
   sb.logInfo("PETPORT profile %s (%ss): %s", stationUniqueId(),
-    tostring(PORT_PROF_INTERVAL),
+    tostring(PETPORTS_CONSTANTS.port.profInterval),
     #parts > 0 and table.concat(parts, " | ") or "nothing over 1 ms")
 
   petports_portProfPhases = {}
@@ -654,7 +657,7 @@ end
 
 -- Reads the config, clears the port state, and installs every message handler.
 function init()
-  sb.logInfo("PETPORT object build: %s", PETPORT_BUILD_STAMP)
+  sb.logInfo("PETPORT object build: %s", PETPORTS_CONSTANTS.port.buildStamp)
   sb.logInfo("PETPORT work build: %s", PETPORTS_WORK_BUILD_STAMP)
 
   COVERAGE_SIZE = config.getParameter("petports_coverageSize", COVERAGE_SIZE)
@@ -749,7 +752,7 @@ function init()
 
     if self.petData == nil or #cargo == 0 then
       sb.logInfo("PETPORT %s unit %s died at %s carrying nothing",
-        stationUniqueId(), tostring(payload.unit), sb.printJson(position))
+        stationUniqueId(), tostring(payload.id), sb.printJson(position))
       return true
     end
 
@@ -783,7 +786,7 @@ function init()
     self.writeTimer = WRITE_INTERVAL
 
     sb.logInfo("PETPORT %s unit %s died at %s -- spilled %s stack(s), %s lost",
-      stationUniqueId(), tostring(payload.unit), sb.printJson(position),
+      stationUniqueId(), tostring(payload.id), sb.printJson(position),
       sb.printJson(spilled), sb.printJson(lost))
 
     return true
@@ -5699,8 +5702,8 @@ function onInteraction(args)
   return config.getParameter("interactAction")
 end
 
-local PETPORT_SLOW_TICK_MS = 30
-local PETPORT_STALL_MS = 250
+PETPORTS_CONSTANTS.port.slowTickMs = 30
+PETPORTS_CONSTANTS.port.stallMs = 250
 
 -- Runs the tick inside the claim snapshot, logging a stall between ticks and a slow tick.
 function update(dt)
@@ -5712,7 +5715,7 @@ function update(dt)
 
   if began ~= nil and self.tickEndedAt ~= nil then
     local gap = (began - self.tickEndedAt) * 1000
-    if gap >= PETPORT_STALL_MS then
+    if gap >= PETPORTS_CONSTANTS.port.stallMs then
       sb.logInfo("PETPORT STALL %s ms of process time between my ticks (clock %s)",
         tostring(math.floor(gap)), tostring(math.floor(began * 1000)))
     end
@@ -5726,7 +5729,7 @@ function update(dt)
     local ok, t = pcall(os.clock)
     if ok and type(t) == "number" then
       local ms = (t - began) * 1000
-      if ms >= PETPORT_SLOW_TICK_MS then
+      if ms >= PETPORTS_CONSTANTS.port.slowTickMs then
         sb.logInfo("PETPORT slow tick: %s ms", tostring(math.floor(ms)))
       end
       self.tickEndedAt = t

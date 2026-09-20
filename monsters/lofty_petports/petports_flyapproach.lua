@@ -1,19 +1,22 @@
 -- Fly and swim movement for free movers, replacing approachPoint and setJumpState.
 
+PETPORTS_CONSTANTS = PETPORTS_CONSTANTS or {}
+PETPORTS_CONSTANTS.fly = PETPORTS_CONSTANTS.fly or {}
+
 petports_vanillaSetJumpState = setJumpState
 
-local BUILD_STAMP = "2026-09-20c every function, the stamp flag and the setJumpState capture are petports_ globals"
+PETPORTS_CONSTANTS.fly.buildStamp = "2026-09-20j the fly script has no top-level locals; its constants are PETPORTS_CONSTANTS.fly"
 
-local FLY_RETARGET_DISTANCE = 4.0
+PETPORTS_CONSTANTS.fly.retargetDistance = 4.0
 petports_flyStampLogged = false
 
-local DRAW_PLAN = false
+PETPORTS_CONSTANTS.fly.drawPlan = false
 
-local PLAN_SHAPE_DEBUG = false
+PETPORTS_CONSTANTS.fly.planShapeDebug = false
 
 -- Logs the mix of edge actions in a plan when it changes.
 function petports_reportPlanShape(finder)
-  if not PLAN_SHAPE_DEBUG then return end
+  if not PETPORTS_CONSTANTS.fly.planShapeDebug then return end
   if finder == nil or not finder.hasPath or finder.edges == nil then return end
 
   local counts, order = {}, {}
@@ -40,7 +43,7 @@ function petports_reportPlanShape(finder)
     sb.printJson(#finder.edges), shape)
 end
 
-local FLY_ARRIVAL = 1.0
+PETPORTS_CONSTANTS.fly.arrival = 1.0
 
 -- Logs whether the body fits at the start, the target and their tile centres.
 function petports_probeStartNode(targetPosition)
@@ -86,24 +89,24 @@ function petports_reportFlyPathEnd(result, targetPosition, distance)
     sb.printJson(mcontroller.position()),
     sb.printJson(targetPosition),
     sb.printJson(distance),
-    sb.printJson(FLY_ARRIVAL))
+    sb.printJson(PETPORTS_CONSTANTS.fly.arrival))
 end
 
 
 
-local FLY_ANIM_MOVING = 2.0
-local FLY_ANIM_STILL = 0.5
+PETPORTS_CONSTANTS.fly.animMoving = 2.0
+PETPORTS_CONSTANTS.fly.animStill = 0.5
 
 
-local FLY_TELEMETRY = true
-local FLY_SAMPLE = 0.5
+PETPORTS_CONSTANTS.fly.telemetry = true
+PETPORTS_CONSTANTS.fly.sample = 0.5
 
 -- Logs the issued fly command, velocity and current edge twice a second.
 function petports_sampleFlyCommand(dt)
-  if not FLY_TELEMETRY then return end
+  if not PETPORTS_CONSTANTS.fly.telemetry then return end
 
   self.petportsFlySampleClock = (self.petportsFlySampleClock or 0) + dt
-  if self.petportsFlySampleClock < FLY_SAMPLE then return end
+  if self.petportsFlySampleClock < PETPORTS_CONSTANTS.fly.sample then return end
   self.petportsFlySampleClock = 0
 
   local pather = self.pather
@@ -130,23 +133,17 @@ end
 
 
 
-local FLY_LOOKAHEAD = 6
+PETPORTS_CONSTANTS.fly.lookahead = 6
 
-local FLY_AIM_RANGE = 8.0
+PETPORTS_CONSTANTS.fly.aimRange = 8.0
 
-local FLY_SWEEP_STEP = 0.8
+PETPORTS_CONSTANTS.fly.sweepStep = 0.8
 
-local FLY_SWEEP_SET = { "Null", "Block", "Dynamic" }
+PETPORTS_CONSTANTS.fly.sweepSet = { "Null", "Block", "Dynamic" }
 
-local STRING_PULL_RECHECK = 0.05
+PETPORTS_CONSTANTS.fly.stringPullRecheck = 0.05
 
-local STRING_PULL_RANGE = 40.0
-
-local STRING_PULL_TASKS = {
-  fish = true,
-  animal = true,
-  medic = true
-}
+PETPORTS_CONSTANTS.fly.stringPullRange = 40.0
 
 
 -- Returns whether a velocity keeps the body out of denied liquid, stopping the unit when it does not.
@@ -247,14 +244,14 @@ function petports_flyPathClear(from, to)
   local bounds = mcontroller.boundBox()
   local media = petports_media()
   local bothMedia = media.fly == true and media.swim == true
-  local steps = math.ceil(length / FLY_SWEEP_STEP)
+  local steps = math.ceil(length / PETPORTS_CONSTANTS.fly.sweepStep)
 
   for i = 0, steps do
     local t = i / steps
     local x = from[1] + span[1] * t
     local y = from[2] + span[2] * t
 
-    if petports_bodyHitsAt({ x, y }, FLY_SWEEP_SET) then return false end
+    if petports_bodyHitsAt({ x, y }, PETPORTS_CONSTANTS.fly.sweepSet) then return false end
 
     if not petports_mediumClearAt(x, y, bounds, bothMedia) then return false end
   end
@@ -270,8 +267,8 @@ function petports_stringPullClear(here, targetPosition, dt)
   self.petportsPullTimer = (self.petportsPullTimer or 0) - (dt or 0)
 
   if self.petportsPullTimer <= 0 then
-    self.petportsPullTimer = STRING_PULL_RECHECK
-    if world.magnitude(here, targetPosition) > STRING_PULL_RANGE then
+    self.petportsPullTimer = PETPORTS_CONSTANTS.fly.stringPullRecheck
+    if world.magnitude(here, targetPosition) > PETPORTS_CONSTANTS.fly.stringPullRange then
       self.petportsPullClear = false
     else
       self.petportsPullClear = petports_flyPathClear(here, targetPosition)
@@ -290,7 +287,7 @@ function petports_flyMediumClear(from, to)
 
   if length < 0.001 then return petports_mediumAllows(from, bounds) end
 
-  local steps = math.ceil(length / FLY_SWEEP_STEP)
+  local steps = math.ceil(length / PETPORTS_CONSTANTS.fly.sweepStep)
 
   for i = 0, steps do
     local t = i / steps
@@ -310,7 +307,7 @@ end
 
 -- Returns the furthest free edge target within aim range that has a clear line to it, and how many edges it skips.
 function petports_aimAhead(from, edgeAt)
-  for i = FLY_LOOKAHEAD, 1, -1 do
+  for i = PETPORTS_CONSTANTS.fly.lookahead, 1, -1 do
     local ahead = edgeAt(i)
 
     if petports_isFreeEdge(ahead)
@@ -319,7 +316,7 @@ function petports_aimAhead(from, edgeAt)
       local candidate = ahead.target.position
       local span = world.distance(candidate, from)
 
-      if math.sqrt(span[1] * span[1] + span[2] * span[2]) <= FLY_AIM_RANGE
+      if math.sqrt(span[1] * span[1] + span[2] * span[2]) <= PETPORTS_CONSTANTS.fly.aimRange
          and petports_flyPathClear(from, candidate) then
         return candidate, i
       end
@@ -473,7 +470,7 @@ function petports_freeMoverInner(pather)
 
   if self.petportsAimNext == nil or now >= self.petportsAimNext
      or self.petportsAimEdge ~= edgeIndex or self.petportsAimAt == nil then
-    self.petportsAimNext = now + STRING_PULL_RECHECK
+    self.petportsAimNext = now + PETPORTS_CONSTANTS.fly.stringPullRecheck
     self.petportsAimEdge = edgeIndex
 
     aim, skip = petports_aimAhead(here,
@@ -552,9 +549,9 @@ function setJumpState()
   local speed = math.sqrt(velocity[1] * velocity[1] + velocity[2] * velocity[2])
 
   local state = self.petportsFlyAnim
-  if speed >= FLY_ANIM_MOVING then
+  if speed >= PETPORTS_CONSTANTS.fly.animMoving then
     state = "run"
-  elseif speed <= FLY_ANIM_STILL then
+  elseif speed <= PETPORTS_CONSTANTS.fly.animStill then
     state = "idle"
   end
 
@@ -618,12 +615,12 @@ function approachPoint(dt, targetPosition, stopDistance, running, arrival)
   if not petports_flyStampLogged then
     petports_flyStampLogged = true
     sb.logInfo("PETPORTS flyapproach build: %s (gravityEnabled %s, flySpeed %s, airFriction %s)",
-      BUILD_STAMP,
+      PETPORTS_CONSTANTS.fly.buildStamp,
       tostring(mcontroller.baseParameters().gravityEnabled),
       sb.printJson(mcontroller.baseParameters().flySpeed),
       sb.printJson(mcontroller.baseParameters().airFriction))
 
-    if DRAW_PLAN then
+    if PETPORTS_CONSTANTS.fly.drawPlan then
       self.debug = true
       sb.logInfo("PETPORTS flyapproach: plan rendering ON (needs /debug in game). "
         .. "Fly edges draw MAGENTA; Walk blue, Jump green, Drop cyan, Land yellow, Arc red.")
@@ -636,7 +633,7 @@ function approachPoint(dt, targetPosition, stopDistance, running, arrival)
   local toTarget = world.distance(targetPosition, here)
   local targetDistance = world.magnitude(targetPosition, here)
 
-  if targetDistance <= (arrival or FLY_ARRIVAL) then
+  if targetDistance <= (arrival or PETPORTS_CONSTANTS.fly.arrival) then
     mcontroller.controlFly({0, 0})
     mcontroller.setVelocity({0, 0})
 
@@ -687,8 +684,8 @@ function approachPoint(dt, targetPosition, stopDistance, running, arrival)
   local latch = self.petportsDirectLatch
   local here = mcontroller.position()
   if latch == nil or latch.pather ~= self.pather
-     or world.magnitude(targetPosition, latch.target) > FLY_RETARGET_DISTANCE
-     or (latch.done and world.magnitude(here, latch.target) <= FLY_RETARGET_DISTANCE) then
+     or world.magnitude(targetPosition, latch.target) > PETPORTS_CONSTANTS.fly.retargetDistance
+     or (latch.done and world.magnitude(here, latch.target) <= PETPORTS_CONSTANTS.fly.retargetDistance) then
     if latch ~= nil and latch.pather == self.pather then
       sb.logInfo("UNIT direct target re-latched: live %s is %s from latched %s%s",
         sb.printJson(targetPosition),

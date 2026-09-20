@@ -1,6 +1,9 @@
 -- Unit-side contract: naming, modules, media and swim mode, dives, vent routing and fuel.
 
-local CONTRACT_BUILD_STAMP = "2026-09-20b every function, state variable and base capture in the contract script is a petports_ global"
+PETPORTS_CONSTANTS = PETPORTS_CONSTANTS or {}
+PETPORTS_CONSTANTS.contract = PETPORTS_CONSTANTS.contract or {}
+
+PETPORTS_CONSTANTS.contract.buildStamp = "2026-09-20i the contract script has no top-level locals; its last eight are PETPORTS_CONSTANTS.contract"
 
 petports_contractStamped = false
 
@@ -12,7 +15,7 @@ function petports_contractStampOnce()
   petports_contractStamped = true
 
   sb.logInfo("PETPORTS contract build: %s (unit %s)",
-    CONTRACT_BUILD_STAMP, tostring(entity.id()))
+    PETPORTS_CONSTANTS.contract.buildStamp, tostring(entity.id()))
 end
 
 -- Returns a copy of the unit's storage for the port to hold.
@@ -301,7 +304,7 @@ function petports_setNetwork(rects, home, units)
   return true
 end
 
-local TETHER_SLACK = 3.0
+PETPORTS_CONSTANTS.contract.tetherSlack = 3.0
 
 -- Returns the task that walks the unit home, or nil while it is inside the network.
 function petports_leashTask()
@@ -311,7 +314,7 @@ function petports_leashTask()
 
   if tethered then
     local distance = world.magnitude(mcontroller.position(), self.petportsHome)
-    if distance <= TETHER_SLACK and self.petportsLeashTask ~= nil
+    if distance <= PETPORTS_CONSTANTS.contract.tetherSlack and self.petportsLeashTask ~= nil
        and self.petportsLeashTask.arrivedHome then
       return self.petportsLeashTask
     end
@@ -329,7 +332,7 @@ function petports_leashTask()
 
   self.petportsLeashTask.position = self.petportsHome
   self.petportsLeashTask.hold = tethered
-  self.petportsLeashTask.slack = TETHER_SLACK
+  self.petportsLeashTask.slack = PETPORTS_CONSTANTS.contract.tetherSlack
 
   return self.petportsLeashTask
 end
@@ -348,9 +351,9 @@ function petports_inNetwork(position)
 end
 
 
-local PETPORTS_SUBMERGED_FILL = 0.9
+PETPORTS_CONSTANTS.contract.submergedFill = 0.9
 
-local PETPORTS_HARMFUL_FILL = 0.1
+PETPORTS_CONSTANTS.contract.harmfulFill = 0.1
 
 PETPORTS_WALL_MARGIN = 0
 
@@ -492,7 +495,7 @@ function petports_mediumAt(position, bounds)
       local side = world.liquidAt({ col + 0.5, row + 0.5 })
       local sideFill = (side ~= nil) and (side[2] or 0) or 0
 
-      if sideFill >= PETPORTS_HARMFUL_FILL and petports_liquidDenied(side[1]) then
+      if sideFill >= PETPORTS_CONSTANTS.contract.harmfulFill and petports_liquidDenied(side[1]) then
         return "forbidden"
       end
     end
@@ -503,11 +506,11 @@ function petports_mediumAt(position, bounds)
 
     local fill = (level ~= nil) and (level[2] or 0) or 0
 
-    if fill >= PETPORTS_HARMFUL_FILL and petports_liquidDenied(level[1]) then
+    if fill >= PETPORTS_CONSTANTS.contract.harmfulFill and petports_liquidDenied(level[1]) then
       return "forbidden"
     end
 
-    if fill < PETPORTS_SUBMERGED_FILL then
+    if fill < PETPORTS_CONSTANTS.contract.submergedFill then
       submerged = false
     else
       anySubmerged = true
@@ -526,11 +529,11 @@ function petports_mediumAtPoint(position)
   local level = world.liquidAt(position)
   local fill = (level ~= nil) and (level[2] or 0) or 0
 
-  if fill >= PETPORTS_HARMFUL_FILL and petports_liquidDenied(level[1]) then
+  if fill >= PETPORTS_CONSTANTS.contract.harmfulFill and petports_liquidDenied(level[1]) then
     return "forbidden"
   end
 
-  return (fill >= PETPORTS_SUBMERGED_FILL) and "swim" or "air"
+  return (fill >= PETPORTS_CONSTANTS.contract.submergedFill) and "swim" or "air"
 end
 
 -- Returns whether a body at a position is fully submerged.
@@ -1335,7 +1338,7 @@ function petports_outOfMedium()
         local okLevel, level = pcall(world.liquidAt, { tile[1] + 0.5, tile[2] + 0.5 })
         local fill = (okLevel and level ~= nil) and (level[2] or 0) or 0
 
-        if fill >= PETPORTS_HARMFUL_FILL and petports_liquidDenied(level[1]) then
+        if fill >= PETPORTS_CONSTANTS.contract.harmfulFill and petports_liquidDenied(level[1]) then
           local d = dx * dx + dy * dy
           if best == nil or d < best then
             best = d
@@ -1374,11 +1377,9 @@ function petports_nodePosition(position, bounds)
   }
 end
 
-local FLY_SEARCH_RADIUS = 4
+PETPORTS_CONSTANTS.contract.flyPointDebug = true
 
-local FLY_POINT_DEBUG = true
-
-local FLY_SPAN_PROBE = 6
+PETPORTS_CONSTANTS.contract.flySpanProbe = 6
 
 -- Returns whether the bound box clears tiles at a position.
 function petports_flyBodyFits(x, y, bounds)
@@ -1457,11 +1458,11 @@ function petports_logFlySpan(position, bounds)
   local openRow = rowOpen(row)
   local bottom, top = row, row
   if openRow then
-    for _ = 1, FLY_SPAN_PROBE do
+    for _ = 1, PETPORTS_CONSTANTS.contract.flySpanProbe do
       if not rowOpen(bottom - 1) then break end
       bottom = bottom - 1
     end
-    for _ = 1, FLY_SPAN_PROBE do
+    for _ = 1, PETPORTS_CONSTANTS.contract.flySpanProbe do
       if not rowOpen(top + 1) then break end
       top = top + 1
     end
@@ -1471,11 +1472,11 @@ function petports_logFlySpan(position, bounds)
   local openCol = colOpen(col)
   local left, right = col, col
   if openCol then
-    for _ = 1, FLY_SPAN_PROBE do
+    for _ = 1, PETPORTS_CONSTANTS.contract.flySpanProbe do
       if not colOpen(left - 1) then break end
       left = left - 1
     end
-    for _ = 1, FLY_SPAN_PROBE do
+    for _ = 1, PETPORTS_CONSTANTS.contract.flySpanProbe do
       if not colOpen(right + 1) then break end
       right = right + 1
     end
@@ -1503,7 +1504,7 @@ function petports_flyPointNear(position, radius, mediumVerified)
   end
 
   if not targetOk then
-    if FLY_POINT_DEBUG then
+    if PETPORTS_CONSTANTS.contract.flyPointDebug then
       sb.logInfo("UNIT flypoint DECLINED %s outright: %s -- no position near it can help, "
         .. "so this target is not workable by this chassis",
         sb.printJson(position), tostring(targetWhy))
@@ -1512,7 +1513,7 @@ function petports_flyPointNear(position, radius, mediumVerified)
     return nil
   end
 
-  if FLY_POINT_DEBUG then
+  if PETPORTS_CONSTANTS.contract.flyPointDebug then
     sb.logInfo("UNIT flypoint SEARCH for %s (%s): origin tile centre %s, radius %s, boundBox %s",
       sb.printJson(position), tostring(targetWhy), sb.printJson({ originX, originY }),
       sb.printJson(radius), sb.printJson(bounds))
@@ -1542,7 +1543,7 @@ function petports_flyPointNear(position, radius, mediumVerified)
 
     if usable then
       if petports_flySighted({ cx, cy }, position) then
-        if FLY_POINT_DEBUG then
+        if PETPORTS_CONSTANTS.contract.flyPointDebug then
           sb.logInfo("UNIT flypoint ACCEPTED %s for %s after %s grid point(s): dist %s",
             sb.printJson({ cx, cy }), sb.printJson(position),
             sb.printJson(examined), sb.printJson(candidate[3]))
@@ -1554,14 +1555,14 @@ function petports_flyPointNear(position, radius, mediumVerified)
       reason = "fits but cannot see the target"
     end
 
-    if FLY_POINT_DEBUG then
+    if PETPORTS_CONSTANTS.contract.flyPointDebug then
       sb.logInfo("UNIT flypoint  #%s grid %s dist %s: %s",
         sb.printJson(examined), sb.printJson({ cx, cy }),
         sb.printJson(candidate[3]), tostring(reason))
     end
   end
 
-  if FLY_POINT_DEBUG then
+  if PETPORTS_CONSTANTS.contract.flyPointDebug then
     sb.logInfo("UNIT flypoint NO POINT for %s after %s grid point(s) out to radius %s -- "
       .. "nothing within reach fits this body, sits in a medium it may occupy, and can "
       .. "see the target, so this target will be DECLINED (media: canFly %s canSwim %s)",
@@ -1642,8 +1643,8 @@ function petports_edgeKey(fromKey, toKey)
   return fromKey .. ">" .. toKey
 end
 
-local ROUTE_TTL_FALSE = 60.0
-local ROUTE_TTL_TRUE = 600.0
+PETPORTS_CONSTANTS.contract.routeTtlFalse = 60.0
+PETPORTS_CONSTANTS.contract.routeTtlTrue = 600.0
 
 -- Returns a cached edge verdict, dropping it once its time to live has passed.
 function petports_routeKnown(fromKey, toKey)
@@ -1655,7 +1656,7 @@ function petports_routeKnown(fromKey, toKey)
   if type(entry) ~= "table" then return nil end
 
   local age = world.time() - (entry.t or 0)
-  local ttl = entry.r and ROUTE_TTL_TRUE or ROUTE_TTL_FALSE
+  local ttl = entry.r and PETPORTS_CONSTANTS.contract.routeTtlTrue or PETPORTS_CONSTANTS.contract.routeTtlFalse
 
   if age > ttl then
     sb.logInfo("UNIT cache EXPIRED for %s (%s, age %s of %s) -- will re-probe",
