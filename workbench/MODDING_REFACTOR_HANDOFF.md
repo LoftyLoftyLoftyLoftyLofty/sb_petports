@@ -2,7 +2,7 @@
 
 State only. No history, no reasoning, no theories. Anything not verified in game says UNTESTED.
 
-Last updated at build 2026-09-19v.
+Last updated at build 2026-09-20l.
 
 ## Goals
 
@@ -21,6 +21,13 @@ Acceptance test, PASSED in game 2026-09-19: copy the three asterite files, find-
 - Asset names inside a behaviour file (projectiles, items) are constants, so a blanket find-replace cannot break them silently.
 - Entries sharing an `order` compete; the nearest work wins. A malformed work table from a modder's generator is the modder's problem.
 - Line endings: LF. Git already stores LF; a CRLF working copy is converted when a build touches it (no git diff results).
+- Nothing at a script's global scope may be `local`: functions, state variables, tables and load-time captures of base functions alike. A modder's added script must be able to reach and replace all of it.
+- Constants are delocalized in their own build per file, after that file's functions. Groups: `port`, `contract`, `fly`, `task`, `nav`. Names are the old name in camelCase; `fly` and `nav` drop the `FLY_` / `NAV_` prefix.
+- The port script's bare upper-case globals (`WORK_INTERVAL`, `CLAIM_TTL`, the `BEACON_*_KEY` strings and the rest, about 106) stay as they are. Modders can reach them.
+- A constant one script reads from another must resolve. No `X or <fallback>` over a name the reader cannot see.
+- A constant or table proven unused (a `local` whose declaration is its only mention in the mod, with no dynamic global lookups in that context) is deleted, not moved.
+- Vent routing is to be rebuilt once the coarse nav highway nodes are done. Vent behaviour is not tested and `no vent route` failures in soak logs are not findings.
+- The interface panes are a separate session: their top-level locals, the tables-to-config work, the stat list and the pet settings widgets.
 - A whole class (port and unit side) moves per build since 19f; if a class build breaks it gets split back into one side per build.
 - The handoff doc is updated at stopping points, not per build. Modified files are presented individually, not zipped.
 
@@ -110,16 +117,62 @@ Per-type tables a task file fills in for itself:
 | `PETPORTS_APPROACH_TYPES[type] = true` | the task uses the approach-target path |
 | `PETPORTS_SWIM_TASK_TYPES[type] = true` | the task swims to its target |
 
-Unit globals delocalized so far: `petports_taskReport`, `petports_publishBeam`, `PETPORTS_CONSTANTS.task.approachTimeout`. `petports_freshPather` already existed as a global wrapper around the local `freshPather`; moved code calls the wrapper.
+## Delocalization (builds 20a to 20l)
+
+These files have no top-level `local` left: `petports_petport.lua` and the 17 `work/` files, `petports_contract.lua`, `petports_flyapproach.lua`, `petportsTaskAction.lua`, `petports_coarsenav.lua`, the 9 `tasks/` files, `shared/asterite.lua`.
+
+| File | Functions and state made global | Constants moved | Group |
+|---|---|---|---|
+| `petports_petport.lua` | 87 | 5 | `PETPORTS_CONSTANTS.port` |
+| `petports_contract.lua` | 21 | 8 | `PETPORTS_CONSTANTS.contract` |
+| `petports_flyapproach.lua` | 19 | 15 | `PETPORTS_CONSTANTS.fly` |
+| `petportsTaskAction.lua` | 60 | 97 | `PETPORTS_CONSTANTS.task` |
+| `petports_coarsenav.lua` | 119 | 62 | `PETPORTS_CONSTANTS.nav` |
+
+Names that are not the plain `petports_` prefix:
+
+| Was | Is | Why |
+|---|---|---|
+| `petportFuelValue` | `petports_fuelValue` | avoids `petports_petport...` |
+| `stampOnce` (contract), `contractStamped` | `petports_contractStampOnce`, `petports_contractStamped` | coarsenav has its own `stampOnce` |
+| `stampOnce` (coarsenav) | `petports_navStampOnce` | as above |
+| `stampLogged` (flyapproach) | `petports_flyStampLogged` | TaskAction has its own |
+| `stampLogged` (TaskAction) | `petports_taskStampLogged` | as above |
+| `petportsBaseUpdate`, `petportsBaseInit` | `petports_baseUpdate`, `petports_baseInit` | load-time captures of the vanilla functions |
+| `vanillaSetJumpState` | `petports_vanillaSetJumpState` | load-time capture |
+| `petportsFreeMoverInner` | `petports_freeMoverInner` | |
+| `petportsTaskUpdateInner` | `petports_taskUpdateInner` | |
+| `navBridgeProfile` | `petports_navBridgeProfileRaw` | `petports_navBridgeProfile` stays as the wrapper gated on `petports_gravitySwitchable` |
+
+Pass-throughs that collapsed into the real function, which now carries the name: `petports_flyPathClear`, `petports_freshPather`, `petports_scootThroughPlatform`, `petports_probeBelow`. Forward declarations removed: 4 in the port, 2 in TaskAction, 12 in coarsenav (10 of them written `local x = nil`).
+
+The three captures are global but still read once at load. A script that holds one must be listed once per context and never `require`d: a second load would capture Petports' own function and recurse. Checked for `petports_contract.lua` and `petports_flyapproach.lua`: once in each of the six monstertypes, no `require`.
+
+`installTaskSections` rebinds the globals `petports_tryCoarseLeg`, `petports_tryVentRoute`, `petports_standableNear`, `petports_approachTargetFor` on the first update, so a replacement made at load is what gets the profiler section.
+
+Not renamed on purpose: the stagehand parameter key `residencyUniqueId`, the inner local `fresh` in the port's socket watch, the `baseTeam` parameter of `petports_setModuleEffects`, the field `stateData.unperchWalk`.
+
+`task.maxTaskHops` is computed once at load as `task.maxVentHops * 12`; changing one does not change the other.
+
+Deleted as unused: `FLY_SEARCH_RADIUS` (contract), `STRING_PULL_TASKS` (flyapproach; string-pull runs for every task type, there is no per-task gate).
+
+Tables that are reachable but still written in Lua: `fly.sweepSet`, `task.coarseLosSet`, `task.arcDescentSolids`, `task.standableTileSet`, `nav.solidSet`, `nav.footingSet`, `nav.levels`, `nav.labelCorners`, `nav.profWorldFunctions`.
+
+Top-level locals that remain, 548 across 28 files:
+
+| Area | Files (count) |
+|---|---|
+| Interface (separate session) | `petportconfig` 138, `upcyclerconfig` 84, `restockconfig` 51, `beaconconfig` 40 |
+| Shared scripts | `coverageoverlay` 54, `filters` 16, `habitat` 9, `work` 8, `flavors` 5, `strings` 5, `modules` 1, `paneicon` 1, `upcyclerstate` 1 |
+| Unit scripts | `bubble` 18, `placement` 12, `think` 10, `petBehavior` 4, `SleepAction` 3 |
+| Objects, items, the rest | `upcycler` 38, `beacon` item 11, `petvent` 10, `module_huelight` 9, `unitfade` 6, `fishinglure` 5, `module_rgblight` 4, `module_light` 3, `crosshair` 1, `residency` stagehand 1 |
 
 ## Still in the big files
 
 - Port: nothing behavioural. Left on purpose: the fuel gauge, cargo transfer functions (`depositCargo`, `depositCargoOnly`, `depositCargoToMachine`, `withdrawSeed`, `withdrawMisfit`, `spendSeed`, `compactContainer`, `sortContainer`), the generic `withdraw` done handler, recall and failure counts, the medkit saved-data slot, the shared plumbing listed above.
-- Unit: `withdraw` and `fuelfetch` rows in `PETPORTS_APPROACH_TYPES` (generic tasks with no arrival branch); the `return` and `diag` handling in the approach code; all movement, door, standable-search and coarse-nav code is still `local`. Delocalizing that is the remaining phase.
-- Wording awaiting Lofty: entry `drain` moves over-quota stock out of storage into an upcycler, but its pane label in `petports_strings.config` is "Emptying Upcycler". Entry `fuel` clears an upcycler's output slot; its label "Collecting Treats" fits.
+- Unit: `withdraw` and `fuelfetch` rows in `PETPORTS_APPROACH_TYPES` (generic tasks with no arrival branch); the `return` and `diag` handling in the approach code.
 - The pane's stat list is fixed; a copied behaviour's metric is stored in the pet's stats but not shown. The stat mirror in `petports_petport.lua` still names `asteriteDepositsMined` and `fished`.
 - Module items and the socket: not yet checked whether a new module flag needs anything beyond a copied `.item`.
-- Shared plumbing (movers, doors, standable search, coarse nav) is still `local`.
 
 ## Builds
 
@@ -151,14 +204,26 @@ Unit globals delocalized so far: `petports_taskReport`, `petports_publishBeam`, 
 | 2026-09-19r | return and diagnostic to their own files | return in game OK (recall, two failures, re-home). Diagnostic is off by default -- UNTESTED |
 | 2026-09-19s | first attempt at the leg-search loop (issue 8) | did not work: it only covered callers that name no origin cell |
 | 2026-09-19t | leg-search loop fix that also covers the chaining caller | in game: the loop is gone at `[2522.5,1160.8]` (one still-running tick, then the search resumes). It uncovered issue 9 |
-| 2026-09-19u | route dive plan abandoned once submerged with a clear swim to the leg waypoint (issue 9) | UNTESTED |
-| 2026-09-19v | dead `drySoilAt` removed; duplicate local `inNetwork` folded into `petports_inNetworkCoverage`; the `fuel` generator's fallback reason names `petports_machinesFuelWork` | UNTESTED |
+| 2026-09-19u | route dive plan abandoned once submerged with a clear swim to the leg waypoint (issue 9) | ran under every 20-series soak without a Lua error; the dive plan case itself was not seen (`dive plan none` throughout) -- UNTESTED |
+| 2026-09-19v | dead `drySoilAt` removed; duplicate local `inNetwork` folded into `petports_inNetworkCoverage`; the `fuel` generator's fallback reason names `petports_machinesFuelWork` | in game OK (ran under every 20-series soak) |
+| 2026-09-20a | port script: 87 functions and state tables global | in game OK. Classes seen across the 20-series soaks: every one except asterite |
+| 2026-09-20b | contract script: 21 functions, state and the two base captures global | in game OK |
+| 2026-09-20c | flyapproach: 19 names global, `petports_flyPathClear` wrapper collapsed; default target-gone failure reads `<noun> is gone` from the tracked row | in game OK; `fish is gone` seen |
+| 2026-09-20d | TaskAction: 60 names global; three pass-throughs collapsed | in game OK, including 8 deaths and respawns. Door functions (no bigbrain socketed), unperch, liquid-avoidance watch not exercised -- UNTESTED |
+| 2026-09-20e | coarsenav: 119 names global. Port death lines print `payload.id`; the unit's cargo handoff sends `unit = entity.id()` | in game OK; death lines seen with a unit id. The handoff line has not occurred -- UNTESTED |
+| 2026-09-20f | defrag homes the stack in hand by its own parameters (see issue 15) | in game OK; superseded by 20g |
+| 2026-09-20g | defrag looks inside the name's own destination crate and homes each stack of that name separately; the depositor's home cache is keyed by name and whether the stack rots | in game OK: fresh `sb_meatchunks` taken out of the warm crate to cold storage, no back-off errors |
+| 2026-09-20h | port constants to `PETPORTS_CONSTANTS.port` | in game OK |
+| 2026-09-20i | contract constants to `PETPORTS_CONSTANTS.contract`; coarsenav's near-surface test reads `contract.submergedFill` (0.9) where it fell back to 0.5; `FLY_SEARCH_RADIUS` deleted | in game OK. Graphs surveyed before this build used 0.5 |
+| 2026-09-20j | flyapproach constants to `PETPORTS_CONSTANTS.fly`; `STRING_PULL_TASKS` deleted | in game OK |
+| 2026-09-20k | TaskAction constants to `PETPORTS_CONSTANTS.task` | in game OK; nibble, run-and-munch, ground feed and fuelfetch all seen |
+| 2026-09-20l | coarsenav constants to `PETPORTS_CONSTANTS.nav` | in game OK in a 4 minute soak: survey sweeps, body-sweep probes, boundaries, bridges, routes, chunk flushes and the unit profiler all ran. The walker's path probe (`NAV probe START`) did not occur in that run -- UNTESTED |
 
-Known log differences from before the refactor: six log strings now name functions by their new names because the kit renamed inside string literals until 19t (`petports_returnWork:` and `petports_inNetworkCoverage` in the two return lines, `petports_noteFailure %s: %s`, `petports_stackSizeOf says`, `PETPORTS_CONSTANTS.task.approachTimeout` in the approach-timer line, `a bug in petports_machinesDrainWork`); no message name, remote function name, store key or task type was touched. Profiler phases are now `g.<entry>` and `<hook>.<entry>` throughout (`g.upcycle` is new). Also: `ground feed idle` logs as soon as `fuelGround` fails with a new reason; profiler phases `asteriteScan` and `fishSweep` are now `tick.asterite` and `workBeat.fish`; the asterite generator says `offering a stand at` where it said `dispatching to stand at`.
+Known log differences from before the refactor: six log strings now name functions by their new names because the kit renamed inside string literals until 19t (`petports_returnWork:` and `petports_inNetworkCoverage` in the two return lines, `petports_noteFailure %s: %s`, `petports_stackSizeOf says`, `PETPORTS_CONSTANTS.task.approachTimeout` in the approach-timer line, `a bug in petports_machinesDrainWork`); no message name, remote function name, store key or task type was touched. Profiler phases are now `g.<entry>` and `<hook>.<entry>` throughout (`g.upcycle` is new). Also: `ground feed idle` logs as soon as `fuelGround` fails with a new reason; profiler phases `asteriteScan` and `fishSweep` are now `tick.asterite` and `workBeat.fish`; the asterite generator says `offering a stand at` where it said `dispatching to stand at`. From the 20-series: a tracked task whose target vanishes fails with `<noun> is gone` (`fish is gone`), where every type but harvest said `drop is gone`; the port's two death lines print the unit's entity id where they printed `nil` (broken since 2026-09-04, commit `c4b5d51`); the defrag idle reason has a new last count, `N whose stack is already where its own spoilage puts it`; the defrag `taking ... toward N` line names the stack's own destination. No delocalization build renamed anything inside a string literal.
 
 ## Tooling
 
-The patch scripts, `movekit.py`, the old-versus-new `findWork` harness and `make_example_copper.py` were delivered as downloads with each build. They are NOT in the repository. `movekit.py` and `make_example_copper.py` are needed to continue this work the same way; they belong in `workbench/tools/`. `texluac` and `texlua` (from a TeX install) stand in for a Lua 5.3 compiler and interpreter.
+`movekit.py` and `make_example_copper.py` are in `workbench/tools/` (untracked in git at the time of writing). The per-build patch scripts (`patch_2026_09_20a.py` to `patch_2026_09_20l.py`) and the old-versus-new `findWork` harness were delivered as downloads and are NOT in the repository. Each patch script runs from the folder that holds `lofty_petports/`, dry-runs by default and takes `--write`. `texluac` and `texlua` (from a TeX install) stand in for a Lua 5.3 compiler and interpreter.
 
 ## Verification per build
 
@@ -170,6 +235,10 @@ The patch scripts, `movekit.py`, the old-versus-new `findWork` harness and `make
 - context check over every script loaded into the same context: every global function defined exactly once (this is what 18a lacked), every free name in a new file resolves to a global, and no identifier in a new file matches a top-level `local` of the file it left
 - where a ladder is replaced: old-versus-new harness under `texlua` with stubbed generators (200,000 random port states)
 - vanilla pet scripts share the unit context and are not available offline; the `petports_` prefix is the only guard
+- delocalization builds: every new name checked against all Lua in both contexts and the interface folder before renaming; per-name scan for inner locals, parameters, table keys and fields that share the name; after writing, the rename is reversed on the output and diffed against the original, and only the intended lines may differ
+- constants builds: no other script may read the name as a global (the coarsenav `PETPORTS_SUBMERGED_FILL` case); no function may sit above the `local` it reads (it would have been reading a nil global); unused names are listed for deletion
+- a script holding a load-time capture is confirmed to load once per context
+- behaviour fixes (20f, 20g): replayed under `texlua` with stubbed crates against the old and the new file. The stub replaces `petports_defragDestination`, so the real crate ranking is not covered
 
 ## Issues found during this work, not fixed
 
@@ -188,3 +257,9 @@ The patch scripts, `movekit.py`, the old-versus-new `findWork` harness and `make
 12. The route to `[2601,1129.8]` has a second dive bridge, `2540,1152 > 2539,1148`, that no run has reached yet. Whether issue 9's fix covers it is unknown.
 13. Calls from one behaviour file into another are unguarded, except the two made from the main file (`petports_collectWork`, `petports_medicKit`). Unregistering an entry is safe because its functions still exist. Removing a file is not: `work/harvest.lua` would call a nil `petports_replantSet` on a consumed crop, `work/upcycle.lua` a nil `petports_depositStorageTakesAny`, `work/machines.lua` a nil `petports_restockBeacons`, and `work/water.lua` would find no crops.
 14. Decision pending: the six log strings the kit altered (listed under known log differences) are accurate but unintended. Keep or restore.
+15. An item whose fresh and spoiled forms share a name (`sb_meatchunks` from Betabound: the spoiled item is the same item with different parameters). The census and the spread are keyed by name; perishability was judged by name in the defrag planner and by the stack's `timeToRot` in the depositor, so the two disagreed and one stack went fridge, warm crate, fridge without end (14 back-off errors in 22 trips). 20f and 20g make defrag and the depositor agree per stack. Left as it is: the plan line still lists the name as `scattered` because the spread counts by name (deduplicated, nothing acts on it); the already-spoiled form does not rot further. Lofty: fine for now.
+16. A pet without the defrag module files perishables by distance even with the `chill` toggle on: `petports_depositPreferredTargets` returns early on `petportDefrag()`. Seen: Unrestricted Flyer put fresh meat in the nearest warm crate twice. Not changed; whether `chill` should work alone is undecided.
+17. `harvest` repeatedly fails with `arrived but 4.x tiles from the crop at [2515,1146]`, unit at about `[2515,1150.4]`, four tiles below the crop. Seen in five soaks. Not investigated.
+18. `no net progress -- moved 0 in 10s` with the unit under half a tile from its target: at `[2519.53,1149.41]` heading for `[2520,1149]` (upcycle, twice) and at `[2508.69,1152.8]` heading for `[2509,1149]` (an upcycle, then a fish task from the same spot). Not investigated.
+19. `deposit:88` stalled twice in the pool at `[2527.49,1158.96]` and `[2533.51,1159.62]` (the area of issues 9 and 11): the unit went aquatic, the nearest-cell search for `[2553,1147.8]` was still running after 17 s, and steering was refused because the straight line leaves the chassis's medium. `dive plan none` throughout, so not issue 9. Seen while the nav graph was being rebuilt after modules were unsocketed.
+20. The fullbright-by-254-alpha shader hack: possible future item, see whether worn armour can carry a fullbright layer without it. Not looked at.

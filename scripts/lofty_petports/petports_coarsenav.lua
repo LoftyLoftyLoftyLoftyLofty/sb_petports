@@ -1,6 +1,9 @@
 -- Coarse navigation: a cell graph of the world kept in world properties, and the routes taken across it.
 
-local COARSENAV_BUILD_STAMP = "2026-09-20i the near-surface test reads the contract's submerged fill, 0.9, where it fell back to 0.5"
+PETPORTS_CONSTANTS = PETPORTS_CONSTANTS or {}
+PETPORTS_CONSTANTS.nav = PETPORTS_CONSTANTS.nav or {}
+
+PETPORTS_CONSTANTS.nav.buildStamp = "2026-09-20l the coarse nav script has no top-level locals; its constants are PETPORTS_CONSTANTS.nav"
 
 petports_navStamped = false
 
@@ -9,41 +12,41 @@ function petports_navStampOnce()
 	if petports_navStamped then return end
 	petports_navStamped = true
 	sb.logInfo("PETPORTS coarsenav build: %s (unit %s)",
-		COARSENAV_BUILD_STAMP, tostring(entity.id()))
+		PETPORTS_CONSTANTS.nav.buildStamp, tostring(entity.id()))
 end
 
-local NAV_INDEX = "petports_navindex"
-local NAV_EDGES = "petports_navedges:"
+PETPORTS_CONSTANTS.nav.index = "petports_navindex"
+PETPORTS_CONSTANTS.nav.edges = "petports_navedges:"
 
-local NAV_MANIFEST = "petports_navmanifest"
+PETPORTS_CONSTANTS.nav.manifest = "petports_navmanifest"
 
-local NAV_GEN = "petports_navgen"
+PETPORTS_CONSTANTS.nav.gen = "petports_navgen"
 
-local NAV_BLOCK_CELLS = 8
+PETPORTS_CONSTANTS.nav.blockCells = 8
 
-local NAV_DRAW_RANGE = 32
+PETPORTS_CONSTANTS.nav.drawRange = 32
 
 petports_navFamilies = {}
 
-local NAV_BOUNDS = "petports_navbounds"
-local NAV_BOUNDS_FILL = 0.5
+PETPORTS_CONSTANTS.nav.bounds = "petports_navbounds"
+PETPORTS_CONSTANTS.nav.boundsFill = 0.5
 
 -- Records a property family and its enumerator in the world manifest.
 function petports_navFamilyRegister(root, enumerate)
 	petports_navFamilies[root] = enumerate
 
-	local ok, manifest = pcall(world.getProperty, NAV_MANIFEST)
+	local ok, manifest = pcall(world.getProperty, PETPORTS_CONSTANTS.nav.manifest)
 	if not ok or type(manifest) ~= "table" then manifest = {} end
 
 	if manifest[root] ~= true then
 		manifest[root] = true
-		pcall(world.setProperty, NAV_MANIFEST, manifest)
+		pcall(world.setProperty, PETPORTS_CONSTANTS.nav.manifest, manifest)
 	end
 end
 
-local NAV_CACHE_TTL = 120.0
+PETPORTS_CONSTANTS.nav.cacheTtl = 120.0
 
-local NAV_OVERLAY_REFRESH = 2.0
+PETPORTS_CONSTANTS.nav.overlayRefresh = 2.0
 
 PETPORTS_NAV_VERBOSE = true
 
@@ -104,7 +107,7 @@ function petports_navNextRadius(sweptRadius)
 	return math.min(sweptRadius + PETPORTS_NAV_RADIUS_STEP, petports_navFullRadius())
 end
 
-local NAV_COVERAGE_MARGIN = 2
+PETPORTS_CONSTANTS.nav.coverageMargin = 2
 
 -- Returns whether a box lies inside a network rect, with margin.
 function petports_navBoxInCoverage(x0, y0, x1, y1)
@@ -113,10 +116,10 @@ function petports_navBoxInCoverage(x0, y0, x1, y1)
 	if type(rects) ~= "table" or #rects == 0 then return true end
 
 	for _, rect in ipairs(rects) do
-		if x0 >= rect[1] - NAV_COVERAGE_MARGIN
-		   and x1 <= rect[3] + NAV_COVERAGE_MARGIN
-		   and y0 >= rect[2] - NAV_COVERAGE_MARGIN
-		   and y1 <= rect[4] + NAV_COVERAGE_MARGIN then
+		if x0 >= rect[1] - PETPORTS_CONSTANTS.nav.coverageMargin
+		   and x1 <= rect[3] + PETPORTS_CONSTANTS.nav.coverageMargin
+		   and y0 >= rect[2] - PETPORTS_CONSTANTS.nav.coverageMargin
+		   and y1 <= rect[4] + PETPORTS_CONSTANTS.nav.coverageMargin then
 			return true
 		end
 	end
@@ -135,10 +138,10 @@ function petports_navInCoverage(cx, cy)
 	local y1 = y0 + PETPORTS_NAV_CELL
 
 	for _, rect in ipairs(rects) do
-		if x1 >= rect[1] - NAV_COVERAGE_MARGIN
-		   and x0 <= rect[3] + NAV_COVERAGE_MARGIN
-		   and y1 >= rect[2] - NAV_COVERAGE_MARGIN
-		   and y0 <= rect[4] + NAV_COVERAGE_MARGIN then
+		if x1 >= rect[1] - PETPORTS_CONSTANTS.nav.coverageMargin
+		   and x0 <= rect[3] + PETPORTS_CONSTANTS.nav.coverageMargin
+		   and y1 >= rect[2] - PETPORTS_CONSTANTS.nav.coverageMargin
+		   and y0 <= rect[4] + PETPORTS_CONSTANTS.nav.coverageMargin then
 			return true
 		end
 	end
@@ -147,15 +150,15 @@ function petports_navInCoverage(cx, cy)
 end
 
 
-local NAV_MAX_DISTANCE = 32
+PETPORTS_CONSTANTS.nav.maxDistance = 32
 
 
-PETPORTS_NAV_MAX_DISTANCE = NAV_MAX_DISTANCE
+PETPORTS_NAV_MAX_DISTANCE = PETPORTS_CONSTANTS.nav.maxDistance
 
 -- Returns the pathfinder options with the nav leg distance cap.
 function petports_navPathOptions()
 	local options = petports_pathOptions()
-	options.maxDistance = NAV_MAX_DISTANCE
+	options.maxDistance = PETPORTS_CONSTANTS.nav.maxDistance
 	return options
 end
 
@@ -174,9 +177,9 @@ function petports_navCellKey(cx, cy)
 	return tostring(cx) .. "," .. tostring(cy)
 end
 
-local NAV_SOLID_SET = { "Null", "Block", "Dynamic", "Slippery" }
+PETPORTS_CONSTANTS.nav.solidSet = { "Null", "Block", "Dynamic", "Slippery" }
 
-local NAV_ANCHOR_TTL = 30.0
+PETPORTS_CONSTANTS.nav.anchorTtl = 30.0
 
 -- Returns whether every tile in a cell collides.
 function petports_navCellSolidUncached(cx, cy)
@@ -185,7 +188,7 @@ function petports_navCellSolidUncached(cx, cy)
 	for dx = 0, PETPORTS_NAV_CELL - 1 do
 		for dy = 0, PETPORTS_NAV_CELL - 1 do
 			local ok, hit = pcall(world.pointTileCollision,
-				{ baseX + dx + 0.5, baseY + dy + 0.5 }, NAV_SOLID_SET)
+				{ baseX + dx + 0.5, baseY + dy + 0.5 }, PETPORTS_CONSTANTS.nav.solidSet)
 
 			if not ok or hit ~= true then return false end
 		end
@@ -202,7 +205,7 @@ function petports_navCellSolid(cx, cy)
 	self.petportsNavSolidCache = self.petportsNavSolidCache or {}
 	local hit = self.petportsNavSolidCache[key]
 
-	if hit ~= nil and (now - hit.at) <= (NAV_ANCHOR_TTL or 30.0) then
+	if hit ~= nil and (now - hit.at) <= (PETPORTS_CONSTANTS.nav.anchorTtl or 30.0) then
 		return hit.solid
 	end
 
@@ -212,7 +215,7 @@ function petports_navCellSolid(cx, cy)
 	return solid
 end
 
-local NAV_FOOTING_SET = { "Block", "Slippery", "Platform" }
+PETPORTS_CONSTANTS.nav.footingSet = { "Block", "Slippery", "Platform" }
 
 -- Returns whether there is footing under the body's overlap with a cell at an x.
 function petports_navFootingUnderCell(x, baseX, baseY, bounds)
@@ -222,7 +225,7 @@ function petports_navFootingUnderCell(x, baseX, baseY, bounds)
 	if right <= left then return false end
 
 	local ok, hit = pcall(world.rectTileCollision,
-		{ left, baseY - 0.95, right, baseY - 0.05 }, NAV_FOOTING_SET)
+		{ left, baseY - 0.95, right, baseY - 0.05 }, PETPORTS_CONSTANTS.nav.footingSet)
 
 	return ok and hit == true
 end
@@ -398,7 +401,7 @@ end
 function petports_navGenNow()
 	petports_navGenerationCheck()
 	if self.petportsNavGen == nil then
-		local ok, gen = pcall(world.getProperty, NAV_GEN)
+		local ok, gen = pcall(world.getProperty, PETPORTS_CONSTANTS.nav.gen)
 		self.petportsNavGen = (ok and type(gen) == "number") and gen or 0
 	end
 	return self.petportsNavGen
@@ -410,7 +413,7 @@ function petports_navGenerationCheck()
 	if self.petportsNavGenAt == now then return end
 	self.petportsNavGenAt = now
 
-	local ok, gen = pcall(world.getProperty, NAV_GEN)
+	local ok, gen = pcall(world.getProperty, PETPORTS_CONSTANTS.nav.gen)
 	gen = (ok and type(gen) == "number") and gen or 0
 
 	if self.petportsNavGen == nil then
@@ -427,7 +430,7 @@ function petports_navCachesTick()
 	local now = world.time()
 
 	if self.petportsNavCachesAt == nil
-	   or (now - self.petportsNavCachesAt) > NAV_ANCHOR_TTL then
+	   or (now - self.petportsNavCachesAt) > PETPORTS_CONSTANTS.nav.anchorTtl then
 		self.petportsNavCachesAt = now
 		self.petportsNavAnchorCache = nil
 		self.petportsNavSolidCache = nil
@@ -454,7 +457,7 @@ function petports_navAnchor(cx, cy, freeMover)
 
 	local hit = cache[key]
 
-	if hit ~= nil and (now - hit.at) <= NAV_ANCHOR_TTL then
+	if hit ~= nil and (now - hit.at) <= PETPORTS_CONSTANTS.nav.anchorTtl then
 		return hit.anchor, hit.why
 	end
 
@@ -466,7 +469,7 @@ function petports_navAnchor(cx, cy, freeMover)
 	return anchor, why
 end
 
-local NAV_NEIGHBOUR_CHUNK = 40
+PETPORTS_CONSTANTS.nav.neighbourChunk = 40
 
 -- Returns the anchored cells within a radius, nearest first, yielding as it scans.
 function petports_navNeighbours(cx, cy, freeMover, radius)
@@ -489,7 +492,7 @@ function petports_navNeighbours(cx, cy, freeMover, radius)
 				local nx, ny = cx + dx, cy + dy
 
 				inspected = inspected + 1
-				if inCoroutine and inspected % NAV_NEIGHBOUR_CHUNK == 0 then
+				if inCoroutine and inspected % PETPORTS_CONSTANTS.nav.neighbourChunk == 0 then
 					petports_profEnd("neighbours")
 					coroutine.yield()
 					petports_profBegin("neighbours")
@@ -627,12 +630,12 @@ end
 
 -- Returns the index property name for a profile.
 function petports_navIndexProperty(profile)
-	return NAV_INDEX .. ":" .. profile
+	return PETPORTS_CONSTANTS.nav.index .. ":" .. profile
 end
 
 -- Returns every profile named in the index registry.
 function petports_navIndexProfiles()
-	local ok, registry = pcall(world.getProperty, NAV_INDEX)
+	local ok, registry = pcall(world.getProperty, PETPORTS_CONSTANTS.nav.index)
 	if not ok or type(registry) ~= "table" then return {} end
 
 	local names = {}
@@ -646,19 +649,19 @@ end
 
 -- Returns the bounds index property name for a bucket.
 function petports_navBoundsIndexProperty(bucket)
-	return NAV_BOUNDS .. ":" .. bucket
+	return PETPORTS_CONSTANTS.nav.bounds .. ":" .. bucket
 end
 
 -- Returns the bounds property name for a cell in a bucket.
 function petports_navBoundsCellProperty(bucket, cellKey)
-	return NAV_BOUNDS .. ":" .. bucket .. ":" .. cellKey
+	return PETPORTS_CONSTANTS.nav.bounds .. ":" .. bucket .. ":" .. cellKey
 end
 
 -- Returns every property name the bounds family holds.
 function petports_navBoundsFamilyEnumerate()
 	local names = {}
 
-	local ok, registry = pcall(world.getProperty, NAV_BOUNDS)
+	local ok, registry = pcall(world.getProperty, PETPORTS_CONSTANTS.nav.bounds)
 	if not ok or type(registry) ~= "table" then registry = {} end
 
 	for bucket in pairs(registry) do
@@ -671,14 +674,14 @@ function petports_navBoundsFamilyEnumerate()
 		table.insert(names, petports_navBoundsIndexProperty(bucket))
 	end
 
-	table.insert(names, NAV_BOUNDS)
+	table.insert(names, PETPORTS_CONSTANTS.nav.bounds)
 	return names
 end
 
 -- Returns a liquid level's name, or air below the fill threshold, cached.
 function petports_navLiquidName(level)
 	local fill = (level ~= nil) and (level[2] or 0) or 0
-	if level == nil or fill < NAV_BOUNDS_FILL then return "air" end
+	if level == nil or fill < PETPORTS_CONSTANTS.nav.boundsFill then return "air" end
 
 	local id = level[1]
 	self.petportsNavLiquidNames = self.petportsNavLiquidNames or {}
@@ -706,9 +709,9 @@ function petports_navBoundsFlush()
 	petports_navGenerationCheck()
 	if (self.petportsNavBoundsPendingCount or 0) == 0 then return end
 
-	petports_navFamilyRegister(NAV_BOUNDS, petports_navBoundsFamilyEnumerate)
+	petports_navFamilyRegister(PETPORTS_CONSTANTS.nav.bounds, petports_navBoundsFamilyEnumerate)
 
-	local ok, registry = pcall(world.getProperty, NAV_BOUNDS)
+	local ok, registry = pcall(world.getProperty, PETPORTS_CONSTANTS.nav.bounds)
 	if not ok or type(registry) ~= "table" then registry = {} end
 	local registryChanged = false
 
@@ -734,7 +737,7 @@ function petports_navBoundsFlush()
 		end
 	end
 
-	if registryChanged then pcall(world.setProperty, NAV_BOUNDS, registry) end
+	if registryChanged then pcall(world.setProperty, PETPORTS_CONSTANTS.nav.bounds, registry) end
 
 	self.petportsNavBoundsPendingCount = 0
 end
@@ -748,7 +751,7 @@ function petports_navBoundaryNote(cx, cy)
 
 	self.petportsNavBoundsFound = self.petportsNavBoundsFound or {}
 
-	if seen ~= nil and (now - seen) <= NAV_ANCHOR_TTL then
+	if seen ~= nil and (now - seen) <= PETPORTS_CONSTANTS.nav.anchorTtl then
 		return self.petportsNavBoundsFound[cellKey] == true
 	end
 	self.petportsNavBoundsSeen[cellKey] = now
@@ -789,7 +792,7 @@ function petports_navBoundaryNote(cx, cy)
 				if (ndx ~= 0 or ndy ~= 0) and petports_navInCoverage(cx + ndx, cy + ndy) then
 					local nkey = petports_navCellKey(cx + ndx, cy + ndy)
 					local nseen = self.petportsNavBoundsSeen[nkey]
-					if nseen == nil or (now - nseen) > NAV_ANCHOR_TTL then
+					if nseen == nil or (now - nseen) > PETPORTS_CONSTANTS.nav.anchorTtl then
 						table.insert(self.petportsNavBoundsFlood, { cx + ndx, cy + ndy })
 					end
 				end
@@ -807,7 +810,7 @@ function petports_navBoundaryNote(cx, cy)
 			if (ndx ~= 0 or ndy ~= 0) and petports_navInCoverage(cx + ndx, cy + ndy) then
 				local nkey = petports_navCellKey(cx + ndx, cy + ndy)
 				local nseen = self.petportsNavBoundsSeen[nkey]
-				if nseen == nil or (now - nseen) > NAV_ANCHOR_TTL then
+				if nseen == nil or (now - nseen) > PETPORTS_CONSTANTS.nav.anchorTtl then
 					table.insert(self.petportsNavBoundsFlood, { cx + ndx, cy + ndy })
 				end
 			end
@@ -831,7 +834,7 @@ function petports_navBoundaryNote(cx, cy)
 				centre[1] + bounds[1], centre[2] + bounds[2],
 				centre[1] + bounds[3], centre[2] + bounds[4]
 			}
-			local okFit, hit = pcall(world.rectTileCollision, region, NAV_SOLID_SET)
+			local okFit, hit = pcall(world.rectTileCollision, region, PETPORTS_CONSTANTS.nav.solidSet)
 			fit[tostring(dx)] = (okFit and hit == false) and true or false
 		end
 	end
@@ -929,8 +932,8 @@ function petports_navContradictThrough(tiles, cellKey)
 	table.insert(self.petportsNavContradictQueue, { tiles = tiles, cellKey = cellKey })
 end
 
-local NAV_CONTRADICT_SCAN = 300
-local NAV_CONTRADICT_BUDGET_MS = 2.0
+PETPORTS_CONSTANTS.nav.contradictScan = 300
+PETPORTS_CONSTANTS.nav.contradictBudgetMs = 2.0
 
 -- Drops fine edges that cross newly denied tiles, a budget at a time.
 function petports_navContradictTick()
@@ -964,7 +967,7 @@ function petports_navContradictTick()
 		job.kept = job.kept or {}
 
 		local scanned = 0
-		while cursor < total and scanned < NAV_CONTRADICT_SCAN do
+		while cursor < total and scanned < PETPORTS_CONSTANTS.nav.contradictScan do
 			cursor = cursor + 1
 			scanned = scanned + 1
 			local fromKey = keys[cursor]
@@ -995,7 +998,7 @@ function petports_navContradictTick()
 	end
 
 	while job.at < #job.froms do
-		if began ~= nil and (petports_navTickClock() - began) * 1000 >= NAV_CONTRADICT_BUDGET_MS then
+		if began ~= nil and (petports_navTickClock() - began) * 1000 >= PETPORTS_CONSTANTS.nav.contradictBudgetMs then
 			return
 		end
 
@@ -1063,7 +1066,7 @@ function petports_navSeedBesideWall(cx, cy, media)
 	petports_profEnd("seedWall")
 end
 
-local NAV_FLOOD_PER_TICK = 6
+PETPORTS_CONSTANTS.nav.floodPerTick = 6
 
 NAV_BRIDGE_SEEN_TTL = 300.0
 
@@ -1073,7 +1076,7 @@ function petports_navBoundsFloodTick()
 	if queue == nil or #queue == 0 then return end
 
 	local done = 0
-	while #queue > 0 and done < NAV_FLOOD_PER_TICK do
+	while #queue > 0 and done < PETPORTS_CONSTANTS.nav.floodPerTick do
 		local cell = table.remove(queue)
 		done = done + 1
 		petports_navBoundaryNote(cell[1], cell[2])
@@ -1103,7 +1106,7 @@ function petports_navBoundsProbe(x, y)
 	end
 
 	out.indexed = {}
-	local okReg, registry = pcall(world.getProperty, NAV_BOUNDS)
+	local okReg, registry = pcall(world.getProperty, PETPORTS_CONSTANTS.nav.bounds)
 	if okReg and type(registry) == "table" then
 		for bucket in pairs(registry) do
 			local okRec, record = pcall(world.getProperty, petports_navBoundsCellProperty(bucket, cellKey))
@@ -1130,8 +1133,8 @@ function petports_navBoundsProbe(x, y)
 	end
 	out.drawAgo = self.petportsNavBoundsDrawAt ~= nil
 		and (world.time() - self.petportsNavBoundsDrawAt) or nil
-	out.drawRange = math.abs(baseX - mcontroller.position()[1]) <= NAV_DRAW_RANGE
-		and math.abs(baseY - mcontroller.position()[2]) <= NAV_DRAW_RANGE
+	out.drawRange = math.abs(baseX - mcontroller.position()[1]) <= PETPORTS_CONSTANTS.nav.drawRange
+		and math.abs(baseY - mcontroller.position()[2]) <= PETPORTS_CONSTANTS.nav.drawRange
 
 	out.seenAgo = self.petportsNavBoundsSeen ~= nil and self.petportsNavBoundsSeen[cellKey] ~= nil
 		and (world.time() - self.petportsNavBoundsSeen[cellKey]) or nil
@@ -1144,7 +1147,7 @@ end
 
 -- Returns the number of stored boundary cells in each bucket.
 function petports_navBoundsStats()
-	local ok, registry = pcall(world.getProperty, NAV_BOUNDS)
+	local ok, registry = pcall(world.getProperty, PETPORTS_CONSTANTS.nav.bounds)
 	if not ok or type(registry) ~= "table" then return {} end
 
 	local out = {}
@@ -1164,14 +1167,14 @@ function petports_navForbiddenCells()
 	local now = world.time()
 
 	if self.petportsNavForbidden ~= nil
-	   and (now - (self.petportsNavForbiddenAt or 0)) <= NAV_ANCHOR_TTL then
+	   and (now - (self.petportsNavForbiddenAt or 0)) <= PETPORTS_CONSTANTS.nav.anchorTtl then
 		return self.petportsNavForbidden
 	end
 
 	local cells = {}
 	local buckets = 0
 
-	local ok, registry = pcall(world.getProperty, NAV_BOUNDS)
+	local ok, registry = pcall(world.getProperty, PETPORTS_CONSTANTS.nav.bounds)
 	if ok and type(registry) == "table" then
 		for bucket in pairs(registry) do
 			local liquids = string.match(bucket, "^([^|]*)|") or ""
@@ -1317,15 +1320,15 @@ end
 
 -- Adds a profile to the index registry.
 function petports_navIndexRegister(profile)
-	petports_navFamilyRegister(NAV_INDEX, petports_navEdgeFamilyEnumerate)
-	local ok, registry = pcall(world.getProperty, NAV_INDEX)
+	petports_navFamilyRegister(PETPORTS_CONSTANTS.nav.index, petports_navEdgeFamilyEnumerate)
+	local ok, registry = pcall(world.getProperty, PETPORTS_CONSTANTS.nav.index)
 	if not ok or type(registry) ~= "table" then registry = {} end
 	registry.profiles = registry.profiles or {}
 
 	if registry.profiles[profile] == true then return end
 
 	registry.profiles[profile] = true
-	pcall(world.setProperty, NAV_INDEX, registry)
+	pcall(world.setProperty, PETPORTS_CONSTANTS.nav.index, registry)
 end
 
 petports_navChunk = {}
@@ -1545,7 +1548,7 @@ function petports_navIndexForgetSeen(profile, cellKey)
 	if chunkKey ~= nil and seen ~= nil and seen[chunkKey] ~= nil then seen[chunkKey][cellKey] = nil end
 end
 
-local NAV_INDEX_SHORT_TRIES = 12
+PETPORTS_CONSTANTS.nav.indexShortTries = 12
 
 -- Reads a chunk's index, restores cells the read lost from memory, and flags a read that came back short.
 function petports_navChunk.indexRead(profile, chunkKey)
@@ -1611,14 +1614,14 @@ function petports_navIndexProfileRead(profile)
 	return cells
 end
 
-local NAV_INDEX_READ_INTERVAL = 10.0
+PETPORTS_CONSTANTS.nav.indexReadInterval = 10.0
 
 -- Returns the index as a table that reads each profile on first access, memoised.
 function petports_navIndexRead()
 	local now = world.time()
 
 	if self.petportsNavIndexMemo ~= nil
-	   and (now - (self.petportsNavIndexMemoAt or -1e9)) < NAV_INDEX_READ_INTERVAL then
+	   and (now - (self.petportsNavIndexMemoAt or -1e9)) < PETPORTS_CONSTANTS.nav.indexReadInterval then
 		return self.petportsNavIndexMemo
 	end
 
@@ -1670,9 +1673,9 @@ function petports_navChunk.indexApply(profile, chunkKey, updates, force)
 	if self.petportsNavIndexShort and self.petportsNavIndexShort[slot] and not force then
 		local tries = (self.petportsNavIndexShortTries[slot] or 0) + 1
 		self.petportsNavIndexShortTries[slot] = tries
-		if tries <= NAV_INDEX_SHORT_TRIES then
+		if tries <= PETPORTS_CONSTANTS.nav.indexShortTries then
 			sb.logInfo("NAV index write for %s chunk %s HELD: read was short (try %s of %s)",
-				profile, chunkKey, sb.printJson(tries), sb.printJson(NAV_INDEX_SHORT_TRIES))
+				profile, chunkKey, sb.printJson(tries), sb.printJson(PETPORTS_CONSTANTS.nav.indexShortTries))
 			return false
 		end
 		sb.logInfo("NAV index write for %s chunk %s: read short %s times running, writing anyway",
@@ -1707,8 +1710,8 @@ function petports_navChunk.indexApply(profile, chunkKey, updates, force)
 	return true
 end
 
-local NAV_INDEX_FLUSH_INTERVAL = 30.0
-local NAV_INDEX_FLUSH_BACKLOG = 200
+PETPORTS_CONSTANTS.nav.indexFlushInterval = 30.0
+PETPORTS_CONSTANTS.nav.indexFlushBacklog = 200
 
 -- Writes the queued index entries chunk by chunk once the interval or the backlog is reached.
 function petports_navIndexFlush()
@@ -1716,8 +1719,8 @@ function petports_navIndexFlush()
 	if (self.petportsNavIndexPendingCount or 0) == 0 then return end
 
 	local now = world.time()
-	if (now - (self.petportsNavIndexFlushedAt or -1e9)) < NAV_INDEX_FLUSH_INTERVAL
-	   and (self.petportsNavIndexPendingCount or 0) < NAV_INDEX_FLUSH_BACKLOG then
+	if (now - (self.petportsNavIndexFlushedAt or -1e9)) < PETPORTS_CONSTANTS.nav.indexFlushInterval
+	   and (self.petportsNavIndexPendingCount or 0) < PETPORTS_CONSTANTS.nav.indexFlushBacklog then
 		return
 	end
 	self.petportsNavIndexFlushedAt = now
@@ -1790,7 +1793,7 @@ petports_navChunk.legacyClear = function(profile, legacy)
 	local cleared = 0
 	for cellKey, entry in pairs(legacy) do
 		if type(entry) == "table" then
-			pcall(world.setProperty, NAV_EDGES .. profile .. ":" .. cellKey, nil)
+			pcall(world.setProperty, PETPORTS_CONSTANTS.nav.edges .. profile .. ":" .. cellKey, nil)
 			cleared = cleared + 1
 		end
 	end
@@ -1803,7 +1806,7 @@ end
 function petports_navEdgeFamilyEnumerate()
 	local names = {}
 
-	local ok, registry = pcall(world.getProperty, NAV_INDEX)
+	local ok, registry = pcall(world.getProperty, PETPORTS_CONSTANTS.nav.index)
 	if not ok or type(registry) ~= "table" then registry = {} end
 
 	for profile in pairs(type(registry.profiles) == "table" and registry.profiles or {}) do
@@ -1817,7 +1820,7 @@ function petports_navEdgeFamilyEnumerate()
 			else
 				for cellKey, entry in pairs(perProfile) do
 					if type(entry) == "table" then
-						table.insert(names, NAV_EDGES .. profile .. ":" .. cellKey)
+						table.insert(names, PETPORTS_CONSTANTS.nav.edges .. profile .. ":" .. cellKey)
 					end
 				end
 			end
@@ -1825,7 +1828,7 @@ function petports_navEdgeFamilyEnumerate()
 		table.insert(names, petports_navIndexProperty(profile))
 	end
 
-	table.insert(names, NAV_INDEX)
+	table.insert(names, PETPORTS_CONSTANTS.nav.index)
 	return names
 end
 
@@ -1834,7 +1837,7 @@ function petports_navChunk.cache()
 	self.petportsNavCellCache = self.petportsNavCellCache or {}
 	self.petportsNavCacheAt = self.petportsNavCacheAt or world.time()
 
-	if (world.time() - self.petportsNavCacheAt) > NAV_CACHE_TTL then
+	if (world.time() - self.petportsNavCacheAt) > PETPORTS_CONSTANTS.nav.cacheTtl then
 		self.petportsNavCellCache = {}
 		self.petportsNavCacheAt = world.time()
 		self.petportsNavVersion = (self.petportsNavVersion or 0) + 1
@@ -1917,8 +1920,8 @@ function petports_navCellWrite(profile, cellKey, edges)
 end
 
 
-local NAV_FLUSH_EDGES = 25
-local NAV_FLUSH_INTERVAL = 5.0
+PETPORTS_CONSTANTS.nav.flushEdges = 25
+PETPORTS_CONSTANTS.nav.flushInterval = 5.0
 
 -- Returns a profile's pending edge writes.
 function petports_navPendingFor(profile)
@@ -1970,7 +1973,7 @@ function petports_navFlush()
 
 	self.petportsNavPending = {}
 	self.petportsNavPendingCount = 0
-	self.petportsNavFlushAt = world.time() + NAV_FLUSH_INTERVAL
+	self.petportsNavFlushAt = world.time() + PETPORTS_CONSTANTS.nav.flushInterval
 	petports_profEnd("flushEdges")
 
 	petports_profCount("edgesFlushed", written)
@@ -2092,8 +2095,8 @@ function petports_navLearn(profile, fromKey, toKey, reachable, travelled, extra)
 				if graph.blocks ~= nil then
 					local fx, fy = string.match(fromKey, "^(-?%d+),(-?%d+)$")
 					if fx ~= nil then
-						local key = math.floor(tonumber(fx) / NAV_BLOCK_CELLS) .. ","
-							.. math.floor(tonumber(fy) / NAV_BLOCK_CELLS)
+						local key = math.floor(tonumber(fx) / PETPORTS_CONSTANTS.nav.blockCells) .. ","
+							.. math.floor(tonumber(fy) / PETPORTS_CONSTANTS.nav.blockCells)
 						if graph.blocks.map[key] == nil then
 							graph.blocks.map[key] = {}
 							graph.blocks.count = graph.blocks.count + 1
@@ -2130,9 +2133,9 @@ function petports_navLearn(profile, fromKey, toKey, reachable, travelled, extra)
 
 	self.petportsNavPendingCount = (self.petportsNavPendingCount or 0) + 1
 	self.petportsNavFlushAt = self.petportsNavFlushAt
-		or (world.time() + NAV_FLUSH_INTERVAL)
+		or (world.time() + PETPORTS_CONSTANTS.nav.flushInterval)
 
-	if self.petportsNavPendingCount >= NAV_FLUSH_EDGES
+	if self.petportsNavPendingCount >= PETPORTS_CONSTANTS.nav.flushEdges
 	   or world.time() >= self.petportsNavFlushAt then
 		petports_navFlush()
 	end
@@ -2157,7 +2160,7 @@ function petports_navContradict(profile, fromKey, toKey)
 	end
 end
 
-local NAV_VERIFY_SLOT = 999
+PETPORTS_CONSTANTS.nav.verifySlot = 999
 
 -- Spins the probe to completion for one edge and returns the verdict and the spin count.
 function petports_navVerify(fromKey, toKey)
@@ -2170,12 +2173,12 @@ function petports_navVerify(fromKey, toKey)
 	while verdict == "searching" and spins < 500 do
 		verdict = petports_navProbeStep(
 			{ tonumber(fx), tonumber(fy) }, { tonumber(tx), tonumber(ty) },
-			300, NAV_VERIFY_SLOT)
+			300, PETPORTS_CONSTANTS.nav.verifySlot)
 		spins = spins + 1
 	end
 
 	if self.petportsNavProbes ~= nil then
-		self.petportsNavProbes[NAV_VERIFY_SLOT] = nil
+		self.petportsNavProbes[PETPORTS_CONSTANTS.nav.verifySlot] = nil
 	end
 
 	return verdict, spins
@@ -2242,7 +2245,7 @@ function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 		if freeMover then
 			local edges = math.ceil(world.magnitude(from, to))
 
-			if edges > NAV_MAX_DISTANCE then
+			if edges > PETPORTS_CONSTANTS.nav.maxDistance then
 				petports_profCount("tooFar")
 				self.petportsNavProbes[slot] = nil
 				return nil
@@ -2322,7 +2325,7 @@ function petports_navProbeStep(fromCell, toCell, exploreRate, slot)
 		if PETPORTS_NAV_VERBOSE then sb.logInfo("NAV probe START %s -> %s: %s to %s (profile %s, rate %s, maxDistance %s, gravity true, live gravity %s)",
 			fromKey, toKey, sb.printJson(from), sb.printJson(to),
 			tostring(petports_navProfile()), sb.printJson(exploreRate or 300),
-			sb.printJson(NAV_MAX_DISTANCE), tostring(liveGravity)) end
+			sb.printJson(PETPORTS_CONSTANTS.nav.maxDistance), tostring(liveGravity)) end
 
 		self.petportsNavProbes[slot] = {
 			aStar = aStar,
@@ -2466,7 +2469,7 @@ function petports_navBridgeLearn(fromKey, toKey, reachable, extra)
 			at = now, radius = math.max(held, 1), g = petports_navGenNow()
 		})
 	end
-	self.petportsNavFlushAt = self.petportsNavFlushAt or (now + NAV_FLUSH_INTERVAL)
+	self.petportsNavFlushAt = self.petportsNavFlushAt or (now + PETPORTS_CONSTANTS.nav.flushInterval)
 end
 
 -- Returns the indexed cells and anchors within bridge radius of a cell, on one side.
@@ -2495,7 +2498,7 @@ end
 
 -- Returns whether a line between two points clears solid tiles.
 function petports_navBridgeSighted(from, to)
-	local set = PETPORTS_DIVE_SOLID_SET or NAV_SOLID_SET
+	local set = PETPORTS_DIVE_SOLID_SET or PETPORTS_CONSTANTS.nav.solidSet
 	local ok, hit = pcall(world.lineTileCollision, from, to, set)
 	return ok and hit == false
 end
@@ -2584,7 +2587,7 @@ function petports_navBridgeExitStep()
 	return true
 end
 
-local NAV_BRIDGE_BUDGET_MS = 1.5
+PETPORTS_CONSTANTS.nav.bridgeBudgetMs = 1.5
 
 -- Marks the anchored cells around a boundary as survey seeds on each side, within a time budget.
 function petports_navBridgeSeedSides(cx, cy, item)
@@ -2619,7 +2622,7 @@ function petports_navBridgeSeedSides(cx, cy, item)
 				end
 				if began ~= nil then
 					local clock = petports_navTickClock()
-					if clock ~= nil and (clock - began) * 1000 >= NAV_BRIDGE_BUDGET_MS then
+					if clock ~= nil and (clock - began) * 1000 >= PETPORTS_CONSTANTS.nav.bridgeBudgetMs then
 						return false, state.seeded
 					end
 				end
@@ -2870,7 +2873,7 @@ function petports_navAdjacency(profile)
 	return out
 end
 
-local NAV_LEVELS = { 4, 8, 16, 32 }
+PETPORTS_CONSTANTS.nav.levels = { 4, 8, 16, 32 }
 
 -- Returns the key of the block a cell falls in at a tile size.
 function petports_navBlockKey(cellKey, tiles)
@@ -2883,16 +2886,16 @@ function petports_navBlockKey(cellKey, tiles)
 		.. "," .. tostring(math.floor(tonumber(cy) / divisor))
 end
 
-local NAV_BUILD_CHUNK = 12
+PETPORTS_CONSTANTS.nav.buildChunk = 12
 
-local NAV_BUILD_BUDGET_MS = 3.0
-local NAV_GRAPH_MIN_AGE = 30.0
+PETPORTS_CONSTANTS.nav.buildBudgetMs = 3.0
+PETPORTS_CONSTANTS.nav.graphMinAge = 30.0
 
 -- Returns whether a build step has used its millisecond budget.
 function petports_navBuildOverBudget(began)
 	if began == nil then return false end
 	local now = petports_navTickClock()
-	return now ~= nil and (now - began) * 1000 >= NAV_BUILD_BUDGET_MS
+	return now ~= nil and (now - began) * 1000 >= PETPORTS_CONSTANTS.nav.buildBudgetMs
 end
 
 -- Builds a profile's fine and coarse graphs a budget at a time, returning it once finished.
@@ -2919,7 +2922,7 @@ function petports_navGraphBuildStep(profile)
 	end
 
 	local began = petports_navTickClock()
-	local stop = math.min(#build.keys, build.at + NAV_BUILD_CHUNK - 1)
+	local stop = math.min(#build.keys, build.at + PETPORTS_CONSTANTS.nav.buildChunk - 1)
 	local k = build.at
 	while k <= #build.keys and (k <= stop or not petports_navBuildOverBudget(began)) do
 		local cellKey = build.keys[k]
@@ -2956,10 +2959,10 @@ function petports_navGraphBuildStep(profile)
 		build.len = {}
 		build.coarse = {}
 		build.blocks = {}
-		for _, tiles in ipairs(NAV_LEVELS) do build.coarse[tiles] = {} end
+		for _, tiles in ipairs(PETPORTS_CONSTANTS.nav.levels) do build.coarse[tiles] = {} end
 	end
 
-	local levels = NAV_LEVELS
+	local levels = PETPORTS_CONSTANTS.nav.levels
 	local blocks = build.blocks
 	-- Returns a cell's block key at every level, cached.
 	local function blocksOf(cellKey)
@@ -2972,7 +2975,7 @@ function petports_navGraphBuildStep(profile)
 	end
 
 	local total = #build.pairs
-	local edgeStop = math.min(total, build.edgeAt + NAV_BUILD_CHUNK * 24 - 1)
+	local edgeStop = math.min(total, build.edgeAt + PETPORTS_CONSTANTS.nav.buildChunk * 24 - 1)
 	local began = petports_navTickClock()
 	local k = build.edgeAt
 	local fine, len, coarse = build.fine, build.len, build.coarse
@@ -3018,7 +3021,7 @@ function petports_navGraphBuildStep(profile)
 end
 
 
-local NAV_MERGED_MIN_AGE = 5.0
+PETPORTS_CONSTANTS.nav.mergedMinAge = 5.0
 
 -- Builds the graph merging the land, swim and bridge profiles, a budget at a time.
 function petports_navMergedBuildStep()
@@ -3048,7 +3051,7 @@ function petports_navMergedBuildStep()
 		petports_profCount("mergedBuildStart")
 	end
 
-	local stop = math.min(#build.keys, build.at + NAV_BUILD_CHUNK - 1)
+	local stop = math.min(#build.keys, build.at + PETPORTS_CONSTANTS.nav.buildChunk - 1)
 
 	for k = build.at, stop do
 		local cellKey, profile, sideTag = build.keys[k][1], build.keys[k][2], build.keys[k][3]
@@ -3097,10 +3100,10 @@ function petports_navMergedBuildStep()
 		build.fine = {}
 		build.len = {}
 		build.coarse = {}
-		for _, tiles in ipairs(NAV_LEVELS) do build.coarse[tiles] = {} end
+		for _, tiles in ipairs(PETPORTS_CONSTANTS.nav.levels) do build.coarse[tiles] = {} end
 	end
 
-	local edgeStop = math.min(#build.edgeKeys, build.edgeAt + NAV_BUILD_CHUNK * 8 - 1)
+	local edgeStop = math.min(#build.edgeKeys, build.edgeAt + PETPORTS_CONSTANTS.nav.buildChunk * 8 - 1)
 
 	for k = build.edgeAt, edgeStop do
 		local key = build.edgeKeys[k]
@@ -3115,7 +3118,7 @@ function petports_navMergedBuildStep()
 				build.len[from] = build.len[from] or {}
 				build.len[from][to] = entry.d or petports_navCellSpan(from, to)
 
-				for _, tiles in ipairs(NAV_LEVELS) do
+				for _, tiles in ipairs(PETPORTS_CONSTANTS.nav.levels) do
 					local a = petports_navBlockKey(from, tiles)
 					local b = petports_navBlockKey(to, tiles)
 					if a ~= nil and b ~= nil and a ~= b then
@@ -3163,7 +3166,7 @@ function petports_navMergedGraphFor()
 	if cached ~= nil and cached.version == version then return cached end
 
 	if self.petportsNavMergedBuild == nil and cached ~= nil
-	   and (now - (cached.builtAt or 0)) < NAV_MERGED_MIN_AGE then
+	   and (now - (cached.builtAt or 0)) < PETPORTS_CONSTANTS.nav.mergedMinAge then
 		return cached
 	end
 
@@ -3196,7 +3199,7 @@ function petports_navGraphForInner(profile)
 
 	if cached ~= nil and cached.profile == profile
 	   and self.petportsNavGraphBuild == nil
-	   and (now - (cached.builtAt or 0)) < NAV_GRAPH_MIN_AGE then
+	   and (now - (cached.builtAt or 0)) < PETPORTS_CONSTANTS.nav.graphMinAge then
 		return cached
 	end
 
@@ -3267,8 +3270,8 @@ function petports_navReaches(profile, fromKey, toKey, budget)
 
 	local graph = petports_navGraphFor(profile)
 
-	for i = #NAV_LEVELS, 1, -1 do
-		local tiles = NAV_LEVELS[i]
+	for i = #PETPORTS_CONSTANTS.nav.levels, 1, -1 do
+		local tiles = PETPORTS_CONSTANTS.nav.levels[i]
 
 		if petports_navCoarseReaches(graph, tiles, fromKey, toKey, budget) == false then
 			return false, 0
@@ -3436,8 +3439,8 @@ function petports_navWhyNoRoute(profile, fromKey, toKey)
 		tostring(graph.version), sb.printJson(outDegree), seam, place, capped)
 end
 
-local NAV_ROUTE_BUDGET_MS = 3.0
-local NAV_WAYPOINT_SWEEPS_PER_CALL = 2
+PETPORTS_CONSTANTS.nav.routeBudgetMs = 3.0
+PETPORTS_CONSTANTS.nav.waypointSweepsPerCall = 2
 
 petports_navHeap = {}
 
@@ -3550,7 +3553,7 @@ function petports_navRouteStep(profile, fromKey, toKey, budget)
 			end
 			if began ~= nil and job.expanded % 64 == 0 then
 				local now = petports_navTickClock()
-				if now ~= nil and (now - began) * 1000 >= NAV_ROUTE_BUDGET_MS then
+				if now ~= nil and (now - began) * 1000 >= PETPORTS_CONSTANTS.nav.routeBudgetMs then
 					return nil, job.expanded, "more"
 				end
 			end
@@ -3782,7 +3785,7 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdva
 				loClear = false }
 			self.petportsNavWaypointJob = job
 		end
-		local budgetLeft = NAV_WAYPOINT_SWEEPS_PER_CALL
+		local budgetLeft = PETPORTS_CONSTANTS.nav.waypointSweepsPerCall
 		if not job.farTried then
 			job.farTried = true
 			if job.hi > 1 then
@@ -3865,7 +3868,7 @@ function petports_navWaypoint(profile, fromKey, toKey, reach, freeMover, minAdva
 		path[chosenAt - 1], legKind
 end
 
-local NAV_NEAREST_SWEEPS = 6
+PETPORTS_CONSTANTS.nav.nearestSweeps = 6
 
 -- Returns the graph's cells bucketed by block, built on first use.
 function petports_navGraphBlocks(graph)
@@ -3876,8 +3879,8 @@ function petports_navGraphBlocks(graph)
 	for from in pairs(graph.fine) do
 		local fx, fy = string.match(from, "^(-?%d+),(-?%d+)$")
 		if fx ~= nil then
-			local key = math.floor(tonumber(fx) / NAV_BLOCK_CELLS) .. ","
-				.. math.floor(tonumber(fy) / NAV_BLOCK_CELLS)
+			local key = math.floor(tonumber(fx) / PETPORTS_CONSTANTS.nav.blockCells) .. ","
+				.. math.floor(tonumber(fy) / PETPORTS_CONSTANTS.nav.blockCells)
 			if blocks.map[key] == nil then
 				blocks.map[key] = {}
 				blocks.count = blocks.count + 1
@@ -3916,7 +3919,7 @@ function petports_navNearestFrom(candidates, startAt, position, freeMover, radiu
 					return c.key, anchor, distance
 				end
 
-				if swept >= NAV_NEAREST_SWEEPS then
+				if swept >= PETPORTS_CONSTANTS.nav.nearestSweeps then
 					self.petportsNavNearestResume = {
 						key = resumeKey, fine = fine, candidates = candidates, at = i
 					}
@@ -3942,7 +3945,7 @@ end
 function petports_navNearestCellIn(graph, position, freeMover, radius, sideTag)
 	radius = radius or 2.5
 
-	if freeMover then radius = math.max(radius, NAV_MAX_DISTANCE) end
+	if freeMover then radius = math.max(radius, PETPORTS_CONSTANTS.nav.maxDistance) end
 
 	local fine = graph.fine
 	local sides = graph.side
@@ -3961,10 +3964,10 @@ function petports_navNearestCellIn(graph, position, freeMover, radius, sideTag)
 
 	local candidates = {}
 	local blocks = petports_navGraphBlocks(graph)
-	local bx0 = math.floor((px - reach) / NAV_BLOCK_CELLS)
-	local bx1 = math.floor((px + reach) / NAV_BLOCK_CELLS)
-	local by0 = math.floor((py - reach) / NAV_BLOCK_CELLS)
-	local by1 = math.floor((py + reach) / NAV_BLOCK_CELLS)
+	local bx0 = math.floor((px - reach) / PETPORTS_CONSTANTS.nav.blockCells)
+	local bx1 = math.floor((px + reach) / PETPORTS_CONSTANTS.nav.blockCells)
+	local by0 = math.floor((py - reach) / PETPORTS_CONSTANTS.nav.blockCells)
+	local by1 = math.floor((py + reach) / PETPORTS_CONSTANTS.nav.blockCells)
 
 	for by = by0, by1 do
 		for bx = bx0, bx1 do
@@ -4036,9 +4039,9 @@ function petports_navStats()
 end
 
 
-local NAV_SWEEP_TTL = 21600.0
+PETPORTS_CONSTANTS.nav.sweepTtl = 21600.0
 
-local NAV_CLAIM_TTL = 120.0
+PETPORTS_CONSTANTS.nav.claimTtl = 120.0
 
 -- Returns an index entry's sweep time and radius when it matches the current generation.
 function petports_navIndexEntry(value)
@@ -4061,7 +4064,7 @@ function petports_navSwept(profile, cellKey)
 	local at, radius = petports_navIndexEntry(cells[cellKey])
 	if at == nil then return nil end
 
-	if (world.time() - at) > NAV_SWEEP_TTL then return nil end
+	if (world.time() - at) > PETPORTS_CONSTANTS.nav.sweepTtl then return nil end
 
 	return at, radius
 end
@@ -4079,7 +4082,7 @@ function petports_navSweptRadiusIn(cells, cellKey, now)
 
 	local at, radius = petports_navIndexEntry(cells[cellKey])
 	if at == nil then return 0 end
-	if (now - at) > NAV_SWEEP_TTL then return 0 end
+	if (now - at) > PETPORTS_CONSTANTS.nav.sweepTtl then return 0 end
 
 	return radius
 end
@@ -4113,7 +4116,7 @@ function petports_navSweepStart(cx, cy, ownerId, index)
 	end
 
 	if not petports_claimTake(workId, ownerId, entity.id(), "nav",
-		mcontroller.position(), NAV_CLAIM_TTL) then
+		mcontroller.position(), PETPORTS_CONSTANTS.nav.claimTtl) then
 		return nil, "claimed by another unit"
 	end
 
@@ -4149,7 +4152,7 @@ function petports_navSweepStart(cx, cy, ownerId, index)
 							local known, age =
 								petports_navKnown(profile, cellKey, candidate.key)
 							local fresh = known ~= nil
-								and (age or 0) < NAV_SWEEP_TTL
+								and (age or 0) < PETPORTS_CONSTANTS.nav.sweepTtl
 
 							local joined = nil
 
@@ -4190,11 +4193,11 @@ function petports_navSweepStart(cx, cy, ownerId, index)
 	return true
 end
 
-local NAV_TICK_BUDGET_MS = 4.0
+PETPORTS_CONSTANTS.nav.tickBudgetMs = 4.0
 
-local NAV_STEPS_PER_TICK = 2
+PETPORTS_CONSTANTS.nav.stepsPerTick = 2
 
-local NAV_STEPS_PER_TICK_FREE = 8
+PETPORTS_CONSTANTS.nav.stepsPerTickFree = 8
 
 -- Returns the process clock in seconds, or nil where it is unavailable.
 function petports_navTickClock()
@@ -4226,7 +4229,7 @@ function petports_navSweepStep()
 
 	local began = petports_navTickClock()
 	local stepped = 0
-	local stepCap = petports_freeMover() and NAV_STEPS_PER_TICK_FREE or NAV_STEPS_PER_TICK
+	local stepCap = petports_freeMover() and PETPORTS_CONSTANTS.nav.stepsPerTickFree or PETPORTS_CONSTANTS.nav.stepsPerTick
 
 	for _, index in ipairs(indices) do
 		local sweep = sweeps[index]
@@ -4240,7 +4243,7 @@ function petports_navSweepStep()
 		if began ~= nil and stepped > 0 then
 			local now = petports_navTickClock()
 
-			if now ~= nil and (now - began) * 1000 >= NAV_TICK_BUDGET_MS then
+			if now ~= nil and (now - began) * 1000 >= PETPORTS_CONSTANTS.nav.tickBudgetMs then
 				petports_profCount("budgetCut")
 				self.petportsNavStepRotate = (self.petportsNavStepRotate or 0) + stepped
 				return "running"
@@ -4300,7 +4303,7 @@ function petports_navFinishSweep(index, completed)
 		})
 
 		self.petportsNavFlushAt = self.petportsNavFlushAt
-			or (world.time() + NAV_FLUSH_INTERVAL)
+			or (world.time() + PETPORTS_CONSTANTS.nav.flushInterval)
 	end
 	petports_claimRelease(sweep.workId, sweep.ownerId)
 
@@ -4338,7 +4341,7 @@ function petports_navLevelReport()
 
 	local levels = {}
 
-	for _, tiles in ipairs(NAV_LEVELS) do
+	for _, tiles in ipairs(PETPORTS_CONSTANTS.nav.levels) do
 		local blocks, edges = {}, 0
 		local nodes = 0
 
@@ -4364,7 +4367,7 @@ function petports_navLevelReport()
 
 				local coarseSaysNo = false
 
-				for _, tiles in ipairs(NAV_LEVELS) do
+				for _, tiles in ipairs(PETPORTS_CONSTANTS.nav.levels) do
 					if petports_navCoarseReaches(graph, tiles, a, b,
 						PETPORTS_NAV_SEARCH_BUDGET) == false then
 						coarseSaysNo = true
@@ -4470,7 +4473,7 @@ function petports_navLevelProgress()
 
 	if held ~= nil and held.profile == profile
 	   and (held.version == version
-	        or (now - (held.at or 0)) < NAV_OVERLAY_REFRESH) then
+	        or (now - (held.at or 0)) < PETPORTS_CONSTANTS.nav.overlayRefresh) then
 		return held.levels
 	end
 
@@ -4540,7 +4543,7 @@ function petports_navSweptPoints()
 	local now = world.time()
 
 	if held ~= nil and (held.version == version
-	   or (now - (held.at or 0)) < NAV_OVERLAY_REFRESH) then
+	   or (now - (held.at or 0)) < PETPORTS_CONSTANTS.nav.overlayRefresh) then
 		return held.points
 	end
 
@@ -4574,7 +4577,7 @@ function petports_navSweptPoints()
 	return points
 end
 
-local NAV_LABEL_CORNERS = {
+PETPORTS_CONSTANTS.nav.labelCorners = {
 	{ 0.15, 0.75 },
 	{ 0.55, 0.75 },
 	{ 0.15, 0.25 },
@@ -4583,11 +4586,11 @@ local NAV_LABEL_CORNERS = {
 
 PETPORTS_NAV_DEBUG = false
 
-local NAV_DRAW_FRESH = 10.0
+PETPORTS_CONSTANTS.nav.drawFresh = 10.0
 
-local NAV_DRAW_WHY_CHARS = 48
+PETPORTS_CONSTANTS.nav.drawWhyChars = 48
 
-local NAV_BOUNDS_DRAW_REFRESH = 4.0
+PETPORTS_CONSTANTS.nav.boundsDrawRefresh = 4.0
 
 PETPORTS_NAV_DRAW_EDGES = false
 
@@ -4616,8 +4619,8 @@ function petports_navDrawLive(here, line)
 	if graph ~= nil and graph.profile == profile and type(graph.fine) == "table" then
 		local blocks = petports_navGraphBlocks(graph)
 		local ucx, ucy = petports_navCell(here)
-		local ubx, uby = math.floor(ucx / NAV_BLOCK_CELLS), math.floor(ucy / NAV_BLOCK_CELLS)
-		local ring = math.ceil(NAV_DRAW_RANGE / (NAV_BLOCK_CELLS * PETPORTS_NAV_CELL))
+		local ubx, uby = math.floor(ucx / PETPORTS_CONSTANTS.nav.blockCells), math.floor(ucy / PETPORTS_CONSTANTS.nav.blockCells)
+		local ring = math.ceil(PETPORTS_CONSTANTS.nav.drawRange / (PETPORTS_CONSTANTS.nav.blockCells * PETPORTS_NAV_CELL))
 
 		for by = uby - ring, uby + ring do
 			for bx = ubx - ring, ubx + ring do
@@ -4648,8 +4651,8 @@ function petports_navDrawLive(here, line)
 						if not shown[to] and petports_navSweptRadiusIn(sweptCells, to, now) <= 0 then
 							shown[to] = true
 							local ox, oy = petports_navKeyOrigin(to)
-							if ox ~= nil and math.abs(ox - here[1]) <= NAV_DRAW_RANGE
-							   and math.abs(oy - here[2]) <= NAV_DRAW_RANGE then
+							if ox ~= nil and math.abs(ox - here[1]) <= PETPORTS_CONSTANTS.nav.drawRange
+							   and math.abs(oy - here[2]) <= PETPORTS_CONSTANTS.nav.drawRange then
 								petports_navDrawSafely(world.debugPoint,
 									{ ox + PETPORTS_NAV_CELL * 0.5, oy + PETPORTS_NAV_CELL * 0.5 },
 									{ 110, 0, 110, 255 })
@@ -4665,8 +4668,8 @@ function petports_navDrawLive(here, line)
 	for tile in pairs(self.petportsNavForbidden or {}) do
 		wallCount = wallCount + 1
 		local tx, ty = string.match(tile, "^(-?%d+),(-?%d+)$")
-		if tx ~= nil and math.abs(tonumber(tx) - here[1]) <= NAV_DRAW_RANGE
-		   and math.abs(tonumber(ty) - here[2]) <= NAV_DRAW_RANGE then
+		if tx ~= nil and math.abs(tonumber(tx) - here[1]) <= PETPORTS_CONSTANTS.nav.drawRange
+		   and math.abs(tonumber(ty) - here[2]) <= PETPORTS_CONSTANTS.nav.drawRange then
 			petports_navDrawSafely(world.debugPoint, { tonumber(tx) + 0.5, tonumber(ty) + 0.5 }, "red")
 		end
 	end
@@ -4674,8 +4677,8 @@ function petports_navDrawLive(here, line)
 	local mine = 0
 	for _, entry in pairs(self.petportsNavBoundsLocal or {}) do
 		mine = mine + 1
-		if math.abs(entry.ox - here[1]) <= NAV_DRAW_RANGE
-		   and math.abs(entry.oy - here[2]) <= NAV_DRAW_RANGE then
+		if math.abs(entry.ox - here[1]) <= PETPORTS_CONSTANTS.nav.drawRange
+		   and math.abs(entry.oy - here[2]) <= PETPORTS_CONSTANTS.nav.drawRange then
 			for offset, name in pairs(entry.m) do
 				local dx, dy = string.match(offset, "^(%d+),(%d+)$")
 				if dx ~= nil and name ~= "air" then
@@ -4713,7 +4716,7 @@ function petports_navDrawLive(here, line)
 				tostring(route.leg))
 		else
 			local why = tostring(route.why)
-			if #why > NAV_DRAW_WHY_CHARS then why = string.sub(why, 1, NAV_DRAW_WHY_CHARS) .. ".." end
+			if #why > PETPORTS_CONSTANTS.nav.drawWhyChars then why = string.sub(why, 1, PETPORTS_CONSTANTS.nav.drawWhyChars) .. ".." end
 			routeText = string.format("NO ROUTE %s -> %s: %s",
 				tostring(route.from), tostring(route.to), why)
 		end
@@ -4751,12 +4754,12 @@ function petports_navBoundsInRange(here)
 	local now = world.time()
 
 	if self.petportsNavBoundsDraw ~= nil
-	   and (now - (self.petportsNavBoundsDrawAt or 0)) <= NAV_BOUNDS_DRAW_REFRESH then
+	   and (now - (self.petportsNavBoundsDrawAt or 0)) <= PETPORTS_CONSTANTS.nav.boundsDrawRefresh then
 		return self.petportsNavBoundsDraw
 	end
 
 	local out = {}
-	local ok, registry = pcall(world.getProperty, NAV_BOUNDS)
+	local ok, registry = pcall(world.getProperty, PETPORTS_CONSTANTS.nav.bounds)
 
 	if ok and type(registry) == "table" then
 		for bucket in pairs(registry) do
@@ -4766,8 +4769,8 @@ function petports_navBoundsInRange(here)
 					local bx, by = string.match(cellKey, "^(-?%d+),(-?%d+)$")
 					if bx ~= nil then
 						local ox, oy = petports_navCellOrigin(tonumber(bx), tonumber(by))
-						if math.abs(ox - here[1]) <= NAV_DRAW_RANGE
-						   and math.abs(oy - here[2]) <= NAV_DRAW_RANGE then
+						if math.abs(ox - here[1]) <= PETPORTS_CONSTANTS.nav.drawRange
+						   and math.abs(oy - here[2]) <= PETPORTS_CONSTANTS.nav.drawRange then
 							local okRec, record = pcall(world.getProperty,
 								petports_navBoundsCellProperty(bucket, cellKey))
 							if okRec and type(record) == "table" and record.g == petports_navGenNow() then
@@ -4792,8 +4795,8 @@ function petports_navDrawBridges(here)
 	-- Returns whether a point is inside draw range.
 	local function near(p)
 		return type(p) == "table"
-			and math.abs(p[1] - here[1]) <= NAV_DRAW_RANGE
-			and math.abs(p[2] - here[2]) <= NAV_DRAW_RANGE
+			and math.abs(p[1] - here[1]) <= PETPORTS_CONSTANTS.nav.drawRange
+			and math.abs(p[2] - here[2]) <= PETPORTS_CONSTANTS.nav.drawRange
 	end
 
 	-- Draws a cross at a position.
@@ -4907,9 +4910,9 @@ function petports_navDebugDraw()
 	local now = world.time()
 
 	for _, point in ipairs(petports_navSweptPoints()) do
-		if math.abs(point[1] - here[1]) <= NAV_DRAW_RANGE
-		   and math.abs(point[2] - here[2]) <= NAV_DRAW_RANGE then
-			local fresh = (now - (point.at or 0)) <= NAV_DRAW_FRESH
+		if math.abs(point[1] - here[1]) <= PETPORTS_CONSTANTS.nav.drawRange
+		   and math.abs(point[2] - here[2]) <= PETPORTS_CONSTANTS.nav.drawRange then
+			local fresh = (now - (point.at or 0)) <= PETPORTS_CONSTANTS.nav.drawFresh
 			petports_navDrawSafely(world.debugPoint, point,
 				fresh and "magenta" or petports_navRadiusColour(point.radius))
 		end
@@ -4948,7 +4951,7 @@ function petports_navDebugDraw()
 		petports_navDrawPoint(probe.fromAnchor, "green")
 		petports_navDrawPoint(probe.toAnchor, "red")
 
-		local corner = NAV_LABEL_CORNERS[((slot - 1) % 4) + 1]
+		local corner = PETPORTS_CONSTANTS.nav.labelCorners[((slot - 1) % 4) + 1]
 
 		local ox, oy = petports_navCellOrigin(probe.toCell[1], probe.toCell[2])
 
@@ -4960,24 +4963,24 @@ function petports_navDebugDraw()
 end
 
 
-local NAV_CANDIDATE_SCAN = 60
+PETPORTS_CONSTANTS.nav.candidateScan = 60
 
-local NAV_CANDIDATE_RINGS = 12
+PETPORTS_CONSTANTS.nav.candidateRings = 12
 
-local NAV_CANDIDATE_FROMS = 200
+PETPORTS_CONSTANTS.nav.candidateFroms = 200
 
-local NAV_FRONTIER_CAP = 2000
-local NAV_FRONTIER_HEAD = 32
+PETPORTS_CONSTANTS.nav.frontierCap = 2000
+PETPORTS_CONSTANTS.nav.frontierHead = 32
 
-local NAV_FRONTIER_REBUILD = 10.0
+PETPORTS_CONSTANTS.nav.frontierRebuild = 10.0
 
-local NAV_CANDIDATE_CACHE = 2.0
+PETPORTS_CONSTANTS.nav.candidateCache = 2.0
 
 -- Yields once a candidate scan has used the tick budget, then restarts the clock.
 function petports_navCandYield(clock)
 	if clock.began == nil then return end
 	local now = petports_navTickClock()
-	if now ~= nil and (now - clock.began) * 1000 >= NAV_TICK_BUDGET_MS then
+	if now ~= nil and (now - clock.began) * 1000 >= PETPORTS_CONSTANTS.nav.tickBudgetMs then
 		coroutine.yield()
 		clock.began = petports_navTickClock()
 	end
@@ -4990,7 +4993,7 @@ function petports_navCandidates(limit)
 	local sideKey = freeMover and "1" or "0"
 	local cache = self.petportsNavCandCache
 	self.petportsNavCandPending = false
-	if cache ~= nil and cache.side == sideKey and (now - cache.at) < NAV_CANDIDATE_CACHE
+	if cache ~= nil and cache.side == sideKey and (now - cache.at) < PETPORTS_CONSTANTS.nav.candidateCache
 	   and #cache.list > 0 then
 		local sweptCells = petports_navIndexRead()[petports_navProfile()]
 		local inSweep = {}
@@ -5012,7 +5015,7 @@ function petports_navCandidates(limit)
 
 	local job = self.petportsNavCandJob
 	if job == nil or job.side ~= sideKey or coroutine.status(job.co) == "dead" then
-		job = { side = sideKey, co = coroutine.create(function() return petports_navCandidatesInner(NAV_FRONTIER_HEAD) end) }
+		job = { side = sideKey, co = coroutine.create(function() return petports_navCandidatesInner(PETPORTS_CONSTANTS.nav.frontierHead) end) }
 		self.petportsNavCandJob = job
 	end
 	local okResume, list = coroutine.resume(job.co)
@@ -5147,7 +5150,7 @@ function petports_navCandidatesInner(limit)
 
 	if freeMover and self.petportsNavSeeds ~= nil then
 		for key, at in pairs(self.petportsNavSeeds) do
-			if (now - at) > NAV_ANCHOR_TTL * 4
+			if (now - at) > PETPORTS_CONSTANTS.nav.anchorTtl * 4
 			   or petports_navSweptRadiusIn(sweptCells, key, now) >= petports_navFullRadius() then
 				self.petportsNavSeeds[key] = nil
 			else
@@ -5160,7 +5163,7 @@ function petports_navCandidatesInner(limit)
 		and self.petportsNavSideSeeds[freeMover and "1" or "0"] or nil
 	if sideSeeds ~= nil then
 		for key, at in pairs(sideSeeds) do
-			if (now - at) > NAV_ANCHOR_TTL * 4
+			if (now - at) > PETPORTS_CONSTANTS.nav.anchorTtl * 4
 			   or petports_navSweptRadiusIn(sweptCells, key, now) >= petports_navFullRadius() then
 				sideSeeds[key] = nil
 			else
@@ -5170,7 +5173,7 @@ function petports_navCandidatesInner(limit)
 	end
 
 	local blocks = petports_navGraphBlocks(graph)
-	local ubx, uby = math.floor(cx / NAV_BLOCK_CELLS), math.floor(cy / NAV_BLOCK_CELLS)
+	local ubx, uby = math.floor(cx / PETPORTS_CONSTANTS.nav.blockCells), math.floor(cy / PETPORTS_CONSTANTS.nav.blockCells)
 	local scanned = 0
 	local ring = 0
 	local seenBlocks = 0
@@ -5186,8 +5189,8 @@ function petports_navCandidatesInner(limit)
 		return unswept
 	end
 
-	while unsweptFound() < NAV_CANDIDATE_SCAN and scanned < NAV_CANDIDATE_FROMS
-	      and seenBlocks < blocks.count and ring <= NAV_CANDIDATE_RINGS do
+	while unsweptFound() < PETPORTS_CONSTANTS.nav.candidateScan and scanned < PETPORTS_CONSTANTS.nav.candidateFroms
+	      and seenBlocks < blocks.count and ring <= PETPORTS_CONSTANTS.nav.candidateRings do
 		for by = uby - ring, uby + ring do
 			for bx = ubx - ring, ubx + ring do
 				if math.abs(bx - ubx) == ring or math.abs(by - uby) == ring then
@@ -5208,7 +5211,7 @@ function petports_navCandidatesInner(limit)
 	end
 
 	if next(queue) == nil
-	   and (now - (self.petportsNavFrontierRebuiltAt or -1e9)) > NAV_FRONTIER_REBUILD then
+	   and (now - (self.petportsNavFrontierRebuiltAt or -1e9)) > PETPORTS_CONSTANTS.nav.frontierRebuild then
 		self.petportsNavFrontierRebuiltAt = now
 		local added = 0
 		for _, targets in pairs(graph.fine or {}) do
@@ -5245,10 +5248,10 @@ function petports_navCandidatesInner(limit)
 			end
 		end
 	end
-	if #queued > NAV_FRONTIER_CAP then
+	if #queued > PETPORTS_CONSTANTS.nav.frontierCap then
 		table.sort(queued, function(a, b) return a.at > b.at end)
-		for i = NAV_FRONTIER_CAP + 1, #queued do queue[queued[i].key] = nil end
-		while #queued > NAV_FRONTIER_CAP do table.remove(queued) end
+		for i = PETPORTS_CONSTANTS.nav.frontierCap + 1, #queued do queue[queued[i].key] = nil end
+		while #queued > PETPORTS_CONSTANTS.nav.frontierCap do table.remove(queued) end
 	end
 	if seedOk and mineRadius <= 0 then
 		queue[seedKey] = queue[seedKey] or now
@@ -5270,9 +5273,9 @@ function petports_navCandidatesInner(limit)
 					break
 				end
 			end
-			if not placed and #head < NAV_FRONTIER_HEAD then
+			if not placed and #head < PETPORTS_CONSTANTS.nav.frontierHead then
 				head[#head + 1] = entry
-			elseif #head > NAV_FRONTIER_HEAD then
+			elseif #head > PETPORTS_CONSTANTS.nav.frontierHead then
 				table.remove(head)
 			end
 		end
@@ -5283,7 +5286,7 @@ function petports_navCandidatesInner(limit)
 
 	self.petportsNavWideRebuiltAt = self.petportsNavWideRebuiltAt or {}
 	self.petportsNavWideList = self.petportsNavWideList or {}
-	if (now - (self.petportsNavWideRebuiltAt[sideKey] or -1e9)) > NAV_FRONTIER_REBUILD then
+	if (now - (self.petportsNavWideRebuiltAt[sideKey] or -1e9)) > PETPORTS_CONSTANTS.nav.frontierRebuild then
 		self.petportsNavWideRebuiltAt[sideKey] = now
 		local wide = {}
 		for cellKey, entry in pairs(sweptCells or {}) do
@@ -5348,9 +5351,9 @@ function petports_navNextCell(freeMover)
 	return candidates[1].cx, candidates[1].cy, candidates[1].key
 end
 
-local NAV_CLAIM_ATTEMPTS = 8
+PETPORTS_CONSTANTS.nav.claimAttempts = 8
 
-local NAV_PURGE_PER_PASS = 4
+PETPORTS_CONSTANTS.nav.purgePerPass = 4
 
 -- Drops a few stale cells that fell outside coverage, with their edges and index entries.
 function petports_navPurgeDeadzonesInner(profile)
@@ -5364,13 +5367,13 @@ function petports_navPurgeDeadzonesInner(profile)
 	local gone = {}
 
 	for cellKey, entry in pairs(cells) do
-		if dropped >= NAV_PURGE_PER_PASS then break end
+		if dropped >= PETPORTS_CONSTANTS.nav.purgePerPass then break end
 
 		local bx, by = string.match(cellKey, "^(-?%d+),(-?%d+)$")
 		local sweptAt = petports_navIndexEntry(entry)
 
 		if bx ~= nil and sweptAt ~= nil
-		   and (now - sweptAt) > NAV_SWEEP_TTL
+		   and (now - sweptAt) > PETPORTS_CONSTANTS.nav.sweepTtl
 		   and not petports_navInCoverage(tonumber(bx), tonumber(by)) then
 
 			cells[cellKey] = nil
@@ -5407,16 +5410,16 @@ function petports_navPurgeDeadzones(profile)
 	return r
 end
 
-local NAV_TICK_INTERVAL = 0.0
+PETPORTS_CONSTANTS.nav.tickInterval = 0.0
 
-local NAV_IDLE_INTERVAL = 2.0
-local NAV_IDLE_TICK_INTERVAL = 2.0
-local NAV_TOPUP_INTERVAL = 0.25
+PETPORTS_CONSTANTS.nav.idleInterval = 2.0
+PETPORTS_CONSTANTS.nav.idleTickInterval = 2.0
+PETPORTS_CONSTANTS.nav.topupInterval = 0.25
 
 PETPORTS_PROFILE = true
 
-local PROF_REPORT_INTERVAL = 5.0
-local PROF_WORLD_FUNCTIONS = {
+PETPORTS_CONSTANTS.nav.profReportInterval = 5.0
+PETPORTS_CONSTANTS.nav.profWorldFunctions = {
 	"rectTileCollision", "lineTileCollision", "pointTileCollision",
 	"liquidAt", "getProperty", "setProperty", "debugLine", "debugText",
 	"debugPoint", "entityQuery", "material", "platformerPathStart"
@@ -5496,7 +5499,7 @@ function petports_profInstall()
 
 	local counted = 0
 
-	for _, name in ipairs(PROF_WORLD_FUNCTIONS) do
+	for _, name in ipairs(PETPORTS_CONSTANTS.nav.profWorldFunctions) do
 		local original = world[name]
 
 		if type(original) == "function" then
@@ -5516,7 +5519,7 @@ function petports_profInstall()
 
 	sb.logInfo("PROFILE installed: clock %s, %s of %s world functions counted",
 		petports_profClock ~= nil and "os.clock" or "NONE (counts only)",
-		sb.printJson(counted), sb.printJson(#PROF_WORLD_FUNCTIONS))
+		sb.printJson(counted), sb.printJson(#PETPORTS_CONSTANTS.nav.profWorldFunctions))
 end
 
 -- Flips profiling and returns the new state.
@@ -5555,7 +5558,7 @@ function petports_profEnd(section)
 	end
 end
 
-local PROF_STALL_MS = 250
+PETPORTS_CONSTANTS.nav.profStallMs = 250
 petports_profTickEndAt = nil
 
 -- Starts the tick timer and logs a stall when process time passed between ticks.
@@ -5566,7 +5569,7 @@ function petports_profTickBegin()
 	if petports_profTickEndAt ~= nil and petports_profTickStart ~= nil then
 		local gap = (petports_profTickStart - petports_profTickEndAt) * 1000
 
-		if gap >= PROF_STALL_MS then
+		if gap >= PETPORTS_CONSTANTS.nav.profStallMs then
 			sb.logInfo("PROFILE STALL %s ms of process time between my ticks (clock %s)",
 				tostring(math.floor(gap)), tostring(math.floor(petports_profTickStart * 1000)))
 		end
@@ -5585,11 +5588,11 @@ function petports_profTickEnd()
 	petports_profTickEndAt = now
 
 	local t = world.time()
-	petports_profReportAt = petports_profReportAt or (t + PROF_REPORT_INTERVAL)
+	petports_profReportAt = petports_profReportAt or (t + PETPORTS_CONSTANTS.nav.profReportInterval)
 	if t < petports_profReportAt then return end
 
-	local span = PROF_REPORT_INTERVAL
-	petports_profReportAt = t + PROF_REPORT_INTERVAL
+	local span = PETPORTS_CONSTANTS.nav.profReportInterval
+	petports_profReportAt = t + PETPORTS_CONSTANTS.nav.profReportInterval
 
 	local parts = {}
 
@@ -5648,7 +5651,7 @@ function petports_profTickEnd()
 	for name in pairs(petports_profWorldCounts) do petports_profWorldCounts[name] = 0 end
 end
 
-local NAV_SURVEY_CONCURRENT = 2
+PETPORTS_CONSTANTS.nav.surveyConcurrent = 2
 
 -- Returns whether this unit takes a survey turn this tick, staggering the units across the network.
 function petports_navSurveyTurn()
@@ -5661,7 +5664,7 @@ function petports_navSurveyTurn()
 	local units = tonumber(self.petportsNetworkUnits)
 	if units ~= nil and units >= 1 then ports = units end
 
-	local stride = math.ceil(ports / NAV_SURVEY_CONCURRENT)
+	local stride = math.ceil(ports / PETPORTS_CONSTANTS.nav.surveyConcurrent)
 	if stride <= 1 then return true end
 
 	local phase = math.abs(entity.id()) % stride
@@ -5674,7 +5677,7 @@ end
 
 -- Starts sweeps on the best candidate cells, and reports the side complete when there are none.
 function petports_navTopUp(ownerId)
-	local candidates = petports_navCandidates(NAV_CLAIM_ATTEMPTS)
+	local candidates = petports_navCandidates(PETPORTS_CONSTANTS.nav.claimAttempts)
 	local side = petports_freeMover() and "1" or "0"
 
 	self.petportsNavComplete = self.petportsNavComplete or {}
@@ -5684,7 +5687,7 @@ function petports_navTopUp(ownerId)
 			self.petportsNavTimer = 0
 			return
 		end
-		self.petportsNavTimer = NAV_IDLE_INTERVAL
+		self.petportsNavTimer = PETPORTS_CONSTANTS.nav.idleInterval
 
 		if not self.petportsNavComplete[side] and self.petportsNavGraphBuild == nil
 		   and not self.petportsNavCandPending then
@@ -5778,7 +5781,7 @@ function petports_navTickInner(dt, ownerId, searching)
 	local side = petports_freeMover() and "1" or "0"
 	local sideDone = self.petportsNavComplete ~= nil and self.petportsNavComplete[side] == true
 	local now = world.time()
-	local idleDue = (now - (self.petportsNavIdleTickAt or -1e9)) >= NAV_IDLE_TICK_INTERVAL
+	local idleDue = (now - (self.petportsNavIdleTickAt or -1e9)) >= PETPORTS_CONSTANTS.nav.idleTickInterval
 	local exitsPending = self.petportsNavBridgeExit ~= nil
 		or (type(self.petportsNavBridgeExits) == "table" and #self.petportsNavBridgeExits > 0)
 	petports_profBegin("draw")
@@ -5809,7 +5812,7 @@ function petports_navTickInner(dt, ownerId, searching)
 	if petports_navSweepCount() >= PETPORTS_NAV_SWEEPS then return true end
 
 	if self.petportsNavTimer > 0 then return false end
-	self.petportsNavTimer = NAV_TICK_INTERVAL
+	self.petportsNavTimer = PETPORTS_CONSTANTS.nav.tickInterval
 
 	local now = world.time()
 
@@ -5818,7 +5821,7 @@ function petports_navTickInner(dt, ownerId, searching)
 		petports_navPurgeDeadzones(petports_navProfile())
 	end
 
-	self.petportsNavTimer = NAV_TOPUP_INTERVAL
+	self.petportsNavTimer = PETPORTS_CONSTANTS.nav.topupInterval
 
 	local side = petports_navSurveySide()
 	local result = petports_navWithSide(side, petports_navTopUp, ownerId)
@@ -5983,11 +5986,11 @@ function petports_navWipe()
 	local cleared = 0
 	local roots = 0
 
-	local ok, manifest = pcall(world.getProperty, NAV_MANIFEST)
+	local ok, manifest = pcall(world.getProperty, PETPORTS_CONSTANTS.nav.manifest)
 	if not ok or type(manifest) ~= "table" then manifest = {} end
 
-	manifest[NAV_INDEX] = true
-	manifest[NAV_BOUNDS] = true
+	manifest[PETPORTS_CONSTANTS.nav.index] = true
+	manifest[PETPORTS_CONSTANTS.nav.bounds] = true
 
 	local own = { petports_navProfile() }
 	if petports_gravitySwitchable() then
@@ -6006,7 +6009,7 @@ function petports_navWipe()
 			else
 				for cellKey, entry in pairs(perProfile) do
 					if type(entry) == "table" then
-						pcall(world.setProperty, NAV_EDGES .. profile .. ":" .. cellKey, nil)
+						pcall(world.setProperty, PETPORTS_CONSTANTS.nav.edges .. profile .. ":" .. cellKey, nil)
 						cleared = cleared + 1
 					end
 				end
@@ -6019,8 +6022,8 @@ function petports_navWipe()
 	for root in pairs(manifest) do
 		roots = roots + 1
 		local enumerate = petports_navFamilies[root]
-			or (root == NAV_INDEX and petports_navEdgeFamilyEnumerate)
-			or (root == NAV_BOUNDS and petports_navBoundsFamilyEnumerate)
+			or (root == PETPORTS_CONSTANTS.nav.index and petports_navEdgeFamilyEnumerate)
+			or (root == PETPORTS_CONSTANTS.nav.bounds and petports_navBoundsFamilyEnumerate)
 
 		if enumerate ~= nil then
 			for _, name in ipairs(enumerate()) do
@@ -6035,14 +6038,14 @@ function petports_navWipe()
 		end
 	end
 
-	pcall(world.setProperty, NAV_MANIFEST, nil)
+	pcall(world.setProperty, PETPORTS_CONSTANTS.nav.manifest, nil)
 
 	local claims = petports_claimsClearType ~= nil
 		and petports_claimsClearType("nav") or 0
 
-	local okGen, gen = pcall(world.getProperty, NAV_GEN)
+	local okGen, gen = pcall(world.getProperty, PETPORTS_CONSTANTS.nav.gen)
 	gen = (okGen and type(gen) == "number") and gen or 0
-	pcall(world.setProperty, NAV_GEN, gen + 1)
+	pcall(world.setProperty, PETPORTS_CONSTANTS.nav.gen, gen + 1)
 
 	petports_navDropMemos(gen + 1)
 

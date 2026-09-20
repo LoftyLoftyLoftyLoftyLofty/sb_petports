@@ -13,96 +13,96 @@ PETPORTS_CONSTANTS.task = PETPORTS_CONSTANTS.task or {}
 
 PETPORTS_CONSTANTS.task.approachTimeout = 20.0
 
-local ARRIVAL_DISTANCE = 1.5
+PETPORTS_CONSTANTS.task.arrivalDistance = 1.5
 
-local TASK_DEBUG = true
+PETPORTS_CONSTANTS.task.taskDebug = true
 
-local TASK_TRACE_MOVES = false
+PETPORTS_CONSTANTS.task.taskTraceMoves = false
 
-local FLIGHT_TRACE = false
+PETPORTS_CONSTANTS.task.flightTrace = false
 
-local FUEL_TRACE = false
+PETPORTS_CONSTANTS.task.fuelTrace = false
 
-local MEDIA_TRACE_INTERVAL = 0.25
+PETPORTS_CONSTANTS.task.mediaTraceInterval = 0.25
 
-local BUILD_STAMP = "2026-09-20e the cargo handoff names the unit by its entity id"
+PETPORTS_CONSTANTS.task.buildStamp = "2026-09-20k the task script has no top-level locals; its constants are PETPORTS_CONSTANTS.task"
 petports_taskStampLogged = false
 
-local SEARCH_LIMIT = 6.0
+PETPORTS_CONSTANTS.task.searchLimit = 6.0
 
-local EXPLORE_RATE = 300
+PETPORTS_CONSTANTS.task.exploreRate = 300
 
-local NAV_LEG_EXPLORE_RATE = 1200
+PETPORTS_CONSTANTS.task.navLegExploreRate = 1200
 
-local SETTLE_GRACE = 2.0
+PETPORTS_CONSTANTS.task.settleGrace = 2.0
 
-local STUCK_MOVE = 0.1
+PETPORTS_CONSTANTS.task.stuckMove = 0.1
 
-local AIRBORNE_EDGE_STALL = 0.35
+PETPORTS_CONSTANTS.task.airborneEdgeStall = 0.35
 
-local ORIGIN_NUDGE_RADIUS = 2
+PETPORTS_CONSTANTS.task.originNudgeRadius = 2
 
-local ORIGIN_NUDGE_ARRIVE = 0.25
+PETPORTS_CONSTANTS.task.originNudgeArrive = 0.25
 
-local ORIGIN_NUDGE_TIMEOUT = 1.5
+PETPORTS_CONSTANTS.task.originNudgeTimeout = 1.5
 
-local WALK_EDGE_STALL = 1.25
+PETPORTS_CONSTANTS.task.walkEdgeStall = 1.25
 
-local MAX_ARC_SKIP = 16
+PETPORTS_CONSTANTS.task.maxArcSkip = 16
 
-local PLAN_SURFACE_TOLERANCE = 0.5
+PETPORTS_CONSTANTS.task.planSurfaceTolerance = 0.5
 
-local JUMP_TAKEOFF_REACH = 1.0
+PETPORTS_CONSTANTS.task.jumpTakeoffReach = 1.0
 
-local JUMP_APPROACH_EPSILON = 0.05
+PETPORTS_CONSTANTS.task.jumpApproachEpsilon = 0.05
 
-local JUMP_LEVEL_TOLERANCE = 1.0
+PETPORTS_CONSTANTS.task.jumpLevelTolerance = 1.0
 
 JUMP_APPROACH_SLOWDOWN = 2.5
 JUMP_APPROACH_SPEED = 3.0
 
-local JUMP_SWIM_CHASE = 4.0
+PETPORTS_CONSTANTS.task.jumpSwimChase = 4.0
 
-local MAX_JUMP_LOOKAHEAD = 64
+PETPORTS_CONSTANTS.task.maxJumpLookahead = 64
 
-local JUMP_VELOCITY_MARGIN = 1.02
+PETPORTS_CONSTANTS.task.jumpVelocityMargin = 1.02
 
-local JUMP_VELOCITY_CAP = 1.25
+PETPORTS_CONSTANTS.task.jumpVelocityCap = 1.25
 
-local NARROW_LANDING_VX = 8.0
+PETPORTS_CONSTANTS.task.narrowLandingVx = 8.0
 
-local JUMP_ARC_CLEARANCE = 0.5
+PETPORTS_CONSTANTS.task.jumpArcClearance = 0.5
 
-local PHYSICS_DT = 1 / 60
+PETPORTS_CONSTANTS.task.physicsDt = 1 / 60
 
-local LAND_BRAKE_ARRIVED = 0.05
+PETPORTS_CONSTANTS.task.landBrakeArrived = 0.05
 
-local LAND_BRAKE_OVERRUN = 1.5
+PETPORTS_CONSTANTS.task.landBrakeOverrun = 1.5
 
-local LAND_BRAKE_STATIONARY = 0.1
+PETPORTS_CONSTANTS.task.landBrakeStationary = 0.1
 
-local LAND_BRAKE_CEILING = 1.0
+PETPORTS_CONSTANTS.task.landBrakeCeiling = 1.0
 
-local LAND_BRAKE_STATIONARY_GAP = 0.5
+PETPORTS_CONSTANTS.task.landBrakeStationaryGap = 0.5
 
 -- Returns the rise a launch speed reaches under the engine's discrete integration.
 function petports_discreteRise(v0, gravity)
-  return ((v0 * v0) / (2 * gravity)) + ((v0 * PHYSICS_DT) / 2)
+  return ((v0 * v0) / (2 * gravity)) + ((v0 * PETPORTS_CONSTANTS.task.physicsDt) / 2)
 end
 
 -- Returns the launch speed that reaches a rise under the engine's discrete integration.
 function petports_discreteLaunchForRise(rise, gravity)
-  local half = PHYSICS_DT / 2
+  local half = PETPORTS_CONSTANTS.task.physicsDt / 2
   return gravity * (math.sqrt((half * half) + ((2 * rise) / gravity)) - half)
 end
 
-local PROGRESS_WINDOW = 5.0
-local PROGRESS_DISTANCE = 2.5
-local PROGRESS_STRIKES = 2
+PETPORTS_CONSTANTS.task.progressWindow = 5.0
+PETPORTS_CONSTANTS.task.progressDistance = 2.5
+PETPORTS_CONSTANTS.task.progressStrikes = 2
 
-local CHASE_RETARGET_INTERVAL = 0.5
+PETPORTS_CONSTANTS.task.chaseRetargetInterval = 0.5
 
-local CHASE_BUDGET = 10.0
+PETPORTS_CONSTANTS.task.chaseBudget = 10.0
 
 PETPORTS_APPROACH_TYPES = {
   withdraw = true,
@@ -118,45 +118,45 @@ function petports_trackedEntity(task)
   return task[row.field], row
 end
 
-local MAX_VENT_HOPS = 10
+PETPORTS_CONSTANTS.task.maxVentHops = 10
 
-local PROBE_LIMIT = 8.0
+PETPORTS_CONSTANTS.task.probeLimit = 8.0
 
-local VENT_APPROACH_TIMEOUT = 8.0
+PETPORTS_CONSTANTS.task.ventApproachTimeout = 8.0
 
-local VENT_ARRIVAL_TOLERANCE = 6.0
+PETPORTS_CONSTANTS.task.ventArrivalTolerance = 6.0
 
-local MAX_REPEAT_HOPS = 4
+PETPORTS_CONSTANTS.task.maxRepeatHops = 4
 
-local MAX_TASK_HOPS = MAX_VENT_HOPS * 12
+PETPORTS_CONSTANTS.task.maxTaskHops = PETPORTS_CONSTANTS.task.maxVentHops * 12
 
-local VENT_USE_DISTANCE = 2.0
+PETPORTS_CONSTANTS.task.ventUseDistance = 2.0
 
-local NAV_LEG_REACH = 8
+PETPORTS_CONSTANTS.task.navLegReach = 8
 
-local NAV_FLYER_LEG_REACH = 32
+PETPORTS_CONSTANTS.task.navFlyerLegReach = 32
 
-local COARSE_FIRST_DISTANCE = 24
-local COARSE_LOS_SET = { "Null", "Block", "Dynamic", "Slippery" }
+PETPORTS_CONSTANTS.task.coarseFirstDistance = 24
+PETPORTS_CONSTANTS.task.coarseLosSet = { "Null", "Block", "Dynamic", "Slippery" }
 
-local SIGHT_LATCH_RANGE = 64
-local SIGHT_LATCH_INTERVAL = 0.5
+PETPORTS_CONSTANTS.task.sightLatchRange = 64
+PETPORTS_CONSTANTS.task.sightLatchInterval = 0.5
 
-local PLAN_REFUSED_LIMIT = 1.0
+PETPORTS_CONSTANTS.task.planRefusedLimit = 1.0
 
-local BRUSH_BACKOFF = 0.5
+PETPORTS_CONSTANTS.task.brushBackoff = 0.5
 
-local COARSE_RETRY_INTERVAL = 0.5
+PETPORTS_CONSTANTS.task.coarseRetryInterval = 0.5
 
-local NAV_LEG_ARRIVAL_FREE = 0.25
+PETPORTS_CONSTANTS.task.navLegArrivalFree = 0.25
 
-local NAV_LEG_STEP_ARRIVAL = 0.15
+PETPORTS_CONSTANTS.task.navLegStepArrival = 0.15
 
-local NAV_LEG_ARRIVAL_THROUGH = 1.0
-local NAV_LEG_SHARP_TURN = 75
+PETPORTS_CONSTANTS.task.navLegArrivalThrough = 1.0
+PETPORTS_CONSTANTS.task.navLegSharpTurn = 75
 
-local NAV_ROUTE_LOOKAHEAD = 6
-local NAV_LEG_BRAKE_TURN = 45
+PETPORTS_CONSTANTS.task.navRouteLookahead = 6
+PETPORTS_CONSTANTS.task.navLegBrakeTurn = 45
 
 -- Logs why petports_tryCoarseLeg handed out no leg, once per distinct reason and pair.
 function petports_noteLegRefusal(stateData, why, target, fromKey, toKey)
@@ -174,7 +174,7 @@ end
 function petports_tryCoarseLeg(stateData, target, reach, fromOverride, asked)
   if petports_navWaypoint == nil then return false end
 
-  reach = reach or NAV_LEG_REACH
+  reach = reach or PETPORTS_CONSTANTS.task.navLegReach
 
   local switchable = petports_gravitySwitchable ~= nil and petports_gravitySwitchable()
   local profile = (switchable and petports_navBridgeProfile ~= nil
@@ -257,11 +257,11 @@ function petports_tryCoarseLeg(stateData, target, reach, fromOverride, asked)
 		return false
 	end
 
-  if freeMover and reach == NAV_LEG_REACH then reach = NAV_FLYER_LEG_REACH end
+  if freeMover and reach == PETPORTS_CONSTANTS.task.navLegReach then reach = PETPORTS_CONSTANTS.task.navFlyerLegReach end
 
   local waypoint, remaining, legCell, legHops, legFrom, legPrev, legKind =
     petports_navWaypoint(profile, fromKey, toKey, reach, freeMover,
-      ARRIVAL_DISTANCE + 0.5, (stateData.navStepFor or 0) < 2)
+      PETPORTS_CONSTANTS.task.arrivalDistance + 0.5, (stateData.navStepFor or 0) < 2)
 
   if waypoint == nil and remaining == "more" then
 		if fromOverride ~= nil then
@@ -286,7 +286,7 @@ function petports_tryCoarseLeg(stateData, target, reach, fromOverride, asked)
   if legKind == "step" then
     stateData.navStepFor = (stateData.navStepFor or 0) + 1
     local gap = world.magnitude(waypoint, mcontroller.position())
-    if gap <= NAV_LEG_ARRIVAL_FREE then
+    if gap <= PETPORTS_CONSTANTS.task.navLegArrivalFree then
       sb.logInfo("UNIT NUDGE %s onto the route at %s (%s tiles, picker step) and re-taking the leg",
         sb.printJson(mcontroller.position()), sb.printJson(waypoint),
         sb.printJson(math.floor(gap * 100 + 0.5) / 100))
@@ -295,7 +295,7 @@ function petports_tryCoarseLeg(stateData, target, reach, fromOverride, asked)
       stateData.coarseFirstFor = nil
       return petports_tryCoarseLeg(stateData, target, reach, legFrom, asked)
     end
-  elseif world.magnitude(waypoint, mcontroller.position()) < ARRIVAL_DISTANCE then
+  elseif world.magnitude(waypoint, mcontroller.position()) < PETPORTS_CONSTANTS.task.arrivalDistance then
     if legCell ~= nil and legCell ~= fromKey then
       sb.logInfo("UNIT coarse leg %s is where we already are -- taking the next leg from %s",
         sb.printJson(waypoint), tostring(legCell))
@@ -365,7 +365,7 @@ function petports_tryVentRoute(stateData, target)
 
   if stateData.plan ~= nil and stateData.planIndex <= #stateData.plan then
     stateData.viaVent = stateData.plan[stateData.planIndex]
-    stateData.ventApproachTimer = VENT_APPROACH_TIMEOUT
+    stateData.ventApproachTimer = PETPORTS_CONSTANTS.task.ventApproachTimeout
     stateData.ventLastPosition = nil
     stateData.ventLegStarted = false
     stateData.searchingTimer = 0
@@ -382,16 +382,16 @@ function petports_tryVentRoute(stateData, target)
     stateData.planOrigin = mcontroller.position()
   end
 
-  local plan = petports_planRoute(target, MAX_VENT_HOPS,
-    stateData.task.port, EXPLORE_RATE, stateData.ventHops > 0,
+  local plan = petports_planRoute(target, PETPORTS_CONSTANTS.task.maxVentHops,
+    stateData.task.port, PETPORTS_CONSTANTS.task.exploreRate, stateData.ventHops > 0,
     stateData.planOrigin, stateData.triedVents)
 
   if plan == "probing" then
     stateData.probeTimer = (stateData.probeTimer or 0) + script.updateDt()
-    if stateData.probeTimer < PROBE_LIMIT then return "probing" end
+    if stateData.probeTimer < PETPORTS_CONSTANTS.task.probeLimit then return "probing" end
 
     sb.logInfo("UNIT probe exceeded PROBE_LIMIT %s, forcing a timeout",
-      sb.printJson(PROBE_LIMIT))
+      sb.printJson(PETPORTS_CONSTANTS.task.probeLimit))
 
     petports_probeTimeout(stateData.task.port)
     stateData.probeTimer = 0
@@ -427,7 +427,7 @@ function petportsTaskAction.touchingVent(ventId)
 
   if not ok or type(ventRect) ~= "table" or type(ventRect[1]) ~= "number" then
     return world.magnitude(mcontroller.position(), world.entityPosition(ventId))
-      <= VENT_USE_DISTANCE
+      <= PETPORTS_CONSTANTS.task.ventUseDistance
   end
 
   local me = rect.translate(mcontroller.boundBox(), mcontroller.position())
@@ -476,7 +476,7 @@ function petportsTaskAction.enterWith(args)
     dwellTimer = task.dwell
       or (PETPORTS_TRACKED_TARGETS[task.type] ~= nil and PETPORTS_TRACKED_TARGETS[task.type].dwell)
       or (PETPORTS_TRACKED_TARGETS[task.type] ~= nil and PETPORTS_TRACKED_TARGETS[task.type].reach ~= nil
-          and CHASE_BUDGET)
+          and PETPORTS_CONSTANTS.task.chaseBudget)
       or 3.0,
     arrived = false,
     searchingTimer = 0,
@@ -546,7 +546,7 @@ function petports_plannedApex(pather)
 
   local highest = nil
 
-  for i = index + 1, math.min(index + MAX_JUMP_LOOKAHEAD, #edges) do
+  for i = index + 1, math.min(index + PETPORTS_CONSTANTS.task.maxJumpLookahead, #edges) do
     local edge = edges[i]
     if edge == nil then break end
 
@@ -568,7 +568,7 @@ function petports_plannedLanding(pather)
   local index = finder and finder.currentEdgeIndex
   if edges == nil or index == nil then return nil end
 
-  for i = index + 1, math.min(index + MAX_JUMP_LOOKAHEAD, #edges) do
+  for i = index + 1, math.min(index + PETPORTS_CONSTANTS.task.maxJumpLookahead, #edges) do
     local edge = edges[i]
     if edge == nil then return nil end
 
@@ -581,7 +581,7 @@ function petports_plannedLanding(pather)
 end
 
 
-local ARC_DESCENT_SOLIDS = { "Null", "Block", "Slippery", "Dynamic", "Platform" }
+PETPORTS_CONSTANTS.task.arcDescentSolids = { "Null", "Block", "Slippery", "Dynamic", "Platform" }
 
 -- Steps an arc through the physics timestep and returns where the body first hits terrain.
 function petports_arcHitsTerrain(source, vx, vy, gravity, airtime, landing)
@@ -590,12 +590,12 @@ function petports_arcHitsTerrain(source, vx, vy, gravity, airtime, landing)
 	local x, y = source[1], source[2]
 	local v = vy
 
-	local steps = math.ceil((airtime or 1) / PHYSICS_DT) + 2
+	local steps = math.ceil((airtime or 1) / PETPORTS_CONSTANTS.task.physicsDt) + 2
 
 	for i = 1, steps do
-		v = v - gravity * PHYSICS_DT
-		x = x + vx * PHYSICS_DT
-		y = y + v * PHYSICS_DT
+		v = v - gravity * PETPORTS_CONSTANTS.task.physicsDt
+		x = x + vx * PETPORTS_CONSTANTS.task.physicsDt
+		y = y + v * PETPORTS_CONSTANTS.task.physicsDt
 
 		if landing ~= nil and v < 0 and y <= landing[2] then
 			return nil
@@ -604,7 +604,7 @@ function petports_arcHitsTerrain(source, vx, vy, gravity, airtime, landing)
 		local movedX = x - source[1]
 		local movedY = y - source[2]
 
-		local set = (v < 0) and ARC_DESCENT_SOLIDS or nil
+		local set = (v < 0) and PETPORTS_CONSTANTS.task.arcDescentSolids or nil
 
 		if (movedX * movedX) + (movedY * movedY) > 0.25
 		   and petports_bodyHitsAt({ x, y }, set) then
@@ -617,7 +617,7 @@ end
 
 -- Logs whether a solved arc is clear, when flight tracing is on.
 function petports_traceLaunchTerrain(source, vx, vy, gravity, landing, airtime)
-	if not FLIGHT_TRACE then return end
+	if not PETPORTS_CONSTANTS.task.flightTrace then return end
 	if gravity == nil or gravity <= 0 then return end
 
 	local hit, step = petports_arcHitsTerrain(source, vx, vy, gravity, airtime, landing)
@@ -630,7 +630,7 @@ function petports_traceLaunchTerrain(source, vx, vy, gravity, landing, airtime)
 
 	sb.logInfo("UNIT TRACE-A solved arc hits terrain at step %s (t %s) at "
 		.. "[%s,%s] -- intended landing %s at t %s. dx travelled %s of %s",
-		sb.printJson(step), sb.printJson(step * PHYSICS_DT),
+		sb.printJson(step), sb.printJson(step * PETPORTS_CONSTANTS.task.physicsDt),
 		sb.printJson(hit[1]), sb.printJson(hit[2]), sb.printJson(landing),
 		sb.printJson(airtime), sb.printJson(hit[1] - source[1]),
 		sb.printJson(landing and (landing[1] - source[1])))
@@ -671,11 +671,11 @@ function petports_solveLaunch(pather, edge, source)
   if not narrow and plannedVx ~= 0 and dx ~= 0 and ((dx > 0) == (plannedVx > 0)) then
     local t = math.abs(dx) / math.abs(plannedVx)
 
-    if dy < 0.5 * gravity * t * (t + PHYSICS_DT) then
-      local candidate = (dy / t) + (0.5 * gravity * (t - PHYSICS_DT))
+    if dy < 0.5 * gravity * t * (t + PETPORTS_CONSTANTS.task.physicsDt) then
+      local candidate = (dy / t) + (0.5 * gravity * (t - PETPORTS_CONSTANTS.task.physicsDt))
 
       if candidate > 0
-         and petports_discreteRise(candidate, gravity) >= dy + JUMP_ARC_CLEARANCE then
+         and petports_discreteRise(candidate, gravity) >= dy + PETPORTS_CONSTANTS.task.jumpArcClearance then
 
         local hit = petports_arcHitsTerrain(source, plannedVx, candidate, gravity, t,
           landing)
@@ -692,7 +692,7 @@ function petports_solveLaunch(pather, edge, source)
   end
 
   if branch == nil then
-    local rise = math.max(planRise, dy + JUMP_ARC_CLEARANCE, JUMP_ARC_CLEARANCE)
+    local rise = math.max(planRise, dy + PETPORTS_CONSTANTS.task.jumpArcClearance, PETPORTS_CONSTANTS.task.jumpArcClearance)
 
     if narrow and plannedVx ~= 0 and dx ~= 0 then
       local ceiling = nil
@@ -703,13 +703,13 @@ function petports_solveLaunch(pather, edge, source)
 
       local tallRise = rise
       for _ = 1, 12 do
-        local tryVy = petports_discreteLaunchForRise(tallRise, gravity) * JUMP_VELOCITY_MARGIN
+        local tryVy = petports_discreteLaunchForRise(tallRise, gravity) * PETPORTS_CONSTANTS.task.jumpVelocityMargin
         if ceiling ~= nil and tryVy > ceiling then break end
-        local tb = tryVy + ((gravity * PHYSICS_DT) / 2)
+        local tb = tryVy + ((gravity * PETPORTS_CONSTANTS.task.physicsDt) / 2)
         local tdisc = (tb * tb) - (2 * gravity * dy)
         if tdisc < 0 then break end
         local tt = (tb + math.sqrt(tdisc)) / gravity
-        if tt > 0 and math.abs(dx / tt) <= NARROW_LANDING_VX then
+        if tt > 0 and math.abs(dx / tt) <= PETPORTS_CONSTANTS.task.narrowLandingVx then
           rise = tallRise
           branch = "tall arc for a narrow landing"
           break
@@ -718,9 +718,9 @@ function petports_solveLaunch(pather, edge, source)
       end
     end
 
-    vy = petports_discreteLaunchForRise(rise, gravity) * JUMP_VELOCITY_MARGIN
+    vy = petports_discreteLaunchForRise(rise, gravity) * PETPORTS_CONSTANTS.task.jumpVelocityMargin
 
-    local b = vy + ((gravity * PHYSICS_DT) / 2)
+    local b = vy + ((gravity * PETPORTS_CONSTANTS.task.physicsDt) / 2)
     local disc = (b * b) - (2 * gravity * dy)
     if disc < 0 then return plannedVx, plannedVy, nil end
 
@@ -735,7 +735,7 @@ function petports_solveLaunch(pather, edge, source)
     vx = math.abs(plannedVx) * (vx > 0 and 1 or -1)
   end
   if plannedVy > 0 then
-    vy = math.min(vy, plannedVy * JUMP_VELOCITY_CAP)
+    vy = math.min(vy, plannedVy * PETPORTS_CONSTANTS.task.jumpVelocityCap)
   end
 
   local finalHit = petports_arcHitsTerrain(source, vx, vy, gravity, time, landing)
@@ -761,30 +761,30 @@ function petports_solveLaunch(pather, edge, source)
   }
 end
 
-local DROP_HOLD_MAX = 0.5
+PETPORTS_CONSTANTS.task.dropHoldMax = 0.5
 
-local DROP_FLOOR_MARGIN = 0.05
+PETPORTS_CONSTANTS.task.dropFloorMargin = 0.05
 
-local DROP_DESCENT_EPSILON = 0.35
+PETPORTS_CONSTANTS.task.dropDescentEpsilon = 0.35
 
-local MIN_DROP_DISTANCE = 0.5
+PETPORTS_CONSTANTS.task.minDropDistance = 0.5
 
 
-local DROP_PROBE_DEPTH = 6
+PETPORTS_CONSTANTS.task.dropProbeDepth = 6
 
-local PROBE_EPSILON = 0.001
+PETPORTS_CONSTANTS.task.probeEpsilon = 0.001
 
 -- Returns the surface height of the first platform below the feet and above a floor.
 function petports_platformToPass(position, floorFeet)
   local bounds = mcontroller.boundBox()
   local feet = position[2] + bounds[2]
 
-  local first = math.floor(feet + PROBE_EPSILON) - 1
+  local first = math.floor(feet + PETPORTS_CONSTANTS.task.probeEpsilon) - 1
 
-  for row = first, first - DROP_PROBE_DEPTH, -1 do
+  for row = first, first - PETPORTS_CONSTANTS.task.dropProbeDepth, -1 do
     local surface = row + 1
 
-    if surface <= floorFeet + PROBE_EPSILON then break end
+    if surface <= floorFeet + PETPORTS_CONSTANTS.task.probeEpsilon then break end
 
     local region = { position[1] + bounds[1], row,
                      position[1] + bounds[3], row + 1 }
@@ -804,7 +804,7 @@ function petports_probeBelow(position)
 
   local feet = position[2] + bounds[2]
 
-  for step = 0, DROP_PROBE_DEPTH do
+  for step = 0, PETPORTS_CONSTANTS.task.dropProbeDepth do
     local row = math.floor(feet) - step
     local region = { position[1] + bounds[1], row,
                      position[1] + bounds[3], row + 1 }
@@ -816,15 +816,15 @@ function petports_probeBelow(position)
     end
   end
 
-  if #rows == 0 then return "nothing within " .. tostring(DROP_PROBE_DEPTH) end
+  if #rows == 0 then return "nothing within " .. tostring(PETPORTS_CONSTANTS.task.dropProbeDepth) end
   return table.concat(rows, " ")
 end
 
-local DROP_SCOOT = 0.25
+PETPORTS_CONSTANTS.task.dropScoot = 0.25
 
-local DROP_ORIGIN_TOLERANCE = 0.35
+PETPORTS_CONSTANTS.task.dropOriginTolerance = 0.35
 
-local DROP_SETTLE_MAX = 1.0
+PETPORTS_CONSTANTS.task.dropSettleMax = 1.0
 
 -- Returns the surface height of the lowest platform below the feet and above a floor.
 function petports_lastPlatformToPass(position, floorFeet)
@@ -832,9 +832,9 @@ function petports_lastPlatformToPass(position, floorFeet)
   local feet = position[2] + bounds[2]
   local lowest = nil
 
-  for row = math.floor(feet + PROBE_EPSILON) - 1, math.floor(feet) - DROP_PROBE_DEPTH, -1 do
+  for row = math.floor(feet + PETPORTS_CONSTANTS.task.probeEpsilon) - 1, math.floor(feet) - PETPORTS_CONSTANTS.task.dropProbeDepth, -1 do
     local surface = row + 1
-    if surface <= floorFeet + PROBE_EPSILON then break end
+    if surface <= floorFeet + PETPORTS_CONSTANTS.task.probeEpsilon then break end
 
     local region = { position[1] + bounds[1], row,
                      position[1] + bounds[3], row + 1 }
@@ -869,7 +869,7 @@ function petports_scootThroughPlatform(pather, floorFeet)
   local feetNow = position[2] + mcontroller.boundBox()[2]
   local standingGap = math.abs(feetNow - surface)
 
-  if standingGap > DROP_ORIGIN_TOLERANCE then
+  if standingGap > PETPORTS_CONSTANTS.task.dropOriginTolerance then
     return false, string.format(
       "feet at %s are %s from the surface %s we would pass -- not standing on it, "
       .. "a placement here would cross %s tiles of geometry unchecked",
@@ -878,9 +878,9 @@ function petports_scootThroughPlatform(pather, floorFeet)
   end
 
   local feet = nil
-  local offset = DROP_SCOOT
+  local offset = PETPORTS_CONSTANTS.task.dropScoot
 
-  while offset <= DROP_SETTLE_MAX + PROBE_EPSILON do
+  while offset <= PETPORTS_CONSTANTS.task.dropSettleMax + PETPORTS_CONSTANTS.task.probeEpsilon do
     local candidate = surface - offset
 
     if petports_bodyFitsWithFeetAt(position, candidate) then
@@ -888,13 +888,13 @@ function petports_scootThroughPlatform(pather, floorFeet)
       break
     end
 
-    offset = offset + DROP_SCOOT
+    offset = offset + PETPORTS_CONSTANTS.task.dropScoot
   end
 
   if feet == nil then
     return false, string.format(
       "no feet height between %s and %s clears solid tiles",
-      sb.printJson(surface - DROP_SCOOT), sb.printJson(surface - DROP_SETTLE_MAX))
+      sb.printJson(surface - PETPORTS_CONSTANTS.task.dropScoot), sb.printJson(surface - PETPORTS_CONSTANTS.task.dropSettleMax))
   end
 
   local was = position[2]
@@ -910,7 +910,7 @@ function petportsTimedDrop(pather, time)
   local delta = pather.delta
   local descent = (delta ~= nil and delta[2] ~= nil) and -delta[2] or 0
 
-  if descent < MIN_DROP_DISTANCE then
+  if descent < PETPORTS_CONSTANTS.task.minDropDistance then
     pather.downHoldTimer = nil
     pather.petportsDropOrigin = nil
     pather.petportsDropFloor = nil
@@ -940,7 +940,7 @@ function petportsTimedDrop(pather, time)
 
   sb.logInfo("UNIT drop scoot refused (%s) -- falling back to controlDown", why)
 
-  pather.downHoldTimer = math.min(time or 0, DROP_HOLD_MAX)
+  pather.downHoldTimer = math.min(time or 0, PETPORTS_CONSTANTS.task.dropHoldMax)
   pather.petportsDropOrigin = mcontroller.position()[2]
 
   pather.petportsDropFloor = pather.petportsDropOrigin - descent
@@ -977,7 +977,7 @@ function petportsKeepDropping(pather, dt)
   local origin = pather.petportsDropOrigin or y
   local floor = pather.petportsDropFloor
 
-  if TASK_DEBUG then
+  if PETPORTS_CONSTANTS.task.taskDebug then
     sb.logInfo("UNIT drop tick y %s feet %s v %s timer %s floor %s | below: %s",
       sb.printJson(y),
       sb.printJson(y + mcontroller.boundBox()[2]),
@@ -1007,7 +1007,7 @@ function petportsKeepDropping(pather, dt)
     end
   end
 
-  if floor ~= nil and y <= floor + DROP_FLOOR_MARGIN then
+  if floor ~= nil and y <= floor + PETPORTS_CONSTANTS.task.dropFloorMargin then
     sb.logInfo("UNIT drop reached floor %s at y %s (fell %s) -- floor backstop, "
       .. "the platform test should have released first",
       sb.printJson(floor), sb.printJson(y), sb.printJson(origin - y))
@@ -1016,8 +1016,8 @@ function petportsKeepDropping(pather, dt)
     return
   end
 
-  if (origin - y) >= DROP_DESCENT_EPSILON and mcontroller.onGround() then
-    if TASK_DEBUG then
+  if (origin - y) >= PETPORTS_CONSTANTS.task.dropDescentEpsilon and mcontroller.onGround() then
+    if PETPORTS_CONSTANTS.task.taskDebug then
       sb.logInfo("UNIT drop landed short at y %s (fell %s, floor was %s), releasing down",
         sb.printJson(y), sb.printJson(origin - y), tostring(floor))
     end
@@ -1052,12 +1052,12 @@ function petportsJumpMover(pather)
   local source = edge.source.position
   local gap = world.magnitude(mcontroller.position(), source)
 
-  if gap >= JUMP_TAKEOFF_REACH then
+  if gap >= PETPORTS_CONSTANTS.task.jumpTakeoffReach then
     if mcontroller.onGround() then
       local toSource = source[1] - mcontroller.position()[1]
       local levelGap = math.abs(source[2] - mcontroller.position()[2])
 
-      if levelGap >= JUMP_LEVEL_TOLERANCE then
+      if levelGap >= PETPORTS_CONSTANTS.task.jumpLevelTolerance then
         if not pather.petportsWrongLevel then
           pather.petportsWrongLevel = true
           sb.logInfo("UNIT jump source %s is %s tiles off our level (at %s) -- not walkable, waiting for replan",
@@ -1070,7 +1070,7 @@ function petportsJumpMover(pather)
 
       pather.petportsWrongLevel = nil
 
-      if math.abs(toSource) >= JUMP_APPROACH_EPSILON then
+      if math.abs(toSource) >= PETPORTS_CONSTANTS.task.jumpApproachEpsilon then
         mcontroller.controlMove(toSource > 0 and 1 or -1, false)
 
         if not pather.petportsWalkingToJump then
@@ -1082,7 +1082,7 @@ function petportsJumpMover(pather)
       end
 
     elseif not petports_freeMover()
-           and gap <= JUMP_SWIM_CHASE then
+           and gap <= PETPORTS_CONSTANTS.task.jumpSwimChase then
       local medium = petports_mediumAt(mcontroller.position())
 
       if medium == "swim" or medium == "mixed" then
@@ -1142,7 +1142,7 @@ function petportsJumpMover(pather)
       local physicsTop = source[2] + nominalRise
       local overshoot = physicsTop - plannedTop
 
-      if overshoot > PLAN_SURFACE_TOLERANCE then
+      if overshoot > PETPORTS_CONSTANTS.task.planSurfaceTolerance then
         sb.logInfo("UNIT ARCPLAN VERDICT: planner apex %s is %s tiles BELOW what a %s jump delivers (%s). "
           .. "The plan's Land is on the ASCENDING crossing -- solveLaunch will lower the launch to arrive descending.",
           sb.printJson(plannedTop), sb.printJson(overshoot),
@@ -1153,7 +1153,7 @@ function petportsJumpMover(pather)
       end
     end
 
-    for i = planIndex + 1, math.min(planIndex + MAX_JUMP_LOOKAHEAD, #planEdges) do
+    for i = planIndex + 1, math.min(planIndex + PETPORTS_CONSTANTS.task.maxJumpLookahead, #planEdges) do
       local planEdge = planEdges[i]
       if planEdge == nil then break end
 
@@ -1194,7 +1194,7 @@ function petportsJumpMover(pather)
 
     mcontroller.setVelocity({vx, vy})
 
-    if FLIGHT_TRACE then
+    if PETPORTS_CONSTANTS.task.flightTrace then
       local traceParams = mcontroller.baseParameters()
       local traceGravity = world.gravity(source)
         * (traceParams.gravityMultiplier or 1.0)
@@ -1293,18 +1293,18 @@ function petportsArcMover(pather)
   local ahead = nil
 
   if landing ~= nil then
-    if math.abs(vel[1]) < LAND_BRAKE_STATIONARY then
+    if math.abs(vel[1]) < PETPORTS_CONSTANTS.task.landBrakeStationary then
       local gap = math.abs(landing[1] - here[1])
-      ahead = (gap <= LAND_BRAKE_STATIONARY_GAP) and 0 or gap
+      ahead = (gap <= PETPORTS_CONSTANTS.task.landBrakeStationaryGap) and 0 or gap
     else
       ahead = (landing[1] - here[1]) * ((vel[1] > 0) and 1 or -1)
     end
   end
 
   if landing ~= nil and not pather.petportsLanding and vel[2] < 0
-    and ahead <= LAND_BRAKE_ARRIVED
-    and ahead >= -LAND_BRAKE_OVERRUN
-    and here[2] <= landing[2] + LAND_BRAKE_CEILING then
+    and ahead <= PETPORTS_CONSTANTS.task.landBrakeArrived
+    and ahead >= -PETPORTS_CONSTANTS.task.landBrakeOverrun
+    and here[2] <= landing[2] + PETPORTS_CONSTANTS.task.landBrakeCeiling then
 
     pather.petportsLanding = true
     mcontroller.setVelocity({ 0, vel[2] })
@@ -1316,8 +1316,8 @@ function petportsArcMover(pather)
   end
 
   if landing ~= nil and not pather.petportsLanding and vel[2] < 0
-    and math.abs(vel[1]) < LAND_BRAKE_STATIONARY
-    and ahead > LAND_BRAKE_ARRIVED
+    and math.abs(vel[1]) < PETPORTS_CONSTANTS.task.landBrakeStationary
+    and ahead > PETPORTS_CONSTANTS.task.landBrakeArrived
     and pather.petportsShortOf ~= landing[1] then
 
     pather.petportsShortOf = landing[1]
@@ -1325,7 +1325,7 @@ function petportsArcMover(pather)
     sb.logInfo("UNIT ARCMOVER NOT arrived at landing %s from %s vel %s -- motionless but %s "
       .. "tiles short horizontally (gap limit %s); descending past it rather than latching",
       sb.printJson(landing), sb.printJson(here), sb.printJson(vel),
-      sb.printJson(ahead), sb.printJson(LAND_BRAKE_STATIONARY_GAP))
+      sb.printJson(ahead), sb.printJson(PETPORTS_CONSTANTS.task.landBrakeStationaryGap))
   end
 
   if pather.petportsLanding then
@@ -1393,7 +1393,7 @@ function petports_freshPather(why)
 		tostring(petports_swimMode()), tostring(petports_freeMover()),
 		tostring(mcontroller.onGround()))
 
-  if TASK_DEBUG then
+  if PETPORTS_CONSTANTS.task.taskDebug then
     sb.logInfo("UNIT pather boundBox %s standingBoundBox %s",
       sb.printJson(options.boundBox), sb.printJson(options.standingBoundBox))
   end
@@ -1404,12 +1404,12 @@ function petports_freshPather(why)
   })
 
   self.petportsExploreCalls = 0
-  self.petportsExploreRate = (why == "coarse leg") and NAV_LEG_EXPLORE_RATE
-    or EXPLORE_RATE
+  self.petportsExploreRate = (why == "coarse leg") and PETPORTS_CONSTANTS.task.navLegExploreRate
+    or PETPORTS_CONSTANTS.task.exploreRate
   -- Returns the explore rate, counting the calls.
   self.pather.finder.exploreRate = function()
     self.petportsExploreCalls = (self.petportsExploreCalls or 0) + 1
-    return self.petportsExploreRate or EXPLORE_RATE
+    return self.petportsExploreRate or PETPORTS_CONSTANTS.task.exploreRate
   end
 
   self.pather.finder.canPathfind = petportsCanPathfind
@@ -1429,7 +1429,7 @@ end
 function petportsTaskAction.enteringState(stateData)
   if not petports_taskStampLogged then
     petports_taskStampLogged = true
-    sb.logInfo("PETPORTS taskAction build: %s", BUILD_STAMP)
+    sb.logInfo("PETPORTS taskAction build: %s", PETPORTS_CONSTANTS.task.buildStamp)
   end
 
   sb.logInfo("UNIT entering task state for %s at %s",
@@ -1439,9 +1439,9 @@ function petportsTaskAction.enteringState(stateData)
 
 end
 
-local TASK_MOVING_DISTANCE = 2.0
+PETPORTS_CONSTANTS.task.taskMovingDistance = 2.0
 
-local TASK_MOVING_INTERVAL = 0.2
+PETPORTS_CONSTANTS.task.taskMovingInterval = 0.2
 
 -- Sends a task outcome to the port and drops the held task.
 function petports_taskReport(stateData, outcome, reason, cargo, retry)
@@ -1475,18 +1475,18 @@ function petports_taskReport(stateData, outcome, reason, cargo, retry)
 end
 
 
-local STANDABLE_TILE_SET = { "Block", "Slippery", "Platform" }
+PETPORTS_CONSTANTS.task.standableTileSet = { "Block", "Slippery", "Platform" }
 
-local GROUND_SEARCH_DOWN = -6
-local GROUND_SEARCH_UP = 4
+PETPORTS_CONSTANTS.task.groundSearchDown = -6
+PETPORTS_CONSTANTS.task.groundSearchUp = 4
 
-local COLUMN_RADIUS = 3
+PETPORTS_CONSTANTS.task.columnRadius = 3
 
 petports_columnCache = {}
 
 -- Returns the column offsets out to a radius, nearest first, cached.
 function petports_columnsFor(radius)
-	radius = math.floor(radius or COLUMN_RADIUS)
+	radius = math.floor(radius or PETPORTS_CONSTANTS.task.columnRadius)
 	if radius < 0 then radius = 0 end
 
 	if petports_columnCache[radius] ~= nil then return petports_columnCache[radius] end
@@ -1524,7 +1524,7 @@ function petports_standableNearInner(position, searchUp, radius, mediumVerified,
   if petports_freeMover() then
     local flyPoint = petports_flyPointNear(position, radius, mediumVerified)
 
-    if TASK_DEBUG then
+    if PETPORTS_CONSTANTS.task.taskDebug then
       sb.logInfo("UNIT fly point for %s -> %s",
         sb.printJson(position), (flyPoint ~= nil) and sb.printJson(flyPoint) or "REFUSED")
     end
@@ -1532,9 +1532,9 @@ function petports_standableNearInner(position, searchUp, radius, mediumVerified,
     return flyPoint
   end
 
-  if searchUp == nil then searchUp = GROUND_SEARCH_UP end
+  if searchUp == nil then searchUp = PETPORTS_CONSTANTS.task.groundSearchUp end
 
-  if searchDown == nil then searchDown = GROUND_SEARCH_DOWN end
+  if searchDown == nil then searchDown = PETPORTS_CONSTANTS.task.groundSearchDown end
 
   local best = nil
   local bestOffset = nil
@@ -1552,7 +1552,7 @@ function petports_standableNearInner(position, searchUp, radius, mediumVerified,
       and type(resolved[2]) == "number"
 
     if usable and not petports_mediumAllows({ resolved[1], resolved[2] }) then
-      if TASK_DEBUG then
+      if PETPORTS_CONSTANTS.task.taskDebug then
         sb.logInfo("UNIT ground spot %s rejected: a liquid this chassis will not enter",
           sb.printJson(resolved))
       end
@@ -1562,7 +1562,7 @@ function petports_standableNearInner(position, searchUp, radius, mediumVerified,
     if usable and not petports_freeMover()
        and petports_mediumAtPoint({ resolved[1], resolved[2] }) == "swim"
        and not world.pointTileCollision({ resolved[1], resolved[2] - 1.0 },
-             STANDABLE_TILE_SET) then
+             PETPORTS_CONSTANTS.task.standableTileSet) then
 
       local floor = nil
 
@@ -1570,7 +1570,7 @@ function petports_standableNearInner(position, searchUp, radius, mediumVerified,
         local lower = { resolved[1], resolved[2] - drop }
 
         if world.pointTileCollision({ lower[1], lower[2] - 1.0 },
-           STANDABLE_TILE_SET) then
+           PETPORTS_CONSTANTS.task.standableTileSet) then
           local fits, standable = pcall(validStandingPosition, lower,
             petports_avoidLiquid())
 
@@ -1583,13 +1583,13 @@ function petports_standableNearInner(position, searchUp, radius, mediumVerified,
       end
 
       if floor ~= nil then
-        if TASK_DEBUG then
+        if PETPORTS_CONSTANTS.task.taskDebug then
           sb.logInfo("UNIT ground spot %s was floating, descended to %s (asked for %s)",
             sb.printJson(resolved), sb.printJson(floor), sb.printJson(position))
         end
         resolved = floor
       else
-        if TASK_DEBUG then
+        if PETPORTS_CONSTANTS.task.taskDebug then
           sb.logInfo("UNIT ground spot %s is floating and no floor below it (asked for %s)",
             sb.printJson(resolved), sb.printJson(position))
         end
@@ -1601,7 +1601,7 @@ function petports_standableNearInner(position, searchUp, radius, mediumVerified,
       local candidate = { resolved[1], resolved[2] }
       local distance = world.magnitude(candidate, position)
 
-      if TASK_DEBUG then
+      if PETPORTS_CONSTANTS.task.taskDebug then
         sb.logInfo("UNIT standable candidate %s for %s (column offset %s) dist %s",
           sb.printJson(candidate), sb.printJson(position),
           sb.printJson(offset), sb.printJson(distance))
@@ -1614,7 +1614,7 @@ function petports_standableNearInner(position, searchUp, radius, mediumVerified,
       end
     end
 
-    if TASK_DEBUG and not ok then
+    if PETPORTS_CONSTANTS.task.taskDebug and not ok then
       sb.logInfo("UNIT findGroundPosition failed at x %s: %s",
         sb.printJson(x), tostring(resolved))
     end
@@ -1649,7 +1649,7 @@ function petports_objectRoofPoint(position, bounds)
     local candidate = { x, roofY }
     local why = nil
 
-    if not world.pointTileCollision({ x, roofY - 1.0 }, STANDABLE_TILE_SET) then
+    if not world.pointTileCollision({ x, roofY - 1.0 }, PETPORTS_CONSTANTS.task.standableTileSet) then
       why = "no floor below"
     elseif not petports_mediumAllows(candidate) then
       why = "a medium this chassis will not enter"
@@ -1670,7 +1670,7 @@ function petports_objectRoofPoint(position, bounds)
       if bestDistance == nil or distance < bestDistance then
         best, bestDistance = candidate, distance
       end
-    elseif TASK_DEBUG then
+    elseif PETPORTS_CONSTANTS.task.taskDebug then
       sb.logInfo("UNIT roof candidate %s refused: %s",
         sb.printJson(candidate), why)
     end
@@ -1700,11 +1700,11 @@ function petports_objectPointNear(position, bounds, mediumVerified)
   local up = math.ceil(maxY - position[2]) + OBJECT_SEARCH_BUFFER
   local down = math.floor(minY - position[2]) - OBJECT_SEARCH_BUFFER
 
-  if up < GROUND_SEARCH_UP then up = GROUND_SEARCH_UP end
-  if down > GROUND_SEARCH_DOWN then down = GROUND_SEARCH_DOWN end
-  if radius < COLUMN_RADIUS then radius = COLUMN_RADIUS end
+  if up < PETPORTS_CONSTANTS.task.groundSearchUp then up = PETPORTS_CONSTANTS.task.groundSearchUp end
+  if down > PETPORTS_CONSTANTS.task.groundSearchDown then down = PETPORTS_CONSTANTS.task.groundSearchDown end
+  if radius < PETPORTS_CONSTANTS.task.columnRadius then radius = PETPORTS_CONSTANTS.task.columnRadius end
 
-  if TASK_DEBUG then
+  if PETPORTS_CONSTANTS.task.taskDebug then
     sb.logInfo("UNIT object point for %s bounds %s -> radius %s up %s down %s",
       sb.printJson(position), sb.printJson(bounds),
       sb.printJson(radius), sb.printJson(up), sb.printJson(down))
@@ -1730,7 +1730,7 @@ function petports_currentTarget(task)
   return world.entityPosition(trackedId)
 end
 
-local TARGET_DRIFT = 1.5
+PETPORTS_CONSTANTS.task.targetDrift = 1.5
 
 -- Records where the approach target came from and logs a change for a switchable chassis.
 function petports_noteGroundTarget(stateData, why, rawPosition)
@@ -1747,7 +1747,7 @@ function petports_noteGroundTarget(stateData, why, rawPosition)
 			.. (plan.abandoned and "abandoned" or (plan.reached and "reached" or "to board"))))
 end
 
--- Returns the nearest of the task object's tile centres within ARRIVAL_DISTANCE of the body, and its distance.
+-- Returns the nearest of the task object's tile centres within PETPORTS_CONSTANTS.task.arrivalDistance of the body, and its distance.
 function petports_objectTileInReach(stateData)
 	local task = stateData.task
 	if task == nil or task.type == "return" then return nil end
@@ -1760,7 +1760,7 @@ function petports_objectTileInReach(stateData)
 
 	for _, point in ipairs(points) do
 		local distance = world.magnitude(here, point)
-		if distance <= ARRIVAL_DISTANCE and (bestDistance == nil or distance < bestDistance) then
+		if distance <= PETPORTS_CONSTANTS.task.arrivalDistance and (bestDistance == nil or distance < bestDistance) then
 			best, bestDistance = point, distance
 		end
 	end
@@ -1779,7 +1779,7 @@ function petports_approachTargetFor(stateData, rawPosition)
   local grounded = petports_freeMover() or mcontroller.onGround()
 
   if grounded and stateData.groundTarget ~= nil and stateData.groundTargetFrom ~= nil
-     and world.magnitude(rawPosition, stateData.groundTargetFrom) > TARGET_DRIFT then
+     and world.magnitude(rawPosition, stateData.groundTargetFrom) > PETPORTS_CONSTANTS.task.targetDrift then
     stateData.groundTarget = nil
     stateData.groundTargetFrom = nil
   end
@@ -1855,7 +1855,7 @@ function petports_nudgeTargetNear(node)
   local here = mcontroller.position()
 
   local candidates = {}
-  for dx = -ORIGIN_NUDGE_RADIUS, ORIGIN_NUDGE_RADIUS do
+  for dx = -PETPORTS_CONSTANTS.task.originNudgeRadius, PETPORTS_CONSTANTS.task.originNudgeRadius do
     if dx ~= 0 then
       local candidate = { node[1] + dx, node[2] }
       table.insert(candidates, { candidate, world.magnitude(candidate, here) })
@@ -1924,7 +1924,7 @@ function petports_nudgeOrigin(stateData, dt)
         .. "the search will plan from mid air, falling through to the ordinary "
         .. "failure ladder",
         sb.printJson(mcontroller.position()), sb.printJson(node),
-        sb.printJson(ORIGIN_NUDGE_RADIUS))
+        sb.printJson(PETPORTS_CONSTANTS.task.originNudgeRadius))
 
       stateData.originNudgeFailed = true
       return false
@@ -1944,7 +1944,7 @@ function petports_nudgeOrigin(stateData, dt)
   local here = mcontroller.position()
   local toTarget = stateData.originNudge[1] - here[1]
 
-  if stateData.originNudgeTimer >= ORIGIN_NUDGE_TIMEOUT then
+  if stateData.originNudgeTimer >= PETPORTS_CONSTANTS.task.originNudgeTimeout then
     sb.logInfo("UNIT origin nudge TIMED OUT at %s after %s s: wanted %s, still "
       .. "%s tiles short -- giving up and letting the task fail normally",
       sb.printJson(here), sb.printJson(stateData.originNudgeTimer),
@@ -1956,7 +1956,7 @@ function petports_nudgeOrigin(stateData, dt)
     return false
   end
 
-  if math.abs(toTarget) <= ORIGIN_NUDGE_ARRIVE then
+  if math.abs(toTarget) <= PETPORTS_CONSTANTS.task.originNudgeArrive then
     mcontroller.controlApproachXVelocity(0, mcontroller.baseParameters().groundForce)
     return true
   end
@@ -1968,9 +1968,9 @@ function petports_nudgeOrigin(stateData, dt)
   return true
 end
 
-local PLAN_WALK_LOOKAHEAD = 6
+PETPORTS_CONSTANTS.task.planWalkLookahead = 6
 
-local PLAN_DROP_REACH = 1.25
+PETPORTS_CONSTANTS.task.planDropReach = 1.25
 
 -- Scoots through the platform underfoot when a nearby walk or land edge sits below the unit.
 function petports_tryPlanDrop(pather, finder)
@@ -1988,7 +1988,7 @@ function petports_tryPlanDrop(pather, finder)
   local worstBelow = nil
   local worstReach = nil
 
-  for i = index, math.min(index + PLAN_WALK_LOOKAHEAD, #edges) do
+  for i = index, math.min(index + PETPORTS_CONSTANTS.task.planWalkLookahead, #edges) do
     local edge = edges[i]
     if edge == nil then break end
 
@@ -1999,8 +1999,8 @@ function petports_tryPlanDrop(pather, finder)
 
       local reach = math.abs(here[1] - edge.target.position[1])
 
-      if below >= PLAN_SURFACE_TOLERANCE
-         and reach <= PLAN_DROP_REACH
+      if below >= PETPORTS_CONSTANTS.task.planSurfaceTolerance
+         and reach <= PETPORTS_CONSTANTS.task.planDropReach
          and (worstBelow == nil or below > worstBelow) then
         worstEdge = edge
         worstIndex = i
@@ -2038,7 +2038,7 @@ function petports_planWalkBlocked(finder)
   local walkEdge = nil
   local walkIndex = nil
 
-  for i = index, math.min(index + PLAN_WALK_LOOKAHEAD, #edges) do
+  for i = index, math.min(index + PETPORTS_CONSTANTS.task.planWalkLookahead, #edges) do
     local candidate = edges[i]
     if candidate == nil then break end
 
@@ -2077,7 +2077,7 @@ function petports_flightPlanX(finder, y)
   local index = finder.currentEdgeIndex
   if index == nil then return nil end
 
-  for i = index, math.min(index + MAX_JUMP_LOOKAHEAD, #finder.edges) do
+  for i = index, math.min(index + PETPORTS_CONSTANTS.task.maxJumpLookahead, #finder.edges) do
     local edge = finder.edges[i]
     if edge == nil then break end
 
@@ -2105,7 +2105,7 @@ end
 
 -- Logs the position, velocity and drift from the solved arc each tick, when flight tracing is on.
 function petports_flightTrace(dt, stateData)
-  if not FLIGHT_TRACE then return end
+  if not PETPORTS_CONSTANTS.task.flightTrace then return end
 
   local here = mcontroller.position()
   local grounded = mcontroller.onGround()
@@ -2141,9 +2141,9 @@ function petports_flightTrace(dt, stateData)
     local sx, sy, sv = launch.source[1], launch.source[2], launch.vy
 
     for _ = 1, tick do
-      sv = sv - launch.gravity * PHYSICS_DT
-      sx = sx + launch.vx * PHYSICS_DT
-      sy = sy + sv * PHYSICS_DT
+      sv = sv - launch.gravity * PETPORTS_CONSTANTS.task.physicsDt
+      sx = sx + launch.vx * PETPORTS_CONSTANTS.task.physicsDt
+      sy = sy + sv * PETPORTS_CONSTANTS.task.physicsDt
     end
 
     solveX, solveY = sx, sy
@@ -2210,8 +2210,8 @@ function petports_fuelMoving(dt)
 		return true
 	end
 
-	if world.magnitude(here, self.petportsFuelAnchor) >= PROGRESS_DISTANCE then
-		if self.petportsFuelHeld and FUEL_TRACE then
+	if world.magnitude(here, self.petportsFuelAnchor) >= PETPORTS_CONSTANTS.task.progressDistance then
+		if self.petportsFuelHeld and PETPORTS_CONSTANTS.task.fuelTrace then
 			sb.logInfo("UNIT fuel: moving again at %s -- resuming the burn",
 				sb.printJson(here))
 		end
@@ -2224,13 +2224,13 @@ function petports_fuelMoving(dt)
 
 	self.petportsFuelTimer = (self.petportsFuelTimer or 0) + dt
 
-	if self.petportsFuelTimer >= PROGRESS_WINDOW then
+	if self.petportsFuelTimer >= PETPORTS_CONSTANTS.task.progressWindow then
 		self.petportsFuelTimer = 0
 		self.petportsFuelAnchor = here
 
-		if not self.petportsFuelHeld and FUEL_TRACE then
+		if not self.petportsFuelHeld and PETPORTS_CONSTANTS.task.fuelTrace then
 			sb.logInfo("UNIT fuel: moved less than %s in %s s at %s -- holding the burn",
-				sb.printJson(PROGRESS_DISTANCE), sb.printJson(PROGRESS_WINDOW),
+				sb.printJson(PETPORTS_CONSTANTS.task.progressDistance), sb.printJson(PETPORTS_CONSTANTS.task.progressWindow),
 				sb.printJson(here))
 		end
 
@@ -2261,11 +2261,11 @@ function petports_burnFuel(dt, task)
 	status.modifyResource("petports_fuel", -(rate * dt))
 end
 
-local MUNCH_INTERVAL = 1.0
+PETPORTS_CONSTANTS.task.munchInterval = 1.0
 
-local MUNCH_RADIUS = 3.0
+PETPORTS_CONSTANTS.task.munchRadius = 3.0
 
-local MUNCH_LOW = 0.25
+PETPORTS_CONSTANTS.task.munchLow = 0.25
 
 -- Returns whether leftovers may be handed to the port rather than dropped.
 function petports_munchMayHold(task)
@@ -2276,17 +2276,17 @@ end
 function petports_runAndMunch(dt, task)
   self.munchTimer = (self.munchTimer or 0) - dt
   if self.munchTimer > 0 then return end
-  self.munchTimer = MUNCH_INTERVAL
+  self.munchTimer = PETPORTS_CONSTANTS.task.munchInterval
 
   local maximum = status.resourceMax("petports_fuel")
   local current = status.resource("petports_fuel")
 
   if maximum == nil or current == nil then return end
-  if current >= maximum * MUNCH_LOW then return end
+  if current >= maximum * PETPORTS_CONSTANTS.task.munchLow then return end
 
   local here = mcontroller.position()
 
-  local found = world.entityQuery(here, MUNCH_RADIUS, {
+  local found = world.entityQuery(here, PETPORTS_CONSTANTS.task.munchRadius, {
     includedTypes = { "itemDrop" }
   })
 
@@ -2385,7 +2385,7 @@ function petports_arcPastWaypoint(edges, index, here)
 	local target = edge.target.position
 	local onward = following.target.position
 
-	if math.abs(here[2] - target[2]) > PLAN_SURFACE_TOLERANCE then
+	if math.abs(here[2] - target[2]) > PETPORTS_CONSTANTS.task.planSurfaceTolerance then
 		return false
 	end
 
@@ -2395,11 +2395,11 @@ function petports_arcPastWaypoint(edges, index, here)
 	return ((here[1] - target[1]) * forward) > 0
 end
 
-local LIQUID_LOOK_AHEAD = 3
+PETPORTS_CONSTANTS.task.liquidLookAhead = 3
 
-local LIQUID_SCAN_SPAN = 10
+PETPORTS_CONSTANTS.task.liquidScanSpan = 10
 
-local LIQUID_HOP_VX = 6
+PETPORTS_CONSTANTS.task.liquidHopVx = 6
 
 -- Returns whether the liquid at a point is one this chassis will not enter.
 function petports_deniedLiquidAt(point)
@@ -2417,7 +2417,7 @@ function petports_liquidHopFrom(here, dir)
 	local nose = here[1] + (dir > 0 and bounds[3] or bounds[1])
 
 	local entry = nil
-	for step = 0, LIQUID_LOOK_AHEAD do
+	for step = 0, PETPORTS_CONSTANTS.task.liquidLookAhead do
 		local x = nose + dir * step
 		if petports_deniedLiquidAt({ x, feetY }) or petports_deniedLiquidAt({ x, feetY - 1 }) then
 			entry = x
@@ -2427,7 +2427,7 @@ function petports_liquidHopFrom(here, dir)
 	if entry == nil then return nil end
 
 	local exit = nil
-	for step = 1, LIQUID_SCAN_SPAN + 1 do
+	for step = 1, PETPORTS_CONSTANTS.task.liquidScanSpan + 1 do
 		local x = entry + dir * step
 		if not (petports_deniedLiquidAt({ x, feetY }) or petports_deniedLiquidAt({ x, feetY - 1 })) then
 			exit = x
@@ -2445,7 +2445,7 @@ function petports_liquidHopFrom(here, dir)
 
 	local dx = landing[1] - here[1]
 	local dy = landing[2] - here[2]
-	local speed = LIQUID_HOP_VX
+	local speed = PETPORTS_CONSTANTS.task.liquidHopVx
 	local okSpeed, runSpeed = pcall(function() return parameters.runSpeed end)
 	if okSpeed and tonumber(runSpeed) ~= nil and runSpeed > 0 then speed = runSpeed end
 
@@ -2455,8 +2455,8 @@ function petports_liquidHopFrom(here, dir)
 
 	local vx = speed * dir
 	local t = math.abs(dx) / speed
-	local vy = (dy / t) + (0.5 * gravity * (t - PHYSICS_DT))
-	vy = math.max(vy, petports_discreteLaunchForRise(math.max(dy, 0) + JUMP_ARC_CLEARANCE, gravity))
+	local vy = (dy / t) + (0.5 * gravity * (t - PETPORTS_CONSTANTS.task.physicsDt))
+	vy = math.max(vy, petports_discreteLaunchForRise(math.max(dy, 0) + PETPORTS_CONSTANTS.task.jumpArcClearance, gravity))
 
 	local ceiling = nil
 	local okJump, profile = pcall(function() return parameters.airJumpProfile.jumpSpeed end)
@@ -2529,14 +2529,14 @@ function petports_avoidLiquidAhead(stateData)
 	return true
 end
 
-local DOOR_REACH = 1.5
-local DOOR_TRAIL = 2.5
-local DOOR_RISE = 1.0
-local DOOR_CLIMB = 4.0
-local DOOR_CLEAR = 0.2
-local DOOR_PATH = 12.0
-local DOOR_DRIFT = 2.0
-local DOOR_BITE = 0.1
+PETPORTS_CONSTANTS.task.doorReach = 1.5
+PETPORTS_CONSTANTS.task.doorTrail = 2.5
+PETPORTS_CONSTANTS.task.doorRise = 1.0
+PETPORTS_CONSTANTS.task.doorClimb = 4.0
+PETPORTS_CONSTANTS.task.doorClear = 0.2
+PETPORTS_CONSTANTS.task.doorPath = 12.0
+PETPORTS_CONSTANTS.task.doorDrift = 2.0
+PETPORTS_CONSTANTS.task.doorBite = 0.1
 
 -- Returns the body box extended by a distance to one side, on the x axis or the y axis.
 function petports_doorSpan(axis, direction, distance)
@@ -2599,7 +2599,7 @@ function petports_doorOnPath(bounds)
 
 		if edge ~= nil and edge.source ~= nil and edge.target ~= nil
 		   and edge.source.position ~= nil and edge.target.position ~= nil then
-			if world.magnitude(here, edge.source.position) > DOOR_PATH then return false end
+			if world.magnitude(here, edge.source.position) > PETPORTS_CONSTANTS.task.doorPath then return false end
 
 			if petports_doorSegmentHits(edge.source.position, edge.target.position, low, high) then
 				return true
@@ -2614,7 +2614,7 @@ end
 function petports_doorVertical()
 	local vy = mcontroller.velocity()[2] or 0
 
-	if vy >= DOOR_CLIMB then return 1 end
+	if vy >= PETPORTS_CONSTANTS.task.doorClimb then return 1 end
 
 	local finder = self.pather and self.pather.finder
 
@@ -2629,8 +2629,8 @@ function petports_doorVertical()
 
 	local rise = edge.target.position[2] - mcontroller.position()[2]
 
-	if rise >= DOOR_RISE then return 1 end
-	if rise <= -DOOR_RISE then return -1 end
+	if rise >= PETPORTS_CONSTANTS.task.doorRise then return 1 end
+	if rise <= -PETPORTS_CONSTANTS.task.doorRise then return -1 end
 
 	return 0
 end
@@ -2638,7 +2638,7 @@ end
 -- Opens any unlocked door the body is about to move into, along one axis.
 function petports_openDoorsAhead(axis, direction, dt)
 	local travel = math.abs(mcontroller.velocity()[axis] or 0) * (dt or 0)
-	local span = petports_doorSpan(axis, direction, DOOR_REACH + travel)
+	local span = petports_doorSpan(axis, direction, PETPORTS_CONSTANTS.task.doorReach + travel)
 
 	if not world.rectTileCollision(span, { "Dynamic" }) then return end
 
@@ -2685,8 +2685,8 @@ function petports_openDoorsAround()
 		local bounds = petports_habitatObjectBounds(doorId)
 
 		if bounds ~= nil then
-			local low = { bounds[1] - 0.5 + DOOR_BITE, bounds[2] - 0.5 + DOOR_BITE }
-			local high = { bounds[3] + 0.5 - DOOR_BITE, bounds[4] + 0.5 - DOOR_BITE }
+			local low = { bounds[1] - 0.5 + PETPORTS_CONSTANTS.task.doorBite, bounds[2] - 0.5 + PETPORTS_CONSTANTS.task.doorBite }
+			local high = { bounds[3] + 0.5 - PETPORTS_CONSTANTS.task.doorBite, bounds[4] + 0.5 - PETPORTS_CONSTANTS.task.doorBite }
 
 			local embedded = not (me[1] >= high[1] or me[3] <= low[1]
 			                   or me[2] >= high[2] or me[4] <= low[2])
@@ -2703,7 +2703,7 @@ end
 
 -- Closes any door the body has moved clear of along one axis, leaving one with something still standing in it.
 function petports_closeDoorsBehind(axis, direction)
-	local span = petports_doorSpan(axis, -direction, DOOR_TRAIL)
+	local span = petports_doorSpan(axis, -direction, PETPORTS_CONSTANTS.task.doorTrail)
 
 	if world.rectTileCollision(span, { "Dynamic" }) then return end
 
@@ -2718,8 +2718,8 @@ function petports_closeDoorsBehind(axis, direction)
 		local bounds = petports_habitatObjectBounds(doorId)
 
 		if bounds ~= nil and toDoor[axis] * direction < 0 then
-			local low = { bounds[1] - 0.5 - DOOR_CLEAR, bounds[2] - 0.5 - DOOR_CLEAR }
-			local high = { bounds[3] + 0.5 + DOOR_CLEAR, bounds[4] + 0.5 + DOOR_CLEAR }
+			local low = { bounds[1] - 0.5 - PETPORTS_CONSTANTS.task.doorClear, bounds[2] - 0.5 - PETPORTS_CONSTANTS.task.doorClear }
+			local high = { bounds[3] + 0.5 + PETPORTS_CONSTANTS.task.doorClear, bounds[4] + 0.5 + PETPORTS_CONSTANTS.task.doorClear }
 
 			local trailed = not (low[1] >= span[3] or high[1] <= span[1]
 			                  or low[2] >= span[4] or high[2] <= span[2])
@@ -2762,9 +2762,9 @@ function petports_doorWatch(dt)
 
 	local vy = mcontroller.velocity()[2] or 0
 
-	if vy >= DOOR_DRIFT then
+	if vy >= PETPORTS_CONSTANTS.task.doorDrift then
 		petports_closeDoorsBehind(2, 1)
-	elseif vy <= -DOOR_DRIFT then
+	elseif vy <= -PETPORTS_CONSTANTS.task.doorDrift then
 		petports_closeDoorsBehind(2, -1)
 	end
 end
@@ -2774,14 +2774,14 @@ function petports_perchFooting()
 	local here = mcontroller.position()
 	local box = mcontroller.boundBox()
 	local y = here[2] + box[2] - 0.3
-	local left = world.pointTileCollision({ here[1] + box[1] + 0.15, y }, STANDABLE_TILE_SET)
-	local right = world.pointTileCollision({ here[1] + box[3] - 0.15, y }, STANDABLE_TILE_SET)
+	local left = world.pointTileCollision({ here[1] + box[1] + 0.15, y }, PETPORTS_CONSTANTS.task.standableTileSet)
+	local right = world.pointTileCollision({ here[1] + box[3] - 0.15, y }, PETPORTS_CONSTANTS.task.standableTileSet)
 	return left, right
 end
 
-local UNPERCH_DEBOUNCE = 1.0
-local UNPERCH_WALK_TIME = 0.6
-local UNPERCH_DWELL = 0.5
+PETPORTS_CONSTANTS.task.unperchDebounce = 1.0
+PETPORTS_CONSTANTS.task.unperchWalkTime = 0.6
+PETPORTS_CONSTANTS.task.unperchDwell = 0.5
 
 -- Starts a timed walk, or a hop, off a perch toward whichever corner has footing.
 function petports_unperchWalk(stateData)
@@ -2791,15 +2791,15 @@ function petports_unperchWalk(stateData)
 	if left and not right then dir = -1 elseif right and not left then dir = 1 end
 
 	if dir ~= nil then
-		stateData.unperchWalk = { dir = dir, until_ = world.time() + UNPERCH_WALK_TIME, hop = false }
+		stateData.unperchWalk = { dir = dir, until_ = world.time() + PETPORTS_CONSTANTS.task.unperchWalkTime, hop = false }
 		sb.logInfo("UNIT UNPERCH: %s is perched with footing under its %s corner -- walking that way for %s s",
-			sb.printJson(here), dir < 0 and "left" or "right", sb.printJson(UNPERCH_WALK_TIME))
+			sb.printJson(here), dir < 0 and "left" or "right", sb.printJson(PETPORTS_CONSTANTS.task.unperchWalkTime))
 		return true
 	end
 
 	local facing = mcontroller.facingDirection()
 	if facing == 0 then facing = 1 end
-	stateData.unperchWalk = { dir = facing, until_ = world.time() + UNPERCH_WALK_TIME, hop = true }
+	stateData.unperchWalk = { dir = facing, until_ = world.time() + PETPORTS_CONSTANTS.task.unperchWalkTime, hop = true }
 	sb.logInfo("UNIT UNPERCH: %s is perched with footing under %s corner (left %s, right %s) -- hopping %s",
 		sb.printJson(here), (left and right) and "both" or "neither", tostring(left), tostring(right),
 		facing < 0 and "left" or "right")
@@ -2835,14 +2835,14 @@ function petports_unperchWatch(dt, stateData)
 
 	local here = mcontroller.position()
 	local anchor = stateData.perchAnchor
-	if anchor == nil or world.magnitude(here, anchor) > UNPERCH_DWELL then
+	if anchor == nil or world.magnitude(here, anchor) > PETPORTS_CONSTANTS.task.unperchDwell then
 		stateData.perchAnchor = here
 		stateData.perchTime = 0
 		return
 	end
 
 	stateData.perchTime = (stateData.perchTime or 0) + (dt or 0)
-	if stateData.perchTime < UNPERCH_DEBOUNCE then return end
+	if stateData.perchTime < PETPORTS_CONSTANTS.task.unperchDebounce then return end
 
 	stateData.perchTime = 0
 
@@ -2876,7 +2876,7 @@ function petports_mediaTrace(dt, stateData, routeTarget, approachTo, overshot, l
 	stateData.mediaTraceKey = key
 	if not wet and not stateData.mediaTraceWet then return end
 	stateData.mediaTraceWet = wet
-	stateData.mediaTraceTimer = MEDIA_TRACE_INTERVAL
+	stateData.mediaTraceTimer = PETPORTS_CONSTANTS.task.mediaTraceInterval
 
 	local edge = (hasPath and finder.edges ~= nil and finder.currentEdgeIndex ~= nil)
 		and finder.edges[finder.currentEdgeIndex] or nil
@@ -2967,7 +2967,7 @@ function petports_taskUpdateInner(dt, stateData)
       petports_freshPather("brushed denied liquid")
     end
 
-    stateData.brushTimer = BRUSH_BACKOFF
+    stateData.brushTimer = PETPORTS_CONSTANTS.task.brushBackoff
 
     if length > 0.001 then
       local speed = petports_scaledSpeed(mcontroller.baseParameters().flySpeed or 5)
@@ -2995,13 +2995,13 @@ function petports_taskUpdateInner(dt, stateData)
     stateData.movingTimer = (stateData.movingTimer or 0) - dt
 
     if stateData.movingTimer <= 0 then
-      stateData.movingTimer = TASK_MOVING_INTERVAL
+      stateData.movingTimer = PETPORTS_CONSTANTS.task.taskMovingInterval
 
       local from = stateData.startPosition
       local gone = from ~= nil
         and world.magnitude(mcontroller.position(), from) or 0
 
-      if gone > TASK_MOVING_DISTANCE then
+      if gone > PETPORTS_CONSTANTS.task.taskMovingDistance then
         stateData.reportedMoving = true
 
         sb.logInfo("UNIT under way for %s: %s tile(s) from %s, now at %s",
@@ -3018,7 +3018,7 @@ function petports_taskUpdateInner(dt, stateData)
   end
 
   local preFinder = self.pather and self.pather.finder
-  if TASK_TRACE_MOVES and preFinder ~= nil and preFinder.hasPath then
+  if PETPORTS_CONSTANTS.task.taskTraceMoves and preFinder ~= nil and preFinder.hasPath then
     local preEdge = preFinder.edges and preFinder.currentEdgeIndex
       and preFinder.edges[preFinder.currentEdgeIndex]
     local preSource = preEdge and preEdge.source and preEdge.source.position
@@ -3140,7 +3140,7 @@ function petports_taskUpdateInner(dt, stateData)
       local stopReason = "hit MAX_ARC_SKIP"
       local landPassed = false
 
-      while skipped < MAX_ARC_SKIP do
+      while skipped < PETPORTS_CONSTANTS.task.maxArcSkip do
         local index = arcFinder.currentEdgeIndex
         local edges = arcFinder.edges
 
@@ -3206,7 +3206,7 @@ function petports_taskUpdateInner(dt, stateData)
 
       if arcMode == "GROUNDED" and landPassed then
         local landVel = mcontroller.velocity()
-        if math.abs(landVel[1]) >= LAND_BRAKE_STATIONARY then
+        if math.abs(landVel[1]) >= PETPORTS_CONSTANTS.task.landBrakeStationary then
           mcontroller.setVelocity({ 0, landVel[2] })
           sb.logInfo("UNIT ARC touchdown at %s vel %s reached the Land -- killing horizontal velocity",
             sb.printJson(mcontroller.position()), sb.printJson(landVel))
@@ -3246,13 +3246,13 @@ function petports_taskUpdateInner(dt, stateData)
           arcFinder:reset()
           stateData.stuckAnchor = nil
           stateData.airborneEdgeStall = 0
-        elseif yGap > PLAN_SURFACE_TOLERANCE then
+        elseif yGap > PETPORTS_CONSTANTS.task.planSurfaceTolerance then
           sb.logInfo("UNIT ARC landed off-plan at %s: next edge %s targets %s, %s tiles off in y "
             .. "(tolerance %s) -- the plan's next step is not reachable from here, replanning "
             .. "(first walk %s, blocked %s)",
             sb.printJson(mcontroller.position()),
             tostring(nextEdge.action), sb.printJson(nextTarget),
-            sb.printJson(yGap), sb.printJson(PLAN_SURFACE_TOLERANCE),
+            sb.printJson(yGap), sb.printJson(PETPORTS_CONSTANTS.task.planSurfaceTolerance),
             tostring(walkIndex), tostring(blocked))
 
           arcFinder:reset()
@@ -3279,7 +3279,7 @@ function petports_taskUpdateInner(dt, stateData)
             .. "no Walk edge within %s ground-level edges to sweep -- keeping the plan",
             sb.printJson(mcontroller.position()),
             tostring(nextEdge.action), sb.printJson(nextTarget),
-            sb.printJson(yGap), sb.printJson(PLAN_WALK_LOOKAHEAD))
+            sb.printJson(yGap), sb.printJson(PETPORTS_CONSTANTS.task.planWalkLookahead))
         end
       end
     end
@@ -3329,7 +3329,7 @@ function petports_taskUpdateInner(dt, stateData)
 
   local pathFinder = self.pather and self.pather.finder
   local stalledEdge = nil
-  local stalledLimit = AIRBORNE_EDGE_STALL
+  local stalledLimit = PETPORTS_CONSTANTS.task.airborneEdgeStall
 
   if pathFinder ~= nil and pathFinder.hasPath and mcontroller.onGround()
      and not stateData.routing and self.pather.jumpTimer == nil then
@@ -3342,7 +3342,7 @@ function petports_taskUpdateInner(dt, stateData)
 
     elseif edge ~= nil and edge.action == "Walk" then
       stalledEdge = edge
-      stalledLimit = WALK_EDGE_STALL
+      stalledLimit = PETPORTS_CONSTANTS.task.walkEdgeStall
     end
   end
 
@@ -3376,7 +3376,7 @@ function petports_taskUpdateInner(dt, stateData)
     local here = mcontroller.position()
 
     if stateData.stuckAnchor == nil
-       or world.magnitude(here, stateData.stuckAnchor) > STUCK_MOVE then
+       or world.magnitude(here, stateData.stuckAnchor) > PETPORTS_CONSTANTS.task.stuckMove then
       stateData.stuckAnchor = here
       pathFinder.stuckTimer = 0
 
@@ -3411,18 +3411,18 @@ function petports_taskUpdateInner(dt, stateData)
 
       local here = mcontroller.position()
       local span = world.magnitude(here, routeTarget)
-      local far = span > COARSE_FIRST_DISTANCE
+      local far = span > PETPORTS_CONSTANTS.task.coarseFirstDistance
       local wanted, why
 
       if petports_freeMover() then
-        local seen = span <= SIGHT_LATCH_RANGE
+        local seen = span <= PETPORTS_CONSTANTS.task.sightLatchRange
           and petports_flyPathClear(here, routeTarget) == true
         wanted = not seen
-        why = (span > SIGHT_LATCH_RANGE) and "beyond sight range"
+        why = (span > PETPORTS_CONSTANTS.task.sightLatchRange) and "beyond sight range"
           or "no clear line"
       else
         local okLos, blocked = pcall(world.lineTileCollision, here, routeTarget,
-          COARSE_LOS_SET)
+          PETPORTS_CONSTANTS.task.coarseLosSet)
         local blind = okLos and blocked == true
 				local otherSide = petports_gravitySwitchable()
 					and petports_mediumAt(routeTarget, mcontroller.boundBox()) == "swim"
@@ -3460,7 +3460,7 @@ function petports_taskUpdateInner(dt, stateData)
       if wanted and self.petportsNavLastRoute ~= nil
          and self.petportsNavLastRoute.building == true then
         stateData.coarseFirstFor = nil
-        stateData.coarseRetryTimer = COARSE_RETRY_INTERVAL
+        stateData.coarseRetryTimer = PETPORTS_CONSTANTS.task.coarseRetryInterval
       end
     end
   end
@@ -3552,10 +3552,10 @@ function petports_taskUpdateInner(dt, stateData)
 
       sb.logInfo("UNIT hop %s complete, landed %s, repeat count %s of %s",
         sb.printJson(stateData.ventHops), sb.printJson(here),
-        sb.printJson(stateData.hopSeen[hopKey]), sb.printJson(MAX_REPEAT_HOPS))
+        sb.printJson(stateData.hopSeen[hopKey]), sb.printJson(PETPORTS_CONSTANTS.task.maxRepeatHops))
 
-      if stateData.hopSeen[hopKey] > MAX_REPEAT_HOPS
-         or stateData.ventHops > MAX_TASK_HOPS then
+      if stateData.hopSeen[hopKey] > PETPORTS_CONSTANTS.task.maxRepeatHops
+         or stateData.ventHops > PETPORTS_CONSTANTS.task.maxTaskHops then
         petports_taskReport(stateData, "failed",
           "vent loop: " .. hopKey .. " x" .. sb.printJson(stateData.hopSeen[hopKey])
           .. " (hops " .. sb.printJson(stateData.ventHops) .. ")")
@@ -3563,7 +3563,7 @@ function petports_taskUpdateInner(dt, stateData)
       end
 
       if wantPosition ~= nil
-         and world.magnitude(here, wantPosition) > VENT_ARRIVAL_TOLERANCE then
+         and world.magnitude(here, wantPosition) > PETPORTS_CONSTANTS.task.ventArrivalTolerance then
         sb.logInfo("UNIT vent %s put us at %s, plan expected exit %s at %s -- discarding plan",
           sb.printJson(ventId), sb.printJson(here),
           sb.printJson(wantExit), sb.printJson(wantPosition))
@@ -3592,13 +3592,13 @@ function petports_taskUpdateInner(dt, stateData)
     if stateData.ventLastPosition == nil
        or world.magnitude(here, stateData.ventLastPosition) > 0.5 then
       stateData.ventLastPosition = here
-      stateData.ventApproachTimer = VENT_APPROACH_TIMEOUT
+      stateData.ventApproachTimer = PETPORTS_CONSTANTS.task.ventApproachTimeout
     end
 
-    stateData.ventApproachTimer = (stateData.ventApproachTimer or VENT_APPROACH_TIMEOUT) - dt
+    stateData.ventApproachTimer = (stateData.ventApproachTimer or PETPORTS_CONSTANTS.task.ventApproachTimeout) - dt
     if stateData.ventApproachTimer <= 0 then
       sb.logInfo("UNIT vent approach TIMED OUT (%s s without movement)",
-        sb.printJson(VENT_APPROACH_TIMEOUT))
+        sb.printJson(PETPORTS_CONSTANTS.task.ventApproachTimeout))
       sb.logInfo("UNIT could not reach vent %s: stalled at %s, mouth %s",
         sb.printJson(stateData.viaVent.id),
         sb.printJson(mcontroller.position()),
@@ -3633,7 +3633,7 @@ function petports_taskUpdateInner(dt, stateData)
 
     local mouthTarget = stateData.viaVent.entry
 
-    if approachPoint(dt, mouthTarget, ARRIVAL_DISTANCE, false) then
+    if approachPoint(dt, mouthTarget, PETPORTS_CONSTANTS.task.arrivalDistance, false) then
       local ok, arrivedAt = pcall(world.callScriptedEntity,
         stateData.viaVent.id, "petports_ventTravel",
         entity.id(), stateData.viaVent.destinationId)
@@ -3677,11 +3677,11 @@ function petports_taskUpdateInner(dt, stateData)
     if approachTo == nil then
       stateData.settleTimer = stateData.settleTimer + dt
 
-      if stateData.settleTimer >= SETTLE_GRACE then
+      if stateData.settleTimer >= PETPORTS_CONSTANTS.task.settleGrace then
         petports_taskReport(stateData, "failed",
           "no standable position near " .. tostring(task.type) .. " target at "
           .. sb.printJson(target)
-          .. " after " .. sb.printJson(SETTLE_GRACE) .. "s")
+          .. " after " .. sb.printJson(PETPORTS_CONSTANTS.task.settleGrace) .. "s")
         return true
       end
 
@@ -3709,12 +3709,12 @@ function petports_taskUpdateInner(dt, stateData)
     stateData.sightTimer = (stateData.sightTimer or 0) - dt
 
     if stateData.sightTimer <= 0 then
-      stateData.sightTimer = SIGHT_LATCH_INTERVAL
+      stateData.sightTimer = PETPORTS_CONSTANTS.task.sightLatchInterval
 
       local here = mcontroller.position()
       local span = world.magnitude(here, routeTarget)
 
-      if span <= SIGHT_LATCH_RANGE
+      if span <= PETPORTS_CONSTANTS.task.sightLatchRange
          and petports_flyPathClear(here, routeTarget) == true then
         sb.logInfo("UNIT SIGHT latch: target %s is %s tiles away on a clear "
           .. "line -- dropping the leg to %s and %s hop(s) behind it",
@@ -3780,10 +3780,10 @@ function petports_taskUpdateInner(dt, stateData)
       end
       if at ~= nil then
         local here = mcontroller.position()
-        for j = at + 1, math.min(#path, at + NAV_ROUTE_LOOKAHEAD) do
+        for j = at + 1, math.min(#path, at + PETPORTS_CONSTANTS.task.navRouteLookahead) do
           local kx, ky = string.match(path[j], "^(-?%d+),(-?%d+)$")
           local anchor = kx ~= nil and petports_navAnchor(tonumber(kx), tonumber(ky), false) or nil
-          if anchor ~= nil and world.magnitude(here, anchor) < ARRIVAL_DISTANCE then
+          if anchor ~= nil and world.magnitude(here, anchor) < PETPORTS_CONSTANTS.task.arrivalDistance then
             sb.logInfo("UNIT standing on route cell %s at %s, %s cell(s) past the waypoint %s -- reached it instead",
               tostring(path[j]), sb.printJson(here), sb.printJson(j - at), sb.printJson(stateData.navWaypoint))
             stateData.navLegTo = path[j]
@@ -3800,10 +3800,10 @@ function petports_taskUpdateInner(dt, stateData)
     and (stateData.navLegArrived == true or overshot
       or world.magnitude(stateData.navWaypoint, mcontroller.position())
          < (petports_freeMover()
-            and (stateData.navLegStep and NAV_LEG_STEP_ARRIVAL
-              or ((stateData.navLegTurn or 0) >= NAV_LEG_SHARP_TURN
-                and NAV_LEG_ARRIVAL_FREE or NAV_LEG_ARRIVAL_THROUGH))
-            or ARRIVAL_DISTANCE))
+            and (stateData.navLegStep and PETPORTS_CONSTANTS.task.navLegStepArrival
+              or ((stateData.navLegTurn or 0) >= PETPORTS_CONSTANTS.task.navLegSharpTurn
+                and PETPORTS_CONSTANTS.task.navLegArrivalFree or PETPORTS_CONSTANTS.task.navLegArrivalThrough))
+            or PETPORTS_CONSTANTS.task.arrivalDistance))
     and (petports_freeMover() or mcontroller.onGround())
 
   if stateData.navWaypoint ~= nil then
@@ -3892,13 +3892,13 @@ function petports_taskUpdateInner(dt, stateData)
       end
     end
     stateData.navLegTurn = turn
-    local sharp = turn >= NAV_LEG_SHARP_TURN
+    local sharp = turn >= PETPORTS_CONSTANTS.task.navLegSharpTurn
     self.petportsLegTightTurn = stateData.navWaypoint ~= nil
-      and (stateData.navLegStep == true or turn >= NAV_LEG_BRAKE_TURN)
+      and (stateData.navLegStep == true or turn >= PETPORTS_CONSTANTS.task.navLegBrakeTurn)
 
     local legArrival = (stateData.navWaypoint ~= nil and petports_freeMover())
-      and (stateData.navLegStep and NAV_LEG_STEP_ARRIVAL
-        or (sharp and NAV_LEG_ARRIVAL_FREE or NAV_LEG_ARRIVAL_THROUGH)) or nil
+      and (stateData.navLegStep and PETPORTS_CONSTANTS.task.navLegStepArrival
+        or (sharp and PETPORTS_CONSTANTS.task.navLegArrivalFree or PETPORTS_CONSTANTS.task.navLegArrivalThrough)) or nil
 
     local touchPoint, touchDistance = nil, nil
     if petports_freeMover() or mcontroller.onGround() then
@@ -3928,7 +3928,7 @@ function petports_taskUpdateInner(dt, stateData)
       return false
     end
 
-    if approachPoint(dt, approachTo, ARRIVAL_DISTANCE, false, legArrival) then
+    if approachPoint(dt, approachTo, PETPORTS_CONSTANTS.task.arrivalDistance, false, legArrival) then
       if stateData.navWaypoint ~= nil then
         stateData.navLegArrived = true
         return false
@@ -3940,7 +3940,7 @@ function petports_taskUpdateInner(dt, stateData)
     end
 
     stateData.progressTimer = (stateData.progressTimer or 0) + dt
-    if stateData.progressTimer >= PROGRESS_WINDOW then
+    if stateData.progressTimer >= PETPORTS_CONSTANTS.task.progressWindow then
       stateData.progressTimer = 0
 
       local now = mcontroller.position()
@@ -3948,19 +3948,19 @@ function petports_taskUpdateInner(dt, stateData)
       stateData.progressAnchor = now
 
       sb.logInfo("UNIT progress window: moved %s (need %s) in %s s at %s",
-        sb.printJson(moved), sb.printJson(PROGRESS_DISTANCE),
-        sb.printJson(PROGRESS_WINDOW), sb.printJson(now))
+        sb.printJson(moved), sb.printJson(PETPORTS_CONSTANTS.task.progressDistance),
+        sb.printJson(PETPORTS_CONSTANTS.task.progressWindow), sb.printJson(now))
 
-      if moved < PROGRESS_DISTANCE then
+      if moved < PETPORTS_CONSTANTS.task.progressDistance then
         stateData.progressStrikes = (stateData.progressStrikes or 0) + 1
         sb.logInfo("UNIT progress STRIKE %s of %s",
-          sb.printJson(stateData.progressStrikes), sb.printJson(PROGRESS_STRIKES))
+          sb.printJson(stateData.progressStrikes), sb.printJson(PETPORTS_CONSTANTS.task.progressStrikes))
 
-        if stateData.progressStrikes >= PROGRESS_STRIKES then
+        if stateData.progressStrikes >= PETPORTS_CONSTANTS.task.progressStrikes then
           local routing = petports_tryVentRoute(stateData, routeTarget)
           if routing ~= "none" then
             stateData.routing = true
-            stateData.progressStrikes = PROGRESS_STRIKES
+            stateData.progressStrikes = PETPORTS_CONSTANTS.task.progressStrikes
             return false
           end
 
@@ -3974,7 +3974,7 @@ function petports_taskUpdateInner(dt, stateData)
 
           petports_taskReport(stateData, "failed",
             "no net progress -- moved " .. sb.printJson(moved)
-            .. " in " .. sb.printJson(PROGRESS_WINDOW * PROGRESS_STRIKES)
+            .. " in " .. sb.printJson(PETPORTS_CONSTANTS.task.progressWindow * PETPORTS_CONSTANTS.task.progressStrikes)
             .. "s at " .. sb.printJson(now)
             .. " heading for " .. sb.printJson(approachTo))
           return true
@@ -3993,7 +3993,7 @@ function petports_taskUpdateInner(dt, stateData)
       stateData.lastPosition = here
 
 
-      if TASK_DEBUG then
+      if PETPORTS_CONSTANTS.task.taskDebug then
         local finder = self.pather and self.pather.finder
         local selfStandable = select(2, pcall(validStandingPosition, here, false))
 
@@ -4035,7 +4035,7 @@ function petports_taskUpdateInner(dt, stateData)
       stateData.lastHasPath = hasPath
     end
 
-	if TASK_DEBUG and hasPath and finder.edges ~= nil and finder.edges ~= stateData.wetEdgesLogged then
+	if PETPORTS_CONSTANTS.task.taskDebug and hasPath and finder.edges ~= nil and finder.edges ~= stateData.wetEdgesLogged then
 		stateData.wetEdgesLogged = finder.edges
 		local bounds = mcontroller.boundBox()
 		local wanted = {}
@@ -4063,7 +4063,7 @@ function petports_taskUpdateInner(dt, stateData)
 		end
 	end
 
-    if TASK_TRACE_MOVES and hasPath then
+    if PETPORTS_CONSTANTS.task.taskTraceMoves and hasPath then
       local edge = finder.edges and finder.currentEdgeIndex
         and finder.edges[finder.currentEdgeIndex]
 
@@ -4103,7 +4103,7 @@ function petports_taskUpdateInner(dt, stateData)
           okLiquid and sb.printJson(liquid) or "err",
           sb.printJson(finder.target))
         stateData.navRefusedTimer = 0
-        stateData.searchingTimer = SEARCH_LIMIT
+        stateData.searchingTimer = PETPORTS_CONSTANTS.task.searchLimit
       end
     else
       stateData.navRefusedTimer = 0
@@ -4119,7 +4119,7 @@ function petports_taskUpdateInner(dt, stateData)
     end
 
     if rejected and not refused and petports_freeMover()
-       and stateData.planRefusedTimer >= PLAN_REFUSED_LIMIT then
+       and stateData.planRefusedTimer >= PETPORTS_CONSTANTS.task.planRefusedLimit then
       local route = self.petportsNavLastRoute
       local why = (route ~= nil and route.why) or "no coarse route asked"
 
@@ -4129,27 +4129,27 @@ function petports_taskUpdateInner(dt, stateData)
       return true
     end
 
-    if refused and stateData.planRefusedTimer >= PLAN_REFUSED_LIMIT
-       and stateData.searchingTimer < SEARCH_LIMIT then
+    if refused and stateData.planRefusedTimer >= PETPORTS_CONSTANTS.task.planRefusedLimit
+       and stateData.searchingTimer < PETPORTS_CONSTANTS.task.searchLimit then
       sb.logInfo("UNIT coarse leg to %s refused by the medium check for %s s -- "
         .. "treating as a failed leg", sb.printJson(stateData.navWaypoint),
         sb.printJson(stateData.planRefusedTimer))
-      stateData.searchingTimer = SEARCH_LIMIT
+      stateData.searchingTimer = PETPORTS_CONSTANTS.task.searchLimit
       stateData.planRefusedTimer = 0
     end
 
     if finder ~= nil and (not finder.hasPath or refused)
-       and (finder.aStar ~= nil or stateData.searchingTimer >= SEARCH_LIMIT) then
+       and (finder.aStar ~= nil or stateData.searchingTimer >= PETPORTS_CONSTANTS.task.searchLimit) then
       stateData.searchingTimer = stateData.searchingTimer + dt
 
       petports_think("pathing")
 
-      if stateData.searchingTimer >= SEARCH_LIMIT then
+      if stateData.searchingTimer >= PETPORTS_CONSTANTS.task.searchLimit then
         if stateData.navWaypoint ~= nil and petports_navContradict ~= nil then
           local legFrom, legTo = stateData.navLegFrom, stateData.navLegTo
           local legPrev = stateData.navLegPrev or legFrom
           local hops = stateData.navLegHops or 1
-          local shrunk = (stateData.navLegReach or NAV_LEG_REACH) <= 0
+          local shrunk = (stateData.navLegReach or PETPORTS_CONSTANTS.task.navLegReach) <= 0
 
           stateData.navWaypoint = nil
           stateData.navRemaining = nil
@@ -4171,7 +4171,7 @@ function petports_taskUpdateInner(dt, stateData)
 
             sb.logInfo("UNIT coarse edge %s > %s would not walk in %s s -- "
               .. "re-probe says %s after %s tick(s) -- %s",
-              tostring(legPrev), tostring(legTo), sb.printJson(SEARCH_LIMIT),
+              tostring(legPrev), tostring(legTo), sb.printJson(PETPORTS_CONSTANTS.task.searchLimit),
               tostring(verdict), sb.printJson(spins),
               (verdict == true and petports_freeMover())
                 and "the edge is real; stepping onto its start first"
@@ -4193,7 +4193,7 @@ function petports_taskUpdateInner(dt, stateData)
 
                 local gap = world.magnitude(mcontroller.position(), start)
 
-                if gap <= NAV_LEG_ARRIVAL_FREE then
+                if gap <= PETPORTS_CONSTANTS.task.navLegArrivalFree then
                   sb.logInfo("UNIT NUDGE %s onto the route at %s (%s tiles) and "
                     .. "re-taking the leg", sb.printJson(mcontroller.position()),
                     sb.printJson(start), sb.printJson(math.floor(gap * 100 + 0.5) / 100))
@@ -4236,7 +4236,7 @@ function petports_taskUpdateInner(dt, stateData)
         end
 
         sb.logInfo("UNIT direct path search hit SEARCH_LIMIT %s with no path -- handing over to vent routing",
-          sb.printJson(SEARCH_LIMIT))
+          sb.printJson(PETPORTS_CONSTANTS.task.searchLimit))
         stateData.routing = true
         stateData.searchingTimer = 0
         return false
@@ -4332,7 +4332,7 @@ function petports_taskUpdateInner(dt, stateData)
             sb.printJson(stateData.dwellTimer), sb.printJson(mcontroller.position()),
             chasedRow.noun, sb.printJson(there))
 
-          stateData.chaseRetarget = CHASE_RETARGET_INTERVAL
+          stateData.chaseRetarget = PETPORTS_CONSTANTS.task.chaseRetargetInterval
           stateData.arrived = false
           stateData.groundTarget = nil
           stateData.approachTimer = PETPORTS_CONSTANTS.task.approachTimeout
