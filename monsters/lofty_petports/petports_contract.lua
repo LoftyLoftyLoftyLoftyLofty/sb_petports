@@ -1,15 +1,15 @@
 -- Unit-side contract: naming, modules, media and swim mode, dives, vent routing and fuel.
 
-local CONTRACT_BUILD_STAMP = "2026-09-19u a route dive plan is abandoned once submerged with a clear swim to its leg waypoint"
+local CONTRACT_BUILD_STAMP = "2026-09-20b every function, state variable and base capture in the contract script is a petports_ global"
 
-local contractStamped = false
+petports_contractStamped = false
 
 -- Logs the contract build stamp once.
-local function stampOnce()
-  if contractStamped then
+function petports_contractStampOnce()
+  if petports_contractStamped then
     return
   end
-  contractStamped = true
+  petports_contractStamped = true
 
   sb.logInfo("PETPORTS contract build: %s (unit %s)",
     CONTRACT_BUILD_STAMP, tostring(entity.id()))
@@ -26,19 +26,19 @@ end
 
 PETPORTS_CULL_TICKS = 60
 
-local petportsBaseUpdate = update
+petports_baseUpdate = update
 
 -- Counts update ticks and calls the base update.
 function update(dt)
   self.petportsTicks = (self.petportsTicks or 0) + 1
-  if petportsBaseUpdate then
-    return petportsBaseUpdate(dt)
+  if petports_baseUpdate then
+    return petports_baseUpdate(dt)
   end
 end
 
 -- Kills the unit outright, or starts its fade-out, without dropping cargo.
 function petports_despawn(instant)
-  stampOnce()
+  petports_contractStampOnce()
   self.petportsNoDrop = true
 
   storage.petportsNoDrop = true
@@ -100,15 +100,15 @@ function die()
   })
 end
 
-local petportsBaseInit = init
+petports_baseInit = init
 
 -- Calls the base init, applies the spawn name, and fades the unit in when it was materialised.
 function init()
-  if petportsBaseInit then
-    petportsBaseInit()
+  if petports_baseInit then
+    petports_baseInit()
   end
 
-  stampOnce()
+  petports_contractStampOnce()
 
   local spawnName = config.getParameter("petName")
 
@@ -422,7 +422,7 @@ function petports_freeMover()
 end
 
 -- Returns the avoided liquid name set with module permissions taken out, cached.
-local function avoidedLiquids()
+function petports_avoidedLiquids()
   if self.petportsAvoidLiquids ~= nil then return self.petportsAvoidLiquids end
 
   local avoided =
@@ -446,7 +446,7 @@ end
 -- Returns whether a liquid name is avoided.
 function petports_liquidNameDenied(name)
   if name == nil then return false end
-  return avoidedLiquids()[string.lower(tostring(name))] == true
+  return petports_avoidedLiquids()[string.lower(tostring(name))] == true
 end
 
 -- Returns whether a liquid id is avoided, cached.
@@ -457,7 +457,7 @@ function petports_liquidDenied(liquidId)
   local cached = self.petportsLiquidVerdict[liquidId]
   if cached ~= nil then return cached end
 
-  local names = avoidedLiquids()
+  local names = petports_avoidedLiquids()
   local denied = petports_habitatLiquidDenied(names, liquidId)
 
   if next(names) ~= nil then
@@ -557,7 +557,7 @@ function petports_media()
 end
 
 -- Returns the chassis's damage team, storing one the port sent.
-local function baseTeam(sent)
+function petports_baseTeam(sent)
   if type(sent) == "table" and sent.type ~= nil then
     self.petportsBaseTeam = sent
   end
@@ -574,7 +574,7 @@ function petports_applyModuleFlags(flags, sentBaseTeam)
 
   self.petportsOpenDoors = set.openDoors == true
 
-  local base = baseTeam(sentBaseTeam)
+  local base = petports_baseTeam(sentBaseTeam)
 
   local want = set.camouflage and { type = "ghostly", team = 0 } or base
   local have = entity.damageTeam()
@@ -612,7 +612,7 @@ function petports_capabilities()
     fly = media.fly,
     swim = media.swim,
     avoidLiquid = petports_avoidLiquid(),
-    avoided = avoidedLiquids()
+    avoided = petports_avoidedLiquids()
   }
 end
 
@@ -719,7 +719,7 @@ function petports_diveForget()
 end
 
 -- Returns whether the tile under the feet is a platform and not solid.
-local function platformUnderfoot()
+function petports_platformUnderfoot()
 	local position = mcontroller.position()
 	local bounds = mcontroller.boundBox()
 
@@ -733,7 +733,7 @@ end
 PETPORTS_DROP_LIQUID_DEPTH = 4
 
 -- Returns whether liquid lies within drop depth under the tile beneath the feet.
-local function liquidUnderPlatform()
+function petports_liquidUnderPlatform()
 	local position = mcontroller.position()
 	local bounds = mcontroller.boundBox()
 
@@ -747,7 +747,7 @@ local function liquidUnderPlatform()
 end
 
 -- Scoots a grounded walker through the platform underfoot when its destination is liquid below it.
-local function dropIntoLiquid(destination)
+function petports_dropIntoLiquid(destination)
 	if type(destination) ~= "table" then return end
 	if self.petportsArrived then return end
 	if petports_swimMode() ~= PETPORTS_SWIM_MODE_LAND or petports_diving() then return end
@@ -761,12 +761,12 @@ local function dropIntoLiquid(destination)
 	if destination[2] >= feet then return end
 	if petports_mediumAt(position, bounds) == "swim" then return end
 	if petports_mediumAt(destination, bounds) ~= "swim" then return end
-	if not platformUnderfoot() then return end
+	if not petports_platformUnderfoot() then return end
 
 	local key = string.format("%s,%s>%s,%s", math.floor(position[1]), math.floor(feet),
 		math.floor(destination[1]), math.floor(destination[2]))
 
-	if not liquidUnderPlatform() then
+	if not petports_liquidUnderPlatform() then
 		if self.petportsDropNoted ~= key then
 			self.petportsDropNoted = key
 			sb.logInfo("UNIT DROP refused at %s: destination %s is liquid below, a platform is underfoot, "
@@ -807,7 +807,7 @@ function petports_bodyHitsAt(position, collisionSet)
 end
 
 -- Returns whether the body clears solid tiles at a position.
-local function bodyFitsAt(position)
+function petports_bodyFitsAt(position)
 	return not petports_bodyHitsAt(position, PETPORTS_DIVE_SOLID_SET)
 end
 
@@ -827,14 +827,14 @@ function petports_bodyFitsAlong(from, to)
 			from[2] + ((to[2] - from[2]) * t)
 		}
 
-		if not bodyFitsAt(at) then return false end
+		if not petports_bodyFitsAt(at) then return false end
 	end
 
 	return true
 end
 
 -- Returns whether the body fits along the line from here to a target.
-local function swimReachable(target)
+function petports_swimReachable(target)
 	if target == nil then return false end
 	return petports_bodyFitsAlong(mcontroller.position(), target)
 end
@@ -888,7 +888,7 @@ function petports_diveLaunch(plan, hop)
 			source[2] + (vy0 * t) - ((gravity * t * t) / 2)
 		}
 
-		if not bodyFitsAt(at) then
+		if not petports_bodyFitsAt(at) then
 			return false, string.format("the flight is blocked at %s (sample %s of %s)",
 				sb.printJson(at), sb.printJson(i),
 				sb.printJson(PETPORTS_DIVE_SWEEP_SAMPLES))
@@ -955,7 +955,7 @@ end
 PETPORTS_SWIM_TASK_TYPES = {}
 
 -- Returns whether the held task is one that swims.
-local function taskWantsSwimming()
+function petports_taskWantsSwimming()
 	if self.petportsLegSide == 1 then return true end
 
 	local task = self.petportsTask
@@ -977,7 +977,7 @@ function petports_desiredSwimMode(destination)
 	if petports_swimMode() == PETPORTS_SWIM_MODE_LAND then
 		if medium ~= "swim" then return PETPORTS_SWIM_MODE_LAND end
 
-		if self.petportsTask ~= nil and taskWantsSwimming() then
+		if self.petportsTask ~= nil and petports_taskWantsSwimming() then
 			local plan = self.petportsDivePlan
 
 			if plan ~= nil and not plan.reached and not plan.abandoned then
@@ -1036,7 +1036,7 @@ PETPORTS_SWIM_MODE_REBUILD_INTERVAL = 1.0
 PETPORTS_MEDIA_TRACE = true
 
 -- Logs the inputs behind the desired swim mode whenever any of them changes.
-local function swimModeNote(desired, destination)
+function petports_swimModeNote(desired, destination)
 	local here = mcontroller.position()
 	local medium = petports_mediumAt(here, mcontroller.boundBox())
 	local source = "none"
@@ -1060,7 +1060,7 @@ local function swimModeNote(desired, destination)
 		.. "leg side %s, task swims %s, dive plan %s, diving %s, onGround %s",
 		tostring(desired), tostring(petports_swimMode()), sb.printJson(here), tostring(medium),
 		sb.printJson(destination), source, tostring(destMedium), tostring(self.petportsLegSide),
-		tostring(taskWantsSwimming()), planState, tostring(petports_diving()),
+		tostring(petports_taskWantsSwimming()), planState, tostring(petports_diving()),
 		tostring(mcontroller.onGround()))
 end
 
@@ -1071,7 +1071,7 @@ function petports_swimModeTick()
 	if not self.petportsSwimModeRebuilding then
 		local destination = petports_currentTaskDestination()
 		local desired = petports_desiredSwimMode(destination)
-		if PETPORTS_MEDIA_TRACE then swimModeNote(desired, destination) end
+		if PETPORTS_MEDIA_TRACE then petports_swimModeNote(desired, destination) end
 
 		if desired ~= petports_swimMode() then
 			if not petports_canPathfindIn(desired) then
@@ -1113,7 +1113,7 @@ function petports_swimModeTick()
 		end
 	end
 
-	if not taskWantsSwimming()
+	if not petports_taskWantsSwimming()
 	   and self.petportsDivePlan ~= nil then
 		petports_diveForget()
 	end
@@ -1136,7 +1136,7 @@ function petports_swimModeTick()
 		end
 	end
 
-	dropIntoLiquid(petports_currentTaskDestination())
+	petports_dropIntoLiquid(petports_currentTaskDestination())
 
 	local plan = self.petportsDivePlan
 
@@ -1160,7 +1160,7 @@ function petports_swimModeTick()
 
 		local goal = plan.route and self.petportsLegWaypoint or petports_taskDestinationRaw()
 
-		if swimReachable(goal) then
+		if petports_swimReachable(goal) then
 			plan.abandoned = true
 
 			self.petportsDiveRetarget = true
@@ -1206,7 +1206,7 @@ function petports_swimModeTick()
 		if not launched then
 			local dropped, dropWhy = false, "there is no platform under the feet to drop through"
 
-			if platformUnderfoot() then
+			if petports_platformUnderfoot() then
 				dropped, dropWhy = petports_diveLaunch(plan, 0)
 			end
 
@@ -1381,7 +1381,7 @@ local FLY_POINT_DEBUG = true
 local FLY_SPAN_PROBE = 6
 
 -- Returns whether the bound box clears tiles at a position.
-local function flyBodyFits(x, y, bounds)
+function petports_flyBodyFits(x, y, bounds)
   return not world.rectTileCollision({
     x + bounds[1], y + bounds[2],
     x + bounds[3], y + bounds[4]
@@ -1389,8 +1389,8 @@ local function flyBodyFits(x, y, bounds)
 end
 
 -- Returns whether the body both fits and may occupy the medium at a position.
-local function flyBodyUsable(x, y, bounds)
-  if not flyBodyFits(x, y, bounds) then return false, "body does not fit" end
+function petports_flyBodyUsable(x, y, bounds)
+  if not petports_flyBodyFits(x, y, bounds) then return false, "body does not fit" end
 
   local ok, why = petports_mediumAllows({ x, y }, bounds)
   if not ok then return false, why end
@@ -1399,13 +1399,13 @@ local function flyBodyUsable(x, y, bounds)
 end
 
 -- Returns whether a point can see a target, counting a target inside a tile as seen.
-local function flySighted(point, target)
+function petports_flySighted(point, target)
   if world.pointTileCollision(target, FLY_TILE_SET) then return true end
   return not world.lineTileCollision(point, target, FLY_TILE_SET)
 end
 
 -- Logs the open row and column runs around a position and whether any tile centre fits the body.
-local function logFlySpan(position, bounds)
+function petports_logFlySpan(position, bounds)
   local width = bounds[3] - bounds[1]
   local height = bounds[4] - bounds[2]
 
@@ -1516,7 +1516,7 @@ function petports_flyPointNear(position, radius, mediumVerified)
     sb.logInfo("UNIT flypoint SEARCH for %s (%s): origin tile centre %s, radius %s, boundBox %s",
       sb.printJson(position), tostring(targetWhy), sb.printJson({ originX, originY }),
       sb.printJson(radius), sb.printJson(bounds))
-    logFlySpan(position, bounds)
+    petports_logFlySpan(position, bounds)
   end
 
   local origin = petports_nodePosition(position, bounds)
@@ -1537,11 +1537,11 @@ function petports_flyPointNear(position, radius, mediumVerified)
     local cx, cy = candidate[1], candidate[2]
     examined = examined + 1
 
-    local usable, why = flyBodyUsable(cx, cy, bounds)
+    local usable, why = petports_flyBodyUsable(cx, cy, bounds)
     local reason = why
 
     if usable then
-      if flySighted({ cx, cy }, position) then
+      if petports_flySighted({ cx, cy }, position) then
         if FLY_POINT_DEBUG then
           sb.logInfo("UNIT flypoint ACCEPTED %s for %s after %s grid point(s): dist %s",
             sb.printJson({ cx, cy }), sb.printJson(position),
@@ -1638,7 +1638,7 @@ function petports_exitKey(exitId)
 end
 
 -- Returns the cache key for the edge between two keys.
-local function edgeKey(fromKey, toKey)
+function petports_edgeKey(fromKey, toKey)
   return fromKey .. ">" .. toKey
 end
 
@@ -1649,7 +1649,7 @@ local ROUTE_TTL_TRUE = 600.0
 function petports_routeKnown(fromKey, toKey)
   if self.petportsRoutes == nil then return nil end
 
-  local entry = self.petportsRoutes[edgeKey(fromKey, toKey)]
+  local entry = self.petportsRoutes[petports_edgeKey(fromKey, toKey)]
   if entry == nil then return nil end
 
   if type(entry) ~= "table" then return nil end
@@ -1659,9 +1659,9 @@ function petports_routeKnown(fromKey, toKey)
 
   if age > ttl then
     sb.logInfo("UNIT cache EXPIRED for %s (%s, age %s of %s) -- will re-probe",
-      edgeKey(fromKey, toKey), tostring(entry.r),
+      petports_edgeKey(fromKey, toKey), tostring(entry.r),
       sb.printJson(age), sb.printJson(ttl))
-    self.petportsRoutes[edgeKey(fromKey, toKey)] = nil
+    self.petportsRoutes[petports_edgeKey(fromKey, toKey)] = nil
     return nil
   end
 
@@ -1671,7 +1671,7 @@ end
 -- Records an edge verdict and tells the port about it.
 function petports_learnRoute(fromKey, toKey, reachable, portUniqueId)
   self.petportsRoutes = self.petportsRoutes or {}
-  local key = edgeKey(fromKey, toKey)
+  local key = petports_edgeKey(fromKey, toKey)
 
   local previous = self.petportsRoutes[key]
   local was = type(previous) == "table" and previous.r or previous
@@ -1783,7 +1783,7 @@ function petports_probeStep(from, to, fromKey, toKey, exploreRate)
 end
 
 -- Returns an edge's cached verdict, or probes for one and records it.
-local function edgeReachable(fromPos, fromKey, toPos, toKey, portId, exploreRate)
+function petports_edgeReachable(fromPos, fromKey, toPos, toKey, portId, exploreRate)
   local known = petports_routeKnown(fromKey, toKey)
   if known ~= nil then
     sb.logInfo("UNIT edge %s -> %s answered FROM CACHE: %s",
@@ -1829,7 +1829,7 @@ function petports_planRoute(target, maxHops, portId, exploreRate, allowWalk, ori
       tostring(node.key), sb.printJson(node.position),
       sb.printJson(#node.legs), sb.printJson(#queue))
 
-    local finishes = edgeReachable(node.position, node.key, target, targetKey,
+    local finishes = petports_edgeReachable(node.position, node.key, target, targetKey,
       portId, exploreRate)
     if finishes == "searching" then return "probing" end
     if finishes == true then
@@ -1864,7 +1864,7 @@ function petports_planRoute(target, maxHops, portId, exploreRate, allowWalk, ori
         end
 
         if traversable and not excluded and not visited[entryKey] then
-          local canReach = edgeReachable(node.position, node.key,
+          local canReach = petports_edgeReachable(node.position, node.key,
             vent.entry, entryKey, portId, exploreRate)
           if canReach == "searching" then return "probing" end
 
@@ -1931,14 +1931,14 @@ end
 PETPORTS_DRAW_DEBUG = true
 
 -- Returns the debug colour for a reachable, unreachable or unknown edge.
-local function reachColour(known)
+function petports_reachColour(known)
   if known == true then return "green" end
   if known == false then return "red" end
   return "yellow"
 end
 
 -- Returns the debug colour for an edge action.
-local function actionColour(action)
+function petports_actionColour(action)
   if action == "Jump" then return "orange" end
   if action == "Arc" then return "magenta" end
   if action == "Drop" then return "cyan" end
@@ -1955,7 +1955,7 @@ function petports_drawRouteDebug(stateData)
 
   for _, vent in ipairs(self.petportsVents or {}) do
     local known = petports_routeKnown(unitKey, petports_entryKey(vent.id))
-    local colour = reachColour(known)
+    local colour = petports_reachColour(known)
 
     world.debugPoint(vent.entry, colour)
     world.debugText("vent %s", vent.id, {vent.entry[1], vent.entry[2] + 1.5}, colour)
@@ -2036,7 +2036,7 @@ function petports_drawRouteDebug(stateData)
     for index, edge in ipairs(finder.edges) do
       if edge.source and edge.target then
         local colour = (index == finder.currentEdgeIndex)
-          and "white" or actionColour(edge.action)
+          and "white" or petports_actionColour(edge.action)
         world.debugLine(edge.source.position, edge.target.position, colour)
         world.debugPoint(edge.target.position, colour)
       end

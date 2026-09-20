@@ -110,16 +110,10 @@ MACHINE_FEEDER_KEY = "petports_upcyclerFeeder"
 
 IGNORE_BEACONS_TAG = "petports_ignore_inserted_beacons"
 
-local crosshairClear
-
-local stackSizeFor
-
-local socketedItem
-
 CARGO_TRACE = true
 
 -- Returns a printable summary of a cargo list.
-local function cargoSummary(cargo)
+function petports_cargoSummary(cargo)
   if cargo == nil then return "nil" end
   if type(cargo) ~= "table" then return "NOT A TABLE (" .. type(cargo) .. ")" end
 
@@ -143,7 +137,7 @@ local function cargoSummary(cargo)
 end
 
 -- Returns a cargo table as a dense array, ordered by its numeric keys.
-local function normaliseCargo(cargo)
+function petports_normaliseCargo(cargo)
   if type(cargo) ~= "table" then return {} end
 
   local keyed = {}
@@ -162,10 +156,10 @@ local function normaliseCargo(cargo)
 end
 
 -- Logs a cargo summary against a label when cargo tracing is on.
-local function cargoTrace(where, cargo)
+function petports_cargoTrace(where, cargo)
   if not CARGO_TRACE then return end
   local ok, text = pcall(string.format, "PETPORT CARGO | %-22s | %s",
-    tostring(where), cargoSummary(cargo))
+    tostring(where), petports_cargoSummary(cargo))
   sb.logInfo("%s", ok and text or ("PETPORT CARGO | bad trace at " .. tostring(where)))
 end
 
@@ -205,7 +199,7 @@ VENT_SEARCH_MARGIN = 24
 RESIDENCY_TYPE = "petports_residency"
 
 -- Logs a labelled value when DEBUG is set.
-local function trace(label, value)
+function petports_trace(label, value)
   if not DEBUG then return end
   if value == nil then
     sb.logInfo("[petport] %s: nil", label)
@@ -246,7 +240,7 @@ function petports_portCoverageRect()
 end
 
 -- Writes this port's rect, position and network id into the registry, dropping any predecessor on the tile.
-local function publishRegistry()
+function petports_publishRegistry()
   local rect = petports_portCoverageRect()
 
   petports_registryClearAt(entity.position(), stationUniqueId())
@@ -262,7 +256,7 @@ end
 UNIT_POSITION_THRESHOLD = 4.0
 
 -- Updates the registry entry with the unit's position and busy state once either has moved on.
-local function publishUnitPosition()
+function petports_publishUnitPosition()
   local registry = petports_registry()
   local entry = (registry.ports or {})[stationUniqueId()]
   if entry == nil then return end
@@ -294,7 +288,7 @@ local function publishUnitPosition()
 end
 
 -- Returns every vent in the network's inflated rects with its entry and exits, logging the set when it changes.
-local function gatherVents()
+function petports_gatherVents()
 	local ventReport = {}
 
   local rects = self.networkRects
@@ -357,7 +351,7 @@ local function gatherVents()
 end
 
 -- Returns a string identifying a vent list by its ids and exits.
-local function ventSignature(vents)
+function petports_ventSignature(vents)
   local rows = {}
   for _, vent in ipairs(vents or {}) do
     local exits = {}
@@ -372,7 +366,7 @@ local function ventSignature(vents)
 end
 
 -- Drops cached route edges naming a vent that is gone, and returns how many went.
-local function pruneRouteCache(vents)
+function petports_pruneRouteCache(vents)
   if self.routeCache == nil then return 0 end
 
   local live = {}
@@ -393,7 +387,7 @@ local function pruneRouteCache(vents)
 end
 
 -- Rereads the network, units and vents when the registry version moves, and pushes them to the unit.
-local function refreshNetwork()
+function petports_refreshNetwork()
   local version = petports_registryVersion()
   local unitChanged = false
 
@@ -421,12 +415,12 @@ local function refreshNetwork()
       self.routeDirty = true
     end
 
-    local vents = gatherVents()
-    if ventSignature(vents) ~= self.ventSignature then
-      self.ventSignature = ventSignature(vents)
+    local vents = petports_gatherVents()
+    if petports_ventSignature(vents) ~= self.ventSignature then
+      self.ventSignature = petports_ventSignature(vents)
       unitChanged = true
 
-      local removed = pruneRouteCache(vents)
+      local removed = petports_pruneRouteCache(vents)
       if removed > 0 then self.routeDirty = true end
 
       sb.logInfo("PETPORT %s vent topology changed: %s vents, %s stale edges dropped",
@@ -441,8 +435,8 @@ local function refreshNetwork()
       self.networkRects, entity.position(), self.networkUnits)
 
     if self.vents == nil then
-      self.vents = gatherVents()
-      self.ventSignature = ventSignature(self.vents)
+      self.vents = petports_gatherVents()
+      self.ventSignature = petports_ventSignature(self.vents)
     end
     sb.logInfo("PETPORT %s pushing to unit %s: %s rects, %s vents, routeDirty %s, freshUnit %s",
       stationUniqueId(), sb.printJson(self.petId),
@@ -543,15 +537,15 @@ end
 
 
 -- Returns the residency unique id for this port's position.
-local function residencyUniqueId()
+function petports_residencyUniqueId()
   local position = entity.position()
   return string.format("petports_residency_%s_%s",
     math.floor(position[1]), math.floor(position[2]))
 end
 
 -- Spawns the residency stagehand for this port when none exists.
-local function ensureResidency()
-  local residencyId = residencyUniqueId()
+function petports_ensureResidency()
+  local residencyId = petports_residencyUniqueId()
   local existing = world.loadUniqueEntity(residencyId)
 
   if existing ~= nil and world.entityExists(existing) then
@@ -570,15 +564,15 @@ local function ensureResidency()
 end
 
 -- Tells this port's residency stagehand to stop.
-local function stopResidency()
-  local residencyId = world.loadUniqueEntity(residencyUniqueId())
+function petports_stopResidency()
+  local residencyId = world.loadUniqueEntity(petports_residencyUniqueId())
   if residencyId == nil then return end
 
   world.sendEntityMessage(residencyId, "petports_residencyStop")
 end
 
 -- Drops the held task and releases its claim.
-local function abandonTask(reason)
+function petports_abandonTask(reason)
   if self.task == nil then return end
 
   sb.logInfo("PETPORT %s abandoning %s: %s", stationUniqueId(), self.task.id, reason)
@@ -586,16 +580,16 @@ local function abandonTask(reason)
   self.task = nil
 end
 
-local PETPORT_BUILD_STAMP = "2026-09-19v dead drySoilAt and the duplicate inNetwork are gone"
+local PETPORT_BUILD_STAMP = "2026-09-20a every function and state table in the port script is a petports_ global"
 
 PETPORT_PROFILE = true
 
 local PORT_PROF_INTERVAL = 10.0
-local portProfPhases = {}
-local portProfAt = nil
+petports_portProfPhases = {}
+petports_portProfAt = nil
 
 -- Returns the process clock in seconds, or nil where it is unavailable.
-local function portClock()
+function petports_portClock()
   if type(os) == "table" and type(os.clock) == "function" then
     local ok, t = pcall(os.clock)
     if ok and type(t) == "number" then return t end
@@ -604,17 +598,17 @@ local function portClock()
 end
 
 -- Runs a function and adds its time to a named phase.
-local function portProf(name, fn, ...)
+function petports_portProf(name, fn, ...)
   if not PETPORT_PROFILE then return fn(...) end
 
-  local began = portClock()
+  local began = petports_portClock()
   local a, b, c = fn(...)
-  local now = portClock()
+  local now = petports_portClock()
 
-  local phase = portProfPhases[name]
+  local phase = petports_portProfPhases[name]
   if phase == nil then
     phase = { calls = 0, ms = 0, max = 0 }
-    portProfPhases[name] = phase
+    petports_portProfPhases[name] = phase
   end
 
   phase.calls = phase.calls + 1
@@ -629,16 +623,16 @@ local function portProf(name, fn, ...)
 end
 
 -- Logs the phase timings on an interval and clears them.
-local function portProfReport()
+function petports_portProfReport()
   if not PETPORT_PROFILE then return end
 
   local t = world.time()
-  portProfAt = portProfAt or (t + PORT_PROF_INTERVAL)
-  if t < portProfAt then return end
-  portProfAt = t + PORT_PROF_INTERVAL
+  petports_portProfAt = petports_portProfAt or (t + PORT_PROF_INTERVAL)
+  if t < petports_portProfAt then return end
+  petports_portProfAt = t + PORT_PROF_INTERVAL
 
   local parts = {}
-  for name, phase in pairs(portProfPhases) do
+  for name, phase in pairs(petports_portProfPhases) do
     if phase.ms >= 1 then
       table.insert(parts, string.format("%s n=%s ms=%s max=%s", name,
         tostring(phase.calls),
@@ -652,7 +646,7 @@ local function portProfReport()
     tostring(PORT_PROF_INTERVAL),
     #parts > 0 and table.concat(parts, " | ") or "nothing over 1 ms")
 
-  portProfPhases = {}
+  petports_portProfPhases = {}
 end
 
 
@@ -686,7 +680,7 @@ function init()
       self.petData.status = status or self.petData.status
       self.petData.storage = storage or self.petData.storage
       self.dirty = true
-      trace("petStatus message -> storage", self.petData.storage)
+      petports_trace("petStatus message -> storage", self.petData.storage)
     end
   end))
 
@@ -738,7 +732,7 @@ function init()
         stationUniqueId(), sb.printJson(payload.id), sb.printJson(position))
     end
 
-    abandonTask("unit died at " .. sb.printJson(position))
+    petports_abandonTask("unit died at " .. sb.printJson(position))
 
     local cargo = {}
 
@@ -809,7 +803,7 @@ function init()
   end))
 
   message.setHandler("petports_setModules", simpleHandler(function(payload)
-    if socketedItem() == nil then return false end
+    if petports_socketedItem() == nil then return false end
 
     if self.petData == nil or type(payload) ~= "table" then return false end
 
@@ -1141,18 +1135,18 @@ end
 function die()
   self.destroyed = true
 
-  stopResidency()
+  petports_stopResidency()
 
   petports_registryRemove(stationUniqueId())
 end
 
 -- Abandons the task, runs the uninit hooks, clears the crosshairs, and saves the unit back into its item.
 function uninit()
-  abandonTask("petport unloading")
+  petports_abandonTask("petport unloading")
 
   petports_workHook("uninit")
 
-  crosshairClear()
+  petports_crosshairClear()
 
   saveAndDespawn(false, not self.destroyed)
 end
@@ -1200,21 +1194,21 @@ end
 
 
 -- Returns the item in the port's socket, or nil.
-socketedItem = function()
+function petports_socketedItem()
   local item = world.containerItemAt(entity.id(), 0)
   if item == nil or item.name == nil then return nil end
   return item
 end
 
 -- Returns an item's stored pet seed.
-local function itemSeed(item)
+function petports_itemSeed(item)
   if item == nil or item.parameters == nil then return nil end
   if item.parameters.petData == nil then return nil end
   return item.parameters.petData.seed
 end
 
 -- Returns the pet data merged from an item's config and its parameters, with the cargo normalised.
-local function petDataFrom(item)
+function petports_petDataFrom(item)
   local base = root.itemConfig(item)
   local data = {}
   if base and base.config and base.config.petData then
@@ -1225,18 +1219,18 @@ local function petDataFrom(item)
   end
   if data.monsterType == nil then return nil end
 
-  cargoTrace("petDataFrom: off item", data.cargo)
+  petports_cargoTrace("petDataFrom: off item", data.cargo)
 
-  data.cargo = normaliseCargo(data.cargo)
-  cargoTrace("petDataFrom: normalised", data.cargo)
+  data.cargo = petports_normaliseCargo(data.cargo)
+  petports_cargoTrace("petDataFrom: normalised", data.cargo)
 
-  trace("read from item", data)
+  petports_trace("read from item", data)
   return data
 end
 
 -- Spawns the unit at the port's spawn offset with its saved status, storage and name.
 function spawnPet()
-  cargoTrace("spawnPet: entry", self.petData and self.petData.cargo)
+  petports_cargoTrace("spawnPet: entry", self.petData and self.petData.cargo)
   if self.petData == nil or self.petData.monsterType == nil then return end
   if self.petId ~= nil and world.entityExists(self.petId) then return end
 
@@ -1272,7 +1266,7 @@ function spawnPet()
 
   parameters.petports_materialise = true
 
-  trace("spawning with initialStorage", parameters.initialStorage)
+  petports_trace("spawning with initialStorage", parameters.initialStorage)
 
   self.petId = world.spawnMonster(self.petData.monsterType, spawnPosition, parameters)
   if self.petId then
@@ -1283,7 +1277,7 @@ function spawnPet()
 
     world.callScriptedEntity(self.petId, "setAnchor", entity.id())
   else
-    trace("spawnMonster returned nil for type", self.petData.monsterType)
+    petports_trace("spawnMonster returned nil for type", self.petData.monsterType)
   end
 end
 
@@ -1291,16 +1285,16 @@ end
 function saveAndDespawn(skipWrite, instant)
   if self.petId and world.entityExists(self.petId) then
     local ok, state = pcall(world.callScriptedEntity, self.petId, "petports_store")
-    trace("petStore returned", ok and state or nil)
+    petports_trace("petStore returned", ok and state or nil)
 
-    cargoTrace("saveAndDespawn: before store merge", self.petData and self.petData.cargo)
+    petports_cargoTrace("saveAndDespawn: before store merge", self.petData and self.petData.cargo)
 
     if ok and state and self.petData then
       self.petData.status = state.status or self.petData.status
       self.petData.storage = state.storage or self.petData.storage
     end
 
-    cargoTrace("saveAndDespawn: after store merge", self.petData and self.petData.cargo)
+    petports_cargoTrace("saveAndDespawn: after store merge", self.petData and self.petData.cargo)
 
     world.callScriptedEntity(self.petId, "petports_despawn", instant)
 
@@ -1325,7 +1319,7 @@ end
 
 
 -- Returns a beacon item's behavior, or nil when it is switched off.
-local function beaconBehaviorOf(item)
+function petports_beaconBehaviorOf(item)
   if item == nil or item.name == nil then return nil end
 
   if item.parameters ~= nil and item.parameters[BEACON_ENABLED_KEY] == false then
@@ -1340,7 +1334,7 @@ local function beaconBehaviorOf(item)
 end
 
 -- Returns whether an object carries an item tag.
-local function objectHasTag(id, tag)
+function petports_objectHasTag(id, tag)
   local ok, tags = pcall(world.getObjectParameter, id, "itemTags")
   if not ok or type(tags) ~= "table" then return false end
 
@@ -1352,7 +1346,7 @@ local function objectHasTag(id, tag)
 end
 
 -- Returns an object's machine kind, enabled and feeder flags and rules, or nil when it is not a machine.
-local function machineAt(id)
+function petports_machineAt(id)
   local ok, kind = pcall(world.getObjectParameter, id, MACHINE_KEY)
   if not ok or type(kind) ~= "string" or kind == "" then return nil end
 
@@ -1394,7 +1388,7 @@ local function machineAt(id)
 end
 
 -- Scans the network for containers, returning the beacons, the deposit census, the machines and where each item is spread.
-local function scanContainers()
+function petports_scanContainers()
   local rects = self.networkRects
   if rects == nil or #rects == 0 then rects = { petports_portCoverageRect() } end
 
@@ -1417,7 +1411,7 @@ local function scanContainers()
       if not seen[id] then
         seen[id] = true
 
-        local machine = machineAt(id)
+        local machine = petports_machineAt(id)
         if machine ~= nil then table.insert(machines, machine) end
 
         local okSize, size = pcall(world.containerSize, id)
@@ -1433,13 +1427,13 @@ local function scanContainers()
             end
             table.sort(slots)
 
-            local ignoresBeacons = objectHasTag(id, IGNORE_BEACONS_TAG)
+            local ignoresBeacons = petports_objectHasTag(id, IGNORE_BEACONS_TAG)
 
             if ignoresBeacons then
               local offender = nil
 
               for _, slot in ipairs(slots) do
-                if beaconBehaviorOf(items[slot]) ~= nil then
+                if petports_beaconBehaviorOf(items[slot]) ~= nil then
                   offender = items[slot].name
                   break
                 end
@@ -1461,7 +1455,7 @@ local function scanContainers()
 
             for _, slot in ipairs(ignoresBeacons and {} or slots) do
               local item = items[slot]
-              local behavior = beaconBehaviorOf(item)
+              local behavior = petports_beaconBehaviorOf(item)
 
               if behavior ~= nil then
                 local filter = nil
@@ -1574,7 +1568,7 @@ local function scanContainers()
 end
 
 -- Logs the item census against each machine rule when the picture changes.
-local function reportCensus(census, censusStacks, machines)
+function petports_reportCensus(census, censusStacks, machines)
   local distinct = 0
   for _ in pairs(census) do distinct = distinct + 1 end
 
@@ -1622,7 +1616,7 @@ DEFRAG_DEBUG = true
 SPREAD_REPORT_CAP = 12
 
 -- Logs which items sit in more than one crate when the picture changes.
-local function reportSpread(spread)
+function petports_reportSpread(spread)
   if not DEFRAG_DEBUG then return end
 
   local names = {}
@@ -1692,7 +1686,7 @@ end
 
 
 -- Returns whether a crate can take one more of an item.
-local function crateHasRoom(id, name)
+function petports_crateHasRoom(id, name)
   if world.containerItemsCanFit == nil then return false end
 
   local ok, fits = pcall(world.containerItemsCanFit, id, { name = name, count = 1 })
@@ -1750,7 +1744,7 @@ function petports_defragDestination(name, where, crates, perishable)
 
   local anchor = ranked[1]
 
-  if crateHasRoom(anchor.crate.id, name) then
+  if petports_crateHasRoom(anchor.crate.id, name) then
     return anchor.crate, "declared narrowest", anchor.held, anchor.breadth
   end
 
@@ -1778,7 +1772,7 @@ function petports_defragDestination(name, where, crates, perishable)
   end)
 
   for _, entry in ipairs(rest) do
-    if crateHasRoom(entry.crate.id, name) then
+    if petports_crateHasRoom(entry.crate.id, name) then
       return entry.crate, "nearest the full one", entry.held, entry.breadth
     end
   end
@@ -1820,7 +1814,7 @@ function petports_defragSourcesFor(name, where, destinationId, byId)
 end
 
 -- Orders defrag candidates by slots used, then crate count, then name.
-local function defragOrder(names)
+function petports_defragOrder(names)
   table.sort(names, function(a, b)
     if a.slots ~= b.slots then return a.slots > b.slots end
     if a.crates ~= b.crates then return a.crates > b.crates end
@@ -1831,7 +1825,7 @@ local function defragOrder(names)
 end
 
 -- Returns whether a crate ages an item better than its current one, cached per beacon scan.
-local function defragBetterTempExists(name, current, deposits, perishable)
+function petports_defragBetterTempExists(name, current, deposits, perishable)
   local version = self.beaconVersion or 0
 
   if self.defragTempVersion ~= version then
@@ -1860,7 +1854,7 @@ local function defragBetterTempExists(name, current, deposits, perishable)
 end
 
 -- Returns whether a narrower crate accepts an item, cached per beacon scan.
-local function defragBetterHomeExists(name, closest, deposits)
+function petports_defragBetterHomeExists(name, closest, deposits)
   local version = self.beaconVersion or 0
 
   if self.defragBetterVersion ~= version then
@@ -1934,7 +1928,7 @@ function petports_defragCandidates(spread, crates)
     local misplaced = narrowest ~= nil and closest ~= nil and closest > narrowest
 
     if misplaced then
-      misplaced = defragBetterHomeExists(name, closest, deposits)
+      misplaced = petports_defragBetterHomeExists(name, closest, deposits)
     end
 
     local chilled = false
@@ -1944,9 +1938,9 @@ function petports_defragCandidates(spread, crates)
       local current = perishable and coldest or warmest
 
       if perishable and current > 0 then
-        chilled = defragBetterTempExists(name, current, deposits, true)
+        chilled = petports_defragBetterTempExists(name, current, deposits, true)
       elseif not perishable and current < 1.0 then
-        chilled = defragBetterTempExists(name, current, deposits, false)
+        chilled = petports_defragBetterTempExists(name, current, deposits, false)
       end
     end
 
@@ -1970,13 +1964,13 @@ function petports_defragCandidates(spread, crates)
     end
   end
 
-  return defragOrder(names), deposits, byId
+  return petports_defragOrder(names), deposits, byId
 end
 
 DEFRAG_PLAN_CAP = 16
 
 -- Logs the destination and sources planned for each defrag candidate when the plan changes.
-local function reportDefragPlan(spread, crates)
+function petports_reportDefragPlan(spread, crates)
   if not DEFRAG_DEBUG then return end
   if not petportDefrag() then return end
   if not petportParticipates("defrag") then return end
@@ -2044,13 +2038,13 @@ local function reportDefragPlan(spread, crates)
 end
 
 -- Rescans the containers on an interval and stores the beacons, census, machines and spread.
-local function refreshBeacons(dt)
+function petports_refreshBeacons(dt)
   self.beaconTimer = (self.beaconTimer or 0) - dt
   if self.beaconTimer > 0 then return end
   self.beaconTimer = BEACON_INTERVAL
 
   local found, containers, census, censusStacks, machines, spread =
-    scanContainers()
+    petports_scanContainers()
 
   self.beacons = found
   self.beaconVersion = (self.beaconVersion or 0) + 1
@@ -2089,9 +2083,9 @@ local function refreshBeacons(dt)
       signature == "" and "none" or signature)
   end
 
-  reportCensus(census, censusStacks, machines)
-  reportSpread(spread)
-  reportDefragPlan(spread, found)
+  petports_reportCensus(census, censusStacks, machines)
+  petports_reportSpread(spread)
+  petports_reportDefragPlan(spread, found)
 end
 
 -- Returns the live beacons of a behavior, nearest first.
@@ -2122,7 +2116,7 @@ function receiveCargo(item)
     return
   end
 
-  cargoTrace("receiveCargo: before", self.petData.cargo)
+  petports_cargoTrace("receiveCargo: before", self.petData.cargo)
 
   self.petData.cargo = self.petData.cargo or {}
 
@@ -2166,23 +2160,23 @@ end
 -- Serialises the pet data into the socketed item.
 function writeBackToItem()
   if self.petData == nil then
-    cargoTrace("writeBack: REFUSED, no petData", nil)
+    petports_cargoTrace("writeBack: REFUSED, no petData", nil)
     return
   end
 
-  local item = socketedItem()
+  local item = petports_socketedItem()
   if item == nil then
-    cargoTrace("writeBack: REFUSED, nothing socketed", self.petData.cargo)
+    petports_cargoTrace("writeBack: REFUSED, nothing socketed", self.petData.cargo)
     return
   end
 
-  self.petData.cargo = normaliseCargo(self.petData.cargo)
-  cargoTrace("writeBack: serialising", self.petData.cargo)
+  self.petData.cargo = petports_normaliseCargo(self.petData.cargo)
+  petports_cargoTrace("writeBack: serialising", self.petData.cargo)
 
   item.parameters = item.parameters or {}
   item.parameters.petData = self.petData
 
-  trace("writing back to item", self.petData)
+  petports_trace("writing back to item", self.petData)
 
   world.containerSwapItemsNoCombine(entity.id(), item, 0)
   self.dirty = false
@@ -2208,15 +2202,15 @@ PANE_FUEL_MAX = 900
 
 PANE_DIAG_LIMIT = 4
 
-local bodyKindCache = {}
+petports_bodyKindCache = {}
 
 -- Returns whether the unit's body is organic or robotic, cached.
-local function paneBodyKind()
+function petports_paneBodyKind()
   local monsterType = self.petData and self.petData.monsterType
   if monsterType == nil then return nil end
 
   local key = tostring(monsterType)
-  if bodyKindCache[key] ~= nil then return bodyKindCache[key] end
+  if petports_bodyKindCache[key] ~= nil then return petports_bodyKindCache[key] end
 
   local kind = "organic"
   local ok, params = pcall(root.monsterParameters, key)
@@ -2234,7 +2228,7 @@ local function paneBodyKind()
       stationUniqueId(), key)
   end
 
-  bodyKindCache[key] = kind
+  petports_bodyKindCache[key] = kind
   return kind
 end
 
@@ -2244,7 +2238,7 @@ PETPORTS_FUEL_PLAIN     = 60
 PETPORTS_FUEL_PREFERRED = 120
 
 -- Returns the unit's stored fuel.
-local function petportFuelValue()
+function petports_fuelValue()
   local resources = self.petData and self.petData.storage and self.petData.storage.petResources
   if type(resources) ~= "table" then return nil end
   return tonumber(resources.petports_fuel)
@@ -2252,14 +2246,14 @@ end
 
 -- Returns how much fuel the unit has room for.
 function petportFuelHeadroom()
-  local fuel = petportFuelValue()
+  local fuel = petports_fuelValue()
   if fuel == nil then return nil end
   return math.max(0, PANE_FUEL_MAX - fuel)
 end
 
 -- Returns whether the unit's fuel is below the low mark.
 function petportFuelWanted()
-  local fuel = petportFuelValue()
+  local fuel = petports_fuelValue()
   if fuel == nil then return false end
   return fuel < (PANE_FUEL_MAX * PETPORTS_FUEL_LOW)
 end
@@ -2296,7 +2290,7 @@ function petportFuelled()
 end
 
 -- Returns the fuel as a blip count for the pane.
-local function paneFuelBlips()
+function petports_paneFuelBlips()
   local resources = self.petData and self.petData.storage and self.petData.storage.petResources
   if type(resources) ~= "table" then return PANE_FUEL_BLIPS end
 
@@ -2309,7 +2303,7 @@ local function paneFuelBlips()
 end
 
 -- Returns the cargo for the pane, each stack capped at its own max size.
-local function paneCargo()
+function petports_paneCargo()
   if self.petData == nil or self.petData.cargo == nil then return nil end
 
   local out = {}
@@ -2331,7 +2325,7 @@ end
 DIAG_MAX_CHARS = 26
 
 -- Returns a diagnostic with its short text cut to the pane's width.
-local function paneDiag(severity, short, full)
+function petports_paneDiag(severity, short, full)
   local capped = short
   if #capped > DIAG_MAX_CHARS then
     capped = string.sub(capped, 1, DIAG_MAX_CHARS - 1) .. "..."
@@ -2342,24 +2336,24 @@ end
 DIAG_FRESH = 30.0
 
 -- Returns whether a time is inside the diagnostic freshness window.
-local function fresh(at)
+function petports_fresh(at)
   if at == nil then return false end
   return (world.time() - at) < DIAG_FRESH
 end
 
 -- Returns the diagnostics the pane shows, newest and most severe first.
-local function paneDiagnostics()
+function petports_paneDiagnostics()
   local out = {}
 
   if petportOblivious() then
-    table.insert(out, paneDiag("info", "Oblivious",
+    table.insert(out, petports_paneDiag("info", "Oblivious",
       "An Oblivious Module is socketed, so this unit takes no dispatched work. "
       .. "It will still come home and put down anything it is already carrying. "
       .. "Remove the module to put it back on duty."))
   end
 
   if self.envUnsuitable ~= nil then
-    table.insert(out, paneDiag("error", "Wrong environment",
+    table.insert(out, petports_paneDiag("error", "Wrong environment",
       self.envRetired
         and ("This unit's chassis cannot survive the liquid or air at its port. "
           .. "It has been retired and will return on its own once the port drains "
@@ -2369,16 +2363,16 @@ local function paneDiagnostics()
           .. "port drains or floods back.")))
   end
 
-  if (self.unreachableFailures or 0) > 0 and fresh(self.unreachableAt) then
-    table.insert(out, paneDiag("warn",
+  if (self.unreachableFailures or 0) > 0 and petports_fresh(self.unreachableAt) then
+    table.insert(out, petports_paneDiag("warn",
       string.format("%d unreachable", self.unreachableFailures),
       string.format("%d job(s) were abandoned because no route could be found. "
         .. "Usually terrain: a gap too wide, a shaft too narrow, or a door the "
         .. "unit cannot open.", self.unreachableFailures)))
   end
 
-  if (self.recallFailures or 0) > 0 and fresh(self.recallAt) then
-    table.insert(out, paneDiag("warn",
+  if (self.recallFailures or 0) > 0 and petports_fresh(self.recallAt) then
+    table.insert(out, petports_paneDiag("warn",
       string.format("%d recalls failed", self.recallFailures),
       string.format("%d attempt(s) to walk home failed. The unit will be "
         .. "re-homed to its port if this keeps happening.", self.recallFailures)))
@@ -2390,8 +2384,8 @@ local function paneDiagnostics()
 end
 
 -- Returns the socketed item's short description.
-local function paneSpecies()
-  local item = socketedItem()
+function petports_paneSpecies()
+  local item = petports_socketedItem()
   if item == nil or item.name == nil then return nil end
 
   local ok, resolved = pcall(root.itemConfig, { name = item.name, count = 1 })
@@ -2414,7 +2408,7 @@ MODULE_SLOTS_MAX = 5
 
 -- Returns the socketed item's module slot count, from its parameters, its config, or its rarity.
 function petportModuleSlots()
-  local item = socketedItem()
+  local item = petports_socketedItem()
   if item == nil then return 0 end
 
   -- Clamps a slot count to the maximum.
@@ -2453,7 +2447,7 @@ function petportIsModuleItem(item)
 end
 
 -- Returns a module item's list field from its parameters or its config.
-local function moduleFieldOf(item, field)
+function petports_moduleFieldOf(item, field)
   if type(item) ~= "table" or item.name == nil then return {} end
 
   if item.parameters and type(item.parameters[field]) == "table" then
@@ -2471,7 +2465,7 @@ local function moduleFieldOf(item, field)
 end
 
 -- Returns the sorted union of a list field across every socketed module.
-local function moduleFieldUnion(field)
+function petports_moduleFieldUnion(field)
   if self.petData == nil or type(self.petData.modules) ~= "table" then return {} end
 
   local seen = {}
@@ -2479,7 +2473,7 @@ local function moduleFieldUnion(field)
 
   for _, record in ipairs(self.petData.modules) do
     if type(record) == "table" and record.item ~= nil then
-      for _, entry in ipairs(moduleFieldOf(record.item, field)) do
+      for _, entry in ipairs(petports_moduleFieldOf(record.item, field)) do
         if type(entry) == "string" and not seen[entry] then
           seen[entry] = true
           table.insert(out, entry)
@@ -2494,17 +2488,17 @@ end
 
 -- Returns the status effects the socketed modules grant.
 function petportModuleEffects()
-  return moduleFieldUnion("petports_moduleEffects")
+  return petports_moduleFieldUnion("petports_moduleEffects")
 end
 
 -- Returns the liquids the socketed modules permit.
 function petportModuleLiquids()
-  return moduleFieldUnion("petports_moduleLiquids")
+  return petports_moduleFieldUnion("petports_moduleLiquids")
 end
 
 -- Returns the flags the socketed modules carry.
 function petportModuleFlags()
-  return moduleFieldUnion("petports_moduleFlags")
+  return petports_moduleFieldUnion("petports_moduleFlags")
 end
 
 OBLIVIOUS_FLAG = "oblivious"
@@ -2761,7 +2755,7 @@ function pushUnitBubbles()
 end
 
 -- Returns up to three cargo items as bubble tokens, or nil.
-local function bubbleSpec()
+function petports_bubbleSpec()
 
   if petportBubbleCargo() and self.petData ~= nil
      and type(self.petData.cargo) == "table" then
@@ -2792,7 +2786,7 @@ function pushUnitBubble()
     return
   end
 
-  local tokens = bubbleSpec()
+  local tokens = petports_bubbleSpec()
 
   local ok, signature = pcall(sb.printJson, tokens or {})
   if not ok then signature = tostring(tokens ~= nil) end
@@ -2819,7 +2813,7 @@ function pushPetName()
 
   local name = self.petData ~= nil and self.petData.petName or nil
   if name == nil or name == "" then
-    name = paneSpecies() or "Utility Unit"
+    name = petports_paneSpecies() or "Utility Unit"
   end
 
   local show = petportNametag()
@@ -2837,7 +2831,7 @@ function pushPetName()
 end
 
 -- Returns the unit's seed as a six digit serial.
-local function paneSerial()
+function petports_paneSerial()
   local seed = self.petData and self.petData.seed
   if seed == nil then return nil end
   return string.format("%06d", math.floor(tonumber(seed) or 0) % 1000000)
@@ -2904,7 +2898,7 @@ function mirrorPaneState(dt)
   if self.paneTimer > 0 then return end
   self.paneTimer = PANE_MIRROR_INTERVAL
 
-  local socketed = portProf("pane.socketed", socketedItem) ~= nil
+  local socketed = petports_portProf("pane.socketed", petports_socketedItem) ~= nil
   self.paneSocketed = socketed
 
   local enabled = petportEnabled()
@@ -2919,17 +2913,17 @@ function mirrorPaneState(dt)
     state = {
       hasUnit = true,
       enabled = enabled,
-      petName = self.petData.petName or paneSpecies() or "Utility Unit",
+      petName = self.petData.petName or petports_paneSpecies() or "Utility Unit",
 
       petNameRaw = self.petData.petName,
-      species = paneSpecies(),
-      serial = paneSerial(),
-      fuelBlips = paneFuelBlips(),
+      species = petports_paneSpecies(),
+      serial = petports_paneSerial(),
+      fuelBlips = petports_paneFuelBlips(),
 
-      bodyKind = paneBodyKind(),
-      cargo = paneCargo(),
+      bodyKind = petports_paneBodyKind(),
+      cargo = petports_paneCargo(),
       task = self.task and self.task.type or "idle",
-      diagnostics = paneDiagnostics(),
+      diagnostics = petports_paneDiagnostics(),
       moduleSlots = petportModuleSlots(),
 
 
@@ -2959,17 +2953,17 @@ function mirrorPaneState(dt)
   if ok and signature == self.paneSignature then return end
   if ok then self.paneSignature = signature end
 
-  local okJ, blob = portProf("pane.json", pcall, sb.printJson, state)
+  local okJ, blob = petports_portProf("pane.json", pcall, sb.printJson, state)
 
   if okJ and blob == self.paneLastBlob then return end
   if okJ then self.paneLastBlob = blob end
 
-  portProf("pane.write", object.setConfigParameter, PANE_STATE_KEY, state)
+  petports_portProf("pane.write", object.setConfigParameter, PANE_STATE_KEY, state)
 end
 
 
 -- Returns the socketed chassis's habitat capabilities.
-local function unitCapabilities()
+function petports_unitCapabilities()
   if self.petData == nil or self.petData.monsterType == nil then return nil end
 
   return petports_habitatCapabilitiesForType(self.petData.monsterType,
@@ -2977,7 +2971,7 @@ local function unitCapabilities()
 end
 
 -- Returns whether the port's own spaces are submerged, dry, and which liquids they hold.
-local function portMedia()
+function petports_portMedia()
   local spaces = world.objectSpaces(entity.id())
   if spaces == nil or #spaces == 0 then return false, true, {} end
 
@@ -3011,14 +3005,14 @@ local function portMedia()
 end
 
 -- Asks whether the chassis can inhabit the port's own footprint, and retires the unit when it cannot.
-local function environmentCheck()
+function petports_environmentCheck()
   if self.petData == nil or self.petData.monsterType == nil then
     self.envUnsuitable = nil
     return
   end
 
   local live = self.petId ~= nil and world.entityExists(self.petId)
-  local wet, dry, liquids = portMedia()
+  local wet, dry, liquids = petports_portMedia()
   local verdict = nil
 
   if live then
@@ -3028,7 +3022,7 @@ local function environmentCheck()
     if not called or type(answer) ~= "table" then return end
     verdict = answer
   else
-    verdict = petports_habitatVerdict(unitCapabilities(), wet, dry, liquids)
+    verdict = petports_habitatVerdict(petports_unitCapabilities(), wet, dry, liquids)
 
     if verdict == nil then
       if not self.envTypeUnreadable then
@@ -3085,7 +3079,7 @@ RECT_CHECKED_TYPES = {
 }
 
 -- Returns work whose type is allowed outside this port's own rect, otherwise nil.
-local function dispatchable(work)
+function petports_dispatchable(work)
   if work == nil then return nil end
 
   if RECT_CHECKED_TYPES[work.type]
@@ -3110,7 +3104,7 @@ end
 
 
 -- Returns the unit's unique id, assigning one when it has none.
-local function petUniqueId()
+function petports_petUniqueId()
   if self.petId == nil or not world.entityExists(self.petId) then return nil end
 
   local uniqueId = world.entityUniqueId(self.petId)
@@ -3154,7 +3148,7 @@ end
 
 -- Returns whether the chassis can work at a target, with the refusal reason.
 function petports_targetSuits(position, entityId)
-  local caps = unitCapabilities()
+  local caps = petports_unitCapabilities()
   if caps == nil then return true end
 
   local points = petports_habitatObjectPoints(entityId)
@@ -3222,7 +3216,7 @@ function petports_standingPointForTarget(position, entityId, radius, mediumVerif
 end
 
 -- Returns the point the unit works a target from, or nil with the reason.
-local function servicePointNearUncached(label, entityId, position, radius)
+function petports_servicePointNearUncached(label, entityId, position, radius)
   local suits, why = petports_targetSuits(position, entityId)
 
   if not suits then
@@ -3263,7 +3257,7 @@ function petports_servicePointNear(label, entityId, position, radius)
     if (now - held.at) < ttl then return held.stand, held.why end
   end
 
-  local stand, why = servicePointNearUncached(label, entityId, position, radius)
+  local stand, why = petports_servicePointNearUncached(label, entityId, position, radius)
   self.servicePoints[key] = { at = now, stand = stand, why = why }
 
   return stand, why
@@ -3299,7 +3293,7 @@ end
 
 
 -- Counts the ticks the unit spends outside its medium and re-homes it once the strikes run out.
-local function mediumCheck()
+function petports_mediumCheck()
   if self.petId == nil or not world.entityExists(self.petId) then
     self.mediumStrikes = 0
     return
@@ -3333,7 +3327,7 @@ local function mediumCheck()
 end
 
 -- Counts the intervals the unit sits motionless away from the port and re-homes it once the stalls run out.
-local function healthCheck()
+function petports_healthCheck()
   if self.petId == nil or not world.entityExists(self.petId) then
     self.healthAnchor = nil
     self.healthStalls = 0
@@ -3468,7 +3462,7 @@ SLOT_KEY_TO_OFFSET = -1
 -- Counts a tidy when taking an item leaves a crate holding none of it.
 petports_metrics.noteStorageTake = function(containerId, name)
   if containerId == nil or name == nil then return end
-  if machineAt(containerId) ~= nil then return end
+  if petports_machineAt(containerId) ~= nil then return end
 
   local ok, left = pcall(world.containerAvailable, containerId, name)
   if not ok or type(left) ~= "number" or left > 0 then return end
@@ -3481,7 +3475,7 @@ petports_metrics.noteStorageTake = function(containerId, name)
 end
 
 -- Takes items from a container slot, putting them back when what came out is not what was expected.
-local function takeFromSlot(containerId, slot, count, expected)
+function petports_takeFromSlot(containerId, slot, count, expected)
   if count == nil or count < 1 then return nil end
 
   local offset = slot + SLOT_KEY_TO_OFFSET
@@ -3555,7 +3549,7 @@ function withdrawSeed(containerId, seedName, workId, count)
 
     local expected = items[slot]
     local want = math.min(remaining, expected.count or 1)
-    local taken = takeFromSlot(containerId, slot, want, expected)
+    local taken = petports_takeFromSlot(containerId, slot, want, expected)
 
     if taken ~= nil then
       receiveCargo(taken)
@@ -3628,7 +3622,7 @@ function withdrawMisfit(containerId, name, count, workId, slot)
     return
   end
 
-  local taken = takeFromSlot(containerId, slot, math.min(count, expected.count or 1),
+  local taken = petports_takeFromSlot(containerId, slot, math.min(count, expected.count or 1),
     expected)
 
   if taken == nil then
@@ -3642,7 +3636,7 @@ function withdrawMisfit(containerId, name, count, workId, slot)
 
   petports_metrics.noteStorageTake(containerId, name)
 
-  if machineAt(containerId) == nil then
+  if petports_machineAt(containerId) == nil then
     compactContainer(containerId)
   end
 
@@ -3677,10 +3671,10 @@ function spendSeed(seedName)
 end
 
 -- Adds a stack to a container in its own maximum-sized chunks, and returns what would not fit.
-local function placeStack(containerId, stack)
+function petports_placeStack(containerId, stack)
   if type(stack) ~= "table" or stack.name == nil then return 0 end
 
-  local limit = stackSizeFor(stack.name, stack.parameters)
+  local limit = petports_stackSizeFor(stack.name, stack.parameters)
   if limit == nil or limit < 1 then limit = 1 end
 
   local remaining = stack.count or 1
@@ -3722,7 +3716,7 @@ function depositCargo(containerId)
   local delivered = 0
 
   for _, stack in ipairs(self.petData.cargo) do
-    local unplaced = placeStack(containerId, stack)
+    local unplaced = petports_placeStack(containerId, stack)
 
     delivered = delivered + (stack.count or 1) - unplaced
 
@@ -3745,7 +3739,7 @@ function depositCargo(containerId)
     end
   end
 
-  cargoTrace("deposit: cargo replaced", remaining)
+  petports_cargoTrace("deposit: cargo replaced", remaining)
   self.petData.cargo = remaining
 
   if #remaining > 0 then
@@ -3779,7 +3773,7 @@ function depositCargoToMachine(machineId, workId)
     return
   end
 
-  local machine = machineAt(machineId)
+  local machine = petports_machineAt(machineId)
 
   if machine == nil or not machine.enabled then
     sb.logInfo("PETPORT %s upcycle ABORTED: machine %s is %s",
@@ -3881,7 +3875,7 @@ function depositCargoToMachine(machineId, workId)
     end
   end
 
-  cargoTrace("deposit: cargo replaced", remaining)
+  petports_cargoTrace("deposit: cargo replaced", remaining)
   self.petData.cargo = remaining
 
   petports_metrics.add("moved", moved)
@@ -3921,7 +3915,7 @@ function depositCargoOnly(containerId, name)
     else
       moved = true
 
-      local unplaced = placeStack(containerId, stack)
+      local unplaced = petports_placeStack(containerId, stack)
 
       delivered = delivered + (stack.count or 1) - unplaced
 
@@ -3950,7 +3944,7 @@ function depositCargoOnly(containerId, name)
       stationUniqueId(), sb.printJson(containerId), tostring(name))
   end
 
-  cargoTrace("deposit: cargo replaced", remaining)
+  petports_cargoTrace("deposit: cargo replaced", remaining)
   self.petData.cargo = remaining
 
   petports_metrics.add("moved", delivered)
@@ -3962,7 +3956,7 @@ end
 
 
 -- Returns the engine's default max stack, read once.
-local function defaultMaxStack()
+function petports_defaultMaxStack()
   if self.defaultStack == nil then
     local ok, config = pcall(root.assetJson, "/items/defaultParameters.config")
 
@@ -3988,7 +3982,7 @@ petports_stackSizeOf = function(name)
     end
 
     if size == nil then
-      size = defaultMaxStack()
+      size = petports_defaultMaxStack()
       if size ~= nil then source = "defaultParameters" end
     end
 
@@ -4004,7 +3998,7 @@ petports_stackSizeOf = function(name)
 end
 
 -- Returns a stack's max size, taking a maxStack parameter over the item's own.
-stackSizeFor = function(name, parameters)
+function petports_stackSizeFor(name, parameters)
   if type(parameters) == "table" then
     local override = tonumber(parameters.maxStack)
     if override ~= nil and override >= 1 then return override end
@@ -4014,12 +4008,12 @@ stackSizeFor = function(name, parameters)
 end
 
 -- Returns whether two values are equal, comparing tables field by field.
-local function sameValue(a, b)
+function petports_sameValue(a, b)
   if a == b then return true end
   if type(a) ~= "table" or type(b) ~= "table" then return false end
 
   for key, value in pairs(a) do
-    if not sameValue(value, b[key]) then return false end
+    if not petports_sameValue(value, b[key]) then return false end
   end
 
   for key in pairs(b) do
@@ -4030,7 +4024,7 @@ local function sameValue(a, b)
 end
 
 -- Returns a printable key for a stack's parameters.
-local function parameterKey(parameters)
+function petports_parameterKey(parameters)
   if parameters == nil then return "" end
 
   local ok, text = pcall(sb.printJson, parameters)
@@ -4059,14 +4053,14 @@ function petports_fragmentation(items)
       group.slots = group.slots + 1
 
       local parameters = stack.parameters
-      local key = parameterKey(parameters)
+      local key = petports_parameterKey(parameters)
       local bucket = group.byKey[key]
 
-      if bucket ~= nil and not sameValue(bucket.parameters, parameters) then
+      if bucket ~= nil and not petports_sameValue(bucket.parameters, parameters) then
         bucket = nil
 
         for _, candidate in ipairs(group.buckets) do
-          if sameValue(candidate.parameters, parameters) then
+          if petports_sameValue(candidate.parameters, parameters) then
             bucket = candidate
             break
           end
@@ -4097,7 +4091,7 @@ function petports_fragmentation(items)
 
       for _, bucket in ipairs(group.buckets) do
         needed = needed
-          + math.ceil(bucket.count / stackSizeFor(name, bucket.parameters))
+          + math.ceil(bucket.count / petports_stackSizeFor(name, bucket.parameters))
       end
 
       if group.slots > needed then
@@ -4137,7 +4131,7 @@ function compactContainer(containerId)
       local rescued = 0
 
       for _, bucket in ipairs(group.buckets) do
-        local unplaced = placeStack(containerId, {
+        local unplaced = petports_placeStack(containerId, {
           name = group.name,
           count = bucket.count,
           parameters = bucket.parameters
@@ -4261,7 +4255,7 @@ SORT_MOVE_CAP = 64
 SORT_BEACONS_FIRST = true
 
 -- Returns an item's sort rank by item type, cached.
-local function sortTypeRank(name)
+function petports_sortTypeRank(name)
 	self.sortTypes = self.sortTypes or {}
 
 	if self.sortTypes[name] == nil then
@@ -4285,7 +4279,7 @@ local function sortTypeRank(name)
 end
 
 -- Returns an item's sort rank by rarity, cached, taking a rarity parameter over the item's own.
-local function sortRarityRank(name, parameters)
+function petports_sortRarityRank(name, parameters)
 	if type(parameters) == "table" and type(parameters.rarity) == "string" then
 		local stated = SORT_RARITY_ORDER[string.lower(parameters.rarity)]
 		if stated ~= nil then return stated end
@@ -4311,7 +4305,7 @@ local function sortRarityRank(name, parameters)
 end
 
 -- Orders stacks by type, rarity, name, count, parameters and then slot.
-local function sortLess(a, b)
+function petports_sortLess(a, b)
 	if a.type ~= b.type then return a.type < b.type end
 	if a.rarity ~= b.rarity then return a.rarity < b.rarity end
 	if a.name ~= b.name then return a.name < b.name end
@@ -4334,7 +4328,7 @@ function petports_sortPlan(items)
 		local stack = items[key]
 
 		if type(stack) == "table" and type(stack.name) == "string" then
-			if SORT_BEACONS_FIRST and beaconBehaviorOf(stack) ~= nil then
+			if SORT_BEACONS_FIRST and petports_beaconBehaviorOf(stack) ~= nil then
 				table.insert(pinned, { key = key, stack = stack })
 			else
 				table.insert(loose, {
@@ -4342,15 +4336,15 @@ function petports_sortPlan(items)
 					stack = stack,
 					name = stack.name,
 					count = stack.count or 1,
-					type = sortTypeRank(stack.name),
-					rarity = sortRarityRank(stack.name, stack.parameters),
-					pkey = parameterKey(stack.parameters)
+					type = petports_sortTypeRank(stack.name),
+					rarity = petports_sortRarityRank(stack.name, stack.parameters),
+					pkey = petports_parameterKey(stack.parameters)
 				})
 			end
 		end
 	end
 
-	table.sort(loose, sortLess)
+	table.sort(loose, petports_sortLess)
 
 	local order = {}
 	for _, record in ipairs(pinned) do table.insert(order, record) end
@@ -4365,7 +4359,7 @@ function petports_sortPlan(items)
 end
 
 -- Takes a stack out of a slot for sorting, putting it back when it is not what was expected.
-local function sortLift(containerId, record, key)
+function petports_sortLift(containerId, record, key)
 	local offset = key + SLOT_KEY_TO_OFFSET
 	local ok, taken = pcall(world.containerTakeNumItemsAt, containerId, offset,
 		record.stack.count or 1)
@@ -4399,7 +4393,7 @@ local function sortLift(containerId, record, key)
 end
 
 -- Puts a stack into a slot, returning it to the container when the slot refuses any of it.
-local function sortLay(containerId, stack, key)
+function petports_sortLay(containerId, stack, key)
 	local offset = key + SLOT_KEY_TO_OFFSET
 	local ok, leftover = pcall(world.containerPutItemsAt, containerId, stack, offset)
 
@@ -4425,7 +4419,7 @@ local function sortLay(containerId, stack, key)
 end
 
 -- Returns the count of each item name in a container.
-local function sortTally(items)
+function petports_sortTally(items)
 	local tally = {}
 
 	if type(items) == "table" then
@@ -4446,7 +4440,7 @@ function sortContainer(containerId)
 	local ok, items = pcall(world.containerItems, containerId)
 	if not ok or type(items) ~= "table" then return false end
 
-	local before = sortTally(items)
+	local before = petports_sortTally(items)
 	local order, disorder = petports_sortPlan(items)
 
 	if disorder < SORT_MIN_DISORDER then
@@ -4481,7 +4475,7 @@ function sortContainer(containerId)
 		local source = where[record]
 
 		if source ~= target then
-			local hand = sortLift(containerId, record, source)
+			local hand = petports_sortLift(containerId, record, source)
 
 			if hand == nil then
 				aborted = "lift refused"
@@ -4492,17 +4486,17 @@ function sortContainer(containerId)
 			local carried = nil
 
 			if evicted ~= nil then
-				carried = sortLift(containerId, evicted, target)
+				carried = petports_sortLift(containerId, evicted, target)
 
 				if carried == nil then
-					sortLay(containerId, hand, source)
+					petports_sortLay(containerId, hand, source)
 					aborted = "second lift refused"
 					break
 				end
 			end
 
-			if not sortLay(containerId, hand, target) then
-				if carried ~= nil then sortLay(containerId, carried, source) end
+			if not petports_sortLay(containerId, hand, target) then
+				if carried ~= nil then petports_sortLay(containerId, carried, source) end
 				aborted = "destination refused"
 				break
 			end
@@ -4512,7 +4506,7 @@ function sortContainer(containerId)
 			at[source] = nil
 
 			if carried ~= nil then
-				if not sortLay(containerId, carried, source) then
+				if not petports_sortLay(containerId, carried, source) then
 					aborted = "return refused"
 					break
 				end
@@ -4528,7 +4522,7 @@ function sortContainer(containerId)
 	local okAfter, after = pcall(world.containerItems, containerId)
 
 	if okAfter then
-		local tally = sortTally(after)
+		local tally = petports_sortTally(after)
 
 		for name, count in pairs(before) do
 			if (tally[name] or 0) ~= count then
@@ -4581,21 +4575,21 @@ function petports_claimFree(workId)
 end
 
 
-local soilCache = {}
+petports_soilCache = {}
 
-local wetNameCache = nil
+petports_wetNameCache = nil
 
 -- Returns the wet matmod a dry soil turns into, confirmed against farming.config's inverse table.
-local function wetModName(dryName, transformModId)
-	if wetNameCache == nil then
-		wetNameCache = {}
+function petports_wetModName(dryName, transformModId)
+	if petports_wetNameCache == nil then
+		petports_wetNameCache = {}
 
 		for _, path in ipairs({ "/farming.config", "/assets/farming.config" }) do
 			local ok, config = pcall(root.assetJson, path)
 
 			if ok and type(config) == "table" and type(config.wetToDryMods) == "table" then
 				for wet, dry in pairs(config.wetToDryMods) do
-					wetNameCache[tostring(dry)] = tostring(wet)
+					petports_wetNameCache[tostring(dry)] = tostring(wet)
 				end
 
 				sb.logInfo("PETPORT %s read wetToDryMods from %s: %s",
@@ -4605,7 +4599,7 @@ local function wetModName(dryName, transformModId)
 		end
 	end
 
-	local inverted = wetNameCache[tostring(dryName)]
+	local inverted = petports_wetNameCache[tostring(dryName)]
 	if inverted == nil then
 		return nil, "no wetToDryMods entry for " .. tostring(dryName)
 	end
@@ -4632,7 +4626,7 @@ function petports_soilInfo(modName)
 	if modName == nil then return nil end
 
 	local key = tostring(modName)
-	if soilCache[key] ~= nil then return soilCache[key] end
+	if petports_soilCache[key] ~= nil then return petports_soilCache[key] end
 
 	local info = { tilled = false, dry = false, wants = {} }
 	local ok, mod = pcall(root.modConfig, key)
@@ -4662,7 +4656,7 @@ function petports_soilInfo(modName)
 					end
 				end
 
-				local wetName, via = wetModName(key, interaction.transformModId)
+				local wetName, via = petports_wetModName(key, interaction.transformModId)
 
 				if item ~= nil and wetName ~= nil then
 					info.dry = true
@@ -4688,7 +4682,7 @@ function petports_soilInfo(modName)
 		stationUniqueId(), key, tostring(info.tilled), tostring(info.dry),
 		sb.printJson(info.wants))
 
-	soilCache[key] = info
+	petports_soilCache[key] = info
 	return info
 end
 
@@ -4819,7 +4813,7 @@ petports_registerWork({
 		end
 
 		local topUp = petports_workGroup("hauling") and petports_collectWork ~= nil
-			and portProf("g.collectTopUp", petports_collectWork, true) or nil
+			and petports_portProf("g.collectTopUp", petports_collectWork, true) or nil
 
 		if topUp ~= nil then
 			sb.logInfo("PETPORT %s stalled with cargo -- topping up %s instead of idling",
@@ -4837,7 +4831,7 @@ petports_registerWork({
 function petports_workHook(hook, ...)
 	for _, entry in ipairs(PETPORTS_WORK) do
 		if entry[hook] ~= nil then
-			portProf(hook .. "." .. entry.name, entry[hook], ...)
+			petports_portProf(hook .. "." .. entry.name, entry[hook], ...)
 		end
 	end
 end
@@ -4932,13 +4926,13 @@ function petports_findWork()
 				if entry.profile == false then
 					work, reason, stop = entry.generate(ctx)
 				else
-					work, reason, stop = portProf(entry.profile or ("g." .. entry.name),
+					work, reason, stop = petports_portProf(entry.profile or ("g." .. entry.name),
 						entry.generate, ctx)
 				end
 
 				if stop then return work, reason end
 
-				if dispatchable(work) ~= nil then
+				if petports_dispatchable(work) ~= nil then
 					local distance = tonumber(work.distance) or math.huge
 
 					table.insert(offers, entry.name .. " " .. string.format("%.1f", distance))
@@ -4983,7 +4977,7 @@ function petports_findWork()
 end
 
 -- Logs why no work was taken, at most once per repeat window for a given reason.
-local function reject(reason)
+function petports_reject(reason)
   if reason == self.lastReject
      and (self.lastRejectAt or 0) + REJECT_REPEAT > world.time() then
     return
@@ -4997,24 +4991,24 @@ end
 
 
 -- Takes the claim on the chosen work, attaches the cargo manifest, and hands the task to the unit.
-local function dispatchWork()
+function petports_dispatchWork()
   if self.petId == nil or not world.entityExists(self.petId) then
-    return reject("no unit")
+    return petports_reject("no unit")
   end
 
-  local work, why = portProf("findWork", petports_findWork)
+  local work, why = petports_portProf("findWork", petports_findWork)
   if work == nil then
-    return reject(why)
+    return petports_reject(why)
   end
 
   if self.petId == nil or not world.entityExists(self.petId) then
-    return reject("unit went away while work was being chosen")
+    return petports_reject("unit went away while work was being chosen")
   end
 
 
-  if not portProf("claimTake", petports_claimTake, work.id, stationUniqueId(),
+  if not petports_portProf("claimTake", petports_claimTake, work.id, stationUniqueId(),
                             work.type, work.position, CLAIM_TTL) then
-    return reject("claimed by another owner: " .. tostring(work.id))
+    return petports_reject("claimed by another owner: " .. tostring(work.id))
   end
 
   if self.petData ~= nil and self.petData.cargo ~= nil then
@@ -5026,10 +5020,10 @@ local function dispatchWork()
     work.cargo = manifest
   end
 
-  if not portProf("assignTask", world.callScriptedEntity, self.petId,
+  if not petports_portProf("assignTask", world.callScriptedEntity, self.petId,
                   "petports_assignTask", work) then
     petports_claimRelease(work.id, stationUniqueId())
-    return reject("unit refused assignment")
+    return petports_reject("unit refused assignment")
   end
 
   self.task = work
@@ -5042,11 +5036,11 @@ local function dispatchWork()
 end
 
 -- Refreshes the running task's claim, and drops it on the deadline or once the unit stops holding it.
-local function trackWork()
+function petports_trackWork()
   self.taskAge = (self.taskAge or 0) + WORK_INTERVAL
   if self.taskAge >= TASK_DEADLINE then
     local taskId = self.task.id
-    abandonTask("deadline -- no report in " .. sb.printJson(TASK_DEADLINE) .. "s")
+    petports_abandonTask("deadline -- no report in " .. sb.printJson(TASK_DEADLINE) .. "s")
     petports_noteFailure(taskId, "deadline")
 
     if self.petId ~= nil and world.entityExists(self.petId) then
@@ -5057,14 +5051,14 @@ local function trackWork()
 
   if self.petId == nil or not world.entityExists(self.petId) then
     self.task = nil
-    return reject("unit gone mid-task")
+    return petports_reject("unit gone mid-task")
   end
 
   if world.callScriptedEntity(self.petId, "petports_taskId") ~= self.task.id then
     local taskId = self.task.id
     self.task = nil
     petports_noteFailure(taskId, "unit stopped holding the task")
-    return reject("unit is no longer holding the task")
+    return petports_reject("unit is no longer holding the task")
   end
 
   sb.logInfo("PETPORT %s tracking %s, age %s of %s",
@@ -5108,7 +5102,7 @@ CROSSHAIR_PRIORITY = {
 }
 
 -- Returns the claim id for a drop's marker.
-local function crosshairClaimId(dropId)
+function petports_crosshairClaimId(dropId)
   return "mark:" .. tostring(dropId)
 end
 
@@ -5116,8 +5110,8 @@ CROSSHAIR_CLAIM_TTL = 4.0
 CROSSHAIR_CLAIM_RENEW = 1.5
 
 -- Takes or renews the marker claim on a drop, taking it off another port only for a higher priority state.
-local function crosshairClaim(dropId, state)
-  local claimId = crosshairClaimId(dropId)
+function petports_crosshairClaim(dropId, state)
+  local claimId = petports_crosshairClaimId(dropId)
   local existing = petports_claimGet(claimId)
   local mine = existing ~= nil and existing.owner == stationUniqueId()
 
@@ -5147,12 +5141,12 @@ local function crosshairClaim(dropId, state)
 end
 
 -- Releases this port's marker claim on a drop.
-local function crosshairRelease(dropId)
-  petports_claimRelease(crosshairClaimId(dropId), stationUniqueId())
+function petports_crosshairRelease(dropId)
+  petports_claimRelease(petports_crosshairClaimId(dropId), stationUniqueId())
 end
 
 -- Returns the marker colour for a state, preferring the unit's own override.
-local function crosshairColor(state)
+function petports_crosshairColor(state)
   local overrides = self.petData ~= nil and self.petData.crosshairColors or nil
 
   if type(overrides) == "table" and type(overrides[state]) == "string" then
@@ -5163,7 +5157,7 @@ local function crosshairColor(state)
 end
 
 -- Returns every drop in the network rects.
-local function crosshairDrops()
+function petports_crosshairDrops()
   local rects = self.networkRects
   if rects == nil or #rects == 0 then return {} end
 
@@ -5187,7 +5181,7 @@ local function crosshairDrops()
 end
 
 -- Returns whether any deposit beacon would accept a drop, caching the verdict per item and beacon.
-local function crosshairStorable(dropId, cache)
+function petports_crosshairStorable(dropId, cache)
   local ok, descriptor = pcall(world.itemDropItem, dropId)
 
   if not ok or type(descriptor) ~= "table" or type(descriptor.name) ~= "string" then
@@ -5230,7 +5224,7 @@ local function crosshairStorable(dropId, cache)
 end
 
 -- Returns the marker state each drop should carry: routing, enroute, unroutable, blocked or unclaimed.
-local function crosshairWanted()
+function petports_crosshairWanted()
   local wanted = {}
 
   if self.task ~= nil and self.task.type == "collect" and self.task.target ~= nil then
@@ -5251,7 +5245,7 @@ local function crosshairWanted()
 
   local storable = {}
 
-  for _, dropId in ipairs(crosshairDrops()) do
+  for _, dropId in ipairs(petports_crosshairDrops()) do
     if wanted[dropId] == nil then
       local claim = petports_claimGet("drop:" .. dropId)
       local mine = claim == nil
@@ -5261,7 +5255,7 @@ local function crosshairWanted()
       if not mine then
         wanted[dropId] = nil
 
-      elseif not crosshairStorable(dropId, storable) then
+      elseif not petports_crosshairStorable(dropId, storable) then
         wanted[dropId] = "blocked"
 
       else
@@ -5274,7 +5268,7 @@ local function crosshairWanted()
 end
 
 -- Kills a marker projectile.
-local function crosshairKill(marker)
+function petports_crosshairKill(marker)
   if marker == nil or marker.id == nil then return end
 
   if world.entityExists(marker.id) then
@@ -5291,13 +5285,13 @@ CROSSHAIR_IMMEDIATE = {
 }
 
 -- Spawns, moves and kills the drop markers to match the wanted states, holding each one briefly before it changes.
-local function crosshairRefresh(dt)
+function petports_crosshairRefresh(dt)
   self.crosshairs = self.crosshairs or {}
 
   if not petportCrosshairs() then
     if next(self.crosshairs) ~= nil then
       sb.logInfo("PETPORT %s retiring crosshairs: switched off", stationUniqueId())
-      crosshairClear()
+      petports_crosshairClear()
     end
     return
   end
@@ -5306,7 +5300,7 @@ local function crosshairRefresh(dt)
   if self.crosshairTimer > 0 then return end
   self.crosshairTimer = CROSSHAIR_INTERVAL
 
-  local wanted = crosshairWanted()
+  local wanted = petports_crosshairWanted()
 
   self.crosshairKnownDrops = self.crosshairKnownDrops or {}
   local fresh = false
@@ -5359,8 +5353,8 @@ local function crosshairRefresh(dt)
       and world.entityExists(marker.id)
 
     if not keep then
-      crosshairKill(marker)
-      crosshairRelease(dropId)
+      petports_crosshairKill(marker)
+      petports_crosshairRelease(dropId)
       self.crosshairs[dropId] = nil
     end
   end
@@ -5368,11 +5362,11 @@ local function crosshairRefresh(dt)
   for dropId, state in pairs(wanted) do
     local marker = self.crosshairs[dropId]
 
-    if world.entityExists(dropId) and crosshairClaim(dropId, state) then
+    if world.entityExists(dropId) and petports_crosshairClaim(dropId, state) then
       local due = marker == nil or (marker.refresh or 0) <= world.time()
 
       if due then
-        crosshairKill(marker)
+        petports_crosshairKill(marker)
 
         local at = world.entityPosition(dropId)
 
@@ -5384,7 +5378,7 @@ local function crosshairRefresh(dt)
           { 0, 0 },
           false,
           {
-            processing = "?multiply=" .. crosshairColor(state),
+            processing = "?multiply=" .. petports_crosshairColor(state),
 
             petportsItem = dropId
           })
@@ -5420,36 +5414,34 @@ local function crosshairRefresh(dt)
 end
 
 -- Kills every marker and releases its claim.
-crosshairClear = function()
+function petports_crosshairClear()
   for dropId, marker in pairs(self.crosshairs or {}) do
-    crosshairKill(marker)
-    crosshairRelease(dropId)
+    petports_crosshairKill(marker)
+    petports_crosshairRelease(dropId)
     self.crosshairs[dropId] = nil
   end
 end
 
 
-local workBeatDispatch
-
 -- Runs the work beat: the sweeps and network refresh, then the beacon scan and the scanBeat hooks across three ticks, then the dispatch.
-local function workUpdate(dt)
+function petports_workUpdate(dt)
   if self.beatStage ~= nil then
     local stage = self.beatStage
 
     if stage == 1 then
-      portProf("refreshBeacons", refreshBeacons, WORK_INTERVAL)
+      petports_portProf("refreshBeacons", petports_refreshBeacons, WORK_INTERVAL)
       self.beatStage = 2
       return
     elseif stage == 2 then
       petports_workHook("scanBeat", WORK_INTERVAL)
-      portProf("publishUnitPosition", publishUnitPosition)
-      portProf("ensureResidency", ensureResidency)
+      petports_portProf("publishUnitPosition", petports_publishUnitPosition)
+      petports_portProf("ensureResidency", petports_ensureResidency)
       self.beatStage = 3
       return
     end
 
     self.beatStage = nil
-    workBeatDispatch()
+    petports_workBeatDispatch()
     return
   end
 
@@ -5457,7 +5449,7 @@ local function workUpdate(dt)
   if self.workTimer > 0 then return end
   self.workTimer = WORK_INTERVAL
 
-  portProf("claimsSweep", petports_claimsSweep)
+  petports_portProf("claimsSweep", petports_claimsSweep)
 
   petports_workHook("workBeat")
 
@@ -5465,16 +5457,16 @@ local function workUpdate(dt)
   if (registry.ports or {})[stationUniqueId()] == nil then
     sb.logInfo("PETPORT %s registry entry is missing -- re-publishing",
       stationUniqueId())
-    publishRegistry()
+    petports_publishRegistry()
   end
 
-  portProf("refreshNetwork", refreshNetwork)
+  petports_portProf("refreshNetwork", petports_refreshNetwork)
 
   self.beatStage = 1
 end
 
 -- Dispatches new work, or tracks the running task.
-workBeatDispatch = function()
+function petports_workBeatDispatch()
   local tickState = string.format("%s/%s", tostring(self.petId),
     self.task and self.task.id or "none")
 
@@ -5487,9 +5479,9 @@ workBeatDispatch = function()
   end
 
   if self.task == nil then
-    portProf("dispatchWork", dispatchWork)
+    petports_portProf("dispatchWork", petports_dispatchWork)
   else
-    portProf("trackWork", trackWork)
+    petports_portProf("trackWork", petports_trackWork)
   end
 end
 
@@ -5524,7 +5516,7 @@ function setAnimationStateForAllHullComponents(anim)
 end
 
 -- Runs the port's tick: markers, tick hooks, pane mirror, the socketed item, the environment and health checks, the spawn, and the work beat.
-local function updateInner(dt)
+function petports_updateInner(dt)
   if self.firstUpdate then
     self.firstUpdate = false
     stationUniqueId()
@@ -5532,45 +5524,45 @@ local function updateInner(dt)
     petports_claimsClearOwner(stationUniqueId())
 
     petports_workHook("firstUpdate")
-    ensureResidency()
-    publishRegistry()
+    petports_ensureResidency()
+    petports_publishRegistry()
   end
 
-  portProf("crosshairRefresh", crosshairRefresh, dt)
+  petports_portProf("crosshairRefresh", petports_crosshairRefresh, dt)
 
   petports_workHook("tick", dt)
 
-  portProf("mirrorPaneState", mirrorPaneState, dt)
+  petports_portProf("mirrorPaneState", mirrorPaneState, dt)
 
-  local item = socketedItem()
+  local item = petports_socketedItem()
 
   if item == nil then
     if self.petId ~= nil then
       saveAndDespawn()
-      cargoTrace("unsocket: discarding petData", self.petData and self.petData.cargo)
+      petports_cargoTrace("unsocket: discarding petData", self.petData and self.petData.cargo)
       self.petData = nil
     end
     setHullAnimationStateIntent("close")
 
-    abandonTask("item removed")
+    petports_abandonTask("item removed")
 
-    publishUnitPosition()
+    petports_publishUnitPosition()
     return
   end
 
-  if self.petData ~= nil and itemSeed(item) ~= self.petData.seed then
-    trace("item swapped, outgoing seed", self.petData.seed)
+  if self.petData ~= nil and petports_itemSeed(item) ~= self.petData.seed then
+    petports_trace("item swapped, outgoing seed", self.petData.seed)
     saveAndDespawn(true)
     self.petData = nil
-    abandonTask("unit swapped out")
+    petports_abandonTask("unit swapped out")
   end
 
   if self.petData == nil then
-    self.petData = petDataFrom(item)
-    cargoTrace("socket: petData built", self.petData and self.petData.cargo)
+    self.petData = petports_petDataFrom(item)
+    petports_cargoTrace("socket: petData built", self.petData and self.petData.cargo)
     if self.petData == nil then
       setHullAnimationStateIntent("close")
-      abandonTask("socketed item is not a pet")
+      petports_abandonTask("socketed item is not a pet")
       return
     end
 
@@ -5593,9 +5585,9 @@ local function updateInner(dt)
   self.environmentTimer = (self.environmentTimer or 0) - dt
   if self.environmentTimer <= 0 then
     self.environmentTimer = ENVIRONMENT_INTERVAL
-    environmentCheck()
+    petports_environmentCheck()
 
-    mediumCheck()
+    petports_mediumCheck()
 
     petports_workHook("environmentBeat")
   end
@@ -5611,14 +5603,14 @@ local function updateInner(dt)
         .. "cargo are written back to the socketed item.", stationUniqueId())
 
       saveAndDespawn()
-      abandonTask("port disabled")
+      petports_abandonTask("port disabled")
 
-      publishUnitPosition()
+      petports_publishUnitPosition()
     end
   end
 
 -- Records the unit's damage team when it changes.
-local function teamWatch()
+function petports_teamWatch()
   if self.petId == nil or not world.entityExists(self.petId) then
     self.watchedTeam = nil
     return
@@ -5637,10 +5629,10 @@ end
   self.healthTimer = (self.healthTimer or 0) - dt
   if self.healthTimer <= 0 then
     self.healthTimer = HEALTH_INTERVAL
-    healthCheck()
+    petports_healthCheck()
   end
 
-  teamWatch()
+  petports_teamWatch()
 
   if enabled and (self.petId == nil or not world.entityExists(self.petId)) then
     self.spawnTimer = self.spawnTimer - dt
@@ -5698,8 +5690,8 @@ end
 
   pushUnitBubble()
 
-  portProf("workUpdate", workUpdate, dt)
-  portProfReport()
+  petports_portProf("workUpdate", petports_workUpdate, dt)
+  petports_portProfReport()
 end
 
 -- Returns the configured interact action.
@@ -5727,7 +5719,7 @@ function update(dt)
   end
 
   petports_claimsMemoBegin()
-  updateInner(dt)
+  petports_updateInner(dt)
   petports_claimsMemoEnd()
 
   if began ~= nil then

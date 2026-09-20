@@ -25,7 +25,7 @@ local FUEL_TRACE = false
 
 local MEDIA_TRACE_INTERVAL = 0.25
 
-local BUILD_STAMP = "2026-09-19t a leg search begun from a later cell resumes from it next tick, whichever cell the caller names"
+local BUILD_STAMP = "2026-09-20c the default target-gone failure names the task row's noun"
 local stampLogged = false
 
 local SEARCH_LIMIT = 6.0
@@ -3405,7 +3405,7 @@ local function petportsTaskUpdateInner(dt, stateData)
     local gone = petports_taskTargetGone[task.type]
     if gone ~= nil then return gone(stateData, task) end
 
-    petports_taskReport(stateData, "failed", "drop is gone")
+    petports_taskReport(stateData, "failed", ((PETPORTS_TRACKED_TARGETS[task.type] or {}).noun or "drop") .. " is gone")
     return true
   end
   task.position = target
