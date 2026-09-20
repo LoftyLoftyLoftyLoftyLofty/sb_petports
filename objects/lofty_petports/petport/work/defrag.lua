@@ -214,6 +214,7 @@ function petports_defragWork()
 
 	local homeless, full, unreachable = 0, 0, 0
 	local claimed, backedOffN, noStack = 0, 0, 0
+	local settled = 0
 
 	for index, entry in ipairs(names) do
 		if index > DEFRAG_PLAN_CAP then break end
@@ -238,6 +239,16 @@ function petports_defragWork()
 			else
 				local sources = petports_defragSourcesFor(entry.name, where, target.id, byId)
 
+				-- The name's own destination can hold a stack that belongs elsewhere by its parameters; it is looked at last.
+				if where[target.id] ~= nil then
+					table.insert(sources,
+					{
+						crate = target,
+						count = where[target.id].count or 0,
+						slots = where[target.id].slots or 0
+					})
+				end
+
 				for _, pick in ipairs(sources) do
 					local crate = pick.crate
 
@@ -253,6 +264,8 @@ function petports_defragWork()
 					if not backedOff and petports_claimFree(workId) then
 						local ok, items = pcall(world.containerItems, crate.id)
 						local slot, stack = nil, nil
+						local home = target
+						local atHome = false
 
 						if ok and type(items) == "table" then
 							local keys = {}
@@ -264,17 +277,28 @@ function petports_defragWork()
 
 								if key ~= crate.beaconSlot and type(held) == "table"
 										and held.name == entry.name then
-									slot, stack = key, held
-									break
+									-- The depositor homes a stack by its own parameters; a name can cover a form that rots and one that does not.
+									local stackHome = petports_defragDestination(entry.name, where, deposits,
+										petports_itemPerishable(held)) or target
+
+									if stackHome.id == crate.id then
+										atHome = true
+									else
+										slot, stack, home = key, held, stackHome
+										break
+									end
 								end
 							end
 						end
 
-						if slot == nil then noStack = noStack + 1 end
+						if slot == nil then
+							if not atHome then noStack = noStack + 1
+							elseif crate.id ~= target.id then settled = settled + 1 end
+						end
 
 						if slot ~= nil then
 							local fits = world.containerItemsCanFit ~= nil
-								and world.containerItemsCanFit(target.id, stack) or nil
+								and world.containerItemsCanFit(home.id, stack) or nil
 
 							if fits == nil or fits <= 0 then
 								full = full + 1
@@ -302,7 +326,7 @@ function petports_defragWork()
 										stationUniqueId(), tostring(entry.name),
 										sb.printJson(stack.count or 1), sb.printJson(crate.id),
 										sb.printJson(slot), sb.printJson(pick.count),
-										sb.printJson(target.id), sb.printJson(index),
+										sb.printJson(home.id), sb.printJson(index),
 										sb.printJson(entry.crates), sb.printJson(entry.slots))
 
 									return {
@@ -332,8 +356,9 @@ function petports_defragWork()
 		"%s name(s) misplaced or scattered, none actionable: %s with nowhere to "
 		.. "gather into, %s with the destination full, %s with a crate this unit "
 		.. "cannot reach, %s claimed by another unit, %s backed off, %s with no "
-		.. "stack found in the source", #names, homeless, full, unreachable,
-		claimed, backedOffN, noStack)
+		.. "stack found in the source, %s whose stack is already where its own "
+		.. "spoilage puts it", #names, homeless, full, unreachable,
+		claimed, backedOffN, noStack, settled)
 
 	if self.defragWhy ~= why then
 		self.defragWhy = why

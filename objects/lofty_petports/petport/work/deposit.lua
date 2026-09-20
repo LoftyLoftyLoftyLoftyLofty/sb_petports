@@ -55,7 +55,10 @@ function petports_depositHomeFor(name, targets, descriptor)
 		self.defragHomes = {}
 	end
 
-	local held = self.defragHomes[name]
+	local perishable = petports_itemPerishable(descriptor or name)
+	local key = perishable and (name .. "|rots") or name
+
+	local held = self.defragHomes[key]
 
 	if held ~= nil then
 		if held == false then return nil end
@@ -64,15 +67,14 @@ function petports_depositHomeFor(name, targets, descriptor)
 
 	local where = (self.spread or {})[name] or {}
 
-	local target, why, has = petports_defragDestination(name, where, targets,
-		petports_itemPerishable(descriptor or name))
+	local target, why, has = petports_defragDestination(name, where, targets, perishable)
 
 	if target == nil or (has or 0) <= 0 and why == "accepts it, holds most" then
-		self.defragHomes[name] = false
+		self.defragHomes[key] = false
 		return nil
 	end
 
-	self.defragHomes[name] = target.id
+	self.defragHomes[key] = target.id
 	return target.id
 end
 
